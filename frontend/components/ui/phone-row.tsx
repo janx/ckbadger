@@ -46,11 +46,19 @@ const TONE: Record<PhoneLineTone, string> = {
 export function PhoneRow({
   lines,
   mark,
+  head,
   className,
   testId,
 }: {
   lines: readonly (PhoneLine | null | false)[];
   mark?: ReactNode;
+  /**
+   * The first line's width as the list states it (`phoneHead`, lib/type-metrics.ts): the stone,
+   * the key at its widest real value, the room between the parts and the widest figure at the
+   * right. Written on the row (`data-head-px`), so a test reads what the row draws against what
+   * its list claims.
+   */
+  head?: number;
   className?: string;
   testId?: string;
 }) {
@@ -59,6 +67,7 @@ export function PhoneRow({
   return (
     <div
       data-phone-row
+      data-head-px={head}
       data-testid={testId}
       className={cn(
         mark
@@ -81,6 +90,8 @@ export function PhoneRow({
           key={line.key}
           data-line={line.key}
           data-tone={line.tone}
+          // gap-x-3: PHONE_PART_GAP_PX, the 12 px a list's stated first line counts between its
+          // parts (lib/type-metrics.ts; phone-row.test reads the class against it)
           className={cn(
             'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5',
             mark && 'col-start-2',

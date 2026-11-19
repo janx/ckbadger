@@ -8,7 +8,10 @@ import {
   shareBarWidth,
 } from '@/components/ui/share-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
-import { phoneLines } from '@/__tests__/utils/phone-row';
+import { phoneHeadPx, phoneLines } from '@/__tests__/utils/phone-row';
+import { gapPx } from '@/__tests__/utils/tailwind-box';
+import { PHONE_PART_GAP_PX } from '@/lib/type-metrics';
+import { RowSeal, ROW_SEAL } from '@/components/ui/row-seal';
 
 describe('PhoneRow (boards L1–L8)', () => {
   it('lays out named lines in three voices, each a wrapping left part and a right figure', () => {
@@ -110,6 +113,27 @@ describe('PhoneRow (boards L1–L8)', () => {
     expect(row).toHaveClass('flex', 'flex-col');
     expect(row).not.toHaveClass('grid');
     expect(row.querySelector('[data-part="mark"]')).toBeNull();
+  });
+
+  // Lane D4: a list states its first line (`phoneHead`) with the 12 px between the parts its lines
+  // draw, and writes it on the row, so its tests read the drawn line against the stated one.
+  it('draws the 12 px between a line’s parts that a stated first line counts', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        head={237.6}
+        mark={<RowSeal id={{ kind: 'block', hash: `0x${'5e'.repeat(32)}`, txs: 1 }} />}
+        lines={[{ key: 'identity', tone: 'head', left: '#21,009,134', right: '1 tx · 20s ago' }]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    expect(row).toHaveAttribute('data-head-px', '237.6');
+    const line = row.querySelector('[data-line="identity"]')!;
+    for (const viewport of [360, 390]) expect(gapPx(line, viewport)).toBe(PHONE_PART_GAP_PX);
+    // the stone's footprint (24), the key at 14 px (92.4), the gap and the figure at 13 px (109.2):
+    // the board's head
+    expect(ROW_SEAL.block.footprint).toBe(24);
+    expect(phoneHeadPx(row, 360)).toBe(237.6);
   });
 
   it('refuses a row without a line', () => {

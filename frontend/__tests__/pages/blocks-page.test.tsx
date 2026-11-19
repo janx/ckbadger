@@ -4,7 +4,12 @@ import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtures/genesis-block';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
 import { contentPx, gapPx } from '@/__tests__/utils/tailwind-box';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -14,7 +19,7 @@ import BlocksPage from '@/app/blocks/page';
 import { api, type Block } from '@/lib/api';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ROW_SEAL } from '@/components/ui/row-seal';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_LINE_PX, ROW_LINE_PX } from '@/lib/type-metrics';
 import type { SealId } from '@/lib/seal/stones';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
@@ -1143,6 +1148,42 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(drawn).toBeLessThanOrEqual(column);
       }
     );
+
+    // Lane D4 (the phone-rows board, head()): the model row states its first line at its widest,
+    // the stone and its gap (24), "#99,999,999" at 14 px (92.4), the 12 px between the parts and
+    // "9,999 txs · 10y 364d ago" at 13 px (187.2): 315.6 of a 360 px phone's 328 px line. A row
+    // drawn with those values draws exactly that, so a wider value let in is past what the list
+    // states, and a wider bound stated does not load (phoneHead throws).
+    it('states its first line at the widest, 315.6 of 328 px, and draws the widest block in it', async () => {
+      atContainerWidth(PHONE_LINE_PX[360]);
+      const T = Date.parse('2030-11-14T12:00:02.000Z');
+      vi.useFakeTimers({ toFake: ['Date'], now: T });
+      try {
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [
+            {
+              ...page.data[0],
+              number: 99_999_999,
+              hash: `0x${'6f'.repeat(32)}`,
+              transactionSizes: Array<number>(9_999).fill(116),
+              transactionsCount: 9_999,
+              // ten years and 364 days on the UTC+8 calendar: the oldest age a live list writes
+              timestamp: '2019-11-15T12:00:01.000Z',
+            },
+          ],
+        });
+        render(<BlocksPage />);
+        const [card] = await screen.findAllByTestId('block-row-mobile');
+        const [head] = phoneLines(card);
+        expect([head.left, head.right]).toEqual(['#99,999,999', '9,999 txs · 10y 364d ago']);
+        expect(statedHeadPx(card)).toBe(315.6);
+        expect(phoneHeadPx(card, 360)).toBe(statedHeadPx(card));
+        expect(statedHeadPx(card)).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     // The review's item H: a block row's age reads the page's one clock, so it moves with no data
     // change (it was written once at render and froze between refetches). Date stands still and
