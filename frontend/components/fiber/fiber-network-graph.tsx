@@ -1,8 +1,7 @@
 'use client';
 
 import { useMemo, type ReactNode } from 'react';
-import Link from '@/components/ui/link';
-import { Prose } from '@/components/ui/prose';
+import Link, { type LinkLook } from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
@@ -43,6 +42,13 @@ interface Props {
 }
 
 const DIM = 0.18;
+/**
+ * The strength of a pair's grey line (its channels over time), in the figure and in its key alike
+ * (lane P4; review fiber-channels: the grey edges all but vanished by night). The night reading ink
+ * at 0.28 on the page ground makes about 2.0 : 1; at 0.4, 2.86 : 1, and the key already drew it at
+ * 0.4 while the figure drew 0.28.
+ */
+const HISTORY_OPACITY = 0.4;
 const targetKey = (target: FiberGraphTarget) => `${target.kind}:${target.id}`;
 /** The plot's name, a label line 2 px under the svg's top. */
 const NAME_PAD = 2;
@@ -84,19 +90,22 @@ export function useFiberGraphPin(): PinnedReadout<FiberGraphTarget> {
   return usePinnedReadout<FiberGraphTarget>(targetKey);
 }
 
-/** A party in the graph's reading panel, a row: its address, else its lock hash (U-09). */
-function PartyLink({ party }: { party: FiberParty }) {
+/**
+ * A party in the graph's reading panel, at the row size: its address, else its lock hash (U-09);
+ * the panel's key where it heads the panel, a link inside the line where a pair's line names it.
+ */
+function PartyLink({ party, look }: { party: FiberParty; look: LinkLook }) {
   const text = party.address ? (
     <ShortId value={party.address} kind="address" size="row" />
   ) : (
     <ShortId value={party.lockScriptHash} kind="hash" size="row" />
   );
   return party.address ? (
-    <Link href={`/address/${party.address}`} className="text-text-bright hover:text-jade">
+    <Link href={`/address/${party.address}`} look={look}>
       {text}
     </Link>
   ) : (
-    <span className="text-text-bright" title={party.lockScriptHash}>
+    <span className={look === 'key' ? 'text-text-bright' : undefined} title={party.lockScriptHash}>
       {text}
     </span>
   );
@@ -121,7 +130,8 @@ function OpenNow({ count, capacity }: { count: number; capacity: string }) {
   if (count === 0) return <>none</>;
   return (
     <>
-      {count} · <CkbAmount form="summary" shannons={BigInt(capacity)} signed={false} tone="plain" />
+      {count.toLocaleString('en-US')} ·{' '}
+      <CkbAmount form="summary" shannons={BigInt(capacity)} signed={false} tone="plain" />
     </>
   );
 }
@@ -131,7 +141,7 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
   return (
     <div>
       <div className="text-text-bright text-body">
-        <PartyLink party={party} />
+        <PartyLink party={party} look="key" />
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
         {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
@@ -152,13 +162,13 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
           ['closed together', party.cooperativelyClosedChannels.toLocaleString('en-US')],
           [
             'force-closed',
-            `${party.forceClosedSettledChannels} settled · ${party.forceClosedWaitingChannels} not yet`,
+            `${party.forceClosedSettledChannels.toLocaleString('en-US')} settled · ${party.forceClosedWaitingChannels.toLocaleString('en-US')} not yet`,
           ],
           [
             'first channel',
             <span key="first">
               <Utc8Date timestamp={party.firstOpenTimestamp} /> ·{' '}
-              <Link href={`/blocks/${party.firstOpenBlock}`} className="hover:text-jade">
+              <Link href={`/blocks/${party.firstOpenBlock}`} look="inline">
                 {formatBlockNumber(party.firstOpenBlock)}
               </Link>
             </span>,
@@ -176,9 +186,11 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
       <div className="text-text-bright text-body">
         …{partyTail(a)} ↔ …{partyTail(b)}
       </div>
-      <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
-        {unitNode(formatCount(pair.channels, 'channel'))} between <PartyLink party={a} /> and{' '}
-        <PartyLink party={b} />
+      {/* The pair's parties are values and links: the reading ink at the panel's small step (they
+          were a quiet 12 px line). */}
+      <div className="text-text mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
+        {unitNode(formatCount(pair.channels, 'channel'))} between{' '}
+        <PartyLink party={a} look="inline" /> and <PartyLink party={b} look="inline" />
       </div>
       <Rows
         rows={[
@@ -190,7 +202,7 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
           ['closed together', pair.cooperativelyClosedChannels.toLocaleString('en-US')],
           [
             'force-closed',
-            `${pair.forceClosedSettledChannels} settled · ${pair.forceClosedWaitingChannels} not yet`,
+            `${pair.forceClosedSettledChannels.toLocaleString('en-US')} settled · ${pair.forceClosedWaitingChannels.toLocaleString('en-US')} not yet`,
           ],
           [
             'typical lifetime',
@@ -205,11 +217,11 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
           [
             'opened in',
             <span key="blocks">
-              <Link href={`/blocks/${pair.firstOpenBlock}`} className="hover:text-jade">
+              <Link href={`/blocks/${pair.firstOpenBlock}`} look="inline">
                 {formatBlockNumber(pair.firstOpenBlock)}
               </Link>
               {' – '}
-              <Link href={`/blocks/${pair.lastOpenBlock}`} className="hover:text-jade">
+              <Link href={`/blocks/${pair.lastOpenBlock}`} look="inline">
                 {formatBlockNumber(pair.lastOpenBlock)}
               </Link>
             </span>,
@@ -277,22 +289,41 @@ function LegendLine({
   );
 }
 
-/** The board's legend, at the top of the column beside the plot (its top right). */
+/**
+ * The graph's key, at the top of the column beside the plot (its top right; under it below lg):
+ * every mark the figure draws, drawn as the figure draws it, and what it stands for (the plan's P4
+ * sentence: the graph's numbers and sizes come up from tier 2 as a legend, not as prose; they were
+ * the tier-2 "How to read the graph"). A party's circle grows with its channels and a large one
+ * carries their count; a pair's grey line widens with the channels it opened over time, its green
+ * line with the CKB locked between the two now. The words are labels: the meta step, the quiet
+ * ink. The widest item, the party's, is a 22 px glyph, 6 px and 37 characters at 12 px (266.4):
+ * 294.4 px, inside the 340 px column and a 358 px phone's line.
+ */
 function GraphKey() {
   const item = 'mr-[18px] inline-flex items-center gap-1.5 last:mr-0';
   return (
     <ul aria-label="Graph key" className="text-meta text-text-dim">
       <li className={item}>
-        <LegendLine stroke={FIBER_COLORS.open} width={3} />
-        CKB locked now
-      </li>
-      <li className={item}>
-        <LegendLine stroke={FIBER_COLORS.history} width={3} opacity={0.4} />
-        channels over time
-      </li>
-      <li className={item}>
-        <LegendLine stroke={FIBER_COLORS.forced} width={1} dash="3 3" />
-        force-closed
+        <svg width="22" height="22" aria-hidden="true">
+          <circle
+            cx="11"
+            cy="11"
+            r="10"
+            fill={FIBER_COLORS.nodeFill}
+            stroke={FIBER_COLORS.nodeStroke}
+            strokeWidth="1.2"
+          />
+          <text
+            x="11"
+            y={11 + centreShift(SVG_TEXT.label)}
+            textAnchor="middle"
+            fontSize={SVG_TEXT.label}
+            fill={FIBER_COLORS.count}
+          >
+            9
+          </text>
+        </svg>
+        party · size and number: its channels
       </li>
       <li className={item}>
         <svg width="14" height="14" aria-hidden="true">
@@ -306,6 +337,18 @@ function GraphKey() {
           <circle cx="7" cy="7" r="6.2" fill="none" stroke={FIBER_COLORS.open} />
         </svg>
         has an open channel
+      </li>
+      <li className={item}>
+        <LegendLine stroke={FIBER_COLORS.history} width={3} opacity={HISTORY_OPACITY} />
+        pair · grey width: channels over time
+      </li>
+      <li className={item}>
+        <LegendLine stroke={FIBER_COLORS.open} width={3} opacity={0.85} />
+        green width: CKB locked now
+      </li>
+      <li className={item}>
+        <LegendLine stroke={FIBER_COLORS.forced} width={1} dash="3 3" opacity={0.7} />
+        force-closed
       </li>
     </ul>
   );
@@ -329,7 +372,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
   const nodesById = useMemo(() => new Map((model?.nodes ?? []).map((n) => [n.id, n])), [model]);
   const edgesById = useMemo(() => new Map((model?.edges ?? []).map((e) => [e.id, e])), [model]);
   if (network.parties.length === 0)
-    return <p className="text-text-dim text-body py-10">No on-chain parties observed yet.</p>;
+    return <p className="text-text text-body py-10">No on-chain parties observed yet.</p>;
   const activeEdge = active?.kind === 'edge' ? edgesById.get(active.id) : undefined;
   const activeNode = active?.kind === 'node' ? nodesById.get(active.id) : undefined;
   const litNodes = activeNode
@@ -410,12 +453,13 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                           strokeWidth="12"
                         />
                         <line
+                          data-history
                           x1={edge.x1}
                           y1={edge.y1}
                           x2={edge.x2}
                           y2={edge.y2}
                           stroke={FIBER_COLORS.history}
-                          strokeOpacity=".28"
+                          strokeOpacity={HISTORY_OPACITY}
                           strokeWidth={edge.greyWidth.toFixed(2)}
                         />
                         {edge.jadeWidth !== null && (
@@ -494,7 +538,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                             fontSize={SVG_TEXT.label}
                             fill={FIBER_COLORS.count}
                           >
-                            {node.channels}
+                            {node.channels.toLocaleString('en-US')}
                           </text>
                         )}
                       </g>
@@ -549,23 +593,6 @@ export function FiberNetworkReading({ network, pin }: Props) {
         Each circle is a party, each line a pair; green is the CKB they lock now.
       </p>
     </>
-  );
-}
-
-/** Tier 2, "How to read the graph": the explainer the picture's column used to hold, as Prose. */
-export function FiberGraphNotes() {
-  return (
-    <Prose>
-      <p>
-        Each circle is a party: the address that funded or received a channel. Its size follows how
-        many channels it took part in. A green ring means it has a channel open now.
-      </p>
-      <p>
-        Each line is a pair that opened channels. Grey grows with how many channels they opened over
-        time; green with the CKB locked between them right now; a dashed line means a channel was
-        force-closed.
-      </p>
-    </Prose>
   );
 }
 

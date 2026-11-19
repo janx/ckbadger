@@ -417,17 +417,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '3 without a look; inks by hand (text-aqua, no-underline, text-interactive)',
   },
   // ---- p-topics ----
-  'app/fiber/channels/[id]/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-text)',
-  },
-  'app/fiber/channels/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
-  },
+  // the Fiber channel and channels pages left the list (lane P4: look 1, ink 1 and look 3, ink
+  // 4, raw 1 → 0)
   // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4: look 10, ink 7 → 0)
   // 'app/forks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
   // 'app/hardforks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
@@ -454,21 +445,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'components/deep-fork-alert.tsx' left the list (lane P4: look 1, ink 1 → 0, the button the
   // block look, its words' ink on a span inside it)
-  'components/fiber/fiber-channel-board.tsx': {
-    lane: 'p-topics',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (text-[color:var(--ink)], style, color)',
-  },
-  'components/fiber/fiber-channel-step.tsx': {
-    lane: 'p-topics',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-[color:var(--ink)], hover:underline, style)',
-  },
-  'components/fiber/fiber-network-graph.tsx': {
-    lane: 'p-topics',
-    sites: { look: 4, ink: 4 },
-    reason: '4 without a look; inks by hand (hover:text-jade, text-text-bright)',
-  },
+  // the Fiber board, step and graph left the list (lane P4: look 11, ink 11 → 0)
   'components/forks/miner-link.tsx': {
     lane: 'p-topics',
     // look 1 → 0 (lane P4): the look is its caller's (`look={look}`); the former ink stands for
@@ -496,11 +473,16 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink) → 509 (page lane P4, 42: the fork page's 17 and MinerLink's look 1, the forks
+// and one ink) → 477 (page lane P4, 74: the fork page's 17 and MinerLink's look 1, the forks
 // page's 8, the deep-fork alert's 2; the hardforks page, 14: its edition block link and the
 // overview links inline, "How it works" a way onward and no raw <a>, 8; the deployment
-// evidence's three links inline, 6)
-const TOLERATED_TOTAL = 509;
+// evidence's three links inline, 6; the Fiber channel page, 16: the breadcrumb's link inline,
+// 2, the board's party, lock-script, commitment-cell and output links, 10, each `inline` or
+// `key`, the step's transaction `key` and block `inline`, 4; the Fiber channels page, 16: the
+// list's channel `key`, its parties `inline` in the table and the phone row, the lede's way
+// down `onward` (the raw anchor and its typed arrow gone), 8, the graph's party and block
+// links, 8)
+const TOLERATED_TOTAL = 477;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

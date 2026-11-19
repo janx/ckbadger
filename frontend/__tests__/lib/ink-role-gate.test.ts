@@ -400,13 +400,15 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/[id]/client-page.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 2 },
-    reason: 'the breadcrumb link, the channel id line and the loading line in the quiet ink',
+    // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/fiber/channels/client-page.tsx': {
     family: 'topics',
-    sites: { td: 1, prose: 2 },
-    reason: "a channel row's time in a table cell; the loading lines",
+    // td 1 → 0 (lane P4): a channel's opening day reads in the reading ink
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
   // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4): the breadcrumb link
   // takes its look, a row's clock and the uncle sentence read in the reading ink
@@ -479,21 +481,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason: 'the not-enough-days sentence',
   },
-  'components/fiber/fiber-channel-board.tsx': {
-    family: 'topics',
-    // prose 5 → 2 (B7): the lede and the lock and output notes explain, in the reading ink
-    sites: { link: 1, prose: 2 },
-    reason: 'the channel id, the empty commitment sentence, a party link',
-  },
   'components/fiber/fiber-channel-step.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 1 },
-    reason: "a step's block link and its loading line",
-  },
-  'components/fiber/fiber-network-graph.tsx': {
-    family: 'topics',
-    sites: { link: 2, prose: 1 },
-    reason: "a pair's party links in its readout and the empty-graph sentence",
+    // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
+    sites: { prose: 1 },
+    reason: "the step's loading line, a transient note in the quiet ink",
   },
   // ---- shared ----
   'components/activity/activity-row.tsx': {
