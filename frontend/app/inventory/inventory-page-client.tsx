@@ -157,11 +157,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
       }),
   });
   const classLabel = INVENTORY_CLASSES.find((c) => c.key === assetType)!.label;
-  // the shown page's figures (lib/pagination.ts); nothing for one page, nor for an empty one
-  const assetsAt =
-    assets.data && assets.data.data.length > 0
-      ? rankedPageAt(classLabel, pagination.page, assets.data)
-      : null;
+  // the shown page's figures (lib/pagination.ts); nothing for one page, an empty page past the
+  // end its place and a way back (lane c2-finish, 1b)
+  const assetsAt = assets.data ? rankedPageAt(classLabel, pagination.page, assets.data) : null;
   const filter = (key: 'standard' | 'compositionTier', value: string) => {
     const next = value || undefined;
     if (key === 'standard') setStandard(next);
