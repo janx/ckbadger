@@ -217,7 +217,9 @@ describe('BlockTransactionsTable', () => {
   // Re-pinned on purpose (lane D2; renamed, it was "…, its rows at the page’s main column"): the
   // facts aside went to the head's status strip, so the main column is the page's 1,232 px at
   // 1280 and the table is a table there.
-  it('budgets every column from what it holds: 1,094 px, a table in the page’s main column', () => {
+  // Re-pinned on purpose (lane P1 follow-up, item 6; renamed, it was "… 1,094 px …"): the inputs
+  // are written grouped (c6f9ea20), "13,568", so Cells 114 → 122 and the table 1,102 px.
+  it('budgets every column from what it holds: 1,102 px, a table in the page’s main column', () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -227,9 +229,9 @@ describe('BlockTransactionsTable', () => {
       ceil(at('0x01010101…010101', 13) + 16),
       // "#99,999,999" and " +10 · uncle" (the proposal window is 2 to 10 blocks)
       ceil(at('#99,999,999 +10 · uncle', 13) + 16),
-      // the most inputs a transaction holds (597,000 bytes of 44-byte inputs: 13,568), "13568",
-      // the arrow between its 6 px margins, four digits of outputs, "9,999"
-      ceil(at('13568', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
+      // the most inputs a transaction holds (597,000 bytes of 44-byte inputs: 13,568), grouped as
+      // written, "13,568", the arrow between its 6 px margins, four digits of outputs, "9,999"
+      ceil(at('13,568', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
       // the genesis transactions' 33.6 billion CKB: eleven whole digits, every decimal
       ceil(at('99,999,999,999.99999999', 13) + 16),
       // a fee under 100 CKB
@@ -239,9 +241,9 @@ describe('BlockTransactionsTable', () => {
       // a 48 px track and a scale under a billion cycles, "750,000,000"; the last column
       ceil(48 + 10 + at('750,000,000', 13)),
     ];
-    expect(budgets).toEqual([48, 149, 196, 114, 196, 102, 145, 144]);
+    expect(budgets).toEqual([48, 149, 196, 122, 196, 102, 145, 144]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(1094);
+    expect(sum).toBe(1102);
     const { unmount } = wrap(
       <BlockTransactionsTable
         transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
@@ -268,8 +270,8 @@ describe('BlockTransactionsTable', () => {
     unmount();
     for (const [width, form] of [
       [1232, 'table'],
-      [1094, 'table'],
-      [1093, 'rows'],
+      [1102, 'table'],
+      [1101, 'rows'],
       [blockPageColumn(1280), 'table'],
     ] as const) {
       atContainerWidth(width);
@@ -298,7 +300,8 @@ describe('BlockTransactionsTable', () => {
   // now, 952 px (1,232 − 240 − 40), and the shortfall is 142 (it was 126 against the literal).
   // Lane D2: the known fault is fixed and its entry removed (the list only shrinks: 1 → 0). The
   // facts aside became the head's status strip (PA-13), so the page gives the table its full
-  // 1,232 px at 1440 and 1280, 138 px more than its 1,094.
+  // 1,232 px at 1440 and 1280, 138 px more than its 1,094 (130 more than its 1,102 since the lane
+  // P1 follow-up budgets the inputs grouped).
   const BLOCK_PAGE_COLUMN = [1440, 1280].map((window) => ({
     window,
     column: blockPageColumn(window),

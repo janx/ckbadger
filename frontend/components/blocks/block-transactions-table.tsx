@@ -179,11 +179,17 @@ export function BlockTransactionsTable({
     {
       key: 'cells',
       label: 'Cells',
-      // The most inputs a transaction holds as written, "13568" (review fb-tests 6: it counted four
-      // digits while 13,568 44-byte inputs fit a block), the arrow between its 6 px margins, four
-      // digits of outputs, "9,999" (97.8 px), and the gap. It was 70.
+      // The most inputs a transaction holds as written, grouped since c6f9ea20, "13,568" (review
+      // fb-tests 6: it counted four digits while 13,568 44-byte inputs fit a block; lane P1
+      // follow-up: it measured the ungrouped "13568"), the arrow between its 6 px margins, four
+      // digits of outputs, "9,999" (105.6 px), and the gap. It was 70.
       minWidth: columnPx(
-        cell(String(MAX_TX_INPUTS)) + 6 + cell('→') + 6 + cell(WIDEST_COUNT) + CELL_GAP_PX
+        cell(MAX_TX_INPUTS.toLocaleString('en-US')) +
+          6 +
+          cell('→') +
+          6 +
+          cell(WIDEST_COUNT) +
+          CELL_GAP_PX
       ),
       render: (tx) => (
         <span className="whitespace-nowrap">
