@@ -3,7 +3,8 @@ import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { RangeSelect } from '@/components/ui/range-select';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { cursorPageFigures } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -85,13 +86,15 @@ export interface ScriptFamilyPageProps {
   codeCells: ReadonlyMap<string, CodeCellState>;
   /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
   newest: NewestCellsState;
+  /**
+   * The family's cells, a page of them: the pager counts them of the family's live cells
+   * (`family.liveCellsCount`), the page the walk is on, the page size asked and the rows shown.
+   */
   cells: {
     pageSize: number;
     rows: readonly Cell[];
     loading: boolean;
     page: number;
-    hasMore: boolean;
-    hasPrevious: boolean;
     currentCount: number;
     onNext: () => void;
     onPrevious: () => void;
@@ -1321,16 +1324,17 @@ export function ScriptFamilyPage({
                 </p>
               )}
               {cells.rows.length > 0 && (
-                <CursorPagination
-                  total={family.liveCellsCount}
-                  totalLabel="cells"
-                  pageSize={cells.pageSize}
-                  page={cells.page}
-                  currentCount={cells.currentCount}
-                  hasMore={cells.hasMore}
-                  hasPrevious={cells.hasPrevious}
-                  onNext={cells.onNext}
+                <Pager
+                  mode="pages"
+                  label="cells"
+                  {...cursorPageFigures({
+                    page: cells.page,
+                    pageSize: cells.pageSize,
+                    rows: cells.currentCount,
+                    total: family.liveCellsCount,
+                  })}
                   onPrevious={cells.onPrevious}
+                  onNext={cells.onNext}
                 />
               )}
             </section>

@@ -4,7 +4,7 @@ import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { NotFoundPage } from '@/components/not-found-page';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { CellBar } from '@/components/ui/cell-bar';
@@ -36,7 +36,7 @@ import {
   getCapacityRangeParams,
   CapacityRangeKey,
 } from '@/lib/capacity-range';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { cursorPageFigures, ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -1314,8 +1314,6 @@ export default function ScriptDetailPage({
           rows: selectedVersionCellsData.data,
           loading: isVersionCellsLoading,
           page: cellsPagination.page,
-          hasMore: selectedVersionCellsData.hasMore,
-          hasPrevious: cellsPagination.hasPrevious,
           currentCount: selectedVersionCellsData.currentCount,
           onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
           onPrevious: cellsPagination.goToPrevious,
@@ -1720,19 +1718,38 @@ export default function ScriptDetailPage({
                       empty="No live cells currently use this version."
                     />
                   )}
-                  {selectedVersionCellsData.data.length > 0 && (
-                    <CursorPagination
-                      total={selectedVersionCellsData.total}
-                      totalLabel="cells"
-                      pageSize={cellsPageSize}
-                      page={cellsPagination.page}
-                      currentCount={selectedVersionCellsData.currentCount}
-                      hasMore={selectedVersionCellsData.hasMore}
-                      hasPrevious={cellsPagination.hasPrevious}
-                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                      onPrevious={cellsPagination.goToPrevious}
-                    />
-                  )}
+                  {/* The cells oldest first: counted of the usage's live cells where the API
+                      states them, else a list in time whose newer end is the next page. */}
+                  {selectedVersionCellsData.data.length > 0 &&
+                    (selectedVersionCellsData.total === undefined ? (
+                      <Pager
+                        mode="time"
+                        label="cells"
+                        order="oldest first"
+                        page={cellsPagination.page}
+                        onNewer={
+                          selectedVersionCellsData.hasMore
+                            ? () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
+                            : undefined
+                        }
+                        onOlder={
+                          cellsPagination.hasPrevious ? cellsPagination.goToPrevious : undefined
+                        }
+                      />
+                    ) : (
+                      <Pager
+                        mode="pages"
+                        label="cells"
+                        {...cursorPageFigures({
+                          page: cellsPagination.page,
+                          pageSize: cellsPageSize,
+                          rows: selectedVersionCellsData.currentCount,
+                          total: selectedVersionCellsData.total,
+                        })}
+                        onPrevious={cellsPagination.goToPrevious}
+                        onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
+                      />
+                    ))}
                 </DetailSection>
               )}
             </>

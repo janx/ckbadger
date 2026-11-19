@@ -769,9 +769,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
     const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
     expect(accents.map((el) => el.textContent)).toEqual(['live · current']);
+    // re-pinned on purpose (lane c2-chain): the cells' pager is the library's, whose way to go is
+    // celadon on every page (the controls board; ui-color-guidelines' pager row), a control's
+    // part and not coloured text; it was a boxed button in the reading ink
+    const pager = screen.getByRole('navigation', { name: 'cells' });
+    expect(within(pager).getByRole('button', { name: 'next →' })).toHaveClass('text-jade');
     const coloured = [...tier1().querySelectorAll('[class]')].filter(
       (el) =>
         !el.matches('[data-row-tag="accent"]') &&
+        !pager.contains(el) &&
         el
           .getAttribute('class')!
           .split(/\s+/)

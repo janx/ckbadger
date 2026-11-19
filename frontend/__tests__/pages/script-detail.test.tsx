@@ -753,7 +753,13 @@ describe('ScriptDetailPage', () => {
     expect(within(cells).getByText('Owner')).toBeInTheDocument();
     expect(within(cells).getByText('Also guarded by')).toBeInTheDocument();
     expect(within(cells).getByText('Occupied')).toBeInTheDocument();
-    await waitFor(() => expect(document.body.textContent).toMatch(/of 8\s*cells/));
+    // re-pinned on purpose (lane c2-chain): the library's pager writes its range as the board does,
+    // `1–1 of 8 · 5 a page` (was "Showing 1–1 of 8 cells · 5 per page"), still of the family total
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'cells' })).toHaveTextContent(
+        /^1–1 of 8 · 5 a page/
+      )
+    );
     for (const [codeHash, hashType] of [
       [sharedVersionCodeHash, 'type'],
       [sharedObservedData1Reference, 'data1'],
