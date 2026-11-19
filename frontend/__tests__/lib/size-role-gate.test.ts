@@ -339,34 +339,22 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
  * with these: 28 sites in 18 files).
  */
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
-  chain: 3,
+  chain: 0,
   assets: 13,
   lists: 6,
   topics: 2,
   charts: 1,
   shared: 3,
 };
-const TOLERATED_FILES = 18;
+// chain 3 → 0, files 18 → 15 (lane P1, the ink and size roles):
+// components/cell/code-cell-board.tsx, components/transaction/script-group-matrix.tsx,
+// components/transaction/what-moved.tsx left the list
+const TOLERATED_FILES = 15;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
-  'components/cell/code-cell-board.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a code cell's script link in its 12 px reference line; ${WORK}`,
-  },
-  'components/transaction/script-group-matrix.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a script group's link in a 12 px line; ${WORK}`,
-  },
-  'components/transaction/what-moved.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a party's link in a 12 px line; ${WORK}`,
-  },
   // ---- assets ----
   'components/asset/asset-history.tsx': {
     family: 'assets',

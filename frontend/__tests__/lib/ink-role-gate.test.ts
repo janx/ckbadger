@@ -70,11 +70,12 @@ interface Tolerated {
 // 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
 // chain 28 → 23, files 51 → 48 (lane P1, the ink and size roles: the address pages)
+// chain 23 → 22, files 48 → 47 (lane P1, the ink and size roles: the code cell)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
   // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
   // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
-  chain: 23,
+  chain: 22,
   assets: 33,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
@@ -85,7 +86,7 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 48;
+const TOLERATED_FILES = 47;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -172,11 +173,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       "loading 1: a transaction being read; note 1: the code cells' 'the spender picks its own cell deps'",
   },
-  'components/cell/code-cell-board.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: 'No registered Type ID version history for this binary.' (lane P1 follow-up)",
-  },
+  // components/cell/code-cell-board.tsx left the list (lane P1, the ink and size roles: the code
+  // cell): 'No registered Type ID version history for this binary.' is a sentence, in the reading
+  // ink
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
   // 'components/transaction/script-group-matrix.tsx' left the list (lane P1 follow-up): a group's
@@ -1217,7 +1216,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // sites left the work list for DECIDED, 15 in 6 files
   // Re-pinned on purpose (lane P1, the ink and size roles: the address pages; renamed, it was "107
   // sites in 51 files")
-  it('tolerates 102 sites in 48 files: the pinned totals by family, which only fall', () => {
+  // Re-pinned on purpose (lane P1, the ink and size roles: the code cell; renamed, it was "102
+  // sites in 48 files")
+  it('tolerates 101 sites in 47 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
