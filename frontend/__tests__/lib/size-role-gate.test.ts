@@ -341,12 +341,14 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 3,
   assets: 13,
-  lists: 6,
+  // lists 6 → 5 (the inventory's totals line at 13 px)
+  lists: 5,
   topics: 2,
   charts: 1,
   shared: 3,
 };
-const TOLERATED_FILES = 18;
+// 18 → 17 (the inventory's totals line at 13 px)
+const TOLERATED_FILES = 17;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -409,11 +411,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { link: 3, td: 1 },
     reason: `the blocks list's miner and reward links at 12 px and a 12 px cell; ${WORK}`,
   },
-  'components/asset/inventory-summary.tsx': {
-    family: 'lists',
-    sites: { link: 1 },
-    reason: `the inventory's as-of block link in a 12 px line; ${WORK}`,
-  },
+  // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles item 2, 588cd09a:\n  // link 1 → 0): the totals line is a sentence at 13 px, its block link with it
   'components/pipeline/pipeline-panel.tsx': {
     family: 'lists',
     sites: { link: 1 },
