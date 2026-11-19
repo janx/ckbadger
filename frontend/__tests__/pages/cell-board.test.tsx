@@ -188,7 +188,8 @@ describe('Cell page against the Cell board', () => {
     const holder = below!.lastElementChild!;
     expect(holder).toHaveAttribute('data-detail-lede');
     expect(holder).toHaveClass('max-w-measure');
-    expect(holder.firstElementChild!.firstElementChild).toBe(line);
+    // re-pinned on purpose (lane P1): the lede is the one sentence itself, no wrapper of two lines
+    expect(holder.firstElementChild).toBe(line);
     expect(plate).not.toContainElement(line);
     // after the full out point and its copy, in the plate
     const outpointLine = screen.getByRole('button', { name: 'copy out point' }).closest('div')!;
@@ -258,21 +259,22 @@ describe('Cell page against the Cell board', () => {
     );
     // re-pinned with readability R4 (lane B7): the lede in its measured holder under the plate.
     // Re-pinned on purpose (lane D3, U-17): the generic "only name" sentence went to the page's
-    // developer tier; the lede keeps what this cell is and where it comes from
-    const lede = below!.querySelector('[data-detail-lede] > div')!;
-    const parts = Array.from(lede.children);
-    expect(parts).toEqual([
-      screen.getByTestId('cell-inventory'),
-      screen.getByTestId('cell-origin'),
-    ]);
+    // developer tier. Re-pinned on purpose (lane P1, the plan: the out point written once whole
+    // and once short; said once): the lede is one sentence of what the cell is; the origin line
+    // under it ("output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533") wrote the
+    // transaction's hash a third time and the strip's state and block again, and is gone
+    const holder = below!.querySelector('[data-detail-lede]')!;
+    expect(Array.from(holder.children)).toEqual([screen.getByTestId('cell-inventory')]);
+    expect(screen.queryByTestId('cell-origin')).toBeNull();
     expect(container.querySelector('[data-tier="2"]')).toContainElement(
       screen.getByText(/The out point is the cell's only name/)
     );
-    // the inventory and the origin lines keep the identity lines' dim small voice
-    expect(lede).toHaveClass('text-text-dim', 'text-small', 'space-y-1.5');
   });
 
-  it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
+  // Renamed and re-pinned on purpose (lane P1; it was "… with copy, its origin line and the 'only
+  // name' note"): the out point is written twice, whole on the id line and short in the h1; the
+  // origin line went (its transaction is the Transactions section's link, its block the strip's).
+  it('names the cell by its out point, whole and short, with copy and the "only name" note (SC-C9)', async () => {
     view();
     await screen.findByRole('heading', { name: /^Bytes / });
     // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
@@ -287,22 +289,17 @@ describe('Cell page against the Cell board', () => {
     expect(h1).toHaveClass('text-entity');
     await waitFor(() => expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger'));
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
-    const origin = screen.getByTestId('cell-origin');
-    // R9 (re-pinned): the origin line is the lede, prose at the row size (it was the head size)
-    expect(origin).toHaveTextContent(
-      /^output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533$/
-    );
-    expect(within(origin).getByRole('link', { name: '0xbe1b9761…936cd8' })).toHaveAttribute(
-      'href',
-      `/mainnet/tx/${cell.txHash}`
-    );
-    expect(within(origin).getByRole('link', { name: '#20,801,533' })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/20801533'
-    );
-    // the origin line sits under the full out point, before the "only name" sentence
-    const outpointLine = screen.getByRole('button', { name: 'copy out point' }).closest('div')!;
-    expect(outpointLine.compareDocumentPosition(origin)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // the head writes the out point twice: short in the h1, whole on the id line, and no third
+    // form of its transaction's hash
+    const head = h1.closest('header')!;
+    expect(head).not.toHaveTextContent(/output 1 of transaction/);
+    expect(head.textContent!.split(cell.txHash).length - 1).toBe(1);
+    // its block is the strip's link
+    expect(
+      within(screen.getByRole('group', { name: 'Cell status' })).getByRole('link', {
+        name: '#20,801,533',
+      })
+    ).toHaveAttribute('href', '/mainnet/blocks/20801533');
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent(
       'exists from block #20,801,533 until a transaction spends it.'

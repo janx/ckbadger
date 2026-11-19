@@ -313,74 +313,6 @@ function CellFacts({
   );
 }
 
-/** "code cell of JoyID, v5": the scripts this cell is code for, and its Type ID version. */
-function CodeCellOf({ cell }: { cell: Cell }) {
-  if (!cell.codeCellOf?.length) return null;
-  const version = cell.codeCell?.typeIdVersions.find(
-    (item) => item.codeCellTxHash === cell.txHash && item.codeCellOutputIndex === cell.outputIndex
-  );
-  return (
-    <span data-testid="code-cell-of" className="text-text-dim text-small">
-      · code cell of{' '}
-      {cell.codeCellOf.map((script, i) => (
-        <span key={`${script.codeHash}:${script.hashType}`}>
-          {i > 0 && ', '}
-          <Link
-            href={`/script/${script.codeHash}?hashType=${script.hashType}`}
-            className="text-text-bright"
-          >
-            {script.name}
-          </Link>
-        </span>
-      ))}
-      {version && `, v${version.ordinal}`}
-    </span>
-  );
-}
-
-/**
- * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to
- * the transaction page and the block to its page; the line under the plate is the page's lede
- * (prose: the row form, R9).
- */
-function CellOrigin({ cell }: { cell: Cell }) {
-  return (
-    <p className="max-w-measure" data-testid="cell-origin">
-      output {cell.outputIndex} of transaction{' '}
-      <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <ShortId value={cell.txHash} kind="hash" size="row" />
-      </Link>{' '}
-      ·{' '}
-      {cell.status === 'dead' ? (
-        cell.consumedAtBlock != null ? (
-          <span className="whitespace-nowrap">
-            spent at{' '}
-            <Link
-              href={`/blocks/${cell.consumedAtBlock}`}
-              className="text-text hover:text-text-bright"
-            >
-              {formatBlockNumber(cell.consumedAtBlock)}
-            </Link>
-          </span>
-        ) : (
-          'spent, block unavailable'
-        )
-      ) : (
-        <span className="whitespace-nowrap">
-          live since{' '}
-          <Link
-            href={`/blocks/${cell.createdAtBlock}`}
-            className="text-text hover:text-text-bright"
-          >
-            {formatBlockNumber(cell.createdAtBlock)}
-          </Link>
-        </span>
-      )}
-    </p>
-  );
-}
-
 /**
  * The cell's status strip (lane D2, PA-13; gate D0′'s strip with the cell's own four facts): its
  * state, live (the data's celadon dot) or spent (the dead ink's), the time it was created on the
@@ -453,9 +385,6 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
         seal={{ ...seal, kind: 'Cell' }}
-        // on the kind line, after "Cell": the scripts it is code for (its state, live or spent,
-        // is the status strip's first fact, said once)
-        status={<CodeCellOf cell={cell} />}
         // The status strip under the id line (lane D2, PA-13): its state, when it was created, the
         // block that created it and its capacity; its other facts stay in "Cell facts" below.
         strip={{ label: 'Cell status', facts: cellStripFacts(cell) }}
@@ -469,14 +398,22 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <span className="min-w-0">{outpoint}</span>
           </IdCopyRow>
         }
-        // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
-        // dim small voice: the inventory item this cell is (lane U, U6) and the transaction it is
-        // an output of (what an out point is, in general, is the developer tier's: lane D3).
+        // Under the stone and the plate, from the page's left edge (C10): one sentence of what the
+        // cell is (lane U, U6: the inventory item it is; lane P1: for every kind, by its scripts —
+        // the code it holds, which the kind line said, among them). Said once (lane P1): its
+        // state, its block and its capacity are the strip's, its transaction the Transactions
+        // section's link, and its out point is written whole on the id line and short in the h1
+        // (the origin line under them wrote the transaction's hash a third time); what an out
+        // point is, in general, is the developer tier's (lane D3).
         lede={
-          <div className="text-text-dim text-small space-y-1.5">
-            <CellInventoryLine cell={cell} />
-            <CellOrigin cell={cell} />
-          </div>
+          <CellInventoryLine
+            cell={cell}
+            typeName={
+              cell.type?.codeHash === TYPE_ID_CODE_HASH || names.lookup.isSuccess
+                ? names.type
+                : undefined
+            }
+          />
         }
         // The developer tier (lane D3, U-17): what an out point is, the cell's bytes, and the
         // script groups of its transactions, in the transaction page's rows.

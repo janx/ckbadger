@@ -80,9 +80,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/cell/[outpoint]/client-page.tsx': {
     lane: 'p-chain',
     // look 15 → 14, ink 8 → 7 (lane D2): the Created fact's block link (text-text-bright) went to
-    // the status strip, whose link states its look
-    sites: { look: 14, ink: 7 },
-    reason: '14 without a look; inks by hand (text-text-bright, text-text, hover:text-text-bright)',
+    // the status strip, whose link states its look. Look 14 → 10, ink 7 → 3 (lane P1): the
+    // origin line's three links went (said once), and the kind line's code-cell link became the
+    // lede's, in components/cell/inventory-line.tsx, stating its look
+    sites: { look: 10, ink: 3 },
+    reason: '10 without a look; inks by hand (text-text-bright, text-[color:var(--ink)])',
   },
   'app/tx/[hash]/client-page.tsx': {
     lane: 'p-chain',
@@ -521,8 +523,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 527 (lane P1, 10
 // more: the transaction page's lede, its item names, the cellbase's paid block, and the cellbase's
 // own block, which the status strip states, 5 looks and 5 inks) → 525 (lane P1: the block page's
-// lede no longer names the miner, and the cellbase row's paid block states its look, 2)
-const TOLERATED_TOTAL = 525;
+// lede no longer names the miner, and the cellbase row's paid block states its look, 2) → 517 (lane
+// P1: the cell page's origin line and its kind line's code-cell link, 8: four looks, four inks)
+const TOLERATED_TOTAL = 517;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
