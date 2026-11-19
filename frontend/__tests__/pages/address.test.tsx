@@ -1592,9 +1592,14 @@ describe('Address board · F2 blocks', () => {
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
       `/mainnet/address/${addressText}.md`
     );
-    expect(within(lock).getByRole('link', { name: 'JSON' }).getAttribute('href')).toMatch(
-      new RegExp(`/addresses/${addressText}$`)
+    // Re-pinned on purpose (lane P1 follow-up, the link-look gate): the API's JSON is a way out of
+    // the site, an ExternalLink to the API's absolute URL ("JSON ↗", a new tab), not a raw <a>
+    const json = within(lock).getByRole('link', { name: /^JSON\s↗$/ });
+    expect(json.getAttribute('href')).toMatch(
+      new RegExp(`^https?://[^/]+/api/mainnet/v1/addresses/${addressText}$`)
     );
+    expect(json).toHaveAttribute('target', '_blank');
+    expect(json).toHaveAttribute('rel', 'noreferrer');
   });
 
   it('draws the lock script as its occupied bytes and derives its two names (C6)', async () => {

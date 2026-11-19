@@ -8,6 +8,7 @@ import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
@@ -285,13 +286,19 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   actions={
                     <span className="text-small">
                       {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
-                      <a
-                        href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
-                        target="_blank"
-                        rel="noreferrer"
+                      {/* the API's JSON, a way out of the site: its absolute URL (lane P1
+                          follow-up; the site's Link would prefix a path with the network) */}
+                      <ExternalLink
+                        look="inline"
+                        href={
+                          new URL(
+                            `${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`,
+                            window.location.origin
+                          ).href
+                        }
                       >
                         JSON
-                      </a>
+                      </ExternalLink>
                       {' · '}
                       <Link
                         look="inline"

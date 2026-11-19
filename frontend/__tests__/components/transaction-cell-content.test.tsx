@@ -87,6 +87,9 @@ describe('transaction cell semantics', () => {
     );
     expect(screen.getByText('no readable amount of')).toHaveAttribute('title', reason);
     expect(screen.getByRole('link')).toHaveTextContent('no readable amount of USDI');
+    // lane P1 follow-up (the link-look gate): the words stand where the amount would, in the
+    // link's own ink; no ink is written by hand inside the link
+    expect(screen.getByText('no readable amount of')).not.toHaveClass('text-text-dim');
     expect(screen.queryByText(/0 USDI/)).not.toBeInTheDocument();
   });
 

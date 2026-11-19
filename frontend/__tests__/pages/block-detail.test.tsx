@@ -322,13 +322,25 @@ describe('BlockDetailPage', () => {
     expect(resources.lastElementChild).toHaveClass('text-text-dim', 'normal-case');
     expect(screen.getByRole('region', { name: 'Hardfork resources' })).toContainElement(resources);
 
-    const resourceLinks = screen.getAllByTestId('block-hardfork-resource-link');
+    // Re-pinned on purpose (lane P1 follow-up, the link-look gate): each resource is a way out of
+    // the site, ExternalLink in the onward look ("CKB2021 ↗", a new tab), not a raw <a> inked by
+    // hand (text-interactive) with its own test id
+    const resourceLinks = within(
+      screen.getByRole('region', { name: 'Hardfork resources' })
+    ).getAllByRole('link');
     expect(resourceLinks).toHaveLength(2);
-    expect(screen.getByRole('link', { name: 'CKB2021' })).toHaveAttribute(
+    for (const link of resourceLinks) {
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveClass('text-jade');
+      expect(link).not.toHaveClass('text-interactive');
+      // its arrow held to its last word (the matcher reads the no-break space as a space)
+      expect(link).toHaveTextContent(/\s↗$/);
+    }
+    expect(screen.getByRole('link', { name: /^CKB2021\s↗$/ })).toHaveAttribute(
       'href',
       'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md'
     );
-    expect(screen.getByRole('link', { name: 'Migration Guide' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^Migration Guide\s↗$/ })).toHaveAttribute(
       'href',
       'https://github.com/jordanmack/nervos-ckb2021-hard-fork-migration-guide'
     );
@@ -417,7 +429,8 @@ describe('BlockDetailPage', () => {
     render(<BlockDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
+      // re-pinned (lane P1 follow-up): an ExternalLink, its name ends in its ↗
+      expect(screen.getByRole('link', { name: /^CKB2023\s↗$/ })).toHaveAttribute(
         'href',
         'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md'
       );

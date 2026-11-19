@@ -298,6 +298,10 @@ describe('Block board · first tier', () => {
       'Next block, 20,827,933',
     ]);
     const [previous, next] = steps;
+    // lane P1 follow-up (the link-look gate): a step link is a block whose mark takes the link's
+    // ink, celadon under the pointer and the focus by the one rule; no ink written on the mark
+    for (const step of steps)
+      expect(step.querySelector('svg')!.getAttribute('class') ?? '').not.toMatch(/\btext-/);
     const height = within(title).getByText('#20,827,932');
     const row = height.parentElement!;
     expect(row.parentElement).toBe(title);

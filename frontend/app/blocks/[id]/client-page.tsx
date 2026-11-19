@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
@@ -722,17 +723,16 @@ export default function BlockDetailPage() {
                 className="mb-3"
               />
               <div className="flex flex-wrap gap-4">
+                {/* each a way out of the site, the onward look with its ↗ (lane P1 follow-up) */}
                 {resources.map((resource) => (
-                  <a
+                  <ExternalLink
                     key={resource.url}
                     href={resource.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    data-testid="block-hardfork-resource-link"
-                    className="text-interactive text-small"
+                    look="onward"
+                    className="text-small"
                   >
                     {resource.label}
-                  </a>
+                  </ExternalLink>
                 ))}
               </div>
             </section>
@@ -834,13 +834,14 @@ export default function BlockDetailPage() {
 
 function ArrowLink({ href, label, d }: { href: string; label: string; d: string }) {
   return (
-    // a block: a box whose mark draws its own ink, quiet, celadon under the pointer (the link's
-    // hover reaches it through the group)
+    // a block: a box whose mark takes the link's ink (stroke currentColor), celadon under the
+    // pointer and the focus by the one rule (app/globals.css); no ink written on the mark (the
+    // link-look gate; lane P1 follow-up: it was the quiet ink, celadon through the group hover)
     <Link
       look="block"
       href={href}
       aria-label={label}
-      className="border-base-border group flex h-9 w-9 shrink-0 items-center justify-center border"
+      className="border-base-border flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -850,7 +851,6 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
-        className="text-text-dim group-hover:text-jade group-focus-visible:text-jade"
       >
         <path d={d} />
       </svg>
