@@ -229,6 +229,9 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
     ] as const
   ).filter((p) => p.value > BigInt(0));
   const holdsDao = holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0;
+  // "other" only beside a DAO part: the cells that are not Nervos DAO cells; an address with no
+  // DAO cell says "its cells" (lane P1, the lead's look after the third round)
+  const cells = daoCells > BigInt(0) ? 'its other cells' : 'its cells';
   const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const zero = sum === BigInt(0);
@@ -331,9 +334,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                         value: (
                           <>
                             <ExactParts shannons={occupied} />{' '}
-                            <span className="text-text-dim">
-                              pays for the bytes of its other cells
-                            </span>
+                            <span className="text-text-dim">pays for the bytes of {cells}</span>
                           </>
                         ),
                       },
@@ -349,8 +350,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                 maturity allows */}
             {free > BigInt(0) && (
               <div data-testid="free-note" className="text-text-dim max-w-measure mt-1.5">
-                Free is the CKB its other cells hold beyond what their bytes occupy; whether it can
-                be spent, their locks decide.
+                Free is the CKB {cells} hold beyond what their bytes occupy; whether it can be
+                spent, their locks decide.
               </div>
             )}
           </div>
