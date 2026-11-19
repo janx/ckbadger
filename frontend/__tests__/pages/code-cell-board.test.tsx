@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { elfParts } from '@/lib/cell-parts';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
@@ -45,7 +46,9 @@ function view() {
 describe('code cell page against the CellCode board', () => {
   beforeEach(() => {
     vi.mocked(api.getCell).mockResolvedValue(cell);
-    vi.mocked(api.lookupScripts).mockResolvedValue({ [MULTISIG]: { name: 'Multisig' } } as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [scriptLookupKey(MULTISIG, cell.lock!.hashType)]: { name: 'Multisig' },
+    } as never);
   });
 
   it('presses the code cell’s own seal: its Type ID an unregistered type, class other (seal kinds, C3)', async () => {
@@ -188,7 +191,9 @@ describe('elfParts (JoyID v5)', () => {
 describe('code cell page · visual pass', () => {
   beforeEach(() => {
     vi.mocked(api.getCell).mockResolvedValue(cell);
-    vi.mocked(api.lookupScripts).mockResolvedValue({ [MULTISIG]: { name: 'Multisig' } } as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [scriptLookupKey(MULTISIG, cell.lock!.hashType)]: { name: 'Multisig' },
+    } as never);
   });
 
   it('labels small map parts of a large cell with their byte count only, never wrapping', async () => {

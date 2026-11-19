@@ -29,6 +29,7 @@ import { ScriptFamilyPage } from '@/components/scripts/script-family-page';
 import type { NewestCellsState } from '@/components/scripts/script-newest-cells';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
+import { distinctScriptPairs, scriptLookupKey } from '@/lib/script-pair';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isAwaited } from '@/lib/query-state';
@@ -46,7 +47,13 @@ import {
   type ScriptRefHashType,
 } from '@/lib/script-ref';
 import { formatCapacity, formatNumber } from '@/lib/utils';
-import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
+import type {
+  Cell,
+  KnownScript,
+  ScriptFamilyDetail,
+  ScriptLookupInfo,
+  ScriptLookupResponse,
+} from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -356,6 +363,19 @@ function hasKnownScriptName(name: string | null | undefined): boolean {
   return normalized.length > 0 && normalized.toLowerCase() !== UNKNOWN_SCRIPT_NAME;
 }
 
+/**
+ * A deployment's lookup answer, by its pair (code hash, hash type): a deployment whose hash type
+ * is not known asks no pair (lane rd/api-lock-names).
+ */
+function deploymentLookupInfo(
+  lookup: ScriptLookupResponse | undefined,
+  deployment: KnownScript
+): ScriptLookupInfo | undefined {
+  return deployment.hashType
+    ? lookup?.[scriptLookupKey(deployment.codeHash, deployment.hashType)]
+    : undefined;
+}
+
 function deploymentReferenceHashes(
   deployment: KnownScript,
   lookupInfo?: ScriptLookupInfo
@@ -452,13 +472,16 @@ export default function ScriptDetailPage({
     enabled: Boolean(name) && !isCodeHashMode,
   });
   const { data: familyCapacityChart, error: familyCapacityChartError } = familyCapacityChartRead;
+  // The reference page reads one script, by its pair: the code hash and the hash type asked
+  // (lane rd/api-lock-names; a code hash alone names no script).
   const codeHashLookupRead = useQuery({
-    queryKey: ['script-lookup-detail', normalizedCodeHash],
+    queryKey: ['script-lookup-detail', normalizedCodeHash, selectedRefHashType],
     queryFn: async () => {
-      const result = await api.lookupScripts([normalizedCodeHash!]);
-      return result[normalizedCodeHash!] ?? null;
+      const pair = { codeHash: normalizedCodeHash!, hashType: selectedRefHashType! };
+      const result = await api.lookupScripts([pair]);
+      return result[scriptLookupKey(pair.codeHash, pair.hashType)] ?? null;
     },
-    enabled: isCodeHashMode,
+    enabled: isCodeHashMode && selectedRefHashType !== null,
     staleTime: Infinity,
   });
   const { data: codeHashLookup, error: codeHashLookupError } = codeHashLookupRead;
@@ -656,17 +679,24 @@ export default function ScriptDetailPage({
       deployedAt: groupedDeployments[0]?.deployedAt ?? null,
     }));
   }, [isCodeHashMode, namedScriptDetail, sortedDeployments]);
-  const lookupCodeHashes = useMemo(() => {
-    const refs = new Set<string>((deployments ?? []).map((deployment) => deployment.codeHash));
-    if (selectedRef) {
-      refs.add(selectedRef);
-    }
-    return Array.from(refs);
-  }, [deployments, selectedRef]);
+  const lookupScriptPairs = useMemo(
+    () =>
+      distinctScriptPairs([
+        ...(deployments ?? []).map((deployment) =>
+          deployment.hashType
+            ? { codeHash: deployment.codeHash, hashType: deployment.hashType }
+            : null
+        ),
+        selectedRef && selectedRefHashType
+          ? { codeHash: selectedRef, hashType: selectedRefHashType }
+          : null,
+      ]),
+    [deployments, selectedRef, selectedRefHashType]
+  );
   const { data: deploymentLookup } = useQuery({
-    queryKey: ['script-deployments-lookup', lookupCodeHashes],
-    queryFn: () => api.lookupScripts(lookupCodeHashes),
-    enabled: lookupCodeHashes.length > 0,
+    queryKey: ['script-deployments-lookup', lookupScriptPairs],
+    queryFn: () => api.lookupScripts(lookupScriptPairs),
+    enabled: lookupScriptPairs.length > 0,
     staleTime: Infinity,
   });
   useEffect(() => {
@@ -682,7 +712,7 @@ export default function ScriptDetailPage({
               group.deployments.some((deployment) => {
                 const refs = deploymentReferenceHashes(
                   deployment,
-                  deploymentLookup?.[deployment.codeHash]
+                  deploymentLookupInfo(deploymentLookup, deployment)
                 );
                 const matchesTypeRef =
                   refs.typeRef === selectedRef &&
@@ -765,7 +795,7 @@ export default function ScriptDetailPage({
     for (const deployment of deploymentsForReferences) {
       const resolved = deploymentReferenceHashes(
         deployment,
-        deploymentLookup?.[deployment.codeHash]
+        deploymentLookupInfo(deploymentLookup, deployment)
       );
 
       if (resolved.typeRef) {
@@ -1257,7 +1287,10 @@ export default function ScriptDetailPage({
       deployment,
       outpointKey,
       codeCell: outpointKey ? deploymentCellsByOutpoint.get(outpointKey) : undefined,
-      references: deploymentReferenceHashes(deployment, deploymentLookup?.[deployment.codeHash]),
+      references: deploymentReferenceHashes(
+        deployment,
+        deploymentLookupInfo(deploymentLookup, deployment)
+      ),
     };
   });
   const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => isAwaited(query));

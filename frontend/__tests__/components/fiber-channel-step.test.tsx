@@ -3,6 +3,7 @@ import { render, screen, within } from '../utils/test-utils';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { FiberChannelStep } from '@/components/fiber/fiber-channel-step';
+import { scriptLookupKey } from '@/lib/script-pair';
 import fixture from '../fixtures/fiber-channel-c07e.json';
 import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
@@ -26,9 +27,17 @@ function serve() {
       )
     ),
     http.post('/api/:network/v1/scripts/lookup', async ({ request }) => {
-      const { codeHashes } = (await request.json()) as { codeHashes: string[] };
+      // asked by pairs (lane rd/api-lock-names); the fixture's names are by code hash
+      const { scripts } = (await request.json()) as {
+        scripts: { codeHash: string; hashType: string }[];
+      };
       return HttpResponse.json(
-        Object.fromEntries(codeHashes.map((h) => [h, { codeHash: h, name: NAMES[h] ?? 'unknown' }]))
+        Object.fromEntries(
+          scripts.map(({ codeHash, hashType }) => [
+            scriptLookupKey(codeHash, hashType),
+            { codeHash, name: NAMES[codeHash] ?? 'unknown' },
+          ])
+        )
       );
     })
   );

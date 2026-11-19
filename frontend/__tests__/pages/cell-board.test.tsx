@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
@@ -68,8 +69,8 @@ describe('Cell page against the Cell board', () => {
     outpoint = `${cell.txHash}-1`;
     vi.mocked(api.getCell).mockResolvedValue(cell);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(cell.lock!.codeHash, cell.lock!.hashType)]: { name: 'Nervape Shadow Lock' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     mockObjectReads();
   });
@@ -333,8 +334,12 @@ describe('Cell page against the Cell board', () => {
     );
     expect(within(facts).getByRole('link', { name: 'Spore' })).toBeInTheDocument();
     expect(facts.textContent).not.toContain(cell.lock!.codeHash);
+    // each script by its pair (lane rd/api-lock-names)
     expect(api.lookupScripts).toHaveBeenCalledWith(
-      [cell.lock!.codeHash, cell.type!.codeHash],
+      [
+        { codeHash: cell.lock!.codeHash, hashType: cell.lock!.hashType },
+        { codeHash: cell.type!.codeHash, hashType: cell.type!.hashType },
+      ],
       cell.txHash
     );
     expect(transactionsProps).toHaveBeenLastCalledWith(
@@ -458,8 +463,8 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
     outpoint = `${cell.txHash}-1`;
     vi.mocked(api.getCell).mockResolvedValue(cell);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(cell.lock!.codeHash, cell.lock!.hashType)]: { name: 'Nervape Shadow Lock' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     mockObjectReads();
   });

@@ -3171,29 +3171,45 @@ interface CapacityChartRangeParams {
   to?: string;
 }
 
+/**
+ * A script asked of `POST /scripts/lookup`: CKB names a script by the pair (code hash, hash
+ * type), so a code hash alone asks for no script (lane rd/api-lock-names).
+ */
+interface ScriptPair {
+  codeHash: string;
+  hashType: string;
+}
+
+/** One pair's answer: the script (`referenceHash`, `hashType`) asked, its own name and figures. */
 interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
+  /** The registry's name of the pair; "Unknown" when it names none. */
   name: string;
-  /** The queried reference's own label description; null when it has none. */
+  /** The pair's own label description; null when it has none. */
   description?: string | null;
   deprecated?: boolean;
   scriptKind: string | null;
   decoderType: string | null;
-  hashType: string | null;
+  /** The hash type asked: the pair's. */
+  hashType: string;
   deploymentTypeHash?: string | null;
   deploymentDataHash?: string | null;
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
+  /** The pair's own usage: cells ever, live cells, their capacity and occupied capacity. */
+  cellsCount: number;
   liveCellsCount: number;
   ownedCapacitySum: string;
   ownedKnowledgeSum: string;
   codeCellsLiveCount: number;
   codeCellsTotal: number;
-  resolutionState?: 'resolved' | 'ambiguous';
+  /** `unresolved`: no binary resolves the pair; its name and usage stand. */
+  resolutionState?: 'resolved' | 'ambiguous' | 'unresolved';
   ambiguity?: ScriptResolutionAmbiguity | null;
 }
 
+/** The lookup's answer, keyed by `scriptLookupKey(codeHash, hashType)` (`lib/script-pair.ts`). */
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;
 
 function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): KnownScript {
@@ -3918,6 +3934,7 @@ export type {
   ScriptUsage,
   ScriptLookupInfo,
   ScriptLookupResponse,
+  ScriptPair,
   CyclesCalculationStatus,
   CyclesStatusResponse,
   TransactionLifecycle,
@@ -5355,9 +5372,9 @@ export const api = {
     return fetchApi(`/scripts/charts/capacity-history?${query}`);
   },
 
-  lookupScripts: async (codeHashes: string[], txHash?: string): Promise<ScriptLookupResponse> => {
-    if (codeHashes.length === 0) return {};
-    const body: Record<string, unknown> = { codeHashes };
+  lookupScripts: async (scripts: ScriptPair[], txHash?: string): Promise<ScriptLookupResponse> => {
+    if (scripts.length === 0) return {};
+    const body: Record<string, unknown> = { scripts };
     if (txHash) body.txHash = txHash;
     return fetchJson(`${activeApiBase()}/scripts/lookup`, {
       method: 'POST',

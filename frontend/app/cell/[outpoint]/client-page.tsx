@@ -14,6 +14,7 @@ import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
+import { distinctScriptPairs, scriptLookupKey } from '@/lib/script-pair';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
@@ -105,24 +106,25 @@ const TYPE_ID_CODE_HASH = '0x000000000000000000000000000000000000000000000000005
 
 /** Registry names of the cell's lock and type, the way the transaction page names its tiles. */
 function useScriptNames(cell: Cell | undefined) {
-  const codeHashes = cell
-    ? [cell.lock?.codeHash, cell.type?.codeHash].filter(
-        (hash): hash is string => hash !== undefined && hash !== TYPE_ID_CODE_HASH
-      )
+  // Each script by its pair (code hash, hash type): lane rd/api-lock-names.
+  const isTypeId = (script: { codeHash: string; hashType: string }) =>
+    script.codeHash === TYPE_ID_CODE_HASH && script.hashType === 'type';
+  const scripts = cell
+    ? distinctScriptPairs([cell.lock, cell.type].filter((script) => script && !isTypeId(script)))
     : [];
   const lookup = useQuery({
-    queryKey: ['scriptLookup', codeHashes, cell?.txHash],
-    queryFn: () => api.lookupScripts(codeHashes, cell!.txHash),
-    enabled: codeHashes.length > 0,
+    queryKey: ['scriptLookup', scripts, cell?.txHash],
+    queryFn: () => api.lookupScripts(scripts, cell!.txHash),
+    enabled: scripts.length > 0,
     staleTime: Infinity,
   });
-  const name = (codeHash: string | undefined): string | null => {
-    if (!codeHash) return null;
-    if (codeHash === TYPE_ID_CODE_HASH) return 'Type ID';
-    const found = lookup.data?.[codeHash]?.name;
+  const name = (script: { codeHash: string; hashType: string } | null | undefined) => {
+    if (!script) return null;
+    if (isTypeId(script)) return 'Type ID';
+    const found = lookup.data?.[scriptLookupKey(script.codeHash, script.hashType)]?.name;
     return found && found.toLowerCase() !== 'unknown' ? found : null;
   };
-  return { lock: name(cell?.lock?.codeHash), type: name(cell?.type?.codeHash), lookup };
+  return { lock: name(cell?.lock), type: name(cell?.type), lookup };
 }
 
 function Fact({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {

@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { scriptLookupKey } from '@/lib/script-pair';
 import fixture from '@/__tests__/fixtures/fiber-channel-c07e.json';
 import { fullText } from '@/__tests__/utils/full-text';
 
@@ -33,9 +34,17 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
         HttpResponse.json(txs[String(params.hash)])
       ),
       http.post('/api/:network/v1/scripts/lookup', async ({ request }) => {
-        const { codeHashes } = (await request.json()) as { codeHashes: string[] };
+        // asked by pairs (lane rd/api-lock-names); the fixture's names are by code hash
+        const { scripts } = (await request.json()) as {
+          scripts: { codeHash: string; hashType: string }[];
+        };
         return HttpResponse.json(
-          Object.fromEntries(codeHashes.map((h) => [h, { codeHash: h, name: NAMES[h] }]))
+          Object.fromEntries(
+            scripts.map(({ codeHash, hashType }) => [
+              scriptLookupKey(codeHash, hashType),
+              { codeHash, name: NAMES[codeHash] },
+            ])
+          )
         );
       })
     );

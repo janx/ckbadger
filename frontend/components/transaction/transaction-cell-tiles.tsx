@@ -3,6 +3,7 @@ import Link from '@/components/ui/link';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import type { TransactionDetail, TransactionCellDisplay, ScriptLookupResponse } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import {
   inputSealState,
   outputSealState,
@@ -54,14 +55,16 @@ export function kindOf(cell: {
 }
 
 /**
- * A code hash's name in the script registry, the one rule for every writer of one: the lookup's
- * name, unless the registry has none ('unknown' is its word for none).
+ * A script's name in the script registry, by its pair (code hash, hash type), the one rule for
+ * every writer of one: the lookup's name, unless the registry has none ('unknown' is its word for
+ * none). The same code hash by another hash type is another script.
  */
 export function registeredName(
   lookup: ScriptLookupResponse | undefined,
-  codeHash: string
+  codeHash: string,
+  hashType: string
 ): string | null {
-  const name = lookup?.[codeHash]?.name;
+  const name = lookup?.[scriptLookupKey(codeHash, hashType)]?.name;
   return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 
@@ -101,7 +104,7 @@ export function cellTiles(
     const address = cell.address ?? null;
     const words = lockWords(
       cellLockFacts(
-        { lock, name: registeredName(lookup, lock.codeHash), address },
+        { lock, name: registeredName(lookup, lock.codeHash, lock.hashType), address },
         `Transaction ${tx.hash} ${context}`
       ),
       'inline'
@@ -126,9 +129,12 @@ export function cellTiles(
       lockKind: words && lockWordsText(words, 'row'),
     };
   };
-  const content = (cell: { type?: { codeHash: string } | null; cellType?: string | null }) => {
+  const content = (cell: {
+    type?: { codeHash: string; hashType: string } | null;
+    cellType?: string | null;
+  }) => {
     const kind = kindOf(cell);
-    const name = cell.type ? registeredName(lookup, cell.type.codeHash) : null;
+    const name = cell.type ? registeredName(lookup, cell.type.codeHash, cell.type.hashType) : null;
     return name !== null
       ? name
       : kind === 'ckb'

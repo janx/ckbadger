@@ -75,6 +75,7 @@ import {
   type ParticipantInfo,
 } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
+import { distinctScriptPairs } from '@/lib/script-pair';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { txComment } from '@/lib/tx-comment';
 import {
@@ -428,7 +429,8 @@ function WitnessRow({
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
       const lock =
-        registeredName(lookup, witness.lock.codeHash) ?? shortenHash(witness.lock.codeHash, 'row');
+        registeredName(lookup, witness.lock.codeHash, witness.lock.hashType) ??
+        shortenHash(witness.lock.codeHash, 'row');
       if (minerMessage && minerMessage.raw !== witness.message)
         throw new Error(
           `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
@@ -744,22 +746,20 @@ export default function TransactionDetailPage() {
     queryFn: () => api.getTransactionGraph(hash),
     enabled: !!tx && !isProvisional && graphOpen,
   });
-  const codeHashes = useMemo(
+  // Each script by its pair (code hash, hash type): lane rd/api-lock-names.
+  const scripts = useMemo(
     () =>
-      Array.from(
-        new Set(
-          [...(tx?.inputs ?? []), ...(tx?.outputs ?? [])]
-            .flatMap((c) => [c.lock?.codeHash, c.type?.codeHash])
-            .concat(tx?.cellbaseWitness ? [tx.cellbaseWitness.lock.codeHash] : [])
-            .filter((v): v is string => v !== undefined)
-        )
+      distinctScriptPairs(
+        [...(tx?.inputs ?? []), ...(tx?.outputs ?? [])]
+          .flatMap((c) => [c.lock, c.type])
+          .concat(tx?.cellbaseWitness ? [tx.cellbaseWitness.lock] : [])
       ),
     [tx]
   );
   const { data: lookup } = useQuery({
-    queryKey: ['scriptLookup', codeHashes, hash],
-    queryFn: () => api.lookupScripts(codeHashes, hash),
-    enabled: codeHashes.length > 0,
+    queryKey: ['scriptLookup', scripts, hash],
+    queryFn: () => api.lookupScripts(scripts, hash),
+    enabled: scripts.length > 0,
     staleTime: Infinity,
   });
   const { cycles, hasCycles, isCalculating, hasFailed, isPaused } = useCyclesCalculation(
@@ -1766,7 +1766,7 @@ export default function TransactionDetailPage() {
                     cellLockFacts(
                       {
                         lock: out.lock,
-                        name: registeredName(lookup, out.lock.codeHash),
+                        name: registeredName(lookup, out.lock.codeHash, out.lock.hashType),
                         address: out.address ?? null,
                       },
                       `Transaction ${tx.hash} output ${at}`

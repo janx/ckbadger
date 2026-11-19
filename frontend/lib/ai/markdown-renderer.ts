@@ -26,6 +26,7 @@ import {
   type TransactionLifecycle,
 } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
@@ -1817,10 +1818,10 @@ export async function renderMarkdownPage(
     case 'script_by_code_hash': {
       const hashType = parseScriptHashType(searchParams.get('hashType'));
       const [lookup, codeCell] = await Promise.all([
-        api.lookupScripts([page.codeHash]),
+        api.lookupScripts([{ codeHash: page.codeHash, hashType }]),
         api.getCodeCell(page.codeHash, hashType),
       ]);
-      const matched = lookup[page.codeHash];
+      const matched = lookup[scriptLookupKey(page.codeHash, hashType)];
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# Script Code Hash ${hashShort(page.codeHash, 14, 12)}`,
         '',

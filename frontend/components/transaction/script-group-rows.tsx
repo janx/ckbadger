@@ -50,7 +50,7 @@ function groupNaming(
   g: TransactionScriptGroup,
   lookup: ScriptLookupResponse | undefined
 ): { label: string; href: string } {
-  const name = registeredName(lookup, g.script.codeHash);
+  const name = registeredName(lookup, g.script.codeHash, g.script.hashType);
   return {
     label: name ?? shortenHash(g.script.codeHash, 'row'),
     href: getScriptDetailHref({
@@ -134,7 +134,7 @@ export function scriptGroupRows(
         : kind === 'dao'
           ? 'DAO'
           : cell.type
-            ? (registeredName(lookup, cell.type.codeHash) ?? 'typed')
+            ? (registeredName(lookup, cell.type.codeHash, cell.type.hashType) ?? 'typed')
             : 'plain';
     // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
     // spends; an output is a cell only once the transaction is committed.
