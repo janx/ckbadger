@@ -66,9 +66,9 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
     const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
     const consumed = sheet(structure, 'consumed');
     expect(consumed.tiles).toEqual([]);
-    expect(consumed.words).toMatch(
-      new RegExp(`^158\\scells from ${SHORT_SENDER}, none of them this cell$`)
-    );
+    // re-pinned on purpose (lane P1, lane D3's note: ", none of them this cell" says nothing on the
+    // sheet a cell page draws, where this cell cannot stand): the count and its owner alone
+    expect(consumed.words).toMatch(new RegExp(`^158\\scells from ${SHORT_SENDER}$`));
     expect(consumed.controls).toBe(0);
     const created = sheet(structure, 'created');
     expect(created.tiles).toEqual(['out:0']);
@@ -109,7 +109,8 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
       new RegExp(`^157\\smore cells from ${SHORT_SENDER}$`)
     );
     expect(sheet(structure, 'created').tiles).toEqual([]);
-    expect(sheet(structure, 'created').words).toMatch(/^2\scells created, none of them this cell$/);
+    // re-pinned on purpose (lane P1, lane D3's note): "2 cells created" is enough there
+    expect(sheet(structure, 'created').words).toMatch(/^2\scells created$/);
     const line = screen.getByTestId('cell-transaction-line');
     expect(line).toHaveTextContent(/^one of 158\scells consumed by /);
     expect(within(line).getByRole('link')).toHaveAttribute(
