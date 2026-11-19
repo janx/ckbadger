@@ -470,11 +470,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { link: 1 },
     reason: "the block link in the cycle readout's idle line",
   },
-  'components/dao/dao-history.tsx': {
-    family: 'topics',
-    sites: { prose: 1 },
-    reason: 'the not-enough-days sentence',
-  },
+  // 'components/dao/dao-history.tsx' left the list (lane P4): the not-enough-days sentence, an
+  // empty state, reads in the reading ink
   'components/fiber/fiber-channel-step.tsx': {
     family: 'topics',
     // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
