@@ -108,126 +108,123 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
     const layout = forkTreeLayout(live, 1248);
     expect(layout.form).toBe('wide');
     // re-pinned (readability F3): a wide tile holds a miner's 13-character address at 12 px,
-    // 8 + 93.6 + 8 → 110 px (96 at 10 px), on a 126 px pitch (112)
+    // 8 + 93.6 + 8 → 110 px (96 at 10 px), on a 126 px pitch (112). Re-pinned (lane P4): the
+    // layout no longer says `collapsed: null` and `labelsUnder: false`; no form folds, and only the
+    // wide form is laid out by height across
     expect(layout.tileW).toBe(110);
     expect(layout.width).toBe(30 + 3 * 126 + 110 + 30);
-    expect(layout.collapsed).toBeNull();
-    expect(layout.labelsUnder).toBe(false);
   });
 
-  // Re-pinned twice: lane F3-d moved this to 370 px (the last column's 12 px labels kept 16 px
-  // after it, so at 358 the oldest two heights folded); the ruling on F3-d sets it back to 358:
-  // the last column's labels end at its tile's right edge, so the svg keeps 4 px after it again,
-  // 6 + 4 × 72 + 3 × 20 + 4 = 358, and the fork's dropped block keeps its column.
-  it('fits four 72 px blocks into 358 px with the time and miner under the boxes', () => {
+  // Re-pinned three times: lane F3-d moved this to 370 px, the ruling on F3-d set it back to 358
+  // with four 72 px tiles and the time and miner under the boxes (6 + 4 × 72 + 3 × 20 + 4 = 358);
+  // lane P4 turns the phone form to a column (it was "fits four 72 px blocks into 358 px with the
+  // time and miner under the boxes"): one block a row, oldest first, at one height today's block
+  // before the dropped one; today's chain in the first lane, the branch in the second; the words
+  // from 4 + 56 + 8 + 56 + 8 = 132 px, 222 px of room at 358 (358 − 132 − 4)
+  it('turns the tree to a column at 358 px: one block a row, a lane a branch, the words beside', () => {
     const layout = forkTreeLayout(live, 358);
-    expect(layout.form).toBe('compact');
-    expect(layout.tileW).toBe(FORK_TREE.compact.minTile);
-    expect(layout.labelsUnder).toBe(true);
-    expect(layout.collapsed).toBeNull();
+    if (layout.form !== 'column') throw new Error(`the ${layout.form} form at 358 px`);
     expect(layout.width).toBe(358);
-    for (const n of [11, 12, 13, 14]) {
-      expect(layout.x(n)).toBeGreaterThanOrEqual(0);
-      expect(layout.x(n) + layout.tileW).toBeLessThanOrEqual(358);
-    }
-    // blocks keep their order with a gap for the branch line between them
-    expect(layout.x(12) - layout.x(11)).toBe(layout.tileW + FORK_TREE.compact.gap);
-  });
-
-  it('collapses the oldest blocks of a seven-deep fork into one "+N earlier" column', () => {
-    const layout = forkTreeLayout(deep, 358);
-    expect(layout.form).toBe('compact');
-    expect(layout.collapsed).not.toBeNull();
-    const { count, first, last } = layout.collapsed!;
-    expect(first).toBe(100);
-    expect(last).toBe(100 + count - 1);
-    // the collapsed column plus the newest blocks, every one of them at least 72 px
-    expect(layout.columns[0]).toBe(last + 1);
-    expect(layout.columns.at(-1)).toBe(107);
-    // re-pinned (the ruling on F3-d): the svg keeps 4 px after the last tile again (lane F3-d had
-    // 16), and the fold's box holds its "+6 earlier" (6 + 72 + 6 = 84 px at 12 px), so where the
-    // tree folds every tile is at least 84 px: floor((358 − 6 − 4 + 20) / (84 + 20)) = 3 columns
-    // (4 with 72 px tiles, before the type change and in lane F3-d)
-    expect(layout.columns.length + 1).toBe(
-      Math.floor((358 - 6 - FORK_TREE.compact.right + 20) / (84 + 20))
-    );
-    expect(layout.tileW).toBeGreaterThanOrEqual(84);
-    // a hidden block is drawn in the collapsed column
-    expect(layout.x(101)).toBe(layout.x(100));
-    expect(layout.x(107) + layout.tileW).toBeLessThanOrEqual(358);
-  });
-
-  it('collapses less where there is more room (the 640 column)', () => {
-    const layout = forkTreeLayout(deep, 608);
-    expect(layout.collapsed!.count).toBeLessThan(forkTreeLayout(deep, 358).collapsed!.count);
-    expect(layout.x(107) + layout.tileW).toBeLessThanOrEqual(608);
-  });
-
-  it('refuses a width that cannot hold the collapsed column and one block', () => {
-    expect(() => forkTreeLayout(deep, 150)).toThrow(/150 px/);
-  });
-
-  // Review F-B (logic finding 8): from "+100 earlier" (12 glyphs at 12 px, 86.4 px, and 6 px each
-  // side: 99 px) the fold's box needs more than the 96 px a tile stops growing at, and the layout
-  // capped it there, its words running 2.4 px past it. The box is as wide as its words need.
-  it('draws the "+N earlier" box as wide as its words, past a hundred folded heights too', () => {
-    // 120 heights: the fork point 100 and today's 101–219, one dropped block at 219
-    const tall: ForkTreeModel = {
-      main: Array.from({ length: 120 }, (_, i) => tile(100 + i, `m${i}`, i === 0)),
-      rows: [{ label: 'dropped at this switch', tiles: [tile(219, 'b219')] }],
-      uncleLinks: [],
-      marks: [{ n: 1, hash: hash('b219') }],
-      first: 100,
-      last: 219,
-    };
-    for (const width of [1248, 608, 358]) {
-      const layout = forkTreeLayout(tall, width);
-      expect(layout.form).toBe('compact');
-      const count = layout.collapsed!.count;
-      expect(count).toBeGreaterThanOrEqual(100);
-      // its words at 0.6 em of 12 px, 6 px in from each side, up to a whole pixel
-      const words = `+${count} earlier`.length * 7.2 + 2 * 6;
-      expect(layout.tileW, `${width} px: +${count} earlier`).toBeGreaterThanOrEqual(words);
-      expect(layout.x(219) + layout.tileW, `${width} px`).toBeLessThanOrEqual(width - 4);
-    }
-  });
-
-  // Review F-B (test finding 9; logic finding 4): the compact form's room, pinned to literals so
-  // a change of the module's constants shows here and in the component's band test, which
-  // derives the same numbers on its own. A tile's labels run 16 px into the 20 px gap after it,
-  // 4 px short of the next tile; under it they take 4 + 15 + 15 + 4 = 38 px; the svg keeps 4 px
-  // after the last tile. The narrowest column, 72 + 16 = 88 px, holds a tight address (11
-  // characters at 12 px, 79.2 px) and not the row form (13, 93.6); a wide tile's 110 − 2 × 8 = 94
-  // px between its insets holds the row form.
-  // Review fb-logic 1: where the last column's labels run back into the gap before it and the
-  // column before it runs its own into the same gap, each has half of it less the 4 px kept clear,
-  // (20 − 4) / 2 = 8 px; the narrowest room is a 72 px tile and that share, 80 px, which still
-  // holds a tight address (79.2).
-  it('keeps the room an unnamed miner is written in', () => {
-    const c = FORK_TREE.compact;
-    expect([c.minTile, c.gap, c.labelRun, c.sharedRun, c.under, c.right]).toEqual([
-      72, 20, 16, 8, 38, 4,
+    expect(layout.tileW).toBe(56);
+    expect(layout.laneX).toEqual([4, 68]);
+    expect(layout.labelsX).toBe(132);
+    expect(layout.labelRoom(live.main[1])).toBe(222);
+    expect(layout.rows.map((r) => [r.tile.number, r.lane, r.dropped])).toEqual([
+      [11, 0, false],
+      [12, 0, false],
+      [12, 1, true],
+      [13, 0, false],
+      [14, 0, false],
     ]);
-    expect(c.minTile + c.labelRun).toBe(88);
-    expect(c.minTile + c.sharedRun).toBe(80);
+    // rows 36 px tall and 18 px apart under the two lanes' names (15 px each) and 18 px
+    expect(layout.rows.map((r) => r.y)).toEqual([48, 102, 156, 210, 264]);
+    expect(layout.height).toBe(264 + 36 + 4);
+    expect(layout.at(hash('b12')).lane).toBe(1);
+    expect(() => layout.at(hash('zz'))).toThrow('is not a tile of the tree');
+    expect(layout.laneNames.map((n) => [n.text, n.x, n.anchor])).toEqual([
+      ['main chain', 4, 'start'],
+      ['branch', 68, 'start'],
+    ]);
+  });
+
+  // Re-pinned (lane P4): it was "collapses the oldest blocks of a seven-deep fork into one "+N
+  // earlier" column" (and "collapses less where there is more room (the 640 column)"): the fold
+  // took the fork point and the branch's first blocks. A fold never takes the branch: the column
+  // holds every block, at 358 and at 608, where the eight heights do not fit the wide tree.
+  it.each([358, 608])(
+    'draws every block of a seven-deep fork at %i px, nothing folded',
+    (width) => {
+      const layout = forkTreeLayout(deep, width);
+      if (layout.form !== 'column') throw new Error(`the ${layout.form} form at ${width} px`);
+      expect(layout.rows).toHaveLength(15);
+      expect(new Set(layout.rows.map((r) => r.tile.hash)).size).toBe(15);
+      expect(layout.rows.filter((r) => r.dropped)).toHaveLength(7);
+    }
+  );
+
+  // Re-pinned (lane P4): it was "refuses a width that cannot hold the collapsed column and one
+  // block"; the column refuses a width whose words' room cannot hold a block's time (86.4 px at
+  // 12 px): 132 + 86.4 + 4 → below 222.4 px with two lanes
+  it('refuses a width that leaves less than a block’s time beside the lanes', () => {
+    expect(() => forkTreeLayout(deep, 222)).toThrow(/222 px canvas leaves 86 px beside 2 lanes/);
+    expect(forkTreeLayout(deep, 223).form).toBe('column');
+  });
+
+  // Lane P4: a third lane (a branch adopted then, dropped since) starts at 132, the words at 196:
+  // at a 360 phone (328 px) 128 px of room; at a 320 window (288 px) 88, which still holds a time
+  // (86.4); its name, 27 characters (194.4 px), ends at the canvas's right edge where it would run
+  // past it.
+  it('lays out a third lane and ends a name that would run past the canvas at its right edge', () => {
+    const three: ForkTreeModel = {
+      ...deep,
+      rows: [
+        ...deep.rows,
+        { label: 'adopted then, dropped since', tiles: [tile(101, 'c101'), tile(102, 'c102')] },
+      ],
+    };
+    const at328 = forkTreeLayout(three, 328);
+    if (at328.form !== 'column') throw new Error(at328.form);
+    expect(at328.laneX).toEqual([4, 68, 132]);
+    expect(at328.labelsX).toBe(196);
+    expect(at328.labelRoom(three.main[1])).toBe(128);
+    // 132 + 194.4 = 326.4, past 328 − 4: the name ends at the right edge; at 358 it starts at 132
+    expect(at328.laneNames[2]).toMatchObject({ x: 324, anchor: 'end' });
+    expect(forkTreeLayout(three, 358)).toMatchObject({
+      laneNames: [{}, {}, { x: 132, anchor: 'start' }],
+    });
+    const at288 = forkTreeLayout(three, 288);
+    if (at288.form !== 'column') throw new Error(at288.form);
+    expect(at288.labelRoom(three.main[1])).toBe(88);
+    expect(at288.laneNames[2]).toMatchObject({ x: 284, anchor: 'end' });
+    // at one height: today's block, the dropped one, the one adopted then dropped since
+    expect(at328.rows.slice(0, 4).map((r) => [r.tile.number, r.lane])).toEqual([
+      [100, 0],
+      [101, 0],
+      [101, 1],
+      [101, 2],
+    ]);
+  });
+
+  // Review F-B (test finding 9; logic finding 4): the forms' room, pinned to literals so a change
+  // of the module's constants shows here and in the component's band test, which derives the same
+  // numbers on its own. A wide tile's 110 − 2 × 8 = 94 px between its insets holds the row form.
+  // Re-pinned (lane P4): it pinned the compact form's 72 px tile, 20 px gap, 16 px run, 8 px shared
+  // run, 38 px under the tile and 4 px after the last; the column's tile is 56 px (6 + 43.2 + 6),
+  // its lanes 8 px apart, its words 8 px after the last lane and 4 px short of the right edge,
+  // its rows 36 px tall and 18 px apart (a tip mark, r 8, hangs whole between them).
+  it('keeps the room an unnamed miner is written in', () => {
+    const c = FORK_TREE.column;
+    expect([c.tile, c.tileH, c.laneGap, c.labelGap, c.right, c.rowGap, c.markR, c.x0]).toEqual([
+      56, 36, 8, 8, 4, 18, 8, 4,
+    ]);
     expect(FORK_TREE.wide.tile - 2 * FORK_TREE.wide.inset).toBe(94);
   });
 
-  // Review fb-logic 1: each tile's labels have the room they really have. At 382 px (a 414 px
-  // window) #21,022,666's four heights stand on 78 px tiles: today's +1 runs its labels 16 px into
-  // the gap after it; +2 and +3 share the gap between them, 8 px each (86 px: the tight form); a
-  // tile whose neighbour across that gap draws nothing (the dropped +1's row) keeps 16. The wide
-  // form's room is the tile less its insets.
-  it('gives each tile the room its labels have, the gap before the last column shared', () => {
-    const tile = (number: number, tag: string, stub = false) => ({
-      number,
-      hash: `0x${tag.padEnd(64, '0')}`,
-      timestamp: stub ? null : '2026-11-01T07:47:24.564Z',
-      minerLockHash: stub ? null : `0x${'11'.padEnd(64, '0')}`,
-      minerAddress: stub ? null : 'ckb1qyqexample93hhsj',
-      minerPool: null,
-      transactionsCount: stub ? null : 1,
-    });
+  // Review fb-logic 1: each tile's words have the room they really have. Re-pinned (lane P4): at
+  // 382 px the compact form drew 78 px tiles and gave the last two columns 86 px each (the gap
+  // between them shared) and the others 94; the column gives every tile the one room of its words,
+  // 382 − 132 − 4 = 246 px. The wide form's room is the tile less its insets.
+  it('gives each tile the room its words have', () => {
     const main = [tile(10, 'f0', true), tile(11, 'a1'), tile(12, 'a2'), tile(13, 'a3')];
     const dropped = tile(12, 'b2');
     const model: ForkTreeModel = {
@@ -239,10 +236,31 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
       last: 13,
     };
     const layout = forkTreeLayout(model, 382);
-    expect([layout.form, layout.tileW]).toEqual(['compact', 78]);
-    expect(main.map(layout.labelRoom)).toEqual([94, 94, 86, 86]);
-    expect(layout.labelRoom(dropped)).toBe(94);
+    expect(layout.form).toBe('column');
+    expect(main.map(layout.labelRoom)).toEqual([246, 246, 246, 246]);
+    expect(layout.labelRoom(dropped)).toBe(246);
     expect(() => layout.labelRoom(tile(14, 'zz'))).toThrow('is not a tile of the tree');
     expect(forkTreeLayout(model, 1248).labelRoom(main[3])).toBe(94);
+  });
+
+  // Review F-B (logic finding 8) held the "+N earlier" box as wide as its words past a hundred
+  // folded heights. Re-pinned (lane P4): it was "draws the "+N earlier" box as wide as its words,
+  // past a hundred folded heights too"; nothing folds now, so a fork of 120 heights draws its 121
+  // blocks, one a row, at every width the wide tree does not hold.
+  it('draws a fork of 120 heights whole, a row a block, at every width under the wide tree', () => {
+    const tall: ForkTreeModel = {
+      main: Array.from({ length: 120 }, (_, i) => tile(100 + i, `m${i}`, i === 0)),
+      rows: [{ label: 'dropped at this switch', tiles: [tile(219, 'b219')] }],
+      uncleLinks: [],
+      marks: [{ n: 1, hash: hash('b219') }],
+      first: 100,
+      last: 219,
+    };
+    for (const width of [1248, 608, 358]) {
+      const layout = forkTreeLayout(tall, width);
+      if (layout.form !== 'column') throw new Error(`the ${layout.form} form at ${width} px`);
+      expect(layout.rows, `${width} px`).toHaveLength(121);
+      expect(layout.rows.at(-1)).toMatchObject({ lane: 1, dropped: true });
+    }
   });
 });

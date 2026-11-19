@@ -67,9 +67,12 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(svg).not.toHaveAttribute('width', '100%');
   });
 
-  // Re-pinned twice: lane F3-d moved this to 370 px; the ruling on F3-d sets it back to 358, the
-  // last column's labels ending at its tile's right edge (6 + 4 × 72 + 3 × 20 + 4 = 358).
-  it('fits 358 px: blocks shrink to 72 px, time and miner move under them, nothing scrolls (V4)', () => {
+  // Re-pinned three times: lane F3-d moved this to 370 px; the ruling on F3-d set it back to 358,
+  // the last column's labels ending at its tile's right edge (6 + 4 × 72 + 3 × 20 + 4 = 358, time
+  // and miner under the boxes); lane P4 turns the phone form to a column (it was "fits 358 px:
+  // blocks shrink to 72 px, time and miner move under them"): one block a row, the time and miner
+  // beside the tile, on its row, from x 132 (4 + 56 + 8 + 56 + 8).
+  it('turns to a column at 358 px: one block a row, its time and miner beside it, nothing scrolls (V4, P4)', () => {
     stubChartWidth(358);
     const model = forkTreeModel(multi as unknown as ReorgDetail);
     const { container } = render(<ForkTree model={model} />);
@@ -84,14 +87,22 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     );
     expect(svg.querySelectorAll('[data-uncle-link]')).toHaveLength(2);
     expect(svg.querySelectorAll('[data-tip-mark]')).toHaveLength(2);
-    // a tile's time sits under its box, not inside it
+    // a tile's time stands beside its box, on its row
     const tile = svg.querySelector('[data-tile="11"]:not([data-dropped])')!;
     const box = tile.querySelector('rect')!;
     const time = tile.querySelector('[data-time]')!;
-    expect(Number(time.getAttribute('y'))).toBeGreaterThan(
-      Number(box.getAttribute('y')) + Number(box.getAttribute('height'))
-    );
-    expect(Number(box.getAttribute('width'))).toBe(72);
+    const top = Number(box.getAttribute('y'));
+    expect(Number(time.getAttribute('y'))).toBeGreaterThan(top);
+    expect(Number(time.getAttribute('y'))).toBeLessThan(top + Number(box.getAttribute('height')));
+    expect(Number(time.getAttribute('x'))).toBe(132);
+    expect(Number(box.getAttribute('width'))).toBe(56);
+    // the lanes are named over them: today's chain, then the branch
+    expect(
+      [...svg.querySelectorAll('[data-lane-name]')].map((t) => [t.textContent, t.getAttribute('x')])
+    ).toEqual([
+      ['main chain', '4'],
+      ['branch', '68'],
+    ]);
   });
 
   // re-pinned twice: lane F3-d had [1248, 6], [370, 6], [358, 4] (358 folded); the ruling on F3-d
@@ -109,7 +120,10 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(roundedRects(svg)).toEqual([]);
   });
 
-  it('collapses a seven-deep fork’s oldest blocks into "+N earlier" instead of scrolling (V4)', () => {
+  // Re-pinned (lane P4): it was "collapses a seven-deep fork's oldest blocks into "+N earlier"
+  // instead of scrolling", the fold taking the fork point and the branch's first blocks; a fold
+  // never takes the branch, so the column draws every block, the column growing a row a block
+  it('draws a seven-deep fork whole in the column, every block a row, instead of folding (V4, P4)', () => {
     stubChartWidth(358);
     const hash = (tag: string) => `0x${tag.padEnd(64, '0')}`;
     const tile = (number: number, tag: string, stub = false) => ({
@@ -143,18 +157,22 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     const { container } = render(<ForkTree model={deep} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
     expectInside(svg, 358);
-    const collapsed = svg.querySelector('[data-collapsed]')!;
-    expect(collapsed).not.toBeNull();
-    expect(screen.getByText(/^\+\d+ earlier$/)).toBeInTheDocument();
-    const n = Number(screen.getByText(/^\+\d+ earlier$/).textContent!.match(/\d+/)![0]);
-    // the hidden heights are named, and the newest blocks are drawn whole
-    expect(collapsed.textContent).toContain(`#100–#${100 + n - 1}`);
-    expect(svg.querySelector('[data-tile="107"]:not([data-dropped])')).not.toBeNull();
-    expect(svg.querySelector('[data-tile="100"]')).toBeNull();
+    expect(svg.querySelector('[data-collapsed]')).toBeNull();
+    expect(screen.queryByText(/earlier$/)).toBeNull();
+    // the fork point, today's seven and the dropped seven: 15 tiles, 15 rows, oldest first
+    const tiles = [...svg.querySelectorAll('[data-tile]')];
+    expect(tiles).toHaveLength(15);
+    const ys = tiles.map((g) => Number(g.querySelector('rect')!.getAttribute('y')));
+    expect(new Set(ys).size).toBe(15);
+    expect(svg.querySelector('[data-tile="100"]')).not.toBeNull();
+    expect(svg.querySelectorAll('[data-tile][data-dropped]')).toHaveLength(7);
     expect(svg.querySelectorAll('[data-tip-mark]')).toHaveLength(2);
     expect(svg.querySelectorAll('[data-uncle-link]')).toHaveLength(1);
-    // U-02, R1: the "+N earlier" box is a square-cornered tile like the blocks it stands for
-    expect(roundedRects(collapsed)).toEqual([]);
+    // U-02, R1: every tile square-cornered
+    expect(roundedRects(svg)).toEqual([]);
+    // 15 rows of 36 px, 18 px apart, under two lane names (15 px each) and 18 px: 30 + 18 + 15 × 36
+    // + 14 × 18 + 4 = 844 px
+    expect(svg.getAttribute('height')).toBe('844');
   });
 });
 
@@ -262,19 +280,10 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     ['five heights, two dropped', five],
     ['a 7-deep fork', deep],
   ] as const;
-  const cases = [1248, 608, 358].flatMap((width) =>
+  // lane P4 adds the 360 phone's 326 px (a 326 px canvas folded every usual fork before)
+  const cases = [1248, 608, 358, 326].flatMap((width) =>
     shapes.map(([name, model]) => [width, name, model] as const)
   );
-  /*
-   * Under a compact tile its time and miner stand in its column, measured here by literal
-   * arithmetic and the drawn rects, not by the module's constants: across, the tile and 16 px of
-   * the 20 px gap after it (4 px kept clear of the next tile), from the tile's left edge, or in
-   * the last column ending at its right edge; down, two tight lines of the 12 px tick (12 + 3
-   * each) with 4 px over and under them, 38 px from the tile's foot.
-   */
-  const GAP = 20;
-  const RUN = GAP - 4;
-  const UNDER = 4 + 2 * (12 + 3) + 4;
 
   it('pins the known faults it holds, which only shrink', () => {
     // Lane P4: the one fault went with the column form (above); the list is empty
@@ -283,6 +292,14 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
       expect(cases.some(([w, name]) => w === fault.width && name === fault.shape)).toBe(true);
   });
 
+  /*
+   * Re-pinned (lane P4): the compact form's band under a tile (its tile and 16 px of the 20 px gap
+   * after it, 38 px under its foot) went with the compact form. In the column a tile's own words
+   * (its number and hash) stand inside its box, and its time and miner in its row's band of the
+   * words' column: from 8 px right of the last lane's right edge to 4 px short of the svg's right
+   * edge, across, and the tile's own top and foot, down; measured here by literal arithmetic and
+   * the drawn rects, not by the module's constants.
+   */
   it.each(cases)('at %i px, %s', (width, name, model) => {
     stubChartWidth(width);
     const layout = forkTreeLayout(model, width);
@@ -294,57 +311,42 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     expect(meetings(all), 'the tree').toEqual(
       KNOWN_FAULTS.filter((f) => f.width === width && f.shape === name).map((f) => f.meets)
     );
-    const tiles = [...svg.querySelectorAll('[data-tile], [data-collapsed]')];
-    if (layout.labelsUnder) {
-      // the gap the run is measured in: every two tiles of a row stand 20 px apart
-      const xs = [...new Set(tiles.map((g) => rectBox(g.querySelector('rect')!).left))].sort(
-        (a, b) => a - b
-      );
-      for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBe(layout.tileW + GAP);
-    }
+    expect(layout.form).toBe(
+      width === 1248 || (width === 608 && model !== five && model !== deep) ? 'wide' : 'column'
+    );
+    const tiles = [...svg.querySelectorAll('[data-tile]')];
+    const lanesRight = Math.max(...tiles.map((g) => rectBox(g.querySelector('rect')!).right));
+    const svgRight = viewBox(svg).right;
     for (const g of tiles) {
       const rect = g.querySelector('rect')!;
       const box = rectBox(rect);
-      const what = `${g.getAttribute('data-tile') ?? '+N earlier'} (${layout.form})`;
-      const last = Number(g.getAttribute('data-tile')) === model.last;
+      const what = `${g.getAttribute('data-tile')} (${layout.form})`;
       for (const text of [...g.querySelectorAll('text')]) {
-        const under = layout.labelsUnder && Number(text.getAttribute('y')) > box.bottom;
-        // no edge is drawn under a tile, so a label may stand flush with its column's sides
-        const run = Number(rect.getAttribute('width')) + RUN;
-        const left = last ? box.right + 0.5 - run : box.left - 0.5;
-        const band = under
-          ? { left, right: left + run, top: box.bottom, bottom: box.bottom + UNDER }
+        const beside = layout.form === 'column' && Number(text.getAttribute('x')) > box.right;
+        const band = beside
+          ? {
+              left: lanesRight + 8 - 0.5,
+              right: svgRight - 4 + 0.5,
+              top: box.top,
+              bottom: box.bottom,
+            }
           : box;
         for (const line of textLines(text))
-          expectLineInside(line, band, what, under ? 'flush' : 'clear');
+          expectLineInside(line, band, what, beside ? 'flush' : 'clear');
       }
     }
     // An unnamed miner is its address in one of the id forms (lib/shorten.ts) chosen by its room,
     // never cut again: the row form, 13 characters (93.6 px at 12 px), where it stands whole — in
-    // a wide tile, its width less 8 px each side (110 − 16 = 94), or under a compact tile, its
-    // column (the tile and 16 px) — else the tight form, 11 characters (79.2 px): under a 72 px
-    // tile the column is 88 px. Each has the one ellipsis. Review fb-logic 1: the gap before the
-    // last column is run into from both sides where the tiles on both sides of it in one row draw
-    // labels; there each has half of it less the 4 px kept clear, (20 − 4) / 2 = 8 px.
+    // a wide tile, its width less 8 px each side (110 − 16 = 94), or in the column's words, from
+    // the last lane's right edge and 8 px to 4 px short of the svg's edge (192 px at 326 with two
+    // lanes, 128 with three) — else the tight form, 11 characters (79.2 px). Each has the one
+    // ellipsis.
     const miners = all.filter((l) => l.text.startsWith('ckb1'));
     expect(miners.length).toBeGreaterThan(0);
-    const drawsLabels = (n: number, y: string) =>
-      tiles.some(
-        (g) =>
-          g.getAttribute('data-tile') === String(n) &&
-          g.querySelector('rect')!.getAttribute('y') === y &&
-          g.querySelector('[data-time]') !== null
-      );
     let checked = 0;
     for (const g of tiles) {
       const n = Number(g.getAttribute('data-tile'));
-      const y = g.querySelector('rect')!.getAttribute('y')!;
-      const shared =
-        (n === model.last || n === model.last - 1) &&
-        drawsLabels(model.last, y) &&
-        drawsLabels(model.last - 1, y);
-      const room =
-        layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + (shared ? (GAP - 4) / 2 : RUN);
+      const room = layout.form === 'wide' ? layout.tileW - 16 : svgRight - 4 - (lanesRight + 8);
       for (const text of [...g.querySelectorAll('text')].filter((t) =>
         t.textContent!.startsWith('ckb1')
       )) {
@@ -359,12 +361,13 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
 });
 
 // The ruling on lane F3-d (2026-11-18): the dropped block is the subject of a fork's page, so at a
-// 390 phone (358 px) a fork of four heights draws all four columns with its branch tile, as before
-// the type change. The labels under a tile start at its left edge, except in the last column,
-// where they end at its right edge; the svg keeps 4 px right of the last tile (6 + 4 × 72 + 3 × 20
-// + 4 = 358).
-describe('ForkTree at 358 px: four heights, every column and the branch (ruling on F3-d)', () => {
-  it('draws the four columns, the branch tile and their label pairs, inside the svg', () => {
+// 390 phone (358 px) a fork of four heights draws all four heights with its branch tile. Re-pinned
+// (lane P4): it was "ForkTree at 358 px: four heights, every column and the branch", four 72 px
+// columns with each tile's time and miner under it (6 + 4 × 72 + 3 × 20 + 4 = 358), the miner in
+// the tight form (an 88 px column); the phone form is a column now, one block a row, and the words
+// beside the tiles have 358 − 132 − 4 = 222 px, so the miner is the row form, the tables' own.
+describe('ForkTree at 358 px: four heights, every block and the branch, in a column (F3-d, P4)', () => {
+  it('draws the four heights, the branch tile and their words, inside the svg', () => {
     stubChartWidth(358);
     const { container } = render(<ForkTree model={usual} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
@@ -377,47 +380,47 @@ describe('ForkTree at 358 px: four heights, every column and the branch (ruling 
     const branch = svg.querySelector(`[data-tile="${FP + 1}"][data-dropped]`)!;
     expect(branch).not.toBeNull();
     expect(screen.getByText('branch')).toBeInTheDocument();
-    // a time and a miner under each block that has them: today's +1 and +2 and the dropped +1.
-    // Re-pinned (review F-B, logic finding 4): the miner was its row form cut a second time to its
-    // column, (72 + 16) / 7.2 → 12 characters, "ckb1…qs93hh…" (two ellipses and a tail that is
-    // not the address's); an address is written in an id form chosen by its room, never cut
-    // again: the row form is 13 characters, 93.6 px, more than the 88 px column, so it is the
-    // tight form, 11 characters, 79.2 px
+    // a time and a miner beside each block that has them: today's +1 and +2 and the dropped +1
     for (const g of [
       svg.querySelector(`[data-tile="${FP + 1}"]:not([data-dropped])`)!,
       svg.querySelector(`[data-tile="${FP + 2}"]:not([data-dropped])`)!,
       branch,
     ]) {
       expect(g.querySelector('[data-time]'), g.getAttribute('data-tile')!).not.toBeNull();
-      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…93hhsj');
+      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…qs93hhsj');
     }
     const lines = allTextLines(svg);
     for (const line of lines) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
-    // no label of one column meets a label of the next
     expectApart(lines, 'the tree at 358');
-    expect(forkTreeLayout(usual, 358).tileW).toBe(72);
+    expect(forkTreeLayout(usual, 358).tileW).toBe(56);
   });
 
-  it('ends the last column’s labels at its tile’s right edge', () => {
+  // Re-pinned (lane P4): it was "ends the last column's labels at its tile's right edge"; in the
+  // column every row's words start at one x, 8 px right of the last lane
+  it('starts every row’s words at one x, right of the lanes, in row order of height', () => {
     stubChartWidth(358);
     const { container } = render(<ForkTree model={three} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
-    const tile = svg.querySelector(`[data-tile="${FP + 2}"]:not([data-dropped])`)!;
-    const rect = tile.querySelector('rect')!;
-    const right = Number(rect.getAttribute('x')) + Number(rect.getAttribute('width'));
-    const under = [...tile.querySelectorAll('text')].filter(
-      (t) =>
-        Number(t.getAttribute('y')) >
-        Number(rect.getAttribute('y')) + Number(rect.getAttribute('height'))
+    const words = [...svg.querySelectorAll('[data-tile] text')].filter(
+      (t) => t.hasAttribute('data-time') || t.textContent!.startsWith('ckb1')
     );
-    expect(under).toHaveLength(2);
-    for (const text of under) {
-      expect(text).toHaveAttribute('text-anchor', 'end');
-      expect(Number(text.getAttribute('x'))).toBe(right);
+    // today's +1 and +2 and the dropped +1, each a time and a miner
+    expect(words).toHaveLength(6);
+    for (const text of words) {
+      expect(text).not.toHaveAttribute('text-anchor');
+      expect(Number(text.getAttribute('x'))).toBe(132);
     }
-    // the other columns' labels start at their tile's left edge
-    const first = svg.querySelector(`[data-tile="${FP + 1}"]:not([data-dropped])`)!;
-    expect(first.querySelector('[data-time]')).not.toHaveAttribute('text-anchor', 'end');
+    // the rows: the fork point, today's +1, the dropped +1, today's +2
+    expect(
+      [...svg.querySelectorAll('[data-tile]')]
+        .map((g) => ({
+          n: Number(g.getAttribute('data-tile')) - FP,
+          dropped: g.hasAttribute('data-dropped'),
+          y: Number(g.querySelector('rect')!.getAttribute('y')),
+        }))
+        .sort((a, b) => a.y - b.y)
+        .map((r) => `${r.n}${r.dropped ? '′' : ''}`)
+    ).toEqual(['0', '1', '1′', '2']);
     expectApart(allTextLines(svg), 'the tree at 358');
   });
 });
@@ -425,32 +428,42 @@ describe('ForkTree at 358 px: four heights, every column and the branch (ruling 
 // Review F-B (logic finding 5): a pool's name is the operator's text (docs/metadata/pools.toml)
 // and may be in any script. It was cut by UTF-16 unit and measured at 0.6 em a unit; no face the
 // site serves holds a CJK character or an emoji, which draw from a fallback face. It is measured
-// as an upper bound, 1.25 em a grapheme outside the served faces' Latin subset (15 px at 12 px; a
-// Latin glyph 7.2), and cut at whole graphemes with the one ellipsis. Under a 72 px tile the
-// miner's column is 88 px; in a wide tile, 94 px between its insets.
+// at 1.25 em a grapheme outside the served faces' Latin subset (15 px at 12 px; a Latin glyph
+// 7.2; the figures' measure, not a bound: the lead's ruling), and cut at whole graphemes with the
+// one ellipsis. In a wide tile the room is 94 px between its insets. Re-pinned (lane P4): under a
+// 72 px compact tile the room was 88 px, and at 358 px "蚂蚁矿池 AntPool 🐜" was cut to "蚂蚁矿池 A…"
+// and eight ants to five and "…"; in the column the words have 358 − 132 − 4 = 222 px (192 at
+// 326), so that name stands whole (4 × 15 + 9 × 7.2 + 15 = 139.8 px) and sixteen ants are cut to
+// fourteen (222) or twelve (192) and the ellipsis.
 describe('ForkTree: a pool’s name in any script (review F-B, logic finding 5)', () => {
   it.each([
-    [358, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 A…', 4 * 15 + 3 * 7.2],
-    [1248, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 An…', 4 * 15 + 4 * 7.2],
-    [358, '🐜'.repeat(8), `${'🐜'.repeat(5)}…`, 5 * 15 + 7.2],
-  ])('cuts it at %i px to whole graphemes within its room: %s', (width, pool, drawn, px) => {
-    stubChartWidth(width);
-    const named: ForkTreeModel = {
-      ...usual,
-      main: usual.main.map((t) => (t.minerAddress ? { ...t, minerPool: pool } : t)),
-      rows: usual.rows.map((r) => ({
-        ...r,
-        tiles: r.tiles.map((t) => ({ ...t, minerPool: pool })),
-      })),
-    };
-    const { container } = render(<ForkTree model={named} />);
-    const svg = container.querySelector('svg[data-fork-tree]')!;
-    const pools = [...svg.querySelectorAll('text')].filter((t) => t.textContent!.endsWith('…'));
-    // today's +1 and +2 and the dropped +1 carry a miner
-    expect(pools).toHaveLength(3);
-    for (const text of pools) expect(text.textContent).toBe(drawn);
-    expect(px).toBeLessThanOrEqual(width === 358 ? 88 : 94);
-  });
+    [358, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 AntPool 🐜', 4 * 15 + 9 * 7.2 + 15, 222],
+    [1248, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 An…', 4 * 15 + 4 * 7.2, 94],
+    [358, '🐜'.repeat(16), `${'🐜'.repeat(14)}…`, 14 * 15 + 7.2, 222],
+    [326, '🐜'.repeat(16), `${'🐜'.repeat(12)}…`, 12 * 15 + 7.2, 192],
+  ])(
+    'writes it at %i px in whole graphemes within its room: %s',
+    (width, pool, drawn, px, room) => {
+      stubChartWidth(width);
+      const named: ForkTreeModel = {
+        ...usual,
+        main: usual.main.map((t) => (t.minerAddress ? { ...t, minerPool: pool } : t)),
+        rows: usual.rows.map((r) => ({
+          ...r,
+          tiles: r.tiles.map((t) => ({ ...t, minerPool: pool })),
+        })),
+      };
+      const { container } = render(<ForkTree model={named} />);
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      const pools = [...svg.querySelectorAll('text')].filter((t) =>
+        t.textContent!.startsWith(pool.slice(0, 2))
+      );
+      // today's +1 and +2 and the dropped +1 carry a miner
+      expect(pools).toHaveLength(3);
+      for (const text of pools) expect(text.textContent).toBe(drawn);
+      expect(px).toBeLessThanOrEqual(room);
+    }
+  );
 });
 
 // Review fb-logic 1 (lane rd/fb-fixes-2, L1): in Chrome on /forks/21022666/07c5ad4e and

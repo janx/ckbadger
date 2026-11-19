@@ -118,18 +118,23 @@ const WIDE_INSET = 8;
  */
 const WIDE_PAD = { top: 5, foot: 8 } as const;
 const WIDE_TILE = WIDE_INSET + Math.ceil(textPx(ROW_ADDRESS, SVG_TEXT.tick)) + WIDE_INSET;
-/** A compact tile: its number over its hash, 3 px clear of its top and foot. */
-const COMPACT_PAD = 3;
-/** Under a compact tile: its time over its miner, 4 px under the tile and 4 px over the next row. */
-const UNDER_PAD = 4;
-const COMPACT_GAP = 20;
-/** The least two columns' labels under compact tiles keep between them. */
-const LABEL_CLEAR = 4;
-/** A compact tile's words, and the "+N earlier" box's, stand this far in from its side. */
-const FOLD_INSET = 6;
-/** The width a "+N earlier" box needs: its words at the label size and the inset each side. */
-const foldTile = (count: number) =>
-  Math.ceil(2 * FOLD_INSET + textPx(`+${count} earlier`.length, SVG_TEXT.label));
+/** A column tile: its number over its hash, 3 px clear of its top and foot. */
+const COLUMN_PAD = 3;
+/** A column tile's words stand this far in from its side. */
+const COLUMN_INSET = 6;
+/** The hash a tile writes: its first six hex digits. */
+export const TILE_HASH_DIGITS = 6;
+/** A block's time on the tree: its clock to the millisecond, `09:12:32.761` (12 characters). */
+const CLOCK_CHARS = 12;
+/** A tip mark in the column hangs whole over its tile: its radius and its centre over the top. */
+const COLUMN_MARK_R = 8;
+
+/** The name a branch of the tree goes by, over its lane or its row. */
+export const LANE_NAMES = {
+  main: 'main chain',
+  'dropped at this switch': 'branch',
+  'adopted then, dropped since': 'adopted then, dropped since',
+} as const;
 
 export const FORK_TREE = {
   /**
@@ -154,92 +159,113 @@ export const FORK_TREE = {
     top: 46,
   },
   /**
-   * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them
-   * (past 96 only where a fold's "+N earlier" needs it, from "+100 earlier"),
-   * and carry only the number and hash, 6 px in from the tile's side; the time and miner hang under
-   * the box, in its column: the tile and 16 px of the gap (`labelRun`), so a clock to the
-   * millisecond (86.4 px at 12 px) stands whole under a 72 px tile. They start at the tile's left
-   * edge and run into the gap after it, except in the last column, where they end at the tile's
-   * right edge and run into the gap before it (the ruling on F3-d: the svg keeps 4 px after the
-   * last tile, so a fork of four heights draws its four columns at a 390 phone, 6 + 4 × 72 + 3 ×
-   * 20 + 4 = 358, its dropped block among them). That gap, before the last column, is the one two
-   * columns' labels run into from both sides: where both draw labels in a row, each takes half of
-   * it less the clearance, `sharedRun` (8 px: 8 + 4 + 8 = 20), and a miner's form is chosen by
-   * that room (review fb-logic 1; `ForkTreeLayout.labelRoom`).
+   * The phone form (lane P4, the tree turned to a column, as the pipeline turns on a phone): one
+   * block a row, the rows in order of height (at one height today's block first, then the dropped
+   * one, then one adopted and dropped since), each branch in a lane of its own — today's chain on
+   * the left, the branch that lost beside it, a branch adopted then dropped beside that — and every
+   * tile's time and miner beside it, on its row, in one column of words right of the lanes. Nothing
+   * folds: the column grows a row a block. Only links run in the lanes and the gaps between them
+   * (today's chain down its lane, the branch's dashed line down its own, the uncle arrows in the gap
+   * between the first two lanes) and only words stand right of them, so no line crosses a word.
+   *
+   * A tile holds its number ("#176", 4 characters at the label size, 28.8 px) over the first six
+   * digits of its hash (43.2 px at the tick size), 6 px in from its side: 6 + 43.2 + 6 → 56 px. The
+   * lanes stand 8 px apart and the words 8 px right of the last lane, so with two lanes the words
+   * start at 4 + 56 + 8 + 56 + 8 = 132 px: 192 px of room at a 360 phone (328 − 132 − 4), 222 at a
+   * 390 (358); with the third lane at 196 px, 128 px of room at 328. A clock (86.4 px at 12 px) and
+   * a miner's address in the row form (93.6 px) stand whole there.
    */
-  compact: {
-    minTile: 72,
-    maxTile: 96,
-    /** 3 + 15 + 15 + 3 = 36 px (34 at 10 px). */
-    tileH: COMPACT_PAD + LABEL_LINE + TICK_LINE + COMPACT_PAD,
-    /** The baselines of the number and of the hash under it. */
-    numberY: COMPACT_PAD + lineAscentPx(SVG_TEXT.label),
-    hashY: COMPACT_PAD + LABEL_LINE + lineAscentPx(SVG_TEXT.tick),
-    markR: 8,
-    inset: FOLD_INSET,
-    x0: 6,
-    gap: COMPACT_GAP,
-    labelRun: COMPACT_GAP - LABEL_CLEAR,
-    sharedRun: (COMPACT_GAP - LABEL_CLEAR) / 2,
+  column: {
+    tile: Math.ceil(2 * COLUMN_INSET + textPx(TILE_HASH_DIGITS, SVG_TEXT.tick)),
+    /** 3 + 15 + 15 + 3 = 36 px. */
+    tileH: COLUMN_PAD + LABEL_LINE + TICK_LINE + COLUMN_PAD,
+    /** The baselines of the number and of the hash under it; the time and the miner beside them. */
+    numberY: COLUMN_PAD + lineAscentPx(SVG_TEXT.label),
+    hashY: COLUMN_PAD + LABEL_LINE + lineAscentPx(SVG_TEXT.tick),
+    inset: COLUMN_INSET,
+    x0: 4,
+    laneGap: 8,
+    labelGap: 8,
     right: 4,
-    /** Under a box: its time and miner lines, 4 px over and under them: 38 px (34 at 10 px). */
-    under: UNDER_PAD + 2 * TICK_LINE + UNDER_PAD,
-    /** The baselines of the time and the miner, from the tile's foot. */
-    timeY: UNDER_PAD + lineAscentPx(SVG_TEXT.tick),
-    minerY: UNDER_PAD + TICK_LINE + lineAscentPx(SVG_TEXT.tick),
-    rowGap: 32,
-    top: 40,
+    /** A tip mark: r 8, its centre 8 px over its tile's top, so it hangs whole over the tile. */
+    markR: COLUMN_MARK_R,
+    markLift: COLUMN_MARK_R,
+    /** A later mark on a block that already carries one stands this far left of it. */
+    markStep: 18,
+    /** Rows stand 18 px apart: a mark (16 px and its stroke) hangs between them, clear of both. */
+    rowGap: 2 * COLUMN_MARK_R + 2,
+    /** The lane names' lines over the lanes, and 18 px under them before the first row. */
+    headGap: 2 * COLUMN_MARK_R + 2,
+    /** The lines down a lane run this far in from its tiles' left edge, clear of their marks. */
+    linkX: 12,
   },
 } as const;
 
 /*
- * An unnamed miner is its address in an id form, never cut again (review F-B, logic finding 4): a
- * wide tile holds the row form by its width (WIDE_TILE), and the narrowest room under a compact
- * tile, the tile and its share of a gap two columns' labels run into (72 + 8 = 80 px; review
- * fb-logic 1), holds the tight form (11 characters, 79.2 px at 12 px). Checked once, at load.
+ * Checked once, at load: a column tile holds its words, and the marks over it stand clear of the
+ * line down its lane.
  */
-const TIGHT_ADDRESS = SHORT_FORMS.tight.address.head + 1 + SHORT_FORMS.tight.address.tail;
-if (textPx(TIGHT_ADDRESS, SVG_TEXT.tick) > FORK_TREE.compact.minTile + FORK_TREE.compact.sharedRun)
-  throw new Error(
-    `fork tree: a ${FORK_TREE.compact.minTile} px tile's narrowest room cannot hold a tight address (${textPx(TIGHT_ADDRESS, SVG_TEXT.tick)} px)`
-  );
+{
+  const c = FORK_TREE.column;
+  if (textPx(4, SVG_TEXT.label) + 2 * c.inset > c.tile)
+    throw new Error(`fork tree: a ${c.tile} px column tile cannot hold its number`);
+  // the first mark's centre stands its radius in from the tile's right edge, a second one
+  // `markStep` left of it: 56 − 8 − 18 − 8 = 22 px from the left edge, clear of the line at 12
+  if (c.tile - c.markR - c.markStep - c.markR <= c.linkX)
+    throw new Error('fork tree: a second tip mark meets the line down its lane');
+}
 
-export interface ForkTreeLayout {
-  form: 'wide' | 'compact';
+export interface ForkTreeWideLayout {
+  form: 'wide';
   tileW: number;
   tileH: number;
-  /** The canvas width: the tree's own in the wide form, the measured box in the compact one. */
+  /** The canvas width: the tree's own. */
   width: number;
   height: number;
   yMain: number;
   /** Top of each branch row above the main row, row 0 nearest to it. */
   rowY: number[];
-  /** Block heights drawn as their own columns, oldest first. */
-  columns: number[];
-  /** The oldest heights folded into one "+N earlier" column on the left; null when none are. */
-  collapsed: { count: number; first: number; last: number } | null;
-  /** Whether a tile's time and miner hang under its box (compact) or sit inside it (wide). */
-  labelsUnder: boolean;
-  /** A height's column x; a folded height gives the "+N earlier" column. */
+  /** A height's column x. */
   x: (number: number) => number;
-  /**
-   * The width a tile's time and miner may take (review fb-logic 1): inside a wide tile, its width
-   * less its insets; under a compact one, the tile and its run into a gap, 16 px, or 8 where the
-   * gap before the last column is run into from both sides, by this tile's labels and by those of
-   * its neighbour in the same row (`FORK_TREE.compact`). A miner's form is chosen by it.
-   */
+  /** The width a tile's time and miner may take: inside the tile, its width less its insets. */
   labelRoom: (tile: ForkTreeTile) => number;
 }
 
-/** Whether a tile draws a time or a miner (the fork point's stub and a later uncle's block do not). */
-const labelled = (tile: ForkTreeTile | undefined): boolean =>
-  tile !== undefined && (tile.timestamp !== null || tile.minerAddress !== null);
+/** One row of the column: a block, the lane of its branch (0 today's chain) and its top. */
+export interface ForkTreeColumnRow {
+  tile: ForkTreeTile;
+  lane: number;
+  dropped: boolean;
+  y: number;
+}
+
+export interface ForkTreeColumnLayout {
+  form: 'column';
+  tileW: number;
+  tileH: number;
+  /** The canvas width: the measured box. */
+  width: number;
+  height: number;
+  /** Each lane's x: today's chain, then each of the model's rows, in order. */
+  laneX: number[];
+  /** Each lane's name, on a line of its own over the lanes. */
+  laneNames: { text: string; x: number; y: number; anchor: 'start' | 'end' }[];
+  /** The rows, top to bottom. */
+  rows: ForkTreeColumnRow[];
+  /** Where every tile's time and miner start: right of the last lane. */
+  labelsX: number;
+  /** The row a block stands on, by its hash. */
+  at: (hash: string) => ForkTreeColumnRow;
+  /** The width a tile's time and miner may take: from `labelsX` to the canvas's right edge. */
+  labelRoom: (tile: ForkTreeTile) => number;
+}
+
+export type ForkTreeLayout = ForkTreeWideLayout | ForkTreeColumnLayout;
 
 /**
- * Where the fork tree's columns go in a box `width` px wide (V4, `docs/RESPONSIVE_LAYOUT.md`
- * rules 3–4). The desktop tree is kept wherever it fits; narrower, tiles shrink towards 72 px with
- * their time and miner moved under them; and when even 72 px tiles cannot hold every height, the
- * oldest heights fold into one "+N earlier" column instead of the canvas scrolling.
+ * Where the fork tree's blocks go in a box `width` px wide (V4, `docs/RESPONSIVE_LAYOUT.md`
+ * rules 3–4). The desktop tree is kept wherever it fits; narrower, it turns to a column (lane P4):
+ * every block a row, nothing folded, no width scrolled.
  */
 export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLayout {
   if (!Number.isFinite(width) || width <= 0)
@@ -248,7 +274,6 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
   const k = model.rows.length;
   const w = FORK_TREE.wide;
   const wideWidth = w.x0 + (heights - 1) * w.pitch + w.tile + w.right;
-  const all = Array.from({ length: heights }, (_, i) => model.first + i);
   if (wideWidth <= width) {
     const yMain = w.top + k * (w.tileH + w.rowGap);
     return {
@@ -259,77 +284,67 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
       height: yMain + w.tileH + 30,
       yMain,
       rowY: model.rows.map((_, i) => yMain - (i + 1) * (w.tileH + w.rowGap)),
-      columns: all,
-      collapsed: null,
-      labelsUnder: false,
       x: (n) => w.x0 + (n - model.first) * w.pitch,
       labelRoom: () => w.tile - 2 * w.inset,
     };
   }
-  const c = FORK_TREE.compact;
-  const room = width - c.x0 - c.right;
-  const tileFor = (columns: number) => (room - (columns - 1) * c.gap) / columns;
-  let shown = heights;
-  // The least a tile may be: 72 px, or where the tree folds, its "+N earlier" box's words.
-  let least: number = c.minTile;
-  if (tileFor(shown) < c.minTile) {
-    // Fold the oldest heights into one column. Every column is one tile wide, and the fold's box
-    // holds its "+N earlier" (84 px at 12 px for a one-digit count, more than a 72 px tile), so
-    // the tiles are at least that wide wherever the tree folds: fewer, wider columns.
-    for (;;) {
-      shown = Math.floor((room + c.gap) / (least + c.gap));
-      if (shown < 2)
-        throw new Error(
-          `Fork tree: a ${width} px canvas cannot hold a "+N earlier" column and one ${least} px block`
-        );
-      const need = foldTile(heights - (shown - 1));
-      if (need <= least) break;
-      least = need;
+  return columnLayout(model, width);
+}
+
+function columnLayout(model: ForkTreeModel, width: number): ForkTreeColumnLayout {
+  const c = FORK_TREE.column;
+  const lanes = 1 + model.rows.length;
+  const laneX = Array.from({ length: lanes }, (_, i) => c.x0 + i * (c.tile + c.laneGap));
+  const labelsX = laneX[lanes - 1] + c.tile + c.labelGap;
+  const room = width - labelsX - c.right;
+  // a clock to the millisecond is the widest word a tile always writes; a miner's tight form is
+  // narrower (79.2 px at 12 px), so a room that holds the clock holds a miner
+  const clock = textPx(CLOCK_CHARS, SVG_TEXT.tick);
+  if (room < clock)
+    throw new Error(
+      `Fork tree: a ${width} px canvas leaves ${room} px beside ${lanes} lanes, less than a block's time (${clock} px)`
+    );
+  const names = [LANE_NAMES.main, ...model.rows.map((row) => LANE_NAMES[row.label])].map(
+    (text, i) => {
+      const x = laneX[i];
+      const y = i * LABEL_LINE + lineAscentPx(SVG_TEXT.label);
+      // a name starts at its lane, or ends at the canvas's right edge where it would run past it
+      return x + textPx(text.length, SVG_TEXT.label) <= width - c.right
+        ? { text, x, y, anchor: 'start' as const }
+        : { text, x: width - c.right, y, anchor: 'end' as const };
     }
-  }
-  // Tiles grow to 96 px where there is room, and never under the least: from "+100 earlier"
-  // (99 px) the fold's box is as wide as its words (review F-B, logic finding 8). The columns
-  // hold it: `shown` columns of a whole `least` px and their gaps fit the room, so a tile's
-  // share, rounded down, is at least `least`.
-  const tileW = Math.min(Math.max(c.maxTile, least), Math.floor(tileFor(shown)));
-  const folded = shown < heights ? heights - (shown - 1) : 0;
-  const columns = all.slice(folded);
-  const pitch = tileW + c.gap;
-  const pitchY = c.tileH + c.under + c.rowGap;
-  const yMain = c.top + k * pitchY;
-  const lead = folded ? 1 : 0;
-  // Under a compact tile the labels run into the gap after it, and the last column's back into
-  // the gap before it: there, where both sides draw labels in one row, each has its share. A
-  // folded height draws none under the "+N earlier" box.
-  const rooms = new Map<string, number>();
-  for (const tiles of [model.main, ...model.rows.map((row) => row.tiles)]) {
-    const atHeight = (n: number) =>
-      n >= model.first + folded ? tiles.find((tile) => tile.number === n) : undefined;
-    const shared = labelled(atHeight(model.last - 1)) && labelled(atHeight(model.last));
-    for (const tile of tiles) {
-      const edge = tile.number === model.last - 1 || tile.number === model.last;
-      rooms.set(tile.hash, tileW + (shared && edge ? c.sharedRun : c.labelRun));
-    }
-  }
-  const labelRoom = (tile: ForkTreeTile) => {
-    const room = rooms.get(tile.hash);
-    if (room === undefined) throw new Error(`Fork tree: ${tile.hash} is not a tile of the tree`);
-    return room;
+  );
+  const order = [
+    ...model.main.map((tile) => ({ tile, lane: 0, dropped: false })),
+    ...model.rows.flatMap((row, i) =>
+      row.tiles.map((tile) => ({ tile, lane: i + 1, dropped: true }))
+    ),
+  ].sort((a, b) => a.tile.number - b.tile.number || a.lane - b.lane);
+  const top = lanes * LABEL_LINE + c.headGap;
+  const rows: ForkTreeColumnRow[] = order.map((row, i) => ({
+    ...row,
+    y: top + i * (c.tileH + c.rowGap),
+  }));
+  const byHash = new Map(rows.map((row) => [row.tile.hash, row]));
+  const at = (hash: string) => {
+    const row = byHash.get(hash);
+    if (row === undefined) throw new Error(`Fork tree: ${hash} is not a tile of the tree`);
+    return row;
   };
   return {
-    form: 'compact',
-    tileW,
+    form: 'column',
+    tileW: c.tile,
     tileH: c.tileH,
     width,
-    height: yMain + c.tileH + c.under + 4,
-    yMain,
-    rowY: model.rows.map((_, i) => yMain - (i + 1) * pitchY),
-    columns,
-    collapsed: folded
-      ? { count: folded, first: model.first, last: model.first + folded - 1 }
-      : null,
-    labelsUnder: true,
-    x: (n) => c.x0 + (n < model.first + folded ? 0 : lead + n - model.first - folded) * pitch,
-    labelRoom,
+    height: top + rows.length * c.tileH + (rows.length - 1) * c.rowGap + c.right,
+    laneX,
+    laneNames: names,
+    rows,
+    labelsX,
+    at,
+    labelRoom: (tile) => {
+      at(tile.hash);
+      return room;
+    },
   };
 }
