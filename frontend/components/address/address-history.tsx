@@ -196,7 +196,7 @@ function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
   return (
     <span className="space-y-1">
       <Link href={`/tx/${tx.txHash}`}>
-        <Hash hash={tx.txHash} size={size} copyable={false} className="text-small" />
+        <Hash hash={tx.txHash} size={size} className="text-small" />
       </Link>
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
@@ -362,7 +362,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
 function CellOutPoint({ cell: c, size }: { cell: AddressCell; size: ShortSize }) {
   return (
     <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
-      <Hash hash={c.txHash} size={size} copyable={false} className="text-small" />
+      <Hash hash={c.txHash} size={size} className="text-small" />
       <OutpointIndex index={c.outputIndex} />
     </Link>
   );
@@ -388,7 +388,7 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
             scriptKind: 'type',
           })}
         >
-          <Hash hash={c.typeScriptHash} size={size} className="text-small" copyable={false} />
+          <Hash hash={c.typeScriptHash} size={size} className="text-small" />
         </Link>
       )}
     </span>

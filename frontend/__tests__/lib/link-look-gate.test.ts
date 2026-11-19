@@ -266,8 +266,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/identity/dotcell-party.tsx': {
     lane: 'p-assets',
-    sites: { look: 3, ink: 1 },
-    reason: '3 without a look; inks by hand (hover:underline)',
+    sites: { look: 2 },
+    reason: '2 without a look (its two Address links; its lock hash link states `block`)',
   },
   'components/identity/dotcell-records-table.tsx': {
     lane: 'p-assets',
@@ -520,7 +520,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 610;
+const TOLERATED_TOTAL = 608;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

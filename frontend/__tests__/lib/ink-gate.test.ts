@@ -96,8 +96,7 @@ const ALPHA_INK_ALLOWLIST: Allowlist = {};
 
 const LINKED =
   'a linked highlight: while the reader points at (or pins) one part, the others fade back; their own focus, not a set-back state';
-const HOVER =
-  'hover feedback on a control or a copyable hash: the pointer’s state, gone when it leaves';
+const HOVER = 'hover feedback on a control: the pointer’s state, gone when it leaves';
 const NO_WORDS = 'fades no word: the element is a mark, an icon or a bar';
 const linked = (anchor: string): Allowed => ({ reason: LINKED, anchor });
 const hover = (anchor: string): Allowed => ({ reason: HOVER, anchor });
@@ -122,7 +121,8 @@ const OPACITY_ALLOWLIST: Allowlist = {
     linked('dim(on)'),
   ],
   'components/ui/composition-set.tsx': [noWords('<CompositionMark')],
-  'components/ui/hex-display.tsx': [hover('copyable && ')],
+  // components/ui/hex-display.tsx's copyable hover went with the click-to-copy of an id (lane
+  // c2-finish, rulings round 1)
 };
 
 /**

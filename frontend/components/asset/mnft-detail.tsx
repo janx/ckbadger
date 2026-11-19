@@ -289,7 +289,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                       kind="address"
                       size="row"
                       className="text-body"
-                      copyable={false}
                     />
                   </AppLink>
                 ) : (
@@ -417,12 +416,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
             <p className="text-meta max-w-measure">
               Issuer ID ·{' '}
-              <Hash
-                hash={item.issuer.issuerId}
-                truncate={false}
-                copyable={false}
-                className="text-meta break-all"
-              />{' '}
+              <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />{' '}
               {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
               <CopyButton
                 value={item.issuer.issuerId}

@@ -159,7 +159,7 @@ export function BlockTransactionsTable({
       minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
+          <Hash hash={tx.hash} size="row" className="text-small" />
         </Link>
       ),
     },
@@ -293,7 +293,7 @@ export function BlockTransactionsTable({
                 <>
                   <span className="text-text-dim mr-2">{tx.index}</span>
                   <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                    <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
+                    <Hash hash={tx.hash} size="tight" className="text-body" />
                   </Link>
                 </>
               ),

@@ -77,14 +77,14 @@ export function TransactionCellContent({ display, cellHref, size }: TransactionC
               </NoBreak>
             )}{' '}
             {display.symbol ?? display.name ?? (
-              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
+              <Hash hash={display.id} size={size} className="text-small" />
             )}
           </span>
         ) : (
           <>
             {name && <span>{name} </span>}
             {display.kind !== 'file' || name === null ? (
-              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
+              <Hash hash={display.id} size={size} className="text-small" />
             ) : null}
           </>
         )}

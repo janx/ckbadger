@@ -444,8 +444,8 @@ h1.text-index {
    of them celadon"); the glow is the theme's (none by day). The focus keeps its ring as well (the
    base layer's `:focus-visible`). An underline follows its words into the celadon (a link inside
    a line is underlined in the muted ink at rest): the rule's `a` and its state outrank the one
-   class that colours the line. Through `.hover-lit`, a copyable hash lights the same way. SVG
-   links (the pipeline's cards) keep their own hover and focus design. */
+   class that colours the line. SVG links (the pipeline's cards) keep their own hover and focus
+   design. */
 a:focus-visible,
 a:hover {
   color: var(--c-jade);
@@ -456,10 +456,6 @@ svg a:focus-visible,
 svg a:hover {
   color: inherit;
   text-shadow: none;
-}
-.hover-lit:hover {
-  color: var(--c-jade);
-  text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
 
 /* Move 2 — the hairlines, set flat (rubbing × Song print, phase 2): the jade tubes lit from the

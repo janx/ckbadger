@@ -364,12 +364,7 @@ function BlockIdentity({ block }: { block: Block }) {
           <Link href={`/blocks/${block.number}`} className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>{' '}
-          <Hash
-            hash={block.hash}
-            size="tight"
-            copyable={false}
-            className="text-text-dim text-meta"
-          />
+          <Hash hash={block.hash} size="tight" className="text-text-dim text-meta" />
         </div>
         {block.hardforkActivation && (
           <Link href="/hardforks" className="text-text-dim text-meta block">
@@ -513,13 +508,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <Dotted
               parts={[
-                <Hash
-                  key="h"
-                  hash={block.hash}
-                  size="tight"
-                  copyable={false}
-                  className="text-meta"
-                />,
+                <Hash key="h" hash={block.hash} size="tight" className="text-meta" />,
                 block.proposalsCount > 0 && (
                   <span key="p" className="whitespace-nowrap">
                     {formatCount(block.proposalsCount, 'proposal')}
@@ -585,7 +574,6 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
           <Hash
             hash={block.hash}
             size="tight"
-            copyable={false}
             className="text-text-dim text-meta block whitespace-nowrap"
           />
           {block.hardforkActivation && (

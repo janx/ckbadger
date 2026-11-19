@@ -1,7 +1,6 @@
 'use client';
 
 import { NoBreak } from '@/components/ui/no-break';
-import { useCopy } from '@/hooks/useCopy';
 import { shortenId, type IdKind, type ShortSize } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
@@ -21,7 +20,6 @@ type HexCodeProps = IdShortening & {
    */
   kind?: IdKind;
   className?: string;
-  copyable?: boolean;
   /**
    * The ink: the reading ink by default, or bright; `inherit` writes no ink of its own, so the
    * value takes the ink (and the size) of the line it stands in — a name plate's id line, which
@@ -35,12 +33,9 @@ export function HexCode({
   value,
   kind = 'hash',
   className,
-  copyable = true,
   variant = 'default',
   ...shortening
 }: HexCodeProps) {
-  const { copied, copy } = useCopy(value);
-
   const displayValue =
     shortening.truncate === false ? value : shortenId(value, kind, shortening.size);
   const shortened = displayValue !== value;
@@ -55,8 +50,6 @@ export function HexCode({
     className: cn(
       'font-mono',
       variantClasses[variant],
-      // Midnight, continued (move 1c): a hovered hash glows jade, as a hovered link does.
-      copyable && 'hover-lit cursor-pointer transition-colors',
       // U-16: a full value is one token too. It sits whole on its line where the line holds it;
       // in a narrower column it is one line in its own box, as wide as the column, that scrolls
       // sideways with the page's thin scrollbar — never wrapped in the middle. `align-top` keeps
@@ -64,10 +57,10 @@ export function HexCode({
       !shortened && 'inline-block max-w-full overflow-x-auto whitespace-nowrap align-top',
       className
     ),
-    // the one copy path (hooks/useCopy): a copy that cannot work shows nothing
-    onClick: copyable ? copy : undefined,
-    title: copyable ? 'Click to copy' : value,
-    children: copied ? '✓' : displayValue,
+    // an id is a value: its whole in its title; a copy is the copy button's, after an id line
+    // (lane c2-finish, rulings round 1: an id in a row or a sentence copies nothing on a click)
+    title: value,
+    children: displayValue,
   };
   // A shortened value is one unit that never breaks at its ellipsis (U-16).
   return shortened ? <NoBreak {...props} /> : <span data-full-value="" {...props} />;

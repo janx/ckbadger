@@ -80,7 +80,7 @@ function Miner({ block, size }: { block: MinerBlock; size: ShortSize }) {
  * a cell of 870.4; 640's 608, 502.4); below 581 px a phone's one column scrolls the hash in its box.
  */
 const FullHash = ({ hash }: { hash: string }) => (
-  <HexCode value={hash} truncate={false} copyable={false} variant="inherit" />
+  <HexCode value={hash} truncate={false} variant="inherit" />
 );
 const blockAt = (number: number) => (
   <Link href={`/blocks/${number}`} className="hover:text-jade">

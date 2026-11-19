@@ -34,14 +34,14 @@ function ItemOwner({ item }: { item: CollectionItem }) {
   if (item.ownerLockHash)
     return (
       <span className="text-meta">
-        <Hash hash={item.ownerLockHash} size="row" copyable={false} className="text-meta" />
+        <Hash hash={item.ownerLockHash} size="row" className="text-meta" />
         <span className="text-text-dim block">address not indexed</span>
       </span>
     );
   if (item.ownerHashPrefix)
     return (
       <span className="text-meta [overflow-wrap:anywhere]">
-        <Hash hash={item.ownerHashPrefix} truncate={false} copyable={false} className="text-meta" />
+        <Hash hash={item.ownerHashPrefix} truncate={false} className="text-meta" />
         <span className="text-text-dim block">named owner prefix · no indexed lock</span>
       </span>
     );
@@ -167,14 +167,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                     {item.standard === 'm-nft'
                       ? mnftRowTitle(item)
                       : (item.name ??
-                        item.did ?? (
-                          <Hash
-                            hash={item.nftId}
-                            size="row"
-                            copyable={false}
-                            className="text-meta"
-                          />
-                        ))}
+                        item.did ?? <Hash hash={item.nftId} size="row" className="text-meta" />)}
                   </AppLink>
                   <span className="text-text-dim text-meta mt-1 block">
                     {formatStandard(item.standard)} · {item.isLive ? 'Live' : 'Inactive'}

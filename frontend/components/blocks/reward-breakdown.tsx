@@ -205,12 +205,7 @@ export function RewardPaidBy({ block }: { block: RewardBlock }) {
         <>
           {' · '}
           <Link href={`/tx/${block.miningRewardTxHash}`}>
-            <Hash
-              hash={block.miningRewardTxHash}
-              size="row"
-              copyable={false}
-              className="text-small"
-            />
+            <Hash hash={block.miningRewardTxHash} size="row" className="text-small" />
           </Link>
         </>
       )}

@@ -318,7 +318,6 @@ export function AssetHistory({
               hash={e.address ?? e.lockHash}
               kind={e.address ? 'address' : 'hash'}
               size="row"
-              copyable={false}
               className="text-small"
             />
           </AppLink>
@@ -604,7 +603,6 @@ export function AssetHistory({
                           hash={e.address ?? e.lockHash}
                           kind={e.address ? 'address' : 'hash'}
                           size={phoneSize}
-                          copyable={false}
                           className="text-meta"
                         />
                       </AppLink>

@@ -366,7 +366,6 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               hash={h.address ?? h.lockScriptHash}
               kind={h.address ? 'address' : 'hash'}
               size="row"
-              copyable={false}
               variant="bright"
               className="text-body leading-row"
             />
@@ -493,7 +492,6 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                             hash={h.address ?? h.lockScriptHash}
                             kind={h.address ? 'address' : 'hash'}
                             size={phoneSize}
-                            copyable={false}
                             className="text-body"
                           />
                         </AppLink>

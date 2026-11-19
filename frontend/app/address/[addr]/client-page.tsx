@@ -276,12 +276,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className="text-text-bright"
                     >
                       {a.lockScriptInfo?.name ?? (
-                        <Hash
-                          hash={a.lockScript.codeHash}
-                          size="row"
-                          className="text-small"
-                          copyable={false}
-                        />
+                        <Hash hash={a.lockScript.codeHash} size="row" className="text-small" />
                       )}
                     </Link>
                   </span>
@@ -438,18 +433,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
-                        <Hash
-                          hash={c.channelId}
-                          size="row"
-                          className="text-small"
-                          copyable={false}
-                        />
+                        <Hash hash={c.channelId} size="row" className="text-small" />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
                           <Link href={`/address/${p}`} key={p}>
-                            <Hash hash={p} size="row" copyable={false} className="text-small" />
+                            <Hash hash={p} size="row" className="text-small" />
                           </Link>
                         ))}
                       </span>
