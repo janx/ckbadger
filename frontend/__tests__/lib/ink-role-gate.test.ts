@@ -71,11 +71,13 @@ interface Tolerated {
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
 // chain 28 → 23, files 51 → 48 (lane P1, the ink and size roles: the address pages)
 // chain 23 → 22, files 48 → 47 (lane P1, the ink and size roles: the code cell)
+// chain 22 → 14, files 47 → 43, decided 15 → 16 in 6 → 7 files (lane P1, the ink and size roles:
+// the block and uncle pages)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
   // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
   // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
-  chain: 22,
+  chain: 14,
   assets: 33,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
@@ -86,31 +88,18 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 47;
+const TOLERATED_FILES = 43;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
   // app/address/[addr]/client-page.tsx left the list (lane P1, the ink and size roles: the address
   // pages): its empty lines ('Script unavailable', 'No activities.') are sentences, in the reading
   // ink
-  'app/blocks/[id]/client-page.tsx': {
-    family: 'chain',
-    // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it;
-    // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
-    // reading ink; link 10 → 7 (lane P1): the activity rows' transaction link and the hardfork
-    // link state their looks, and the uncle row's links read in the line's ink
-    // link 7 → 0, prose 7 → 4 (lane P1 follow-up): the genesis epoch's note, a proposal's
-    // commitment (or that it has none in its window), the proposals' failure and an uncle's
-    // sibling line are statements, in the reading ink, their links with them
-    sites: { prose: 4 },
-    reason:
-      'empty 3: no uncles, no proposals, no activities in this block; loading 1: the proposals',
-  },
-  'app/blocks/[id]/uncles/[index]/client-page.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: 'This uncle proposed nothing.'",
-  },
+  // app/blocks/[id]/client-page.tsx left the list (lane P1, the ink and size roles: the block and
+  // uncle pages): its empty lines (no uncles, no proposals, no activities) and its loading line are
+  // sentences, in the reading ink
+  // app/blocks/[id]/uncles/[index]/client-page.tsx left the list (lane P1, the ink and size roles:
+  // the block and uncle pages): 'This uncle proposed nothing.' is a sentence, in the reading ink
   // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
   // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
   // B7: the out-point sentence reads)
@@ -131,20 +120,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // components/address/address-holdings.tsx left the list (lane P1, the ink and size roles: the
   // address pages): its loading and unavailable line and the collections' sentence ('Open a
   // collection to list its objects here; …') read in the reading ink
-  'components/blocks/block-position.tsx': {
-    family: 'chain',
-    // link 1 → 0, prose 7 → 2 (lane P1 follow-up): the position sentence, the two failures, a
-    // proposal arc's uncle line and an uncle's "Included by #N" are statements, in the reading ink
-    sites: { prose: 2 },
-    reason:
-      "loading 1: the proposal origins being read; label 1: an uncle row's 'Uncle parent → included uncle'",
-  },
-  'components/blocks/block-transactions-table.tsx': {
-    family: 'chain',
-    // td 2 → 1 (lane P1 follow-up): a transaction's index in its block is a value, the reading ink
-    sites: { td: 1 },
-    reason: "empty 1: a transaction's cycles cell with no figure ('Not yet run', 'Replay failed')",
-  },
+  // components/blocks/block-position.tsx left the list (lane P1, the ink and size roles: the block
+  // and uncle pages): the origins being read is a sentence, in the reading ink; an uncle row's
+  // label went to DECIDED
+  // components/blocks/block-transactions-table.tsx left the list (lane P1, the ink and size roles:
+  // the block and uncle pages): a cycles cell with no figure ('Not yet run', 'Replay failed') is a
+  // table cell's content, in the reading ink
   // 'components/blocks/block-visual.tsx' left the list (lane P1 follow-up): the size-and-cycles
   // line under the blocks figure is a reading of it, its figures values, in the reading ink
   // 'components/blocks/reward-breakdown.tsx' left the list (lane P1 follow-up): the reward's
@@ -907,10 +888,17 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     reason:
       'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
   },
+  'components/blocks/block-position.tsx': {
+    family: 'chain',
+    // lane P1, the ink and size roles: the one quiet line of the chain position
+    sites: { prose: 1 },
+    reason:
+      "label 1: an uncle row's 'Uncle parent → included uncle', the label of the two links under it ('Parent 0x…', 'Uncle #… · 0x…')",
+  },
 };
-/** The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d. */
-const DECIDED_SITES = 15;
-const DECIDED_FILES = 6;
+/** The pinned sites and files of DECIDED: 16 sites in 7 files, the P3 follow-up's 2d and lane P1's. */
+const DECIDED_SITES = 16;
+const DECIDED_FILES = 7;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -1218,7 +1206,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // sites in 51 files")
   // Re-pinned on purpose (lane P1, the ink and size roles: the code cell; renamed, it was "102
   // sites in 48 files")
-  it('tolerates 101 sites in 47 files: the pinned totals by family, which only fall', () => {
+  // Re-pinned on purpose (lane P1, the ink and size roles: the block and uncle pages; renamed, it
+  // was "101 sites in 47 files")
+  it('tolerates 93 sites in 43 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
@@ -1228,7 +1218,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 15 in 6 files, none of them also on the work list', () => {
+  // Re-pinned on purpose (lane P1, the ink and size roles: the block and uncle pages; renamed, it
+  // was "15 in 6 files")
+  it('holds the decided sites apart, 16 in 7 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

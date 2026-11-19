@@ -264,7 +264,7 @@ export function BlockPosition({
           Proposal origins unavailable: {transactionsError}
         </p>
       ) : transactions === undefined ? (
-        <p className="text-text-dim text-small">Reading transaction proposal origins…</p>
+        <p className="text-text text-small">Reading transaction proposal origins…</p>
       ) : null}
       {proposalsError && (
         <p role="alert" className="text-text text-small max-w-measure">

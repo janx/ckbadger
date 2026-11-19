@@ -12,6 +12,8 @@ import { expectOneRowSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const BLOCK_ID = '8775638';
 const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
@@ -571,6 +573,8 @@ describe('BlockDetailPage', () => {
     ) as HTMLElement;
     expect(row).toHaveTextContent('uncle #8,775,637');
     expect(within(row).queryByRole('link', { name: /uncle #8,775,637/ })).not.toBeInTheDocument();
+    // lane P1, the ink and size roles: the uncle's height is a value, the reading ink (it was quiet)
+    expect(inkOf(within(row).getByText('uncle #8,775,637'))).toBe(READING);
   });
 
   it('says there are no proposals when the block and its uncles proposed nothing', async () => {
@@ -741,5 +745,70 @@ describe('BlockDetailPage', () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /^activities/ }));
     expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
+  });
+
+  // Lane P1, the ink and size roles round (items 1 to 3): the block's values, its empty and
+  // loading lines and its notes read in the reading ink; a label, a unit, a column head and a hint
+  // stay quiet. Each of these stood in the quiet ink.
+  it('reads its facts, its empty lines and its notes in the reading ink (lane P1)', async () => {
+    render(<BlockDetailPage />);
+    expect(inkOf(await screen.findByText('No uncles in this block.'))).toBe(READING);
+    expect(inkOf(await screen.findByText('No proposals in this block.'))).toBe(READING);
+    expect(inkOf(await screen.findByText('No activities in this block.'))).toBe(READING);
+    const facts = await screen.findByTestId('block-tier2-facts');
+    expect(inkOf(within(facts).getByText('123,456'))).toBe(READING);
+    expect(inkOf(within(facts).getByText(/ · overhead /))).toBe(READING);
+    expect(inkOf(within(facts).getByText(/ of 3,500,000,000$/))).toBe(READING);
+    expect(inkOf(within(facts).getByText('decoded from the cellbase message'))).toBe(READING);
+  });
+
+  it('says its proposals are loading in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 3 });
+    vi.mocked(api.getBlockProposals).mockReturnValue(new Promise(() => {}));
+    render(<BlockDetailPage />);
+    expect(inkOf(await screen.findByText('Loading proposals…'))).toBe(READING);
+  });
+
+  it('says its uncle’s sibling being read, its time and count, and its uncle count in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      proposalsCount: 2,
+      unclesCount: 1,
+      uncles: [carrier],
+    });
+    vi.mocked(api.getBlockUncle).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0x00112233445566778899',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: null,
+      },
+    ]);
+    render(<BlockDetailPage />);
+    const reading = await screen.findByText('reading its sibling…');
+    expect(inkOf(reading)).toBe(READING);
+    const article = reading.closest('article')!;
+    // the word between the uncle's height and its hash names it: a label, quiet
+    expect(inkOf(within(article).getByText('uncle'))).toBe(QUIET);
+    const last = reading.parentElement!.lastElementChild!;
+    expect(last).toHaveTextContent(/1\s+proposal$/);
+    expect(inkOf(last)).toBe(READING);
+    expect(inkOf(screen.getByText('1 · counted toward the uncle rate'))).toBe(READING);
+    expect(inkOf(await screen.findByText('1 · none committed yet'))).toBe(READING);
+  });
+
+  it('says its bars’ scale being read in the reading ink at 13 px, and what its transactions were committed from (lane P1)', async () => {
+    vi.mocked(api.getBlocks).mockReturnValue(new Promise(() => {}));
+    render(<BlockDetailPage />);
+    const pending = await screen.findAllByText('reading the list scale…');
+    expect(pending.length).toBeGreaterThan(0);
+    for (const el of pending) {
+      expect(inkOf(el)).toBe(READING);
+      expect(typeStepOf(el)).toBe('small');
+    }
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
+    expect(inkOf(await screen.findByText(/^1 committed from #/))).toBe(READING);
   });
 });

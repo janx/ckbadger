@@ -450,7 +450,7 @@ export default function BlockDetailPage() {
                       `block ${block.number} difficulty`
                     ).replace(/([A-Z])$/, ' $1')}
                   </dd>
-                  <dd className="text-text-dim break-all">
+                  <dd className="text-text break-all">
                     {BigInt(block.difficulty).toLocaleString('en-US')}
                   </dd>
                 </div>
@@ -468,7 +468,7 @@ export default function BlockDetailPage() {
                       />
                     )}
                   </dd>
-                  <dd className="text-text-dim mt-1">
+                  <dd className="text-text mt-1">
                     {percentOf(BigInt(block.size), BigInt(block.maxBlockBytes))} of{' '}
                     {block.maxBlockBytes.toLocaleString('en-US')} · overhead{' '}
                     {block.overheadSize.toLocaleString('en-US')} · transactions{' '}
@@ -491,7 +491,7 @@ export default function BlockDetailPage() {
                     )}
                   </dd>
                   {block.cycles !== null && (
-                    <dd className="text-text-dim mt-1">
+                    <dd className="text-text mt-1">
                       {percentOf(BigInt(block.cycles), BigInt(block.maxBlockCycles))} of{' '}
                       {BigInt(block.maxBlockCycles).toLocaleString('en-US')}
                     </dd>
@@ -501,7 +501,7 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim mb-1">Miner client</dt>
                   <dd className="text-text-bright [overflow-wrap:anywhere]">{client.line}</dd>
                   {client.decoded && (
-                    <dd className="text-text-dim">decoded from the cellbase message</dd>
+                    <dd className="text-text">decoded from the cellbase message</dd>
                   )}
                 </div>
                 {/* The fees its transactions paid (lane D2): a fact of the facts aside, which the
@@ -547,7 +547,7 @@ export default function BlockDetailPage() {
                   actions={
                     // the site's word, the forks chart's (lane P1 follow-up; it read "the NC-Max
                     // orphan rate", the protocol's term): one word for one thing
-                    <span className="text-text-dim text-small">
+                    <span className="text-text text-small">
                       {block.unclesCount.toLocaleString('en-US')} · counted toward the uncle rate
                     </span>
                   }
@@ -563,14 +563,14 @@ export default function BlockDetailPage() {
                     />
                   ))}
                   {block.unclesCount === 0 && (
-                    <p className="text-text-dim text-small">No uncles in this block.</p>
+                    <p className="text-text text-small">No uncles in this block.</p>
                   )}
                 </DetailSection>
                 <DetailSection
                   title="Proposals"
                   actions={
                     ownProposals && (
-                      <span className="text-text-dim text-small">
+                      <span className="text-text text-small">
                         {proposalsSummary(
                           ownProposals.length,
                           ownProposals.filter((p) => p.committedTxHash !== null).length
@@ -609,7 +609,7 @@ export default function BlockDetailPage() {
                                 uncle {formatBlockNumber(proposal.uncle.number)}
                               </Link>
                             ) : (
-                              <span className="text-text-dim">
+                              <span className="text-text">
                                 uncle {formatBlockNumber(proposal.uncle.number)}
                               </span>
                             ))}
@@ -645,12 +645,12 @@ export default function BlockDetailPage() {
                   {!proposalsError &&
                     (proposals?.length === 0 ||
                       (block.proposalsCount === 0 && block.unclesCount === 0)) && (
-                      <p className="text-text-dim text-small">No proposals in this block.</p>
+                      <p className="text-text text-small">No proposals in this block.</p>
                     )}
                   {!proposalsError &&
                     proposals === undefined &&
                     (block.proposalsCount > 0 || block.unclesCount > 0) && (
-                      <p className="text-text-dim text-small">Loading proposals…</p>
+                      <p className="text-text text-small">Loading proposals…</p>
                     )}
                 </DetailSection>
               </div>
@@ -694,7 +694,7 @@ export default function BlockDetailPage() {
                       )}
                     </span>
                     {key === 'epoch' && (
-                      <span className="text-text-dim">
+                      <span className="text-text">
                         {' '}
                         = {formatEpochPosition(epoch, block.number)}
                       </span>
@@ -794,7 +794,7 @@ export default function BlockDetailPage() {
                           />
                         ))}
                         {activityRows.length === 0 && (
-                          <p className="text-text-dim text-small">No activities in this block.</p>
+                          <p className="text-text text-small">No activities in this block.</p>
                         )}
                         {activitiesAt && (
                           <Pager mode="pages" label="activities" {...activitiesAt} />
@@ -887,7 +887,8 @@ function ScalePending({ error, value }: { error: Error | null; value: number }) 
   return (
     <span className="text-text-bright">
       {value.toLocaleString('en-US')}
-      <span className="text-text-dim text-meta ml-2">
+      {/* a sentence, the reading ink at 13 px (lane P1, the ink and size roles: quiet, 12 px) */}
+      <span className="text-text text-small ml-2">
         {error ? `bar scale unavailable: ${error.message}` : 'reading the list scale…'}
       </span>
     </span>
@@ -948,10 +949,10 @@ function CommittedFrom({
     );
   }
   const [only] = origins.keys();
-  // the same quiet note, now its own line under the tab row (it stood at the row's right end,
-  // which is the tab list now)
+  // the same note, now its own line under the tab row (it stood at the row's right end, which is
+  // the tab list now); a sentence, the reading ink (lane P1, the ink and size roles: it was quiet)
   return (
-    <span className="text-text-dim text-small mb-3 block">
+    <span className="text-text text-small mb-3 block">
       {unitNode(
         origins.size === 1
           ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
@@ -995,12 +996,12 @@ function UncleRow({
             <Hash hash={uncle.hash} size="row" className="text-small" />
           </Link>
         </span>
-        {/* its sibling line: a statement in the reading ink, or its failure; the line being read
-            is quiet, a transient line (R3; lane P1 follow-up) */}
+        {/* its sibling line: a statement in the reading ink, or its failure, or the line saying it
+            is being read (R3; lane P1, the ink and size roles: that one was quiet) */}
         {error ? (
           <span className="text-text">sibling facts unavailable: {error.message}</span>
         ) : !detail ? (
-          <span className="text-text-dim">reading its sibling…</span>
+          <span className="text-text">reading its sibling…</span>
         ) : (
           <span className="text-text">
             {detail.sameParentAs === null ? (
@@ -1028,7 +1029,7 @@ function UncleRow({
             )}
           </span>
         )}
-        <span className="text-text-dim">
+        <span className="text-text">
           {unitNode(formatUtc8Time(uncle.timestamp))}
           {detail?.msAfterSibling != null &&
             `, ${detail.msAfterSibling >= 0 ? `${detail.msAfterSibling.toLocaleString('en-US')} ms after` : `${(-detail.msAfterSibling).toLocaleString('en-US')} ms before`} its sibling`}{' '}
