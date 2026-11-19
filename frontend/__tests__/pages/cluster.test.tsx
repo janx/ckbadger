@@ -69,7 +69,8 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   const objects = await screen.findByRole('region', { name: 'Objects' });
   expect(within(objects).getByRole('img', { name: /allele gel/ })).toBeInTheDocument();
   expect(await within(objects).findByRole('table', { name: 'Newest objects' })).toBeInTheDocument();
-  expect(screen.getByRole('group', { name: 'History time range' })).toBeInTheDocument();
+  // re-pinned (lane c2-assets): the range is RangeSelect, a radio group (was a group of buttons)
+  expect(screen.getByRole('radiogroup', { name: 'History time range' })).toBeInTheDocument();
   // Main.dc.html: "Recent activity" — its link to the transactions opens the full feed there.
   const recent = screen.getByRole('region', { name: 'Recent activity' });
   fireEvent.click(within(recent).getByRole('button', { name: /transactions →$/ }));
