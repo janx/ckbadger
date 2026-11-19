@@ -342,8 +342,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'lists',
     // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
     // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
-    // reading ink, one of them new; the yesterday line is the lede, in the reading ink
-    sites: { td: 2, prose: 9 },
+    // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
+    // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
+    // subtraction (the day's user transactions are its activity row's, the route's count)
+    sites: { td: 2, prose: 8 },
     reason: 'interpretation states in table cells; the statistics, pool and list notes and states',
   },
   'components/activities-stream-explorer.tsx': {
