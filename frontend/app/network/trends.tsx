@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/aligned-bar';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
@@ -175,8 +175,26 @@ function shareDayWords(row: ShareDay): string {
   if (row.buckets === null) return 'No retained round observation';
   if (row.buckets.length === 0) return 'No retained labels';
   return row.buckets
-    .map((bucket) => `${bucket.label} ${bucket.count.toLocaleString()}`)
+    .map((bucket) => `${bucket.label} ${bucket.count.toLocaleString('en-US')}`)
     .join(' · ');
+}
+
+/**
+ * The phone row's last line, every label and count of the day (a title is no hover on a touch
+ * screen): the quiet line draws in the reading ink, so each label is set quiet here and its count
+ * reads (PAGE-LANE-NOTES, B1: label quiet, value reading), a label being words someone else wrote
+ * (a client's version string) that may break between its words.
+ */
+function ShareDayLabels({ buckets }: { buckets: readonly LabelCount[] }) {
+  return (
+    <Dotted
+      parts={buckets.map((bucket) => (
+        <Labelled key={bucket.label} label={bucket.label} words>
+          {bucket.count.toLocaleString('en-US')}
+        </Labelled>
+      ))}
+    />
+  );
 }
 
 /**
@@ -224,7 +242,7 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
     return (
       <span className="flex min-w-0 items-baseline gap-2">
         <span className="text-text min-w-0 truncate">{top.label}</span>{' '}
-        <span className="text-text shrink-0 tabular-nums">{top.count.toLocaleString()}</span>
+        <span className="text-text shrink-0 tabular-nums">{top.count.toLocaleString('en-US')}</span>
       </span>
     );
   };
@@ -262,9 +280,10 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
       // was 64
       minWidth: columnPx(Math.max(cell('999'.length), meta('Labels'.length)) + CELL_GAP_PX),
       numeric: true,
+      // a count of the day, a value: the reading ink
       render: (row) =>
         row.buckets?.length ? (
-          <span className="text-text-dim">{row.buckets.length.toLocaleString()}</span>
+          <span className="text-text">{row.buckets.length.toLocaleString('en-US')}</span>
         ) : null,
     },
     {
@@ -313,7 +332,7 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
             Boolean(row.buckets?.length) && {
               key: 'labels',
               tone: 'quiet',
-              left: shareDayWords(row),
+              left: <ShareDayLabels buckets={row.buckets!} />,
             },
           ]}
         />
@@ -347,19 +366,12 @@ function ShareTrend({
       ) : !history ? (
         <p className="text-text-dim text-small">Loading observations…</p>
       ) : history.points.length === 0 ? (
-        <p className="text-text-dim text-small">No completed daily crawler observations yet.</p>
+        <p className="text-text text-small">No completed daily crawler observations yet.</p>
       ) : (
-        <>
-          <p className="text-text text-body max-w-measure mb-3">
-            Retained top-label counts per observed day. The historical total and omitted labels were
-            not recorded, so percentages are unavailable. Each bar is a day&apos;s retained count,
-            its most common label in jade; every label is in the row&apos;s title.
-          </p>
-          {/* The head and six one-line days (61 + 6 × 41 px); a longer retention scrolls, raw data. */}
-          <div className="max-h-80 overflow-y-auto">
-            <ShareDays title={title} days={days} />
-          </div>
-        </>
+        // The head and six one-line days (61 + 6 × 41 px); a longer retention scrolls, raw data.
+        <div className="max-h-80 overflow-y-auto">
+          <ShareDays title={title} days={days} />
+        </div>
       )}
     </TrendPanel>
   );
@@ -431,7 +443,7 @@ export function NetworkTrends() {
           Loading verified peer history…
         </p>
       ) : days.length === 0 ? (
-        <p className="text-text-dim text-small font-mono">
+        <p className="text-text text-small font-mono">
           No completed daily crawler observations yet.
         </p>
       ) : (
@@ -496,10 +508,11 @@ export function NetworkTrendNotes() {
   const { verifiedPeers } = usePeerHistories();
   // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
+    // Each thing said once (the review's network page: "per completed UTC+8 day" and "Daily history
+    // … by UTC+8 day", "Round counts were not recorded" and "Rounds per day are unavailable").
     <p>
-      “Over time” draws the retained verification state (daily): verified and reachable peers per
-      completed UTC+8 day. Daily history of retained verified peers, by UTC+8 day. The current
-      (incomplete) day is excluded. Round counts were not recorded. Days older than the
+      “Over time” draws the verified peers the crawler retained on each completed UTC+8 day and the
+      part of them that was reachable; the current (incomplete) day is excluded. Days older than the
       crawler&apos;s hourly retention show as gaps, never zero.
       {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
         <>
@@ -508,7 +521,7 @@ export function NetworkTrendNotes() {
         </>
       )}{' '}
       Shaded days have no retained round observation. Rounds per day are unavailable because the
-      crawler did not record counts.
+      crawler did not record them.
     </p>
   );
 }
@@ -526,8 +539,14 @@ export function NetworkShareHistory() {
     refetchInterval: 60000,
   });
   return (
-    // Stacked: tier 2 gives the daily counts one column of its own from lg.
+    // Stacked: tier 2 gives the daily counts one column of its own from lg. How to read the two
+    // tables is said once, over both (it stood over each, word for word).
     <div className="grid grid-cols-1 gap-4">
+      <p className="text-text text-body max-w-measure">
+        Retained top-label counts per observed day. The historical total and omitted labels were not
+        recorded, so percentages are unavailable. Each bar is a day&apos;s retained count, its most
+        common label in jade; every label is in the row&apos;s title.
+      </p>
       <ShareTrend
         title="Client Version Share"
         history={versionShare.data}

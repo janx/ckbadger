@@ -429,12 +429,12 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
         '4 verified nodes in 2 countries · ringed: the 1 this node had a session with in the latest round.'
       )
     );
+    // Re-pinned on purpose (P4 topics; the review's network page: tier 2 said one thing twice,
+    // "… so no links are drawn." then "… so none are drawn: not even this node's …"): said once.
     expect(notes).toHaveTextContent(
-      '4 of 4 retained verified peers have approximate GeoIP coordinates; 0 locations are unavailable. Dots with close coordinates are displaced to keep them selectable. There is no centre: every node keeps a handful of connections of its own, and that mesh cannot be observed from outside, so no links are drawn.'
+      "4 of 4 retained verified peers have approximate GeoIP coordinates; 0 locations are unavailable. Dots with close coordinates are displaced to keep them selectable. There is no centre: every node keeps a handful of connections of its own, and that mesh cannot be observed from outside, so no links are drawn, not even this node's, which would make it look like a centre."
     );
-    expect(notes).toHaveTextContent(
-      "Each node keeps its own handful of connections to others. Those links cannot be seen from outside, so none are drawn: not even this node's, which would make it look like a centre."
-    );
+    expect(notes).not.toHaveTextContent(/none are drawn/);
   });
 
   it('puts the map notes in tier 2 of the page', async () => {
@@ -687,12 +687,17 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     await waitFor(() =>
       expect(tier2).toHaveTextContent(/Coverage: 2025-07-01 through 2025-07-03\./)
     );
+    // Re-pinned on purpose (P4 topics; the review's network page: tier 2 said things twice, "per
+    // completed UTC+8 day" then "Daily history … by UTC+8 day", "Round counts were not recorded"
+    // then "Rounds per day are unavailable …"): each said once.
     expect(tier2).toHaveTextContent(
-      "“Over time” draws the retained verification state (daily): verified and reachable peers per completed UTC+8 day. Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is excluded. Round counts were not recorded. Days older than the crawler's hourly retention show as gaps, never zero."
+      "“Over time” draws the verified peers the crawler retained on each completed UTC+8 day and the part of them that was reachable; the current (incomplete) day is excluded. Days older than the crawler's hourly retention show as gaps, never zero."
     );
     expect(tier2).toHaveTextContent(
-      'Shaded days have no retained round observation. Rounds per day are unavailable because the crawler did not record counts.'
+      'Shaded days have no retained round observation. Rounds per day are unavailable because the crawler did not record them.'
     );
+    expect(tier2).not.toHaveTextContent(/Daily history of retained verified peers/);
+    expect(tier2).not.toHaveTextContent(/Round counts were not recorded/);
   });
 
   it('keeps tier 1 to one coloured text, one hint per section and short prose (R11, R14, §4)', async () => {
@@ -849,12 +854,15 @@ describe('Network tier 2 prose at body (R1: meta is never prose; lane D3 ruling)
     await waitFor(() =>
       expect(within(tier2).getAllByText(/percentages are unavailable/).length).toBeGreaterThan(0)
     );
+    // Re-pinned on purpose (P4 topics; the review's network page: the daily-count note stood over
+    // each of the two daily tables, word for word): it is said once, over both (it was getAllByText
+    // and four paragraphs).
     const prose = [
       within(tier2).getByText(/^Evidence boundary: an advertised candidate/),
-      ...within(tier2).getAllByText(/^Retained top-label counts per observed day/),
+      within(tier2).getByText(/^Retained top-label counts per observed day/),
       within(tier2).getByText(/unique advertiser → target peer pairs/),
     ];
-    expect(prose).toHaveLength(4);
+    expect(prose).toHaveLength(3);
     for (const p of prose) {
       expect(p).toHaveClass('text-body');
       expect(p.className).not.toMatch(/(^|\s)text-(meta|small)(\s|$)/);

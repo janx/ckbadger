@@ -712,6 +712,14 @@ describe('NetworkTrends', () => {
       ['leader', 'body', 'US 12', '2 labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);
+    // PAGE-LANE-NOTES (B1, network/trends:288): the quiet line draws in the reading ink, so its
+    // label words are set quiet by the page — each label in the quiet ink, each count a value in
+    // the line's reading ink
+    const labelsLine = rows[0].querySelector('[data-line="labels"]') as HTMLElement;
+    const named = [...labelsLine.querySelectorAll('[data-role="figure-label"]')];
+    expect(named.map((n) => n.textContent)).toEqual(['US', 'DE']);
+    for (const n of named) expect(n).toHaveClass('text-text-dim');
+    expect(labelsLine.querySelectorAll('[data-dotted-item]')).toHaveLength(2);
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['day', '2025-07-02', null],
       ['leader', 'No retained round observation', null],

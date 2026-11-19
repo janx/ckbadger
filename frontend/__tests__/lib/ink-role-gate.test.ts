@@ -455,9 +455,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/network/trends.tsx': {
     family: 'topics',
-    // prose 5 → 4 (B7): the top-label note explains, in the reading ink
-    sites: { td: 1, prose: 4 },
-    reason: 'a bucket count in a table cell; the loading, empty and round lines',
+    // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2
+    // (P4 topics): a day's label count is a value, and the two empty lines read
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
   'components/dao/dao-board.tsx': {
     family: 'topics',

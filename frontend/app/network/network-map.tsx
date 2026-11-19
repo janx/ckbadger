@@ -692,15 +692,14 @@ export function NetworkMapNotes() {
   // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
     <p>
-      {data.located.toLocaleString()} verified nodes in {counts.countries} countries · ringed: the{' '}
-      {counts.ringed} this node had a session with in the latest round.{' '}
-      {data.located.toLocaleString()} of {data.verifiedRetained.toLocaleString()} retained verified
-      peers have approximate GeoIP coordinates; {data.locationUnavailable.toLocaleString()}{' '}
-      locations are unavailable. Dots with close coordinates are displaced to keep them selectable.
-      There is no centre: every node keeps a handful of connections of its own, and that mesh cannot
-      be observed from outside, so no links are drawn. Each node keeps its own handful of
-      connections to others. Those links cannot be seen from outside, so none are drawn: not even
-      this node&apos;s, which would make it look like a centre.
+      {data.located.toLocaleString('en-US')} verified nodes in {counts.countries} countries ·
+      ringed: the {counts.ringed} this node had a session with in the latest round.{' '}
+      {data.located.toLocaleString('en-US')} of {data.verifiedRetained.toLocaleString('en-US')}{' '}
+      retained verified peers have approximate GeoIP coordinates;{' '}
+      {data.locationUnavailable.toLocaleString('en-US')} locations are unavailable. Dots with close
+      coordinates are displaced to keep them selectable. There is no centre: every node keeps a
+      handful of connections of its own, and that mesh cannot be observed from outside, so no links
+      are drawn, not even this node&apos;s, which would make it look like a centre.
     </p>
   );
 }
