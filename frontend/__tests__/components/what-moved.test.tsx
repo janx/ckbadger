@@ -293,3 +293,45 @@ describe('WhatMoved, the list form', () => {
     expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('ay02wn'));
   });
 });
+
+// Lane P1 follow-up (review chain-b tx-dao-deposit: "what moved draws the deposit as a payment to
+// ckb1…vwd5rt DEFAULT LOCK 122,000; nowhere in the figure does it say Nervos DAO"). The activity
+// says which party a DAO step is (its DAO tag, bit 3) and what the step is (its protocol action):
+// the end of that party says it, so the ribbon to it does not read as a payment.
+describe('WhatMoved, a Nervos DAO step', () => {
+  const TAG_DAO_BIT = 8;
+  const deposit = (): GlobalActivity => ({
+    ...activity([
+      party('ylvfrs', '-12200000088888'),
+      { ...party('vwd5rt', '12200000000000'), tags: TAG_DAO_BIT },
+    ]),
+    protocolActions: [
+      {
+        protocol: 'dao',
+        protocolName: 'Nervos DAO',
+        action: 'deposit',
+        metadata: { capacity: '12200000000000' },
+      },
+    ],
+  });
+
+  it('says the end of the party that holds the deposit is a Nervos DAO deposit', () => {
+    for (const width of [1000, 358]) {
+      stubChartWidth(width);
+      const { unmount } = render(
+        <WhatMoved hash={HASH} activity={deposit()} fee="88888" compensation={null} />
+      );
+      const frame = screen.getByTestId('tx-what-moved');
+      const to = frame.querySelector('[data-flow-side="to"]') as HTMLElement;
+      const from = frame.querySelector('[data-flow-side="from"]') as HTMLElement;
+      const holder = [...to.querySelectorAll<HTMLElement>('[data-flow-end="party"]')].find((e) =>
+        // its address's last six characters, in the row and the tight size alike
+        e.textContent!.includes(seededAddress('vwd5rt', JOYID).slice(-6))
+      )!;
+      expect(holder).toHaveTextContent('Nervos DAO deposit');
+      expect(from).not.toHaveTextContent('Nervos DAO');
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+});

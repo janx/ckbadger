@@ -73,7 +73,9 @@ import {
   type CellDep,
   type ItemDelta,
   type ParticipantInfo,
+  TAG_DAO,
 } from '@/lib/api';
+import { BlockLink } from '@/components/ui/block-link';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { txComment } from '@/lib/tx-comment';
@@ -281,6 +283,71 @@ function listWords(words: readonly string[]): string {
  * its fee says so in one sentence, and with that sentence the figure and a one-party table, which
  * would restate the fee alone, are not drawn (`onlyFeeMoved`).
  */
+/**
+ * A transaction's Nervos DAO steps in the lede, from the activity's own kind (lane P1 follow-up;
+ * review chain-b tx-dao-deposit: the page drew a deposit as a payment): each kind of step once, with
+ * its amount where the transaction takes one such step and its count where it takes several (the
+ * API states no total, and the page sums none), and the parties the activity tags DAO, whose cells
+ * hold the step. Compensation is the DAO's word, never interest.
+ */
+function DaoSentences({ activity }: { activity: GlobalActivity }) {
+  const steps = activity.protocolActions.filter((pa) => pa.protocol === 'dao');
+  if (steps.length === 0) return null;
+  const holders = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
+  if (holders.length === 0)
+    throw new Error(`${activity.txHash}: a Nervos DAO step and no party the activity tags DAO`);
+  const who = <Parties parties={holders} />;
+  const amount = (shannons: bigint) => (
+    <CkbAmount form="summary" shannons={shannons} signed={false} tone="plain" />
+  );
+  const kinds = [...new Set(steps.map((pa) => pa.action))];
+  return (
+    <>
+      {kinds.map((kind) => {
+        const of = steps.filter((pa) => pa.action === kind);
+        const one = of.length === 1 ? protocolActionMeta(of[0]) : null;
+        const count = of.length.toLocaleString('en-US');
+        switch (kind) {
+          case 'deposit':
+            return one ? (
+              <Fragment key={kind}>
+                {amount(one.capacity!)} went into a Nervos DAO deposit held by {who}.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {count} Nervos DAO deposits were made, held by {who}.{' '}
+              </Fragment>
+            );
+          case 'withdraw_request':
+            return one ? (
+              <Fragment key={kind}>
+                {who} asked to withdraw a Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
+                <BlockLink look="inline" number={one.depositBlock!} />.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {who} asked to withdraw {count} Nervos DAO deposits.{' '}
+              </Fragment>
+            );
+          case 'withdraw_complete':
+            return one ? (
+              <Fragment key={kind}>
+                {who} withdrew {amount(one.capacity!)} from the Nervos DAO, with{' '}
+                {amount(one.compensation!)} of compensation.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {who} withdrew {count} Nervos DAO deposits, each with its compensation.{' '}
+              </Fragment>
+            );
+          default:
+            throw new Error(`${activity.txHash}: a Nervos DAO step "${kind}" has no sentence`);
+        }
+      })}
+    </>
+  );
+}
+
 function TxSummary({
   activity,
   fee,
@@ -356,26 +423,30 @@ function TxSummary({
           {` kept the rest of ${activity.participants.length === 1 ? 'its' : 'their'} CKB. `}
         </>
       )}
+      {moves.length === 0 && readable(activity.txHash, () => <DaoSentences activity={activity} />)}
       {moves.length === 0 &&
-        activity.protocolActions.map((pa, i) => (
-          <Fragment key={i}>
-            {readable(activity.txHash, () => {
-              // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
-              const parts = protocolActionNoteParts(pa, 'row');
-              return parts.length ? (
-                <>
-                  {parts.map((part, j) => (
-                    <Fragment key={j}>
-                      {j > 0 && ', '}
-                      {part}
-                    </Fragment>
-                  ))}
-                  {'. '}
-                </>
-              ) : null;
-            })}
-          </Fragment>
-        ))}
+        // the DAO's steps are said above, in their sentences; the other protocols' facts here
+        activity.protocolActions
+          .filter((pa) => pa.protocol !== 'dao')
+          .map((pa, i) => (
+            <Fragment key={i}>
+              {readable(activity.txHash, () => {
+                // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
+                const parts = protocolActionNoteParts(pa, 'row');
+                return parts.length ? (
+                  <>
+                    {parts.map((part, j) => (
+                      <Fragment key={j}>
+                        {j > 0 && ', '}
+                        {part}
+                      </Fragment>
+                    ))}
+                    {'. '}
+                  </>
+                ) : null;
+              })}
+            </Fragment>
+          ))}
     </p>
   );
 }

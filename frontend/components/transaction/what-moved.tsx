@@ -20,6 +20,7 @@ import {
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatCount } from '@/lib/format-count';
 import {
+  daoStepOf,
   foldEnds,
   ribbonWeight,
   txFlows,
@@ -164,12 +165,15 @@ function EndText({
   end,
   align,
   size,
+  daoStep,
   onExpand,
 }: {
   asset: FlowAsset;
   end: FlowEnd;
   align: 'left' | 'right';
   size: ShortSize;
+  /** A party's Nervos DAO step here, in words (`daoStepOf`), said after its CKB amount. */
+  daoStep: (party: ParticipantInfo) => string | null;
   onExpand?: () => void;
 }) {
   const alignClass = align === 'right' ? 'text-right' : 'text-left';
@@ -202,6 +206,14 @@ function EndText({
         </div>
         <div className="text-small">
           <Amount asset={asset} amount={end.amount} size={size} />
+          {/* what its CKB is here: its Nervos DAO step, so a ribbon to it is not read as a
+              payment (lane P1 follow-up), in the DAO's gold, as its compensation is */}
+          {asset.kind === 'ckb' && daoStep(end.party) && (
+            <>
+              {' '}
+              <span className="text-gold">· {daoStep(end.party)}</span>
+            </>
+          )}
         </div>
       </div>
     );
@@ -304,9 +316,11 @@ function side(ends: FlowEnd[], height: number): Side {
 /** The flow in its ribbon form: givers, the field with the ribbons and the plate, receivers. */
 function RibbonStrip({
   flow,
+  daoStep,
   onHover,
 }: {
   flow: TxFlow;
+  daoStep: (party: ParticipantInfo) => string | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -397,6 +411,7 @@ function RibbonStrip({
                 end={end}
                 align={which === 'from' ? 'right' : 'left'}
                 size="row"
+                daoStep={daoStep}
                 onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
               />
             </div>
@@ -439,9 +454,11 @@ function RibbonStrip({
 /** The flow in its list form (under 700 px): the givers, a step down through the plate, the receivers. */
 function ListStrip({
   flow,
+  daoStep,
   onHover,
 }: {
   flow: TxFlow;
+  daoStep: (party: ParticipantInfo) => string | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -467,6 +484,7 @@ function ListStrip({
             end={end}
             align="left"
             size={size}
+            daoStep={daoStep}
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
           />
         </li>
@@ -542,7 +560,7 @@ export function WhatMoved({
       <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
-            <Strip flow={flow} onHover={onHover} />
+            <Strip flow={flow} daoStep={(party) => daoStepOf(activity, party)} onHover={onHover} />
           </div>
         ))}
       </div>

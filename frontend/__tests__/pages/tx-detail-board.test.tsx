@@ -955,11 +955,18 @@ describe('Transaction variants (D4)', () => {
         },
       ],
       participants: [
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000' },
+        // the owner of the withdrawn deposit: the API tags it DAO (TAG_DAO, bit 3), as the indexer
+        // does the party whose cells hold the step (lane P1 follow-up: the fixture carried no tag)
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000', tags: 8 },
         { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
       ],
     });
     render(<TransactionDetailPage />);
+    // Lane P1 follow-up (the review's standing cause, What moved and the lede on a DAO step): the
+    // lede says what happened from the activity's own kind, a withdrawal with its compensation
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
+    );
     const inflow = await screen.findByTestId('tx-inflow');
     expect(inflow).toHaveAttribute('data-inflow', 'dao');
     expect(inflow).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
@@ -981,6 +988,39 @@ describe('Transaction variants (D4)', () => {
     expect(headers).toHaveTextContent('2 · read, not consumed');
     expect(within(headers).getByRole('link', { name: '#5' })).toBeInTheDocument();
     expect(within(headers).getByRole('link', { name: '#9' })).toBeInTheDocument();
+  });
+
+  // Lane P1 follow-up (review chain-b tx-dao-deposit: the deposit read as a payment): the lede
+  // says the CKB went into a Nervos DAO deposit and who holds it (the party the API tags DAO), and
+  // What moved writes that party's end as the deposit; the payer is not its holder here.
+  it('says a deposit went into the Nervos DAO and who holds it, the figure too', async () => {
+    const tx = committed();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.daoWithdrawRequest,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+      ],
+      participants: [
+        {
+          ...feedSamples.daoWithdrawRequest.participants[2],
+          ckbDelta: `-${BigInt('12200000000000') + BigInt(tx.fee)}`,
+        },
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '12200000000000', tags: 8 },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
   });
 
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
