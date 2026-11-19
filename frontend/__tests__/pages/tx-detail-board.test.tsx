@@ -1011,16 +1011,38 @@ describe('Transaction variants (D4)', () => {
     } as Awaited<ReturnType<typeof api.getBlock>>);
     render(<TransactionDetailPage />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Cellbase' })).toBeInTheDocument();
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph; review chain-a tx-cellbase: "the lede
+    // lacks the payee, two heights 11 apart in one sentence"): the lede names who is paid
+    // (`tx.outputs[].address`, as the cell tile names its owner), how much (the API's outputs
+    // capacity, in the summary form, exact in its title and in the reward source) and which block
+    // the reward is for. It was "The first transaction of block #101. It consumes no cell and pays
+    // the reward of block #89, 559.61739927 CKB.": the block it is in is the strip's, and that it
+    // consumes no cell the cells' note and the comment say.
+    const payee = committed().outputs![0].address!;
     expect(screen.getByTestId('tx-summary')).toHaveTextContent(
-      'The first transaction of block #101. It consumes no cell and pays the reward of block #89, 559.61739927 CKB.'
+      new RegExp(`^It pays ckb1…${payee.slice(-8)} 559\\.61 CKB, the reward for block #89\\.$`)
+    );
+    expect(
+      within(screen.getByTestId('tx-summary')).getByRole('link', {
+        name: `ckb1…${payee.slice(-8)}`,
+      })
+    ).toHaveAttribute('href', `/mainnet/address/${payee}`);
+    expect(screen.getByTestId('tx-summary').querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '559.61739927 CKB'
     );
     // R-6a: the paid block is linked by its canonical hash.
     expect(
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#89' })
     ).toHaveAttribute('href', `/mainnet/blocks/0x${'89'.repeat(32)}`);
-    // Lane L: the block the cellbase is in is a link too.
+    // the block the cellbase is in is the status strip's link, said once
     expect(
-      within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
+      within(screen.getByTestId('tx-summary')).queryByRole('link', { name: '#101' })
+    ).toBeNull();
+    expect(
+      within(screen.getByRole('group', { name: 'Transaction status' })).getByRole('link', {
+        name: '#101',
+      })
     ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
     // A cellbase consumes no cell: the cells command runs on 0 in (T1), and its comment says where
@@ -1311,6 +1333,127 @@ describe('Transaction board, R2b-a fields', () => {
     expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
       `0.00064119 CKB · paid by ${row('cjk9lz')}`
     );
+  });
+
+  // Lane P1 (the plan's P1 paragraph; review chain-a tx-transfer, chain-b tx-pool: "the lede lacks
+  // the amount"): the summary states how much moved, from the flows the figure draws, in the
+  // summary form, its exact value in its title and in the balance table.
+  it('states how much CKB moved, cut to the summary form, its exact value in its title (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.objectTransfer,
+      txHash: TX_HASH,
+      typeCalls: [],
+      lockCalls: [],
+      participants: [
+        {
+          ...feedSamples.objectTransfer.participants[0],
+          ckbDelta: '-66959187575',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+        {
+          ...feedSamples.objectTransfer.participants[1],
+          ckbDelta: '66959123456',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    // what reached the receiver, 669.59123456 CKB, cut to two places; the fee is the strip's
+    expect(summary).toHaveTextContent(
+      new RegExp(`^669\\.59 CKB moved from ${row('cjk9lz')} to ${row('shp3hr')}\\.$`)
+    );
+    const amount = summary.querySelector('[data-ckb-amount]')!;
+    expect(amount).toHaveAttribute('data-form', 'summary');
+    expect(amount).toHaveAttribute('title', '669.59123456 CKB');
+    // the exact value stands in the balance table, the receiver's row
+    const balance = (await screen.findByRole('heading', { name: 'Balance changes' })).closest(
+      'section'
+    )!;
+    expect(balance).toHaveTextContent('+669.59123456');
+  });
+
+  it('states a token’s amount in its own units, in the summary form (P1)', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...committed(),
+      fee: '8888',
+      outputsCapacity: '55499991112',
+    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.tokenTransfer,
+      txHash: TX_HASH,
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up
+    expect(summary).toHaveTextContent(
+      new RegExp(`^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`)
+    );
+    expect(within(summary).getByRole('link', { name: 'Seal' })).toBeInTheDocument();
+  });
+
+  // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"; review chain-b
+  // tx-old-sample: the fee printed seven times above the fold, the figure and the table restating
+  // it): the lede says it once, and the figure and the one-party table, which said nothing else,
+  // are not drawn.
+  it('says in one line that only the fee moved, and draws no figure or table that restates it (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.objectTransfer,
+      txHash: TX_HASH,
+      typeCalls: [],
+      lockCalls: [],
+      participants: [
+        {
+          ...feedSamples.objectTransfer.participants[0],
+          ckbDelta: '-64119',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      new RegExp(`^Only the fee moved: ${row('cjk9lz')} kept the rest of its CKB\\.$`)
+    );
+    await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(screen.queryByRole('heading', { name: 'What moved' })).toBeNull();
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Balance changes' })).toBeNull();
+  });
+
+  it('keeps the balance table when several locks shared the fee, and says "their" (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.objectTransfer,
+      txHash: TX_HASH,
+      typeCalls: [],
+      lockCalls: [],
+      participants: [
+        {
+          ...feedSamples.objectTransfer.participants[0],
+          ckbDelta: '-60000',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+        {
+          ...feedSamples.objectTransfer.participants[1],
+          ckbDelta: '-4119',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^Only the fee moved: ${row('cjk9lz')} and ${row('shp3hr')} kept the rest of their CKB\\.$`
+      )
+    );
+    expect(await screen.findByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
   });
 });
 
