@@ -12,7 +12,7 @@ import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
-import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
@@ -264,15 +264,23 @@ it('opens Recent activity with five rows and two links that open the full feed i
   // Phase 5 (A10): the activity, run on the rows it shows; the two links are the note.
   const heading = within(recent).getByRole('heading', { name: 'Activity --last 5' });
   expectPrompt(heading, 'Activity', '--last 5');
-  const note = promptNote(heading);
-  expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
-  expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
-  fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
+  // re-pinned on purpose (lane P2's follow-up, item 10): the newest rows open into the whole feed in place, a fold, by the one disclosure control (FoldToggle): "all 184
+  // transactions ↓" under the rows (it was two buttons in the heading's note, "All activity →"
+  // and "184 transactions →", arrows that said another page); the same button folds them back
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  const fold = screen.getByRole('button', { name: /^all 184\stransactions ↓$/ });
+  expect(fold).toHaveAttribute('aria-expanded', 'false');
+  fold.focus();
+  fireEvent.click(fold);
   expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
   expect(screen.queryByRole('region', { name: 'Recent activity' })).toBeNull();
+  expect(fold).toHaveAccessibleName('fewer ↑');
+  expect(document.activeElement).toBe(fold);
+  fireEvent.click(fold);
+  expect(await screen.findByRole('region', { name: 'Recent activity' })).toBeInTheDocument();
 });
 
 // Consistency round (Main.dc.html): the lede is the kind and what every object is made of; the

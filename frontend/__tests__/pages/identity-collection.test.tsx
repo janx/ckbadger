@@ -36,8 +36,14 @@ it('shows identities, exact created/live counts, capacity history and parallel r
     'of 2 minted / created'
   );
   // re-pinned (PB-28, lane c2-assets): the two layers open from the last five, in place (the page
-  // opened on them)
-  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  // opened on them); re-pinned on purpose (lane P2's follow-up, item 10): the newest rows open into the whole feed in place, a fold, by the one disclosure control (FoldToggle): "all 3
+  // transactions ↓" opens on the transactions, the tabs switch to the activities
+  fireEvent.click(await screen.findByRole('button', { name: /^all 3\stransactions ↓$/ }));
+  expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'activities' }));
   expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
     'aria-selected',
     'true'
@@ -77,8 +83,10 @@ it('opens its activity as the last five and the ways onward to the whole feed (P
   expect(screen.queryByRole('navigation', { name: 'activities' })).toBeNull();
   const heading = within(recent).getByRole('heading', { name: 'Activity --last 5' });
   expectPrompt(heading, 'Activity', '--last 5');
-  expect(within(recent).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
-  fireEvent.click(within(recent).getByRole('button', { name: '3 transactions →' }));
+  // re-pinned on purpose (lane P2's follow-up, item 10): the newest rows open into the whole feed in place, a fold, by the one disclosure control (FoldToggle): "all 3
+  // transactions ↓", the collection's own count (it was "All activity →" and "3 transactions →")
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /^all 3\stransactions ↓$/ }));
   expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
@@ -139,8 +147,8 @@ it('keeps holders visible independently of the records tabs and handles empty pa
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
   // re-pinned (PB-28, lane c2-assets): the layers open from the last five, then the tabs switch
-  // them (the page opened on the tabs)
-  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  // them (the page opened on the tabs); re-pinned on purpose (lane P2's follow-up, item 10): the newest rows open into the whole feed in place, a fold, by the one disclosure control (FoldToggle): "all 3 transactions ↓"
+  fireEvent.click(await screen.findByRole('button', { name: /^all 3\stransactions ↓$/ }));
   fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   expect(screen.getByText('No current holders.')).toBeInTheDocument();
 });

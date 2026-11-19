@@ -76,7 +76,9 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   expect(screen.getByRole('radiogroup', { name: 'History time range' })).toBeInTheDocument();
   // Main.dc.html: "Recent activity" — its link to the transactions opens the full feed there.
   const recent = screen.getByRole('region', { name: 'Recent activity' });
-  fireEvent.click(within(recent).getByRole('button', { name: /transactions →$/ }));
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N transactions ↓" (it was "N transactions →")
+  expect(recent).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /^all \S+\stransactions ↓$/ }));
   expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
