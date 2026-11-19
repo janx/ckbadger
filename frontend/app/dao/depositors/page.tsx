@@ -5,8 +5,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { usePageSize } from '@/hooks/usePageSize';
+import { pageCount } from '@/lib/pagination';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { SHARE_TRACK_PX, formatShareTick, percentHundredths } from '@/components/ui/share-bar';
 import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader } from '@/components/ui/aligned-bar';
@@ -252,26 +253,31 @@ export default function DaoDepositorsPage() {
                   />
                 )}
               />
-              {/* The site's one pager (B5): it draws nothing for one page. The buttons keep this
-                  page's words, the size of a page on Next (R2). */}
-              <CursorPagination
-                className="pt-4"
-                total={page.total}
-                totalLabel="depositors"
-                page={cursors.length}
-                pageSize={pageSize}
-                currentCount={page.data.length}
-                hasMore={page.hasMore}
-                hasPrevious={cursors.length > 1}
-                onNext={() => {
-                  if (page.nextCursor === null)
-                    throw new Error('DAO depositors: a page with more ranks has no next cursor');
-                  setCursors((c) => [...c, page.nextCursor!]);
-                }}
-                onPrevious={() => setCursors((c) => c.slice(0, -1))}
-                previousLabel="← Previous"
-                nextLabel={`Next ${pageSize} →`}
-              />
+              {/* The controls board's pager for a ranked list (B5: nothing for one page): the
+                  first and the last rank shown are the API's own, the page's size its limit (R2:
+                  twenty on a phone), the page the reader's step through the cursors. */}
+              {page.data.length > 0 && (
+                <div className="pt-4">
+                  <Pager
+                    mode="pages"
+                    label="depositors"
+                    from={page.data[0].rank}
+                    to={page.data[page.data.length - 1].rank}
+                    total={page.total}
+                    pageSize={page.limit}
+                    page={cursors.length}
+                    pages={pageCount(page.total, page.limit)}
+                    onNext={() => {
+                      if (page.nextCursor === null)
+                        throw new Error(
+                          'DAO depositors: a page with more ranks has no next cursor'
+                        );
+                      setCursors((c) => [...c, page.nextCursor!]);
+                    }}
+                    onPrevious={() => setCursors((c) => c.slice(0, -1))}
+                  />
+                </div>
+              )}
             </>
           )}
         </DetailLayout>

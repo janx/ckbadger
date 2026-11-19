@@ -78,11 +78,6 @@ const CONTROL_FILES = [
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
-  'app/dao/depositors/page.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the depositors list’s cursor pager',
-  },
   'app/inventory/inventory-page-client.tsx': {
     lane: 'c2-lists',
     sites: { select: 2, 'text-input': 1, tab: 1, pager: 1 },
@@ -212,7 +207,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 48;
+const TOLERATED_TOTAL = 47;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
