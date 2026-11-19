@@ -289,7 +289,7 @@ export function ObjectGeneticsView({
                   )}
                 />
                 {own3.absent.length > 0 && (
-                  <p role="status" className="text-text text-meta max-w-measure">
+                  <p role="status" className="text-text text-small max-w-measure">
                     Its {own3.absent.join(', ')} variant is not among the collection’s counted
                     variants.
                   </p>
@@ -352,7 +352,7 @@ export function ObjectGeneticsEvidence({
       >
         DNA evidence
       </h2>
-      <p className="text-text text-meta max-w-measure">
+      <p className="text-text text-small max-w-measure">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null
           ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
@@ -385,7 +385,7 @@ export function ObjectGeneticsEvidence({
                   key={u.step}
                   role="status"
                   title={u.reason}
-                  className="text-text text-meta max-w-measure"
+                  className="text-text text-small max-w-measure"
                 >
                   Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern
                   alone is used.
@@ -452,10 +452,11 @@ export function ObjectGeneticsEvidence({
         </ul>
       )}
       {cached.traits.length > 0 && (
-        <dl aria-label="Cached VM traits" className="text-meta grid gap-2 sm:grid-cols-2">
+        // a trait's value at 13 px, its name the label at 12 (ink and size roles)
+        <dl aria-label="Cached VM traits" className="text-small grid gap-2 sm:grid-cols-2">
           {cached.traits.map((t, i) => (
             <div key={`${t.name}:${i}`} className="min-w-0">
-              <dt className="text-text-dim">{t.name}</dt>
+              <dt className="text-text-dim text-meta">{t.name}</dt>
               {/* a raw trait value anyone can mint: words stay whole, a long run breaks anywhere */}
               <dd className="[overflow-wrap:anywhere]">{t.value === '' ? '(empty)' : t.value}</dd>
             </div>
@@ -616,19 +617,19 @@ function ObjectDnaReading({
         />
       )}
       {declaredOnly && (
-        <p className="text-text text-meta max-w-measure">
+        <p className="text-text text-small max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
       )}
       {clipped.length > 0 && (
-        <p className="text-text text-meta max-w-measure">
+        <p className="text-text text-small max-w-measure">
           Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
           {clipped.length === 1 ? 's' : ''} bytes past its {count(layout.bytes.length)}.
         </p>
       )}
       {layout.unmapped.map((u) => (
-        <p key={u.name} className="text-text text-meta max-w-measure">
+        <p key={u.name} className="text-text text-small max-w-measure">
           {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this DNA
           fall in the declared range.
         </p>
@@ -998,14 +999,14 @@ function PatternReading({
         </div>
       ) : (
         genes.length > 0 && (
-          <p className="text-text text-meta">
+          <p className="text-text text-small max-w-measure">
             Its ranges run past what a ruler can draw; the table gives them exactly.
           </p>
         )
       )}
       {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
       {declared && (
-        <p className="text-text text-meta max-w-measure">
+        <p className="text-text text-small max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
@@ -1062,7 +1063,7 @@ function PatternReading({
             </dl>
           )}
           {outside.length > 0 && (
-            <p className="text-text text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
+            <p className="text-text text-small max-w-measure mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
               <TraitText
                 text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}

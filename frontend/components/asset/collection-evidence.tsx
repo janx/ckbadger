@@ -123,7 +123,7 @@ export function StoredDescription({ description }: { description: string | null 
       {pretty !== null ? (
         <TintedJson text={pretty} />
       ) : (
-        <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
+        <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
           {description}
         </pre>
       )}
@@ -265,7 +265,7 @@ export function MnftClassEvidence({
           {info.kind === 'pretty JSON' ? (
             <TintedJson text={info.text} />
           ) : (
-            <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
+            <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
               {info.text}
             </pre>
           )}

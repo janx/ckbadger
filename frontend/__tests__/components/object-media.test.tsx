@@ -84,7 +84,11 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
   expect(note).toHaveTextContent(
     'Its image lives on Bitcoin; CKBadger reads CKB only and does not fetch it.'
   );
-  expect(note).toHaveClass('text-text-dim', 'text-meta');
+  // re-pinned on purpose (the ink and size roles round): the caption is a sentence, the reading
+  // ink at 13 px (it was quiet at 12); still after the way to the picture, no copper, no box, once
+  expect(note).toHaveClass('text-text');
+  expect(note.closest('figcaption')).toHaveClass('text-small', 'max-w-measure');
+  expect(note).not.toHaveClass('text-text-dim', 'text-meta');
   expect(note).not.toHaveClass('text-copper');
   expect(note.closest('figure')).not.toHaveClass('border');
   expect(view.closest('figure')).toBe(note.closest('figure'));
@@ -252,10 +256,14 @@ it('shows the first reference and the action under the title, the rest in the di
   expect(follows(box, details)).toBe(true);
   // the library's inner disclosure in tier 1 (lane cd-fixes-controls, the disclosure sweep): its
   // words at the control step, 13 px, and the reading ink (they were 12 px in the page's bright
-  // ink); the references keep their 12 px
+  // ink); re-pinned on purpose (the ink and size roles round): a reference's URI is a value, the
+  // reading ink at 13 px (the references were 12 px); its scheme, location and tier the label at 12
   const words = details.querySelector('summary')!;
   expect(words).toHaveClass('text-small', 'text-text');
-  expect(within(details).getByText(later).closest('ul')!.parentElement).toHaveClass('text-meta');
+  expect(within(details).getByText(later).closest('ul')!.parentElement).toHaveClass(
+    'text-small',
+    'text-text'
+  );
   expect(within(details).getByText(later)).toBeInTheDocument();
   expect(
     within(details).getByRole('link', { name: 'Bitcoin tx ababababab…ababab · inscription i3 ↗' })

@@ -384,7 +384,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-small whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>

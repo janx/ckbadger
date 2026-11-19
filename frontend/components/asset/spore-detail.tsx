@@ -202,12 +202,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value:
         last && moves !== null ? (
           moves === 0 ? (
-            <span className="text-text-dim">never</span>
+            <span className="text-text">never</span>
           ) : (
             formatUtc8Date(last.timestamp)
           )
         ) : (
-          <span className="text-text-dim">Loading cell history…</span>
+          <span className="text-text">Loading cell history…</span>
         ),
       note:
         last && moves !== null ? (
@@ -295,7 +295,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           {tier ? (
             <CompositionLine tier={tier} lede />
           ) : (
-            <span className="text-text-dim text-meta">Composition not recorded</span>
+            <span className="text-text text-small">Composition not recorded</span>
           )}
         </div>
       }

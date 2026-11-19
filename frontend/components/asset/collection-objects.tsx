@@ -178,7 +178,7 @@ function ClusterObjectPhoneRow({
   const made = tier ? (
     <CompositionBadge tier={tier} size="sm" />
   ) : (
-    <span className="text-text-dim">not recorded</span>
+    <span className="text-text">not recorded</span>
   );
   const genes = lanes.flatMap((lane) => {
     const own = item.traits.find((t) => t.name === lane.gene);
@@ -234,7 +234,7 @@ function ClusterObjectPhoneRow({
                   )}
                 </>
               ) : (
-                <span className="text-text-dim">No live owner</span>
+                <span className="text-text">No live owner</span>
               ),
               right: made,
             },
@@ -688,7 +688,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                               {itemTier ? (
                                 <CompositionBadge tier={itemTier} size="sm" />
                               ) : (
-                                <span className="text-text-dim">not recorded</span>
+                                <span className="text-text">not recorded</span>
                               )}
                             </span>
                             {!shared.owner && (
@@ -714,7 +714,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                     )}
                                   </>
                                 ) : (
-                                  <span className="text-text-dim">No live owner</span>
+                                  <span className="text-text">No live owner</span>
                                 )}
                               </span>
                             )}
@@ -759,7 +759,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
 export function DecodeCoverage({ genetics }: { genetics: CollectionInsights['genetics'] }) {
   const n = (v: number) => v.toLocaleString('en-US');
   return (
-    <p className="text-text text-meta max-w-measure">
+    <p className="text-text text-small max-w-measure">
       {n(genetics.decodedItems)} of {n(genetics.eligibleItems)} DOB objects decoded ·{' '}
       {n(genetics.pendingItems)} pending · {n(genetics.failedItems)} failed ·{' '}
       {n(genetics.nonDobItems)} non-DOB objects · {n(genetics.liveItems)} live

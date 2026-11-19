@@ -132,11 +132,12 @@ function itemHolder(item: CollectionItem): ReactNode {
     );
   if (item.isLive)
     return (
-      <span role="alert" className="text-text-dim">
+      <span role="alert" className="text-text">
         {item.nftId}: a live item with no owner in the API response
       </span>
     );
-  return <span className="text-text-dim">No live owner</span>;
+  // the owner's absence in its place, the reading ink (ink roles; it stood quiet)
+  return <span className="text-text">No live owner</span>;
 }
 
 /**
@@ -182,7 +183,7 @@ function CollectionItemPhoneRow({
               tier ? (
                 <CompositionBadge tier={tier} size="sm" />
               ) : (
-                <span className="text-text-dim">composition not recorded</span>
+                <span className="text-text">composition not recorded</span>
               )
             ) : undefined,
         },

@@ -678,7 +678,8 @@ export function AssetHistory({
           {peakItem && <p className="text-text text-small max-w-measure">{peakItem}</p>}
         </>
       )}
-      {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
+      {/* the footnote's counts are figures: the reading ink (ink roles; it stood quiet) */}
+      {footnote && <div className="text-text text-small mt-3">{footnote}</div>}
       {supplyEvents && token && (
         // the library's section disclosure (lane cd-fixes-controls, the disclosure sweep): its words
         // in tier 1's reading ink at 13 px, under the tier's rule
@@ -688,11 +689,11 @@ export function AssetHistory({
         >
           <div className="space-y-3">
             {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-              <p className="text-text text-meta max-w-measure">
+              <p className="text-text text-small max-w-measure">
                 The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
               </p>
             )}
-            <p className="text-text text-meta max-w-measure">
+            <p className="text-text text-small max-w-measure">
               Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
               which preserves time through backward block timestamps.
             </p>

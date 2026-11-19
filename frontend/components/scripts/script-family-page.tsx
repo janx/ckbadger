@@ -872,9 +872,10 @@ export function ScriptFamilyPage({
     {
       key: 'deployed',
       label: 'Deployed',
-      // the date, and the block under it at 12 px (79.2, the wider), and the gap
+      // the date, and the block under it, a link, at 13 px (85.8, the wider; it was 79.2 at 12
+      // px), and the gap
       minWidth: columnPx(
-        Math.max(small(formatUtc8Date(0)), meta(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
+        Math.max(small(formatUtc8Date(0)), small(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
       ),
       className: NARROW,
       render: (row) =>
@@ -883,7 +884,7 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               <Utc8Date timestamp={d.deployedAt} />
               {d.createdAtBlock !== undefined && (
-                <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
+                <span className="block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
@@ -910,7 +911,8 @@ export function ScriptFamilyPage({
               </span>
             </span>
           ))}
-          <span className="text-text-dim text-meta block [overflow-wrap:anywhere]">
+          {/* the version hash the column's head names, a value: the reading ink at 13 px */}
+          <span className="text-text block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>

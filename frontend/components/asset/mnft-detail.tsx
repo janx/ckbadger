@@ -101,7 +101,8 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
               Open the file ↗
             </a>
           )}
-          <figcaption className="text-text-dim text-meta">
+          {/* a caption that is a sentence: the reading ink at 13 px, on the measure (ink roles) */}
+          <figcaption className="text-text text-small max-w-measure">
             One file for the whole class.
             {scheme === 'http' || scheme === 'https'
               ? ' If that server goes away, the picture goes with it; the token itself stays on CKB.'
@@ -109,7 +110,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           </figcaption>
         </>
       ) : (
-        <figcaption className="text-text-dim text-meta">No class renderer recorded.</figcaption>
+        <figcaption className="text-text text-small">No class renderer recorded.</figcaption>
       )}
     </figure>
   );
@@ -343,7 +344,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               value:
                 last && moves !== null ? (
                   moves === 0 ? (
-                    <span className="text-text-dim">never</span>
+                    <span className="text-text">never</span>
                   ) : (
                     <AppLink look="key" href={`/cell/${last.txHash}-${last.outputIndex}`}>
                       <Utc8Date timestamp={last.timestamp} />
@@ -422,7 +423,10 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             state={{ claimed: item.claimed, locked: item.locked, value: item.state }}
           />
           <DetailSection title="Issuer record">
-            <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
+            <p className="text-text text-small max-w-measure">
+              <span className="text-text-dim text-meta">Name ·</span>{' '}
+              {item.issuer.name ?? 'not recorded'}
+            </p>
             {/* Lane P2's follow-up (item 8): the issuer id as a head's id, its copy after it (it
                 was a box that scrolled): 42 characters at 11 px, 277.2 px, one line at every
                 width from 360 (328 less the copy's 40) */}
@@ -430,7 +434,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               <span className="text-text-dim">Issuer ID</span>
               <HeadId value={item.issuer.issuerId} kind="hash" copy="copy issuer id" />
             </div>
-            <p className="text-text text-meta max-w-measure mt-2">
+            <p className="text-text text-small max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets
             </p>
@@ -438,7 +442,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its
               // bytes keep the 12 px they took from the disclosure
               <SectionDisclosure form="inner" summary="Raw issuer metadata" className="mt-3">
-                <pre className="text-meta whitespace-pre-wrap break-all">{item.issuer.infoHex}</pre>
+                <pre className="text-text text-small whitespace-pre-wrap break-all">
+                  {item.issuer.infoHex}
+                </pre>
               </SectionDisclosure>
             )}
           </DetailSection>
@@ -540,7 +546,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               )}
             </div>
-            <div className="text-text-dim text-small flex flex-wrap items-center gap-4">
+            <div className="text-text text-small flex flex-wrap items-center gap-4">
               {collection.data.composition && (
                 <CompositionBadge tier={collection.data.composition.tier} size="sm" />
               )}

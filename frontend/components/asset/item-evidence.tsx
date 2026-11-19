@@ -190,7 +190,7 @@ export function ItemTransactionContext({
           />
         </>
       ) : (
-        <span className="text-text-dim block">No resulting item cell</span>
+        <span className="text-text block">No resulting item cell</span>
       )}
     </div>
   );
