@@ -340,15 +340,16 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
  */
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 3,
-  // assets 13 → 1 (lane P2, the ink and size roles round, at the gate's merge)
-  assets: 1,
+  // assets 13 → 1 (lane P2, the ink and size roles round, at the gate's merge) → 0
+  assets: 0,
   lists: 6,
   topics: 2,
   charts: 1,
   shared: 3,
 };
-// 18 → 12 (lane P2, the ink and size roles round, at the gate's merge): six assets files left
-const TOLERATED_FILES = 12;
+// 18 → 12 (lane P2, the ink and size roles round, at the gate's merge): six assets files left;
+// 12 → 11: script-code-evidence
+const TOLERATED_FILES = 11;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -370,14 +371,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: `a party's link in a 12 px line; ${WORK}`,
   },
   // ---- assets ----
-  // asset-history 2, cell-versions 2, genetics 3, identity-document 1, item-evidence 3 and
-  // identity-evidence 1 left the list at the gate's merge into lane P2's ink and size roles round:
-  // their links were at 13 px already (the round's commits 597e4300 and 8fbb4043)
-  'components/scripts/script-code-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `a code cell's link in a 12 px line; ${WORK}`,
-  },
+  // The assets family left the list (lane P2, the ink and size roles round): asset-history 2,
+  // cell-versions 2, genetics 3, identity-document 1, item-evidence 3 and identity-evidence 1 at
+  // the gate's merge; then script-code-evidence 1, a history marker's chip (its day, event and
+  // block, and its code cell's link) 12 → 13 px
   // ---- lists ----
   'app/blocks/page.tsx': {
     family: 'lists',

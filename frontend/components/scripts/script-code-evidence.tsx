@@ -585,7 +585,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
+                className="border-base-border text-text text-small inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"
