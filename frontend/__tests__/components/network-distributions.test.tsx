@@ -58,7 +58,10 @@ describe('NetworkDistributions', () => {
     expect(await screen.findByText('0.114.0')).toBeInTheDocument();
     // The ASN's organisation, with the one-sentence reading over the verified peers.
     expect(
-      screen.getByText('2 of the 7 verified nodes run on Hetzner, across 2 countries.')
+      // re-pinned for lane exactness, part A2 (the pages review's NOTE 3): the countries are
+      // counted once, on the map, of its located nodes (this said "across 2 countries" of every
+      // verified node, beside the map's own count)
+      screen.getByText('2 of the 7 verified nodes run on Hetzner.')
     ).toBeInTheDocument();
     expect(screen.getByText('/ckb/2')).toBeInTheDocument();
   });
@@ -182,7 +185,8 @@ describe('NetworkDistributions', () => {
     );
     const { container } = render(<HostingBar />);
     expect(
-      await screen.findByText('3 of the 6 verified nodes run on Amazon.com, across 2 countries.')
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      await screen.findByText('3 of the 6 verified nodes run on Amazon.com.')
     ).toBeInTheDocument();
     expect(
       [...container.querySelectorAll('[data-provider]')].map((n) => n.getAttribute('data-provider'))

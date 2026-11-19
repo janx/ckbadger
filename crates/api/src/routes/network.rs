@@ -400,7 +400,12 @@ async fn map(State(state): State<Arc<AppState>>) -> ApiResult<NetworkMap> {
                 {
                     points.push(NetworkMapPoint {
                         peer_id: hex(&peer_id),
-                        country: geo.country,
+                        // one name for no country, the distributions route's (lane exactness, part A2)
+                        country: if geo.country.is_empty() {
+                            "Unknown".to_string()
+                        } else {
+                            geo.country
+                        },
                         lat,
                         lon,
                         reachable: record.reachable,
