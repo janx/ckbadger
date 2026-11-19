@@ -1,5 +1,5 @@
 import { SHEETS } from '@/components/transaction/tx-structure';
-import { containerContentPx } from '@/__tests__/utils/tailwind-box';
+import { boxPx, containerContentPx } from '@/__tests__/utils/tailwind-box';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
 import { occupiedBytesText } from '@/lib/occupied';
@@ -617,6 +617,70 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     );
     expect(cellBar).toHaveClass('min-w-0', 'flex-1');
     expect(words).toHaveTextContent(/^occupied 61 B$/);
+  });
+
+  // Lane D3 (the tile's last line; the readability review's note, ruled at Gate B for D3): the
+  // bar, "occupied N B" and the state stood on two lines in the narrow tiles, the state under the
+  // bar. A tile's text column, as the pages draw it since lane D2 gave tier 1 the whole measure:
+  // the sheet less its 12 px padding and 1 px border on the outer side (and its 36 px lane on the
+  // seam side from lg, where the sheets stand side by side; below lg they stack, the padding on
+  // both sides), the tile's 12 px padding and 1 px border on each side, the mark column and its
+  // 10 px gap. The line is the bar's track, 6 px, the bytes, 6 px and the state, at the meta step.
+  it('holds the bar, its bytes and the state on one line in every tile the pages draw, for every cell under 1,000,000 bytes', () => {
+    render(
+      <CellTile
+        cell={sealedTile({
+          id: 'in:0',
+          testId: 'tile',
+          href: '/cell/0x-0',
+          label: 'input 0',
+          owner: 'owner',
+          lockKind: null,
+          kind: 'ckb',
+          content: 'CKB',
+          capacity: '6100000000',
+          occupiedBytes: '61',
+          state: 'consumed',
+        })}
+      />
+    );
+    const [, , , occupied] = tileRows(screen.getByTestId('tile'));
+    const track = boxPx(occupied.text.firstElementChild!, 1024)!;
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const text = (sheet: number) => sheet - 2 * (12 + 1) - mark - 10;
+    /** The sheets side by side from lg, less the onward bridge's 96 px column where a page has it. */
+    const sideBySide = (viewport: number, bridge = 0) =>
+      text((containerContentPx(viewport) - SHEETS.seam - bridge) / 2 - SHEETS.lane - (12 + 1));
+    const stacked = (viewport: number) => text(containerContentPx(viewport) - 2 * (12 + 1));
+    const columns = {
+      'transaction page 1280': sideBySide(1280),
+      'transaction page 1024': sideBySide(1024),
+      'cell page 1024, beside its onward bridge': sideBySide(1024, 96),
+      'stacked 640': stacked(640),
+      'stacked 390': stacked(390),
+      'stacked 360': stacked(360),
+    };
+    expect(columns).toEqual({
+      'transaction page 1280': 511,
+      'transaction page 1024': 383,
+      'cell page 1024, beside its onward bridge': 335,
+      'stacked 640': 528,
+      'stacked 390': 278,
+      'stacked 360': 248,
+    });
+    const meta = fontPx('meta');
+    const lineOf = (bytes: number) =>
+      track +
+      6 +
+      textPx(`occupied ${occupiedBytesText(BigInt(bytes), 'a cell')}`.length, meta) +
+      6 +
+      textPx('consumed'.length, meta);
+    // every cell under 1,000,000 bytes (the widest state, "consumed") holds its line in every tile
+    for (const [where, width] of Object.entries(columns))
+      expect(lineOf(999_999), where).toBeLessThanOrEqual(width);
+    // the widest of record (genesis's cellbase, LARGEST_TX_BYTES) holds it from 390 up
+    for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
+      expect(lineOf(LARGEST_TX_BYTES), where).toBeLessThanOrEqual(width);
   });
 });
 
