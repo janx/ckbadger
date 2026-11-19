@@ -76,29 +76,18 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 **The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
 and these codes, never their args)
 
-- `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
-  transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
-  code-hash order: the type script of every token, object and identity any participant gained or
-  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Each is
-  what the indexer classified, read from ckbadger's own stores in the request's view, never a
-  match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
-  - a token: its row (`CF_TOKENS`), the script itself;
-  - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
-    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
-  - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
-    (`object_outpoints`, MNFT_TOKEN);
-  - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
-    classifier would take as the cluster (a code the protocol registry names `Cluster`, the
-    cluster's id as args).
-
-  `null` on a pool row (a pending row never folds), and on a committed row whose item's script the
-  stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
-  item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
-  and a feed folds such a row with no other.
-
-- `itemTypesUnread: string | null` — see `itemTypes`.
-- `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
-  with their args.
+- `recognizedTypes: [{ typeCodeHash, typeHashType, scriptName }]` — every type script code the
+  indexer recognises that ran in the transaction (sUDT, xUDT, the Nervos DAO, Spore, Cluster,
+  m-NFT, `.bit`, `.bit Cell`, did:ckb, `.cell`), on an input or an output cell, each code (code
+  hash and hash type) once, in code-hash order; `scriptName` is the registry's name. Read from the
+  row (`recognized_type_codes`, which the indexer writes from the transaction's own cells, C7),
+  on a committed row and a pool row alike; nothing is read per item. It holds the codes of the
+  items that changed hands and also those of recognised scripts that ran and moved nothing (a
+  wallet merging its own token cells). It replaced `itemTypes` (the items' codes, resolved per
+  request from token rows, recorded cells and creating transactions) and `itemTypesUnread` (why a
+  row's items could not be placed), which are gone with that resolver.
+- `typeCalls` — the type scripts the indexer does not recognise, with their args. With
+  `recognizedTypes` they are every type script code that ran.
 - `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
   An output's lock does not run: these are not the locks the transaction called. The locks that
   ran, its inputs', are the parties that sent (`sent`, below).

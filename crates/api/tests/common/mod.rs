@@ -1374,8 +1374,7 @@ pub fn make_test_tx_actions(
 }
 
 /// A cell whose type script is `code` (hash type `type`) with `args`: the cell an item's own
-/// record places for an activity's `itemTypes` (an object's creating output, an identity's cell in
-/// the item outpoint index).
+/// record places (an object's creating output, an identity's cell in the item outpoint index).
 pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
     LiveCellInfo {
         capacity: 200_00000000,
@@ -1391,7 +1390,7 @@ pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
     }
 }
 
-/// An object's creating transaction for `itemTypes`: its location and index row at
+/// An object's creating transaction: its location and index row at
 /// `(block, tx_index)` and one output per id, each a `code` cell whose type args are the id.
 pub fn seed_creating_tx(
     batch: &mut StoreBatch,

@@ -283,7 +283,6 @@ pub(crate) fn transaction_response(
         (false, Some(actions)) => {
             let activity = super::activities::build_global_activity_response(
                 &state.store,
-                &state.append_only_store,
                 &state.ckb_network,
                 actions,
                 &mut std::collections::HashMap::new(),

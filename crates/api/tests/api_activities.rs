@@ -1475,7 +1475,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         ],
     };
     seed_named_tx(&core_store, 10, &tx_hash, &actions);
-    // the .cell name's cell (`itemTypes` reads its type script there)
+    // the .cell name's cell, as the indexer records it
     let mut cells = StoreBatch::new(append_only_store.as_ref());
     cells
         .put_cell_payload_by_outpoint(&tx_hash, 0, &typed_cell([0xd3; 32], &[0x5c; 20]))
@@ -2269,9 +2269,9 @@ async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
 /// Every identity item delta carries its standard, as the builder recorded
 /// it, in the standard's one wire value (`IdentityStandard::asset_standard`):
 /// the frontend links the item to its page with it. Re-pinned on purpose (the
-/// P3 follow-up, `itemTypes`): the four identities have their cells in the
-/// item outpoint index now, where an activity's item types are read; they
-/// still have no identity row, which the standard needs none of.
+/// P3 follow-up): the four identities have their cells in the item outpoint
+/// index, as the indexer records them; they still have no identity row, which
+/// the standard needs none of.
 #[tokio::test]
 async fn identity_item_deltas_name_their_standard() {
     use ckbadger_store::types::{
@@ -3372,27 +3372,6 @@ async fn block_activities_read_the_header_once_and_the_rows_with_one_multi_get()
 // The fold's code (the page-phase review's MUST-1, the P3 follow-up)
 // ---------------------------------------------------------------------------
 
-/// An object's row, made by `created_at_tx`.
-fn object_row(
-    standard: ckbadger_store::types::ObjectStandard,
-    extra: ckbadger_store::types::ObjectExtra,
-    collection_id: Option<Vec<u8>>,
-    created_at_tx: &[u8],
-) -> ckbadger_store::types::ObjectEntry {
-    ckbadger_store::types::ObjectEntry {
-        standard,
-        collection_id,
-        token_id: None,
-        owner_lock_hash: None,
-        name: None,
-        description: None,
-        is_live: true,
-        created_at_block: 1,
-        created_at_tx: created_at_tx.to_vec(),
-        extra,
-    }
-}
-
 /// A token's row: its type script.
 fn token_row(code: [u8; 32], standard: &str) -> ckbadger_store::types::TokenInfo {
     ckbadger_store::types::TokenInfo {
@@ -3413,117 +3392,41 @@ fn token_row(code: [u8; 32], standard: &str) -> ckbadger_store::types::TokenInfo
     }
 }
 
-/// MUST-1 of the page-phase review (the P3 follow-up): the fold compares what was done plus the
-/// script code, and the API sent no code for a token, object or identity row: `typeCalls` holds
-/// only the type scripts the indexer does not recognise, and an item delta carries no code hash.
-/// `itemTypes` names, for a committed activity, the type script of every item it moved by its
-/// code hash and hash type (never its args), each code once, as the indexer classified the item:
-/// a token's row; a spore's and an identity's cell the indexer recorded (the item outpoint
-/// index); an m-NFT token's creating output the indexer recorded as the token; and the Nervos
-/// DAO's for a DAO step. So an sUDT and an xUDT transfer, a Spore and an m-NFT transfer, a .bit
-/// Cell and a did:ckb transfer each name a different code.
+/// MUST-1 of the page-phase review (the P3 follow-up), re-pinned on purpose for C7
+/// (resync/type-codes): the fold compares what was done plus the script code, so an activity states
+/// the code of the type scripts that ran. It was `itemTypes`, resolved per request for the items
+/// that changed hands (a token's row, an object's or identity's recorded cell, an m-NFT token's
+/// creating output, the DAO for a DAO step), and a recognised script that moved nothing stated no
+/// code. Now every activity states `recognizedTypes`: the codes its row records
+/// (`recognized_type_codes`, written by the indexer from the transaction's own cells), each
+/// (code hash, hash type) once, named by the registry. So an sUDT and an xUDT transfer, a Spore and
+/// an m-NFT transfer, a .bit Cell and a did:ckb transfer each name a different code, a row may
+/// name two, and a row whose script moved nothing names its code too.
 #[tokio::test]
-async fn item_types_name_every_items_type_script_by_its_code() {
-    use ckbadger_store::types::{
-        IdentityStandard, ItemDelta, ItemKind, ObjectExtra, ObjectStandard, ParticipantDelta,
-        ParticipantId, ProtocolAction, TxActions,
-    };
+async fn recognized_types_are_the_codes_the_row_records() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions, TypeCode};
 
     let store = test_store();
-    let (sudt, xudt) = ([0x5e; 32], [0x50; 32]);
-    let (spore_code, mnft_code) = ([0x4a; 32], [0x2b; 32]);
-    let (bit_cell_code, did_code) = ([0x1c; 32], [0xcf; 32]);
-    let (token_a, token_b) = ([0xa1u8; 32], [0xb1u8; 32]);
-    let spore = vec![0x51; 32];
-    let mnft = [vec![0x3c; 24], vec![0, 0, 0, 7]].concat();
-    let (bit_cell, did) = (vec![0xbc; 32], vec![0xdd; 20]);
-    let (spore_mint, mnft_mint, bit_cell_tx, did_tx) =
-        ([0x71u8; 32], [0x72u8; 32], [0x73u8; 32], [0x74u8; 32]);
-
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_token(&token_a, &token_row(sudt, "sudt"));
-    batch.put_token(&token_b, &token_row(xudt, "xudt"));
-    batch.put_spore(
-        &spore,
-        &object_row(
-            ObjectStandard::Spore,
-            ObjectExtra::Spore {
-                content_type: "image/png".into(),
-                content_length: 10,
-                media_profile: Default::default(),
-            },
-            Some(ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION.to_vec()),
-            &spore_mint,
-        ),
-    );
-    batch.put_mnft(
-        &mnft,
-        &object_row(
-            ObjectStandard::MnftToken,
-            ObjectExtra::MnftToken {
-                token_index: 7,
-                characteristic: vec![0; 8],
-                configure: 0,
-                state: 0,
-            },
-            Some(mnft[..24].to_vec()),
-            &mnft_mint,
-        ),
-    );
-    // the m-NFT token's creating transaction, its output 1 recorded as the token
-    let other: &[u8] = &[0x01];
-    seed_creating_tx(&mut batch, 2, 0, mnft_mint, mnft_code, &[other, &mnft]);
-    batch.put_mnft_token_outpoint(&mnft_mint, 1, &mnft);
-    // the spore's and the identities' cells, in the item outpoint index
-    for (tx, code, id) in [
-        (spore_mint, spore_code, &spore),
-        (bit_cell_tx, bit_cell_code, &bit_cell),
-        (did_tx, did_code, &did),
-    ] {
-        batch.put_spore_outpoint(&tx, 0, id);
-        batch
-            .put_cell_payload_by_outpoint(&tx, 0, &typed_cell(code, &[0x02; 32]))
+    let dao: [u8; 32] =
+        hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
+            .unwrap()
+            .try_into()
             .unwrap();
-    }
-    batch.commit().unwrap();
-
-    let item = |id: &[u8], kind| ItemDelta {
-        item_id: id.to_vec(),
-        kind,
-        magnitude: 1,
-        negative: false,
+    let code = |code_hash: [u8; 32], hash_type: i16| TypeCode {
+        code_hash,
+        hash_type,
     };
-    let rows: Vec<(u8, Vec<ItemDelta>, Vec<ProtocolAction>)> = vec![
-        (1, vec![item(&token_a, ItemKind::Token)], vec![]),
-        (2, vec![item(&token_b, ItemKind::Token)], vec![]),
-        (3, vec![item(&spore, ItemKind::Object)], vec![]),
-        (4, vec![item(&mnft, ItemKind::Object)], vec![]),
-        (
-            5,
-            vec![item(
-                &bit_cell,
-                ItemKind::Identity(IdentityStandard::BitCell),
-            )],
-            vec![],
-        ),
-        (
-            6,
-            vec![item(&did, ItemKind::Identity(IdentityStandard::DidCkb))],
-            vec![],
-        ),
-        (
-            7,
-            vec![],
-            vec![ProtocolAction::new(
-                "dao",
-                "deposit",
-                serde_json::json!({"capacity": "10200000000"}),
-            )],
-        ),
+    // (block, recorded codes): one row each, newest first in the response
+    let rows: Vec<(u8, Vec<TypeCode>)> = vec![
+        (1, vec![code([0x5e; 32], 1)]),
+        (2, vec![code([0x50; 32], 2)]),
+        (3, vec![code([0x4a; 32], 1), code([0x5e; 32], 1)]),
+        (4, vec![code(dao, 1)]),
+        (5, vec![]),
     ];
-    for (n, items, protocol_actions) in rows {
+    for (n, codes) in &rows {
         let tx_hash = vec![0xe0 + n; 32];
-        let block = 100 + i64::from(n);
+        let block = 100 + i64::from(*n);
         let actions = TxActions {
             tx_hash: tx_hash.clone(),
             block_hash: vec![0xb0 + n; 32],
@@ -3531,15 +3434,15 @@ async fn item_types_name_every_items_type_script_by_its_code() {
             tx_index: 0,
             timestamp: 1_700_000_000_000,
             is_cellbase: false,
-            protocol_actions,
+            protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
-            recognized_type_codes: vec![],
+            recognized_type_codes: codes.clone(),
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x40 + n; 32]),
                 ckb_delta: 0,
                 used_delta: 0,
-                item_deltas: items,
+                item_deltas: vec![],
                 tags: 0,
                 roles: 0,
             }],
@@ -3549,14 +3452,16 @@ async fn item_types_name_every_items_type_script_by_its_code() {
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/activities?limit=10").await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let codes: Vec<Vec<(String, String)>> = json["data"]
+    let stated: Vec<Vec<(String, String)>> = json["data"]
         .as_array()
         .unwrap()
         .iter()
         .map(|row| {
-            row["itemTypes"]
+            assert!(row.get("itemTypes").is_none(), "{row}");
+            assert!(row.get("itemTypesUnread").is_none(), "{row}");
+            row["recognizedTypes"]
                 .as_array()
-                .unwrap_or_else(|| panic!("a committed row states its item types: {row}"))
+                .unwrap_or_else(|| panic!("every row states its recognised types: {row}"))
                 .iter()
                 .map(|t| {
                     (
@@ -3567,165 +3472,43 @@ async fn item_types_name_every_items_type_script_by_its_code() {
                 .collect()
         })
         .collect();
-    let code = |c: [u8; 32]| vec![(format!("0x{}", hex::encode(c)), "type".to_string())];
+    let named =
+        |c: [u8; 32], hash_type: &str| (format!("0x{}", hex::encode(c)), hash_type.to_string());
     assert_eq!(
-        codes,
+        stated,
         vec![
-            // newest first: the DAO deposit, then the identities, the objects, the tokens
-            vec![(
-                "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e".to_string(),
-                "type".to_string()
-            )],
-            code(did_code),
-            code(bit_cell_code),
-            code(mnft_code),
-            code(spore_code),
-            code(xudt),
-            code(sudt),
+            vec![],
+            vec![named(dao, "type")],
+            vec![named([0x4a; 32], "type"), named([0x5e; 32], "type")],
+            vec![named([0x50; 32], "data1")],
+            vec![named([0x5e; 32], "type")],
         ],
         "{json}"
     );
 }
 
-/// The lead's ruling on the security read of the item types (the P3 follow-up): an item's type
-/// script is what the indexer classified, never a match on args among a transaction's outputs, as
-/// anyone can write a second output whose args equal an object's id under any code. A cluster's
-/// creating transaction carrying a crafted second output (another code, the cluster's id as args)
-/// and an m-NFT token's carrying one the indexer did not record as the token: the page answers,
-/// the cluster's row names the registry's cluster code, the token's row the recorded cell's code.
+/// C7 (resync/type-codes), re-pinned on purpose: the codes are the row's alone. The item-type
+/// resolver read per request what the stores held for each item that moved, and a row whose item
+/// they could not place (a token with no token row) stated no code and said why
+/// (`itemTypesUnread`), standing alone in a feed; a crafted output (an item's id under another
+/// code) had to be kept out of what it read. Nothing is read per item now: a row whose token has
+/// no token row states its recorded code, and a token row naming another code changes nothing,
+/// on the global feed and on an address's own feed alike.
 #[tokio::test]
-async fn item_types_name_what_the_indexer_classified_not_a_crafted_output() {
+async fn recognized_types_are_read_from_the_row_alone() {
     use ckbadger_store::types::{
-        ItemDelta, ItemKind, ObjectExtra, ObjectStandard, ParticipantDelta, ParticipantId,
-        TxActions,
+        ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TxActions, TypeCode,
     };
 
     let store = test_store();
-    // the mainnet Spore Cluster code (docs/metadata/scripts/spore-cluster.toml), data1
-    let cluster_code: [u8; 32] =
-        hex::decode("7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075")
-            .unwrap()
-            .try_into()
-            .unwrap();
-    let crafted = [0xee; 32];
-    let (cluster, mnft) = (vec![0x86; 32], [vec![0x3c; 24], vec![0, 0, 0, 9]].concat());
-    let (cluster_mint, mnft_mint) = ([0x61u8; 32], [0x62u8; 32]);
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_spore(
-        &cluster,
-        &object_row(
-            ObjectStandard::SporeCluster,
-            ObjectExtra::SporeCluster,
-            None,
-            &cluster_mint,
-        ),
-    );
-    batch.put_mnft(
-        &mnft,
-        &object_row(
-            ObjectStandard::MnftToken,
-            ObjectExtra::MnftToken {
-                token_index: 9,
-                characteristic: vec![0; 8],
-                configure: 0,
-                state: 0,
-            },
-            Some(mnft[..24].to_vec()),
-            &mnft_mint,
-        ),
-    );
-    // each creating transaction: the crafted output first, then the real one, both with the id
-    seed_creating_tx(
-        &mut batch,
-        1,
-        0,
-        cluster_mint,
-        crafted,
-        &[&cluster, &cluster],
-    );
-    let mut real = typed_cell(cluster_code, &cluster);
-    real.type_hash_type = Some(2); // data1
-    batch
-        .put_cell_payload_by_outpoint(&cluster_mint, 1, &real)
-        .unwrap();
-    seed_creating_tx(&mut batch, 2, 0, mnft_mint, crafted, &[&mnft, &mnft]);
-    batch
-        .put_cell_payload_by_outpoint(&mnft_mint, 1, &typed_cell([0x2b; 32], &mnft))
-        .unwrap();
-    batch.put_mnft_token_outpoint(&mnft_mint, 1, &mnft);
-    batch.commit().unwrap();
-
-    for (n, id) in [(1u8, &cluster), (2, &mnft)] {
-        let tx_hash = vec![0xd0 + n; 32];
-        let block = 200 + i64::from(n);
-        let actions = TxActions {
-            tx_hash: tx_hash.clone(),
-            block_hash: vec![0xc0 + n; 32],
-            block_number: block,
-            tx_index: 0,
-            timestamp: 1_700_000_000_000,
-            is_cellbase: false,
-            protocol_actions: vec![],
-            type_calls: vec![],
-            lock_calls: vec![],
-            recognized_type_codes: vec![],
-            participants: vec![ParticipantDelta {
-                id: ParticipantId::Lock([0x30 + n; 32]),
-                ckb_delta: 0,
-                used_delta: 0,
-                item_deltas: vec![ItemDelta {
-                    item_id: id.clone(),
-                    kind: ItemKind::Object,
-                    magnitude: 1,
-                    negative: false,
-                }],
-                tags: 0,
-                roles: 0,
-            }],
-        };
-        seed_named_tx(&store, block, &tx_hash, &actions);
-    }
-    let app = create_router(test_config(store)).await;
-    let (status, json) = get_json(&app, "/activities").await;
-    assert_eq!(status, StatusCode::OK, "{json}");
-    let named: Vec<serde_json::Value> = json["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| row["itemTypes"].clone())
-        .collect();
-    assert_eq!(
-        named,
-        vec![
-            serde_json::json!([{
-                "typeCodeHash": format!("0x{}", "2b".repeat(32)),
-                "typeHashType": "type",
-                "scriptName": null,
-            }]),
-            serde_json::json!([{
-                "typeCodeHash": format!("0x{}", hex::encode(cluster_code)),
-                "typeHashType": "data1",
-                "scriptName": null,
-            }]),
-        ],
-        "{json}"
-    );
-}
-
-/// Where the stores cannot say an item's script (here a token item with no token row), that part
-/// of its row fails alone: the row states no item types and says why, so the feed folds it with no
-/// other row; the page and its other rows answer.
-#[tokio::test]
-async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
-    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TxActions};
-
-    let store = test_store();
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_token(&[0xa1; 32], &token_row([0x5e; 32], "sudt"));
+    // a token row that would name another code than the one the row records
+    batch.put_token(&[0xa1; 32], &token_row([0x77; 32], "sudt"));
     batch.commit().unwrap();
     for (n, token) in [(9u8, [0xc4u8; 32]), (8, [0xa1; 32])] {
         let tx_hash = vec![0xe0 + n; 32];
         let block = 100 + i64::from(n);
+        let lock = [0x40 + n; 32];
         let actions = TxActions {
             tx_hash: tx_hash.clone(),
             block_hash: vec![0xb0 + n; 32],
@@ -3736,9 +3519,12 @@ async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
-            recognized_type_codes: vec![],
+            recognized_type_codes: vec![TypeCode {
+                code_hash: [0x5e; 32],
+                hash_type: 1,
+            }],
             participants: vec![ParticipantDelta {
-                id: ParticipantId::Lock([0x40 + n; 32]),
+                id: ParticipantId::Lock(lock),
                 ckb_delta: 0,
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
@@ -3752,27 +3538,27 @@ async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
             }],
         };
         seed_named_tx(&store, block, &tx_hash, &actions);
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_addr_tx(&lock, block, 0, &AddrTxValue::new(0, true, true, 0));
+        batch.commit().unwrap();
+        sync_address_tx_counters(&store, &lock);
     }
     let app = create_router(test_config(store)).await;
+    let recorded = serde_json::json!([{
+        "typeCodeHash": format!("0x{}", "5e".repeat(32)),
+        "typeHashType": "type",
+        "scriptName": null,
+    }]);
     let (status, json) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let rows = json["data"].as_array().unwrap();
-    // newest first: the token with no row, then the sUDT one
-    assert_eq!(rows[0]["itemTypes"], serde_json::Value::Null, "{json}");
-    let why = rows[0]["itemTypesUnread"].as_str().unwrap();
-    assert!(
-        why.contains(&"c4".repeat(32)) && why.contains(&"e9".repeat(32)),
-        "{why}"
-    );
-    assert!(why.contains("no token row"), "{why}");
-    assert_eq!(
-        rows[1]["itemTypesUnread"],
-        serde_json::Value::Null,
-        "{json}"
-    );
-    assert_eq!(
-        rows[1]["itemTypes"][0]["typeCodeHash"],
-        format!("0x{}", "5e".repeat(32)),
-        "{json}"
-    );
+    for row in json["data"].as_array().unwrap() {
+        assert_eq!(row["recognizedTypes"], recorded, "{row}");
+    }
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode([0x49u8; 32])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["recognizedTypes"], recorded, "{json}");
 }

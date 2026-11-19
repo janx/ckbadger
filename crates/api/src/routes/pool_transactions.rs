@@ -263,7 +263,6 @@ fn pool_transactions_page(
             .map(|actions| {
                 super::activities::build_global_activity_response_with_pool(
                     &state.store,
-                    &state.append_only_store,
                     &state.ckb_network,
                     actions,
                     &mut script_cache,

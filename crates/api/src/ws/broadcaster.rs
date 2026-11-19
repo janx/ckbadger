@@ -49,7 +49,6 @@ fn pin_broadcast_read_view() -> ReadViewGuard {
 
 pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
-    append_only_store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
     ckb_network: String,
@@ -216,7 +215,7 @@ pub async fn start_block_broadcaster(
 
             // Broadcast latest activities after new blocks
             if !payload_failed {
-                broadcast_latest_activities(&store, &append_only_store, &ws_manager, &ckb_network);
+                broadcast_latest_activities(&store, &ws_manager, &ckb_network);
             }
         }
     }
@@ -259,7 +258,6 @@ fn build_block_transaction_messages(
 
 fn broadcast_latest_activities(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     ws_manager: &Arc<WsManager>,
     ckb_network: &str,
 ) {
@@ -279,7 +277,6 @@ fn broadcast_latest_activities(
         .map(|actions| {
             build_global_activity_response(
                 store,
-                ao_store,
                 ckb_network,
                 actions,
                 &mut script_info_cache,

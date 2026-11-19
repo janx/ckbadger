@@ -141,7 +141,7 @@ fn seed_dotbit_registrations(store: &Arc<CkbadgerStore>, n: u32) -> Vec<(i64, i3
             protocol_actions: vec![],
         };
         put_feed_tx(&mut batch, &tx);
-        // the account's cell carries the .bit AccountCell type script (`itemTypes` reads it)
+        // the account's cell carries the .bit AccountCell type script, as the indexer records it
         batch
             .put_cell_payload_by_outpoint(&tx.hash, 0, &typed_cell([0x96; 32], &[]))
             .unwrap();
@@ -333,7 +333,7 @@ fn seed_two_cluster_transaction(store: &Arc<CkbadgerStore>) {
             },
         );
     }
-    // the clusters' and the spores' creating transactions (`itemTypes`)
+    // the clusters' and the spores' creating transactions, as the indexer records them
     seed_creating_tx(
         &mut batch,
         0,
