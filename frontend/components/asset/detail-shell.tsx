@@ -149,14 +149,13 @@ export function AssetDetailShell({
     <header
       className={railAfterHeader ? 'min-w-0 space-y-3 lg:col-start-1 lg:row-start-1' : 'space-y-3'}
     >
-      <nav
-        aria-label="Breadcrumb"
-        className="text-text-dim text-small flex flex-wrap items-center gap-2"
-      >
+      <nav aria-label="Breadcrumb" className="text-small flex flex-wrap items-center gap-2">
         {breadcrumb.map((b, i) => (
           <span key={`${b.href}:${b.label}`}>
             {i > 0 && <span className="text-text-ghost mr-2">/</span>}
-            <AppLink href={b.href}>{b.label}</AppLink>
+            <AppLink look="inline" href={b.href}>
+              {b.label}
+            </AppLink>
           </span>
         ))}
       </nav>

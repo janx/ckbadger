@@ -14,6 +14,8 @@ import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
+import { FoldBack } from '@/components/transaction/tx-structure';
+import { listTotal } from '@/components/asset/token-holders';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
   AlignedBar,
@@ -21,7 +23,6 @@ import {
   COUNT_TRACK_PX,
   ScaleHeader,
 } from '@/components/ui/aligned-bar';
-import { rowTagClass } from '@/components/ui/row-tag';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
@@ -142,6 +143,10 @@ function ScopedCollectionHolders({
   // a change of page size (at md, or the top ten opened to all) starts the walk again (lane
   // c2-finish, 1d)
   const pagination = useCursorPagination(limit);
+  const showAll = (open: boolean) => {
+    setAll(open);
+    pagination.reset();
+  };
   const holders = useQuery({
     queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
     queryFn: () => load({ limit, cursor: pagination.cursor }),
@@ -228,21 +233,23 @@ function ScopedCollectionHolders({
     {
       key: 'lock',
       label: 'Lock',
-      // The flexible column (readability F3-e): its tag holds 12 characters of the kind at its
-      // minimum (its words at 12 px, 5 px sides, a 1 px border) and the gap, and takes what the
-      // container gives beyond the sum; a longer kind ends in the one ellipsis. It was 116.
-      minWidth: columnPx(textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1 + CELL_GAP_PX),
+      // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
+      // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum; a
+      // longer name ends in the one ellipsis. It was 115, a tag of 12 characters at 12 px with its
+      // 5 px sides and 1 px border (98.4).
+      minWidth: columnPx(cell(12) + CELL_GAP_PX),
       width: 'auto',
       render: (holder) => (
         <span className="flex min-w-0">
-          {/* a column headed "Lock" is never empty: the default lock by its name (B4) */}
+          {/* a column headed "Lock" is never empty: the default lock by its name (B4); a lock is
+              plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
           <LockKind
             lockKind={holder.lockKind}
             lockCodeHash={holder.lockCodeHash}
             address={holder.address}
             size="row"
             place="column"
-            className={rowTagClass('default', 'min-w-0 truncate')}
+            className="text-text text-small min-w-0 truncate"
           />
         </span>
       ),
@@ -282,21 +289,7 @@ function ScopedCollectionHolders({
     },
   ];
   return (
-    <DetailSection
-      title="Who holds it"
-      actions={
-        <button
-          type="button"
-          className="text-jade text-meta"
-          onClick={() => {
-            setAll(!all);
-            pagination.reset();
-          }}
-        >
-          {all ? 'Top 10 holders' : 'All holders →'}
-        </button>
-      }
-    >
+    <DetailSection title="Who holds it">
       <div
         className={
           distribution ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'min-w-0'
@@ -359,17 +352,36 @@ function ScopedCollectionHolders({
                   );
                 }}
               />
-              {holdersAt && (
-                // the controls board's pager: a ranked list in pages, every figure the response's
-                <div className="mt-3">
-                  <Pager
-                    mode="pages"
-                    label="holders"
-                    {...holdersAt}
-                    onPrevious={pagination.goToPrevious}
-                    onNext={() => pagination.goToNext(holders.data.nextCursor)}
-                  />
+              {all ? (
+                <div className="mt-3 space-y-1">
+                  {holdersAt && (
+                    // the controls board's pager: a ranked list in pages, every figure the
+                    // response's
+                    <Pager
+                      mode="pages"
+                      label="holders"
+                      {...holdersAt}
+                      onPrevious={pagination.goToPrevious}
+                      onNext={() => pagination.goToNext(holders.data.nextCursor)}
+                    />
+                  )}
+                  <FoldBack onFold={() => showAll(false)} />
                 </div>
+              ) : (
+                holders.data.hasMore && (
+                  // the short list's form, opened in place (the placement lane's toggles, the
+                  // lead's ruling): "all 522 holders ↓", the count its response's own
+                  <div className="mt-3">
+                    <Pager
+                      mode="more"
+                      all={{
+                        count: listTotal(holders.data, `the holders of collection ${queryKey}`),
+                        singular: 'holder',
+                        onShow: () => showAll(true),
+                      }}
+                    />
+                  </div>
+                )
               )}
             </>
           ) : (

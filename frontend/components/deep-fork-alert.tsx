@@ -74,12 +74,14 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
               </span>
             </div>
 
+            {/* a button that is one link: the block look, no link ink of its own; its words take
+                the ink its fill calls for (lane P4) */}
             <Link
               href="/forks"
+              look="block"
               className="bg-negative-bright hover:bg-negative-dim px-4 py-2 font-medium transition"
-              style={{ color: buttonInk }}
             >
-              View Details →
+              <span style={{ color: buttonInk }}>View Details →</span>
             </Link>
           </div>
         </div>

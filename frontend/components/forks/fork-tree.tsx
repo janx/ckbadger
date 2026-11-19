@@ -1,192 +1,78 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, type ReactNode } from 'react';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { blockClock } from '@/lib/fork-format';
 import {
   FORK_TREE,
+  LANE_NAMES,
+  TILE_HASH_DIGITS,
   forkTreeLayout,
-  type ForkTreeLayout,
+  type ForkTreeColumnLayout,
   type ForkTreeModel,
   type ForkTreeTile,
+  type ForkTreeWideLayout,
 } from '@/lib/fork-tree';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
-import { clipForeignLabel, shortenHash, type ShortSize } from '@/lib/shorten';
+import { clipForeignLabel, type ShortSize } from '@/lib/shorten';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 import { descentPx, textPx } from '@/lib/type-metrics';
 
 const MARK = ['', '①', '②', '③'] as const;
-/** A later mark on a block that already carries one is drawn this far beside it. */
-const MARK_STEP = { wide: 22, compact: 18 } as const;
-/** A tip mark hangs this far over (or under) the tile corner it marks. */
+/** A later mark on a block that already carries one is drawn this far beside it (the wide tree). */
+const MARK_STEP = 22;
+/** A tip mark hangs this far over (or under) the tile corner it marks (the wide tree). */
 const MARK_OVERHANG = 2;
 
 /**
- * "The two branches" (Fork board V67): today's chain on the main row, the branch that lost dashed
- * above it, a jade arrow into the block that took a dropped block as an uncle, and ① ② ③ on the
- * tips this node had before and after the switch, and after a later switch reversed it.
+ * "The two branches" (Fork board V67): today's chain, the branch that lost dashed beside it, a jade
+ * arrow into the block that took a dropped block as an uncle, and ① ② ③ on the tips this node had
+ * before and after the switch, and after a later switch reversed it.
  *
- * Responsive (V4): laid out for the measured column (`forkTreeLayout`). The desktop tree is kept
- * wherever it fits; narrower, tiles shrink to no less than 72 px with time and miner under them,
- * and a deep fork folds its oldest heights into one "+N earlier" column. Nothing scrolls.
+ * Responsive (V4, lane P4): laid out for the measured column (`forkTreeLayout`). The desktop tree,
+ * heights left to right, is kept wherever it fits; narrower, the tree turns to a column, one block
+ * a row with its time and miner beside it. Nothing folds and nothing scrolls.
  */
 export function ForkTree({ model }: { model: ForkTreeModel }) {
   const [box, measured] = useElementWidth<HTMLDivElement>();
+  if (measured === null) return <div ref={box} className="min-w-0" />;
+  const layout = forkTreeLayout(model, Math.floor(measured));
   return (
     <div ref={box} className="min-w-0">
-      {measured !== null && (
-        <Tree model={model} layout={forkTreeLayout(model, Math.floor(measured))} />
+      {layout.form === 'wide' ? (
+        <WideTree model={model} layout={layout} />
+      ) : (
+        <ColumnTree model={model} layout={layout} />
       )}
     </div>
   );
 }
 
-function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout }) {
-  const marker = useId().replace(/:/g, '');
-  const { tileW: TW, tileH: TH, yMain, x, collapsed, labelsUnder } = layout;
-  const compact = layout.form === 'compact';
-  const shown = (n: number) => collapsed === null || n > collapsed.last;
-  const mainByNumber = new Map(model.main.map((tile) => [tile.number, tile]));
-  const targets = new Set(model.uncleLinks.map((link) => link.to));
-  // A folded block is drawn in the "+N earlier" column on the main row.
-  const position = new Map<string, { x: number; y: number; row: number }>();
-  model.main.forEach((tile) => position.set(tile.hash, { x: x(tile.number), y: yMain, row: -1 }));
-  model.rows.forEach((row, i) =>
-    row.tiles.forEach((tile) =>
-      position.set(
-        tile.hash,
-        shown(tile.number)
-          ? { x: x(tile.number), y: layout.rowY[i], row: i }
-          : { x: x(tile.number), y: yMain, row: -1 }
-      )
-    )
-  );
-  const W = FORK_TREE.wide;
-  const C = FORK_TREE.compact;
-  const markR = compact ? C.markR : W.markR;
-  // A row's name stands over the tip marks that hang on its tiles' top corners, a pixel clear of
-  // them: "adopted then, dropped since" is wider than a tile, and its row's tip is marked (②).
-  const rowNameLift = markR + MARK_OVERHANG + 1 + descentPx(SVG_TEXT.label);
-  /**
-   * A miner on the tree (review F-B, logic finding 4), in the room its tile's labels have
-   * (`layout.labelRoom`: inside a wide tile its width less the insets; under a compact one the
-   * tile and its run into the gap, its share of the gap before the last column where both sides
-   * of it draw labels, review fb-logic 1): a pool by its name, a word in any script (the
-   * operator's pools.toml), measured as text that is not ours and cut to the room at whole
-   * graphemes with the one ellipsis (finding 5); an unnamed one by its address in the id form the
-   * room holds, never cut again: the row form, the narrative's and the tables' (R9), where it
-   * stands whole (13 characters, 93.6 px at 12 px: inside a wide tile's 94 px between its insets,
-   * under a compact tile of at least 78 px, or of 86 px beside the shared gap), else the tight form
-   * (11 characters, 79.2 px: lib/fork-tree.ts holds that the narrowest room, 72 + 8 = 80 px, takes
-   * it).
-   */
-  const minerLabel = (t: ForkTreeTile, address: string): string => {
-    const room = layout.labelRoom(t);
-    if (t.minerPool !== null) return clipForeignLabel(t.minerPool, SVG_TEXT.tick, room);
-    const fits = (size: ShortSize) =>
-      textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= room;
-    const size: ShortSize = fits('row') ? 'row' : 'tight';
-    return minerName(address, null, size);
-  };
-
-  const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
-    const tx = x(t.number);
-    const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
-    const miner = t.minerAddress ? minerLabel(t, t.minerAddress) : null;
-    // under a compact tile its labels start at its left edge, except in the last column, where
-    // they end at its right edge (the ruling on F3-d)
-    const lastColumn = labelsUnder && t.number === model.last;
-    const under = lastColumn
-      ? ({ x: tx + TW, textAnchor: 'end' } as const)
-      : ({ x: tx, textAnchor: undefined } as const);
-    return (
-      <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
-        <title>
-          {[
-            formatBlockNumber(t.number),
-            t.hash,
-            t.timestamp && formatUtc8DateTime(t.timestamp),
-            t.transactionsCount !== null && `${t.transactionsCount} tx`,
-            t.minerAddress && `miner ${t.minerAddress}`,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </title>
-        <rect
-          x={tx}
-          y={y}
-          width={TW}
-          height={TH}
-          fill={FORK_COLORS.tileFill}
-          stroke={
-            dropped ? FORK_COLORS.dropped : lit ? FORK_COLORS.tileStrokeLit : FORK_COLORS.tileStroke
-          }
-          strokeDasharray={dropped ? '3 3' : undefined}
-        />
-        <text
-          x={tx + (compact ? C.inset : W.inset)}
-          y={y + (compact ? C.numberY : W.numberY)}
-          fontSize={SVG_TEXT.label}
-          fill={FORK_COLORS.ink}
-        >
-          #{String(t.number % 1000).padStart(3, '0')}
-        </text>
-        {compact ? (
-          <text x={tx + C.inset} y={y + C.hashY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
-            {t.hash.slice(2, 8)}
-          </text>
-        ) : (
-          <text
-            x={tx + TW - W.inset}
-            y={y + W.numberY}
-            textAnchor="end"
-            fontSize={SVG_TEXT.tick}
-            fill={FORK_COLORS.tick}
-          >
-            {t.hash.slice(2, 8)}
-          </text>
-        )}
-        {t.timestamp && (
-          <text
-            data-time
-            x={labelsUnder ? under.x : tx + W.inset}
-            y={labelsUnder ? y + TH + C.timeY : y + W.timeY}
-            textAnchor={labelsUnder ? under.textAnchor : undefined}
-            fontSize={SVG_TEXT.tick}
-            fill={FORK_COLORS.dim}
-          >
-            {blockClock(t.timestamp)}
-          </text>
-        )}
-        {miner && (
-          <text
-            x={labelsUnder ? under.x : tx + W.inset}
-            y={labelsUnder ? y + TH + C.minerY : y + W.minerY}
-            textAnchor={labelsUnder ? under.textAnchor : undefined}
-            fontSize={SVG_TEXT.tick}
-            fill={FORK_COLORS.tick}
-          >
-            {miner}
-          </text>
-        )}
-      </g>
-    );
-  };
-
-  const folded = collapsed
-    ? [...model.main, ...model.rows.flatMap((row) => row.tiles)].filter((t) => !shown(t.number))
-    : [];
+/** The tree's svg, its arrowhead and its name for a reader that does not see it. */
+function TreeSvg({
+  model,
+  width,
+  height,
+  marker,
+  children,
+}: {
+  model: ForkTreeModel;
+  width: number;
+  height: number;
+  marker: string;
+  children: ReactNode;
+}) {
   return (
     <svg
       data-fork-tree
-      viewBox={`0 0 ${layout.width} ${layout.height}`}
-      width={layout.width}
-      height={layout.height}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
       role="img"
-      aria-label={`Blocks ${formatBlockNumber(model.first)} to ${formatBlockNumber(model.last)}: today's chain, the branch that lost above it, and where it was taken as an uncle`}
+      aria-label={`Blocks ${formatBlockNumber(model.first)} to ${formatBlockNumber(model.last)}: today's chain, the branch that lost beside it, and where it was taken as an uncle`}
       className="block max-w-none overflow-visible"
     >
       <defs>
@@ -202,8 +88,129 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           <path d="M0 0L6 3L0 6Z" fill={FORK_COLORS.uncleLink} />
         </marker>
       </defs>
+      {children}
+    </svg>
+  );
+}
+
+/**
+ * A tile's title: everything the API says of the block, the whole hash and miner among it — a
+ * pool's whole name too, which the tile may cut to its room (PAGE-LANE-NOTES F3-e: a cut pool name
+ * showed nowhere whole, the miner's link titled by its address alone).
+ */
+function TileTitle({ t }: { t: ForkTreeTile }) {
+  return (
+    <title>
+      {[
+        formatBlockNumber(t.number),
+        t.hash,
+        t.timestamp && formatUtc8DateTime(t.timestamp),
+        t.transactionsCount !== null && `${t.transactionsCount} tx`,
+        t.minerAddress &&
+          `miner ${t.minerPool === null ? '' : `${t.minerPool}, `}${t.minerAddress}`,
+      ]
+        .filter(Boolean)
+        .join(' · ')}
+    </title>
+  );
+}
+
+/**
+ * A miner on the tree (review F-B, logic finding 4), in the room its tile's words have
+ * (`layout.labelRoom`: inside a wide tile its width less the insets; in the column, from the words'
+ * column to the canvas's edge): a pool by its name, a word in any script (the operator's
+ * pools.toml), measured as text that is not ours (1.25 em a grapheme, the figures' measure, which
+ * is not a bound: a clip at the room's edge holds what it misses) and cut to the room at whole
+ * graphemes with the one ellipsis; an unnamed one by its address in the id form the room holds,
+ * never cut again: the row form, the narrative's and the tables' (R9), where it stands whole (13
+ * characters, 93.6 px at 12 px), else the tight form (11 characters, 79.2 px).
+ */
+function minerLabel(t: ForkTreeTile, room: number): string | null {
+  if (!t.minerAddress) return null;
+  if (t.minerPool !== null) return clipForeignLabel(t.minerPool, SVG_TEXT.tick, room);
+  const address = t.minerAddress;
+  const fits = (size: ShortSize) =>
+    textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= room;
+  return minerName(address, null, fits('row') ? 'row' : 'tight');
+}
+
+/** A tile's stroke: dashed in the dropped ink, else lit on the fork point and an uncle's block. */
+function tileStroke(dropped: boolean, lit: boolean) {
+  return dropped ? FORK_COLORS.dropped : lit ? FORK_COLORS.tileStrokeLit : FORK_COLORS.tileStroke;
+}
+
+/** The tile's number on the tree: the last three digits of its height, `#176`. */
+const tileNumber = (n: number) => `#${String(n % 1000).padStart(3, '0')}`;
+
+function WideTree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeWideLayout }) {
+  const marker = useId().replace(/:/g, '');
+  const { tileW: TW, tileH: TH, yMain, x } = layout;
+  const mainByNumber = new Map(model.main.map((tile) => [tile.number, tile]));
+  const targets = new Set(model.uncleLinks.map((link) => link.to));
+  const position = new Map<string, { x: number; y: number; row: number }>();
+  model.main.forEach((tile) => position.set(tile.hash, { x: x(tile.number), y: yMain, row: -1 }));
+  model.rows.forEach((row, i) =>
+    row.tiles.forEach((tile) =>
+      position.set(tile.hash, { x: x(tile.number), y: layout.rowY[i], row: i })
+    )
+  );
+  const W = FORK_TREE.wide;
+  // A row's name stands over the tip marks that hang on its tiles' top corners, a pixel clear of
+  // them: "adopted then, dropped since" is wider than a tile, and its row's tip is marked (②).
+  const rowNameLift = W.markR + MARK_OVERHANG + 1 + descentPx(SVG_TEXT.label);
+
+  const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
+    const tx = x(t.number);
+    const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
+    const miner = minerLabel(t, layout.labelRoom(t));
+    return (
+      <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
+        <TileTitle t={t} />
+        <rect
+          x={tx}
+          y={y}
+          width={TW}
+          height={TH}
+          fill={FORK_COLORS.tileFill}
+          stroke={tileStroke(dropped, lit)}
+          strokeDasharray={dropped ? '3 3' : undefined}
+        />
+        <text x={tx + W.inset} y={y + W.numberY} fontSize={SVG_TEXT.label} fill={FORK_COLORS.ink}>
+          {tileNumber(t.number)}
+        </text>
+        <text
+          x={tx + TW - W.inset}
+          y={y + W.numberY}
+          textAnchor="end"
+          fontSize={SVG_TEXT.tick}
+          fill={FORK_COLORS.tick}
+        >
+          {t.hash.slice(2, 2 + TILE_HASH_DIGITS)}
+        </text>
+        {t.timestamp && (
+          <text
+            data-time
+            x={tx + W.inset}
+            y={y + W.timeY}
+            fontSize={SVG_TEXT.tick}
+            fill={FORK_COLORS.dim}
+          >
+            {blockClock(t.timestamp)}
+          </text>
+        )}
+        {miner && (
+          <text x={tx + W.inset} y={y + W.minerY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
+            {miner}
+          </text>
+        )}
+      </g>
+    );
+  };
+
+  return (
+    <TreeSvg model={model} width={layout.width} height={layout.height} marker={marker}>
       {model.main.map((t) =>
-        mainByNumber.has(t.number + 1) && shown(t.number + 1) ? (
+        mainByNumber.has(t.number + 1) ? (
           <line
             key={`spine-${t.number}`}
             x1={x(t.number) + TW}
@@ -215,13 +222,13 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         ) : null
       )}
       {model.rows.map((row, i) => {
-        const tiles = row.tiles.filter((t) => shown(t.number));
+        const tiles = row.tiles;
         if (tiles.length === 0) return null;
         const first = tiles[0];
         const y = layout.rowY[i];
-        // from the parent block, or from the "+N earlier" column when the row's start is folded
-        const from = first === row.tiles[0] ? mainByNumber.get(first.number - 1) : model.main[0];
-        const fromY = yMain + (compact ? 10 : 20);
+        // from the parent block on today's chain
+        const from = mainByNumber.get(first.number - 1);
+        const fromY = yMain + 20;
         return (
           <g key={row.label}>
             {from && (
@@ -249,7 +256,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
               fontSize={SVG_TEXT.label}
               fill={FORK_COLORS.tick}
             >
-              {row.label === 'dropped at this switch' ? 'branch' : 'adopted then, dropped since'}
+              {LANE_NAMES[row.label]}
             </text>
           </g>
         );
@@ -260,103 +267,240 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         fontSize={SVG_TEXT.label}
         fill={FORK_COLORS.tick}
       >
-        main chain
+        {LANE_NAMES.main}
       </text>
-      {collapsed && (
-        <g data-collapsed>
-          <title>
-            {`${collapsed.count} earlier heights, ${formatBlockNumber(collapsed.first)} to ${formatBlockNumber(collapsed.last)}: ${folded
-              .map((t) => `${formatBlockNumber(t.number)} ${shortenHash(t.hash, 'row')}`)
-              .join(', ')}`}
-          </title>
-          <rect
-            x={x(collapsed.first)}
-            y={yMain}
-            width={TW}
-            height={TH}
-            fill={FORK_COLORS.tileFill}
-            stroke={FORK_COLORS.tileStroke}
+      {model.main.map((t) => tile(t, yMain, false))}
+      {model.rows.map((row, i) => row.tiles.map((t) => tile(t, layout.rowY[i], true)))}
+      {model.uncleLinks.map((link, i) => {
+        const from = position.get(link.from)!;
+        const x0 = from.x + TW / 2;
+        const x1 = x(link.to) + TW / 2 + (i % 2 ? 8 : -8);
+        return (
+          <path
+            key={`${link.from}-${link.to}`}
+            data-uncle-link
+            d={`M${x0} ${from.y} C${x0} ${from.y - 30} ${x1} ${from.y - 34} ${x1} ${yMain - 2}`}
+            fill="none"
+            stroke={FORK_COLORS.uncleLink}
+            strokeWidth="1.2"
+            markerEnd={`url(#${marker})`}
           />
-          <text
-            x={x(collapsed.first) + C.inset}
-            y={yMain + C.numberY}
-            fontSize={SVG_TEXT.label}
-            fill={FORK_COLORS.ink}
-          >
-            +{collapsed.count} earlier
-          </text>
-          <text
-            x={x(collapsed.first) + C.inset}
-            y={yMain + C.hashY}
-            fontSize={SVG_TEXT.tick}
-            fill={FORK_COLORS.tick}
-          >
-            #{String(collapsed.first % 1000).padStart(3, '0')}–#
-            {String(collapsed.last % 1000).padStart(3, '0')}
-          </text>
-        </g>
-      )}
-      {model.main.filter((t) => shown(t.number)).map((t) => tile(t, yMain, false))}
-      {model.rows.map((row, i) =>
-        row.tiles.filter((t) => shown(t.number)).map((t) => tile(t, layout.rowY[i], true))
-      )}
-      {model.uncleLinks
-        .filter((link) => shown(link.to))
-        .map((link, i) => {
-          const from = position.get(link.from)!;
-          const x0 = from.x + TW / 2;
-          const x1 = x(link.to) + TW / 2 + (i % 2 ? 8 : -8);
-          return (
-            <path
-              key={`${link.from}-${link.to}`}
-              data-uncle-link
-              d={`M${x0} ${from.y} C${x0} ${from.y - 30} ${x1} ${from.y - 34} ${x1} ${yMain - 2}`}
-              fill="none"
-              stroke={FORK_COLORS.uncleLink}
-              strokeWidth="1.2"
-              markerEnd={`url(#${marker})`}
-            />
-          );
-        })}
+        );
+      })}
       {model.marks.map((mark, i) => {
         const at = position.get(mark.hash)!;
         const before = model.marks.slice(0, i).filter((m) => m.hash === mark.hash).length;
         const main = at.row < 0;
-        const r = markR;
-        let cx: number;
-        let cy: number;
-        if (compact) {
-          // on the box's top-right corner on either row: under a box hang its time and miner, and
-          // the uncle arcs land at its top centre; a second mark on the same block steps left
-          cx = at.x + TW - 6 - before * MARK_STEP.compact;
-          cy = at.y - MARK_OVERHANG;
-        } else {
-          cx = (main ? at.x + 4 : at.x + TW - 4) + before * MARK_STEP.wide * (main ? 1 : -1);
-          cy = main ? at.y + TH + MARK_OVERHANG : at.y - MARK_OVERHANG;
-        }
+        const cx = (main ? at.x + 4 : at.x + TW - 4) + before * MARK_STEP * (main ? 1 : -1);
+        const cy = main ? at.y + TH + MARK_OVERHANG : at.y - MARK_OVERHANG;
+        return <TipMark key={mark.n} n={mark.n} cx={cx} cy={cy} r={W.markR} role="label" />;
+      })}
+    </TreeSvg>
+  );
+}
+
+/** A tip mark, ① ② ③: its digit at the role its tree sets (the label in the wide tree, the tick in the column). */
+function TipMark({
+  n,
+  cx,
+  cy,
+  r,
+  role,
+}: {
+  n: 1 | 2 | 3;
+  cx: number;
+  cy: number;
+  r: number;
+  role: 'label' | 'tick';
+}) {
+  const size = SVG_TEXT[role];
+  return (
+    <g data-tip-mark={n}>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill={FORK_COLORS.halo}
+        stroke={FORK_COLORS.ink}
+        strokeWidth="1.2"
+      />
+      <text
+        x={cx}
+        y={cy + centreShift(size)}
+        textAnchor="middle"
+        fontSize={SVG_TEXT[role]}
+        fill={FORK_COLORS.ink}
+      >
+        {n}
+      </text>
+    </g>
+  );
+}
+
+/**
+ * The phone form (lane P4): the tree turned to a column. One block a row in order of height, each
+ * branch in a lane of its own (`layout.laneX`), named once over its lane; every tile's time and
+ * miner beside it, on its row, in the column of words right of the lanes. The lines run only in
+ * the lanes and the gaps between them: today's chain down its lane, the branch's dashed line from
+ * its parent and down its own lane, an uncle's arrow in the gap between the first two lanes, from
+ * the dropped block to the block that took it. A tip mark hangs over its tile's right corner.
+ */
+function ColumnTree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeColumnLayout }) {
+  const marker = useId().replace(/:/g, '');
+  const C = FORK_TREE.column;
+  const { tileW: TW, tileH: TH, laneX, labelsX } = layout;
+  const mainByNumber = new Map(model.main.map((tile) => [tile.number, tile]));
+  const targets = new Set(model.uncleLinks.map((link) => link.to));
+  const linkX = (lane: number) => laneX[lane] + C.linkX;
+  return (
+    <TreeSvg model={model} width={layout.width} height={layout.height} marker={marker}>
+      {layout.laneNames.map((name) => (
+        <text
+          key={name.text}
+          data-lane-name
+          x={name.x}
+          y={name.y}
+          textAnchor={name.anchor === 'end' ? 'end' : undefined}
+          fontSize={SVG_TEXT.label}
+          fill={FORK_COLORS.tick}
+        >
+          {name.text}
+        </text>
+      ))}
+      {model.main.map((t) => {
+        const next = mainByNumber.get(t.number + 1);
+        if (!next) return null;
         return (
-          <g key={mark.n} data-tip-mark={mark.n}>
-            <circle
-              cx={cx}
-              cy={cy}
-              r={r}
-              fill={FORK_COLORS.halo}
-              stroke={FORK_COLORS.ink}
-              strokeWidth="1.2"
-            />
-            <text
-              x={cx}
-              y={cy + centreShift(compact ? SVG_TEXT.tick : SVG_TEXT.label)}
-              textAnchor="middle"
-              fontSize={compact ? SVG_TEXT.tick : SVG_TEXT.label}
-              fill={FORK_COLORS.ink}
-            >
-              {mark.n}
-            </text>
+          <line
+            key={`spine-${t.number}`}
+            x1={linkX(0)}
+            x2={linkX(0)}
+            y1={layout.at(t.hash).y + TH}
+            y2={layout.at(next.hash).y}
+            stroke={FORK_COLORS.edge}
+          />
+        );
+      })}
+      {model.rows.map((row, i) => {
+        const lane = i + 1;
+        const tiles = row.tiles;
+        if (tiles.length === 0) return null;
+        const first = layout.at(tiles[0].hash);
+        const parent = mainByNumber.get(tiles[0].number - 1);
+        const from = parent && layout.at(parent.hash);
+        const lx = linkX(lane);
+        return (
+          <g key={row.label}>
+            {from && (
+              // from the parent's right edge across to the branch's lane, then down into its tile
+              <path
+                d={`M${laneX[0] + TW} ${from.y + TH / 2} H${lx - 6} Q${lx} ${from.y + TH / 2} ${lx} ${from.y + TH / 2 + 6} V${first.y}`}
+                fill="none"
+                stroke={FORK_COLORS.tick}
+                strokeDasharray="3 3"
+              />
+            )}
+            {tiles.slice(1).map((t, j) => (
+              <line
+                key={`link-${t.hash}`}
+                x1={lx}
+                x2={lx}
+                y1={layout.at(tiles[j].hash).y + TH}
+                y2={layout.at(t.hash).y}
+                stroke={FORK_COLORS.tick}
+                strokeDasharray="3 3"
+              />
+            ))}
           </g>
         );
       })}
-    </svg>
+      {layout.rows.map(({ tile: t, lane, dropped, y }) => {
+        const tx = laneX[lane];
+        const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
+        const miner = minerLabel(t, layout.labelRoom(t));
+        return (
+          <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
+            <TileTitle t={t} />
+            <rect
+              x={tx}
+              y={y}
+              width={TW}
+              height={TH}
+              fill={FORK_COLORS.tileFill}
+              stroke={tileStroke(dropped, lit)}
+              strokeDasharray={dropped ? '3 3' : undefined}
+            />
+            <text
+              x={tx + C.inset}
+              y={y + C.numberY}
+              fontSize={SVG_TEXT.label}
+              fill={FORK_COLORS.ink}
+            >
+              {tileNumber(t.number)}
+            </text>
+            <text x={tx + C.inset} y={y + C.hashY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
+              {t.hash.slice(2, 2 + TILE_HASH_DIGITS)}
+            </text>
+            {t.timestamp && (
+              <text
+                data-time
+                x={labelsX}
+                y={y + C.numberY}
+                fontSize={SVG_TEXT.tick}
+                fill={FORK_COLORS.dim}
+              >
+                {blockClock(t.timestamp)}
+              </text>
+            )}
+            {miner && (
+              <text x={labelsX} y={y + C.hashY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
+                {miner}
+              </text>
+            )}
+          </g>
+        );
+      })}
+      {model.uncleLinks.map((link, i) => {
+        const from = layout.at(link.from);
+        if (from.lane !== 1)
+          throw new Error(
+            `Fork tree: the uncle ${link.from} stands in lane ${from.lane}, not the dropped branch's`
+          );
+        const to = mainByNumber.get(link.to);
+        if (!to)
+          throw new Error(`Fork tree: no block ${formatBlockNumber(link.to)} on today's chain`);
+        const end = layout.at(to.hash);
+        // in the gap between today's lane and the branch's, two arrows 4 px apart
+        const gap = (laneX[0] + TW + laneX[1]) / 2 + (i % 2 ? 2 : -2);
+        const y0 = from.y + TH / 2;
+        const y1 = end.y + TH / 2;
+        return (
+          <path
+            key={`${link.from}-${link.to}`}
+            data-uncle-link
+            d={`M${laneX[1]} ${y0} C${gap} ${y0} ${gap} ${y1} ${laneX[0] + TW + 1} ${y1}`}
+            fill="none"
+            stroke={FORK_COLORS.uncleLink}
+            strokeWidth="1.2"
+            markerEnd={`url(#${marker})`}
+          />
+        );
+      })}
+      {model.marks.map((mark, i) => {
+        const at = layout.at(mark.hash);
+        const before = model.marks.slice(0, i).filter((m) => m.hash === mark.hash).length;
+        return (
+          <TipMark
+            key={mark.n}
+            n={mark.n}
+            cx={laneX[at.lane] + TW - C.markR - before * C.markStep}
+            cy={at.y - C.markLift}
+            r={C.markR}
+            role="tick"
+          />
+        );
+      })}
+    </TreeSvg>
   );
 }
 

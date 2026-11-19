@@ -8,6 +8,23 @@ export type ChartPayload =
   | Awaited<ReturnType<typeof api.getUncleRateChart>>
   | Awaited<ReturnType<typeof api.getCellSizeDistributionChart>>;
 
+/**
+ * What the daily activity charts count (lane D1, second follow-up, item 2), in one place. The route
+ * sums the day's eight activity kinds (`kindOccurrences`), and until `fix/activity-kinds` (ruled by
+ * the owner, waiting for a re-sync) makes the kinds partition the day's activities, an activity of
+ * two kinds counts under both (2026-11-18: the activity filter's All read 6,122, the kinds summed
+ * 6,196). So the series is the day's kind counts and the words say that; no word claims a number of
+ * activities. When `fix/activity-kinds` merges, these words return: noun 'activities', perDay
+ * 'activities a day', subtitle 'Activities per day', note none (drop both charts' `countNote`), and
+ * Activities' head eyebrow may read 'recorded in a day' again (chart-head.ts; 'counted' stays true).
+ */
+export const ACTIVITY_COUNT_WORDS = {
+  noun: 'kind counts',
+  perDay: 'kind counts a day',
+  subtitle: 'Kind counts per day',
+  note: 'An activity of two kinds counts under both.',
+} as const;
+
 export type ChartVisual = 'line' | 'bars' | 'stacked' | 'ranked';
 export type ChartScale = 'raw' | 'shannons' | 'hash-rate' | 'difficulty' | 'fraction-percent';
 export type ChartSource =
@@ -40,6 +57,13 @@ export interface ChartDefinition {
    * magnitude, where a linear axis flattens every day under one spike.
    */
   logScale?: true;
+  /**
+   * A sentence the page's head ends with, said once, where what the series counts needs it (the
+   * activity charts' `ACTIVITY_COUNT_WORDS.note`).
+   */
+  countNote?: string;
+  /** The unit of a stack's whole where it is not its bands' (Activity by type: kind counts). */
+  wholeUnit?: string;
   /** The index card draws only the newest N points, exactly as served (CH-13); the detail all. */
   cardDays?: number;
   section: string;
@@ -132,13 +156,14 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'activity-volume',
     title: 'Activities',
-    subtitle: 'Activities per day',
-    cardSubtitle: 'recorded a day',
-    plotUnit: 'activities a day',
+    subtitle: ACTIVITY_COUNT_WORDS.subtitle,
+    cardSubtitle: ACTIVITY_COUNT_WORDS.perDay,
+    plotUnit: ACTIVITY_COUNT_WORDS.perDay,
+    countNote: ACTIVITY_COUNT_WORDS.note,
     logScale: true,
     section: section.activity,
     visual: 'line',
-    unit: 'activities',
+    unit: ACTIVITY_COUNT_WORDS.noun,
     scale: 'raw',
     source: 'activities',
     evidenceHref: '/activities',
@@ -150,9 +175,12 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'activity-type-breakdown',
     title: 'Activity by type',
-    subtitle: 'Activities per day, by type',
+    subtitle: `${ACTIVITY_COUNT_WORDS.subtitle}, by kind`,
     cardSubtitle: 'largest kind a day',
-    plotUnit: 'activities a day, by kind',
+    plotUnit: `${ACTIVITY_COUNT_WORDS.perDay}, by kind`,
+    countNote: ACTIVITY_COUNT_WORDS.note,
+    // a band is the activities of its kind; the stack sums the kinds
+    wholeUnit: ACTIVITY_COUNT_WORDS.noun,
     section: section.activity,
     visual: 'stacked',
     unit: 'activities',

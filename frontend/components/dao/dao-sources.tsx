@@ -33,17 +33,12 @@ export function DaoSources() {
           args={`--last ${RECENT_ROWS}`}
           note={
             <span className="text-small flex flex-wrap items-baseline gap-x-6 gap-y-1">
-              <Link
-                href="/activities?filter=dao"
-                className="text-text hover:text-text-bright hover:underline"
-              >
-                All DAO activity →
+              {/* ways onward, to the list pages: the look writes the arrow (lane P4) */}
+              <Link href="/activities?filter=dao" look="onward">
+                All DAO activity
               </Link>
-              <Link
-                href="/transactions?kind=dao"
-                className="text-text hover:text-text-bright hover:underline"
-              >
-                DAO transactions →
+              <Link href="/transactions?kind=dao" look="onward">
+                DAO transactions
               </Link>
             </span>
           }

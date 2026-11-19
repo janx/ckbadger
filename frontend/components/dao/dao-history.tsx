@@ -13,7 +13,8 @@ import { formatSignedCkbInteger, parseCkbDecimal } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
+import { useClockText } from '@/components/ui/utc8-date';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
@@ -159,17 +160,25 @@ export function cutShare(ratio: string): string {
   return m[2] === undefined ? m[1] : `${m[1]}.${m[2].slice(0, 2)}`;
 }
 
-/** A reading's CKB, in its summary form (R5): its line names the unit; a cut figure is titled. */
+/**
+ * A reading's CKB, exact (the ruling of 2026-11-19: a chart's readout is exact on every page; it
+ * was the summary form): its line names the unit.
+ */
 function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   return (
     <CkbAmount
-      form="summary"
+      form="exact"
       shannons={shannons}
       signed={signed}
       tone={signed ? 'sign' : 'inherit'}
       unit={false}
     />
   );
+}
+
+/** The UTC+8 day before the one a time falls on, as the series names its days: `2026-11-17`. */
+function utc8Yesterday(now: number): string {
+  return formatUtc8Date(now - DAY_MS);
 }
 
 const textWidth = textPx;
@@ -232,7 +241,7 @@ export function DaoHistoryFigure({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { days } = series;
   if (days.length < 2)
-    return <p className="text-text-dim text-small mt-[18px]">Not enough complete days to draw.</p>;
+    return <p className="text-text text-small mt-[18px]">Not enough complete days to draw.</p>;
   return (
     <div className="mt-[18px] min-w-0">
       <div ref={ref} className="min-w-0">
@@ -599,8 +608,10 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
 /**
  * The one reading of the picture (board v3): the hovered or tapped day — else the last complete
  * day — deposited, its share, its depositors, the whole week it falls in, and the all-time peak.
- * Its amounts are in the summary form (R5), a cut one titled with its exact value, as the
- * line end's label is.
+ * Its amounts are exact (a chart's readout, the ruling of 2026-11-19). At rest it reads the last
+ * complete day, named for what it is beside the hero's figure of now (lane P4): "yesterday's
+ * close" while that day is yesterday on the UTC+8 clock (the page's one clock), else "last close";
+ * a day pointed at or pinned is "day".
  */
 export function DaoHistoryReading({
   series,
@@ -614,6 +625,10 @@ export function DaoHistoryReading({
   const pinWord = usePinWord();
   const { days, weeks } = series;
   const last = days.length - 1;
+  const lastDate = last < 0 ? null : days[last].date;
+  const closeLabel = useClockText((now) =>
+    lastDate === utc8Yesterday(now) ? 'yesterday’s close' : 'last close'
+  );
   if (last < 0) return null;
   const index = pin.active === null || pin.active > last ? last : pin.active;
   const day = days[index];
@@ -629,7 +644,7 @@ export function DaoHistoryReading({
       <DetailFacts
         facts={[
           {
-            label: 'day',
+            label: pin.active === null || pin.active > last ? closeLabel : 'day',
             value: (
               <>
                 {pin.showingPin && <span className="text-text-dim">{pinWord} </span>}

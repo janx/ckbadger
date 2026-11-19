@@ -127,30 +127,54 @@ export function niceTicks(
   return { values, step };
 }
 
-function trimZeros(s: string): string {
-  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+/**
+ * A tick's exact digits, its sign aside, as `[whole, fraction]`, the decimal point moved `shift`
+ * places left: the scale chose the tick on its step's grid (`niceTicks`), so the shortest form of
+ * the number is the value itself, and nothing here rounds or cuts (the lead's ruling of
+ * 2026-11-19: a tick's label is its value).
+ */
+export function exactTickDigits(value: number, shift = 0): [string, string] {
+  assertFinite('exactTickDigits: value', value);
+  const [mantissa, exponentText = '0'] = Math.abs(value).toString().split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  const digits = `${whole}${fraction}`;
+  const point = whole.length + Number(exponentText) - shift;
+  const [w, f] =
+    point <= 0
+      ? ['0', `${'0'.repeat(-point)}${digits}`]
+      : point >= digits.length
+        ? [`${digits}${'0'.repeat(point - digits.length)}`, '']
+        : [digits.slice(0, point), digits.slice(point)];
+  return [w.replace(/^0+(?=\d)/, ''), f.replace(/0+$/, '')];
 }
 
 /**
- * A tick label: thousands as k / M / B (trailing zeros trimmed: 500, 1k, 2.5k, 10k), smaller
- * values with the decimals their step needs (2.4, 2.6 …), micro-token values in scientific
- * notation, negatives with a real minus sign. Exact data readouts remain separate from axis labels.
+ * A tick label, exactly its value (the lead's ruling of 2026-11-19: a rounded or a cut label puts
+ * the line at another number than it says): thousands as k / M / B with every digit the value has
+ * (500, 1k, 2.5k, 1.00001M), smaller values with at least the decimals their step needs (2.40,
+ * 2.60 …), micro-token values in scientific notation, negatives with a real minus sign. Exact data
+ * readouts remain separate from axis labels.
  */
 export function formatTick(value: number, step: number): string {
   assertFinite('formatTick: value', value);
   if (value === 0) return '0';
   const abs = Math.abs(value);
   const sign = value < 0 ? MINUS : '';
-  const units: [number, string][] = [
-    [1e9, 'B'],
-    [1e6, 'M'],
-    [1e3, 'k'],
+  const units: [number, number, string][] = [
+    [1e9, 9, 'B'],
+    [1e6, 6, 'M'],
+    [1e3, 3, 'k'],
   ];
-  for (const [div, suffix] of units) {
-    if (abs >= div) return `${sign}${trimZeros((abs / div).toFixed(3))}${suffix}`;
+  for (const [div, shift, suffix] of units) {
+    if (abs >= div) {
+      const [whole, fraction] = exactTickDigits(abs, shift);
+      return `${sign}${fraction ? `${whole}.${fraction}` : whole}${suffix}`;
+    }
   }
-  const decimal = tickDecimal(abs, stepDecimals(step));
-  return `${sign}${abs < 1e-8 ? Number(decimal).toExponential() : decimal}`;
+  if (abs < 1e-8) return `${sign}${abs.toExponential()}`;
+  const [whole, fraction] = exactTickDigits(abs);
+  const decimals = Math.max(stepDecimals(step), fraction.length);
+  return `${sign}${decimals ? `${whole}.${fraction.padEnd(decimals, '0')}` : whole}`;
 }
 
 /** The smallest 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 / 6 / 8 × 10^k value that is at least `x`. */
@@ -196,6 +220,10 @@ export function clipToCap(values: number[], cap: number): SignedBar[] {
     const clipped = Math.abs(value) > cap;
     return { value, drawn: clipped ? Math.sign(value) * cap : value, clipped };
   });
+}
+
+function trimZeros(s: string): string {
+  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
 
 /** A compact signed amount for a clipped bar's label: +28.12M, −8.94M, +950k, +12.5k, −12. */

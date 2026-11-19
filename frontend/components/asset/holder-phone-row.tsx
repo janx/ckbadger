@@ -70,7 +70,7 @@ export function HolderPhoneRow({
   );
   const figure = <span className="text-text-bright text-body">{amount}</span>;
   const shareText = share !== undefined && share !== null && (
-    <span className={`text-text-dim text-meta ${SHARE_TEXT}`}>{share}</span>
+    <span className={`text-text text-meta ${SHARE_TEXT}`}>{share}</span>
   );
   if (wide)
     return (

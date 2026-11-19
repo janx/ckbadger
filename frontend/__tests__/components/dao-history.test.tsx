@@ -190,8 +190,10 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    // re-pinned (lane P4): at rest the day is named for what it is, the last complete day's close
+    // ("last close" here: the real clock is past the series), not "day"
     expect(factsOf(reading)).toEqual([
-      ['day', date(154)],
+      ['last close', date(154)],
       ['deposited', '101,190'],
       ['share', '11.5400%'],
       ['depositors', '254'],
@@ -209,7 +211,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
   // of the amount's sign, never the amount's ink at 70 %. Readability R5 (re-pinned and renamed on
   // purpose: "sets the reading’s fraction digits in the sign’s quieter ink, ..."): one ink per
   // amount, the summary form, a cut figure titled with its exact value; still no opacity.
-  it('sets each reading amount in one ink, cut and titled, never at an opacity', () => {
+  // Renamed (lane P4; it was "sets each reading amount in one ink, cut and titled, never at an
+  // opacity"): a chart's readout is exact (the ruling of 2026-11-19), so nothing is cut or titled
+  it('sets each reading amount in one ink, exact, never at an opacity', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const last = deposited.data.length - 1;
@@ -218,15 +222,13 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
-    expect(factsOf(reading)).toContainEqual(['deposited', '101,190']);
+    expect(factsOf(reading)).toContainEqual(['deposited', '101,190.25']);
     expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
     const amounts = [...reading.querySelectorAll('[data-ckb-amount]')];
-    expect(amounts.map((a) => a.textContent)).toEqual(['101,190', '+10.25', '101,190']);
-    expect(amounts.map((a) => a.getAttribute('title'))).toEqual([
-      '101,190.25 CKB',
-      null,
-      '101,190.25 CKB',
-    ]);
+    expect(amounts.map((a) => a.textContent)).toEqual(['101,190.25', '+10.25', '101,190.25']);
+    // re-pinned (lane P4, the ruling of 2026-11-19: a chart's readout is exact): every amount is
+    // written whole, so none is titled (it was '101,190' titled '101,190.25 CKB')
+    expect(amounts.map((a) => a.getAttribute('title'))).toEqual([null, null, null]);
     // deposited and the peak take the reading line's ink, the week's net its sign's
     expect(amounts[1]).toHaveClass('text-positive');
     for (const a of amounts) {
@@ -279,7 +281,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // One cursor in each of the three panels.
     expect(container.querySelectorAll('[data-cursor]')).toHaveLength(3);
     fireEvent.pointerLeave(share);
-    expect(factsOf(reading)[0]).toEqual(['day', date(154)]);
+    // re-pinned (lane P4) here and after the second tap: at rest, "last close" (it was "day")
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
     // A tap on the main plot pins the day it lands on; leaving keeps it.
     const main = container.querySelector('svg[data-panel="deposited"]')!;
     // Re-pinned with U-19: the plot starts after its 48 px value gutter, so its middle day (77 of
@@ -294,7 +297,7 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(day.firstElementChild).toHaveTextContent(/^selected$/);
     expect(day.firstElementChild).toHaveClass('text-text-dim');
     fireEvent.click(main, { clientX: 624 });
-    expect(factsOf(reading)[0]).toEqual(['day', date(154)]);
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
   });
 
   it('colours falling weeks red and rising weeks jade (DAO-18)', () => {
@@ -345,7 +348,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
     expect(factsOf(screen.getByRole('status', { name: 'History reading' }))).toContainEqual([
       'week from',
-      '2024-05-28 −12.34',
+      // re-pinned (lane P4, the ruling of 2026-11-19: a chart's readout is exact; it was −12.34)
+      '2024-05-28 −12.34567891',
     ]);
   });
 
@@ -493,6 +497,48 @@ describe('DaoHistory at phone width (DAO-22)', () => {
 
 // Responsive fix plan 2026-11-01 (A3, report A#14): at 390 the reading broke the week's date
 // ("2026-/10-25") and split an amount.
+// Readability plan 2026-11-18, P4 (the DAO page): "labels its readout 'yesterday's close'" (the
+// review: the reading opened on the last complete day, beside the hero's figure of now, and read
+// as a contradiction: 8,180,424,335.96 beside 8,184,071,455), and the ruling of 2026-11-19 (the
+// notes, P4): a chart's readout is exact on every page; the DAO "History reading" wrote the
+// summary form.
+describe('DaoHistory reading: yesterday’s close, exact (P4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('names the last complete day “yesterday’s close” while it is yesterday, and reads every amount exactly', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 10:00 UTC+8 on the day after the series' last day (date(154))
+    vi.setSystemTime(new Date(START + 155 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const last = deposited.data.length - 1;
+    deposited.data[last] = { ...deposited.data[last], value: '101190.25' };
+    deposited.peak = { date: date(last), value: '101190.25' };
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading).slice(0, 2)).toEqual([
+      ['yesterday’s close', date(154)],
+      ['deposited', '101,190.25'],
+    ]);
+    expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
+    expect(factsOf(reading)).toContainEqual(['peak', `101,190.25 on ${date(154)}`]);
+  });
+
+  it('names an older last day “last close”, never “yesterday’s”', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(START + 160 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
+  });
+});
+
 describe('DaoHistory reading units', () => {
   afterEach(() => {
     vi.restoreAllMocks();

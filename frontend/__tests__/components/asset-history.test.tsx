@@ -172,7 +172,10 @@ describe('Asset history', () => {
   // Re-pinned with U-19 (UI review 2026-11-14): the values leave the plot for a dim gutter (they
   // were ghost values written inside it, under the line and behind the bars); the name stays
   // inside the plot, after the gutter, short enough to fit a 360 px phone.
-  it('draws the main plot 280 px tall with its name inside it and its values in the gutter', () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "draws the main plot 280
+  // px tall …"): the plot is 160 px under one sentence its points give
+  // (__tests__/components/history-sentence.test.tsx), no longer the hero's 280 px picture.
+  it('draws the main plot 160 px tall with its name inside it and its values in the gutter', () => {
     stubChartWidth(1248);
     try {
       for (const token of [undefined, { symbol: 'T', decimals: 0 }]) {
@@ -187,7 +190,7 @@ describe('Asset history', () => {
           />
         );
         const main = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
-        expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+        expect(Number(main.getAttribute('height'))).toBe(160);
         const name = main.querySelector('[data-role="chart-name"]')!;
         expect(name).toHaveTextContent('CKB held · occupied, free');
         const left = plotLeftOf(main);

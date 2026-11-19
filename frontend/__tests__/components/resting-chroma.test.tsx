@@ -1,3 +1,4 @@
+import { linkLookClass } from '@/components/ui/link';
 // Visual finish V5 (resting chroma, 2026-11-04): quiet at rest, light on interaction. Inside a
 // table, a feed or a list row a link rests as ink with a faint aqua underline
 // (`text-text-bright underline decoration-aqua/35 underline-offset-[3px]`) and carries no hover
@@ -108,7 +109,12 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     );
     const [, row] = screen.getAllByRole('row');
     expectNoAquaLink(row);
-    expectRestingLink(within(row).getByRole('link', { name: ADDRESS }));
+    // re-pinned on purpose (lane p-assets, the link-look gate): a link in the row states its look,
+    // inline, the line's ink over the muted underline of components/ui/link.tsx (it drew V5's
+    // resting look by hand: bright ink over a faint aqua underline); no hover colour of its own
+    const link = within(row).getByRole('link', { name: ADDRESS });
+    expect(link).toHaveClass(...linkLookClass('inline')!.split(' '));
+    expect(Array.from(link.classList).filter((c) => c.startsWith('hover:text-'))).toEqual([]);
   });
 
   it('a party: the standalone form is an Address; a bare lock hash hovers jade, not aqua', () => {

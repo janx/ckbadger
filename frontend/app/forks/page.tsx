@@ -22,7 +22,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { WIDEST_BLOCK_NUMBER, shortChars } from '@/lib/list-bounds';
+import { WIDEST_BLOCK_NUMBER, WIDEST_SIBLING_GAP, shortChars } from '@/lib/list-bounds';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
@@ -55,11 +55,6 @@ const body = (chars: number) => textPx(chars, fontPx('body'));
 const FORK_GLYPH_PX = 210;
 /** A time on the UTC+8 clock to the second, "2026-10-22 22:43:55": 19 characters at every time. */
 const SEEN_CHARS = formatUtc8DateTime(0).slice(0, 19).length;
-/**
- * A sibling found apart from its rival: six digits of milliseconds, "999,999 ms" (under 1,000 s;
- * a sibling is found while its parent is the tip, blocks some ten seconds apart).
- */
-const WIDEST_APART = '999,999 ms';
 
 /** R15: a topic page shows a list's first rows; the rest expand in place (there is no list page). */
 const PREVIEW_ROWS = 5;
@@ -199,7 +194,7 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
   return (
     <span>
       {href ? (
-        <Link href={href} className="text-text hover:text-jade">
+        <Link href={href} look="inline">
           {unitText(when)}
         </Link>
       ) : (
@@ -231,14 +226,19 @@ function switchTitle(event: ReorgEvent, now: number): string {
   ].join(' · ');
 }
 
-/** The row's key (table-rows T5): the fork point, bright at the row's body size. */
+/**
+ * The row's key (table-rows T5): the fork point, bright at the row's body size; under it how deep
+ * the switch went, in words (the review: "depth 1" was not explained).
+ */
 function ForkPoint({ event }: { event: ReorgEvent }) {
   return (
     <span>
-      <Link href={`/blocks/${event.forkPointNumber}`} className="text-text-bright hover:text-jade">
+      <Link href={`/blocks/${event.forkPointNumber}`} look="key">
         {formatBlockNumber(event.forkPointNumber)}
       </Link>
-      <span className="text-text-dim text-meta block w-fit">depth {event.depth}</span>
+      <span className="text-text-dim text-meta block w-fit">
+        {unitNode(`${formatCount(event.depth, 'block')} deep`)}
+      </span>
     </span>
   );
 }
@@ -280,8 +280,9 @@ function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactN
         `Fork ${formatBlockNumber(event.forkPointNumber)}: miner lock ${hash} and address ${address} disagree`
       );
     return address ? (
-      // T5: the fork point is the row's one bright thing; the miners read in body ink.
-      <MinerLink address={address} pool={pool} size={size} className="text-text" />
+      // T5: the fork point is the row's one bright thing; the miners read in the line's ink, links
+      // inside a line
+      <MinerLink address={address} pool={pool} size={size} look="inline" />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
@@ -336,16 +337,23 @@ function Fate({ event }: { event: ReorgEvent }) {
   return (
     <span>
       {uncleInBlock !== null ? (
-        // R11: neutral words; the glyph's arrow keeps the jade
-        <Link href={`/blocks/${uncleInBlock}`} className="text-text hover:underline">
-          {`${words} in ${formatBlockNumber(uncleInBlock)} (+${uncleInBlock - event.forkPointNumber - 1})`}
-        </Link>
+        // R11: neutral words; the glyph's arrow keeps the jade. The review: "(+2)" was not
+        // explained; how many blocks later the uncle was taken is said in words
+        <>
+          <span className="text-text">{words} in </span>
+          <Link href={`/blocks/${uncleInBlock}`} look="inline">
+            {formatBlockNumber(uncleInBlock)}
+          </Link>
+          <span className="text-text-dim text-meta block w-fit">
+            {unitNode(`${formatCount(uncleInBlock - event.forkPointNumber - 1, 'block')} after it`)}
+          </span>
+        </>
       ) : (
         <span className="text-text">{words}</span>
       )}
       <span className="text-text-dim text-meta block w-fit">
         {noncellbaseTransactions === 0
-          ? 'cellbase only'
+          ? 'held no transaction but its cellbase'
           : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
       </span>
     </span>
@@ -432,9 +440,9 @@ export default function ForksPage() {
             lede={
               <>
                 Two blocks, one height: one stays, one is an uncle.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                <Link href="#evidence" look="onward">
+                  How it works
+                </Link>
               </>
             }
             figure={data ? uncleRate(data) : undefined}
@@ -450,7 +458,7 @@ export default function ForksPage() {
               ) : data && data.days.length ? (
                 <ForkDaysPlot days={data.days} pin={pin} />
               ) : (
-                <p className="text-text-dim text-small">No completed fork days are indexed.</p>
+                <p className="text-text text-small">No completed fork days are indexed.</p>
               )
             }
             reading={
@@ -541,7 +549,7 @@ export default function ForksPage() {
                       // "999,999 ms" at 13 px (78), wider than the head's words, and the gap; it
                       // was 100
                       minWidth: columnPx(
-                        textPx(WIDEST_APART.length, fontPx('small')) + CELL_GAP_PX
+                        textPx(WIDEST_SIBLING_GAP.length, fontPx('small')) + CELL_GAP_PX
                       ),
                       numeric: true,
                       render: (e) => <FoundApart event={e} />,
@@ -635,9 +643,10 @@ export default function ForksPage() {
               <DetailSection title="How the chart is drawn">
                 <Prose>
                   <p>
-                    In the chart each grey bar is a day&apos;s uncles on chain and the jade inside
-                    it this node&apos;s branch switches that day; point at a day, or focus the chart
-                    and use ← → to step through the days.
+                    In the chart each grey bar is a day&apos;s uncle rate, its uncles over its
+                    blocks, against the dashed target of one in 40; under it, in jade on a scale of
+                    its own, this node&apos;s branch switches that day. Point at a day, or focus the
+                    chart and use ← → to step through the days.
                   </p>
                   {data && <p>Days: {data.scope}.</p>}
                 </Prose>

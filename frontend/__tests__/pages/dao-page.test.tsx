@@ -162,7 +162,9 @@ describe('DaoPage', () => {
     ]);
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(screen.getByRole('link', { name: 'Open source block' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/5'
     );
@@ -177,7 +179,9 @@ describe('DaoPage', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     const intro = within(hero).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
     expect(intro.textContent!.length).toBeLessThanOrEqual(90);
-    expect(within(intro).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(within(intro).getByRole('link', { name: 'How it works' })).toHaveAttribute(
       'href',
       '#evidence'
     );
@@ -189,7 +193,8 @@ describe('DaoPage', () => {
     expect(container.querySelector('[data-tier="1"]')).not.toHaveTextContent(former);
     expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(former);
     // "Explore DAO charts →" is kept, in the title row beside the range buttons (R13).
-    const charts = screen.getByRole('link', { name: 'Explore DAO charts →' });
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden (it was typed)
+    const charts = screen.getByRole('link', { name: 'Explore DAO charts' });
     expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
     expect(within(hero).getByRole('heading', { level: 1 }).parentElement).toContainElement(charts);
     // The whole page's tier 1: at most three caption-length prose blocks (§0, §4).
@@ -227,7 +232,9 @@ describe('DaoPage', () => {
       screen.getByText(/Protocol occupied \(U\) includes the genesis virtual occupied baseline/)
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('link', { name: 'Verify statistics anchor block #4 →' })
+      // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+      // its last word by a no-break space (it was typed into the words)
+      screen.getByRole('link', { name: 'Verify statistics anchor block #4' })
     ).toHaveAttribute('href', '/mainnet/blocks/4');
   });
 

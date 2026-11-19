@@ -174,7 +174,9 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(screen.getByRole('heading', { name: 'Dropped transactions 1' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Dropped branch transactions' })).toBeInTheDocument();
     expect(within(table).getByText('#11′')).toBeInTheDocument();
-    expect(within(table).getByText('uncle in #12')).toBeInTheDocument();
+    // re-pinned (lane P4): the fate's label is quiet and its block a link of its own
+    expect(within(table).getByText(fullText('uncle in #12'))).toBeInTheDocument();
+    expect(within(table).getByText('uncle in')).toHaveClass('text-text-dim');
     expect(within(table).getAllByText('main chain')).toHaveLength(2);
     expect(within(table).getByText('06:13:20.050')).toBeInTheDocument();
     expect(
@@ -213,13 +215,15 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       // the widest fate on its line
       ceil(w('committed on canonical branch', 13) + 16),
       ceil(w('#99,999,999', 13) + 16),
-      // an output under a billion CKB with its unit, or "Unavailable"; the last column
-      ceil(Math.max(w('999,999,999.99999999', 13) + w(' CKB', 12), w('Unavailable', 13))),
+      // an output under a billion CKB with its unit, or "Unavailable"; the last column.
+      // Re-pinned (lane P4): a list column writes the summary form, whole CKB from 1,000 up
+      // (R5), so the widest is "999,999,999" (it was every decimal, 185 px)
+      ceil(Math.max(w('999,999,999', 13) + w(' CKB', 12), w('Unavailable', 13))),
     ];
     expect(blocks).toEqual([134, 149, 110, 118, 55, 234]);
-    expect(dropped).toEqual([274, 110, 243, 102, 185]);
+    expect(dropped).toEqual([274, 110, 243, 102, 115]);
     const sum = (budgets: number[]) => budgets.reduce((s, x) => s + x, 0);
-    expect([sum(blocks), sum(dropped)]).toEqual([800, 914]);
+    expect([sum(blocks), sum(dropped)]).toEqual([800, 844]);
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     const { unmount } = render(<ForkDetailPage />);
     for (const [label, budgets, flexible] of [
@@ -233,7 +237,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       expect(Number.parseFloat(table.style.minWidth)).toBe(sum([...budgets]));
     }
     unmount();
-    for (const width of [1232, 914, 913, 800, 799, 608, 358]) {
+    for (const width of [1232, 844, 843, 800, 799, 608, 358]) {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
       vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
@@ -241,7 +245,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       const { unmount: drop } = render(<ForkDetailPage />);
       for (const [label, min] of [
         ['Blocks', 800],
-        ['Dropped branch transactions', 914],
+        ['Dropped branch transactions', 844],
       ] as const) {
         const form = width >= min ? 'table' : 'rows';
         const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
@@ -301,19 +305,24 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       'href',
       '/mainnet/blocks/12'
     );
-    // U-16 (re-pinned): the uncle's hash and number are two items of one list, the hash one token
-    const uncleHash = within(tier2)
-      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
-      .find((e) => e.closest('[data-dotted]'));
-    expect(uncleHash!.closest('[data-dotted]')).toHaveTextContent(
-      `${uncleFixture.orphanedBlocks[0].hash} · #11`
+    // U-16 (re-pinned twice): the uncle's hash and number were two items of one list, the hash
+    // first; lane P4 writes them as the stored event's facts are, the dropped height and then its
+    // hash in designed lines (HeadId)
+    const uncleHash = [...tier2.querySelectorAll('[data-head-id]')].find(
+      (id) => id.getAttribute('title') === uncleFixture.orphanedBlocks[0].hash
+    )!;
+    expect(uncleHash.parentElement).toHaveTextContent(
+      `#11′ ${uncleFixture.orphanedBlocks[0].hash}`
     );
   });
 
   // U-16, PB-05 (UI review 2026-11-14): tier 2's full hashes wrapped across two lines in the middle
-  // ("0xcd29f0b0…8402a67d72b4b3fb5" / "bfaece30ba50b3"); a full hash is one token, whole on its
-  // line or scrolled in its own box. U-15: "miner witness unavailable" was an internal state.
-  it('writes tier 2’s full hashes as one line each and says "not recorded" for a missing miner (U-16, U-15)', async () => {
+  // ("0xcd29f0b0…8402a67d72b4b3fb5" / "bfaece30ba50b3"), broken where the browser pleased. Re-pinned
+  // (lane P4; it was "writes tier 2's full hashes as one line each", whole on its line or scrolled
+  // in its own box): one id is wrapped, never scrolled, and never where the browser pleases — each
+  // is HeadId's designed lines, every line one unbreakable unit, no `break-all` around it. U-15:
+  // "miner witness unavailable" was an internal state.
+  it('writes tier 2’s full hashes in designed lines and says "not recorded" for a missing miner (U-16, U-15, P4)', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     const { container } = render(<ForkDetailPage />);
     await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
@@ -326,20 +335,73 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       event.newTipHash,
       uncleFixture.orphanedBlocks[0].hash,
     ]) {
-      for (const full of within(tier2).getAllByText(hash)) {
-        expect(full).toHaveAttribute('data-full-value');
-        expect(full).toHaveClass('whitespace-nowrap', 'overflow-x-auto', 'max-w-full');
-        expect(full.closest('.break-all')).toBeNull();
+      const ids = [...tier2.querySelectorAll('[data-head-id]')].filter(
+        (id) => id.getAttribute('title') === hash
+      );
+      expect(ids.length, hash).toBeGreaterThan(0);
+      for (const id of ids) {
+        expect(id.textContent).toBe(hash);
+        for (const line of id.querySelectorAll('[data-head-line]'))
+          expect(line).toHaveClass('whitespace-nowrap');
+        expect(id.closest('.break-all')).toBeNull();
+        expect(id.closest('.overflow-x-auto')).toBeNull();
       }
     }
-    // the uncle's number follows its hash as the next item of one list, never a loose "·"
-    const uncle = within(tier2)
-      .getAllByText(uncleFixture.orphanedBlocks[0].hash)
-      .map((e) => e.closest('[data-dotted]'))
-      .find(Boolean);
-    expect(uncle).toHaveTextContent(`${uncleFixture.orphanedBlocks[0].hash} · #11`);
     expect(within(tier2).getByText('not recorded')).toBeInTheDocument();
     expect(tier2).not.toHaveTextContent('miner witness unavailable');
+  });
+
+  // PAGE-LANE-NOTES (B1): a phone row's third line wrote its label words in the reading ink
+  // ("committed in #12", "uncle in #12"): a label is quiet, its value reads (lane P4). The Hash
+  // column's short hash is a value, not a link: it was drawn in the boards' link ink (cyan), which
+  // reads as a link it is not; a value takes the reading ink.
+  it('sets a phone row’s labels quiet and its values in the reading ink, and draws no hash in a link’s ink (P4)', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const txs = await screen.findAllByTestId('fork-tx-row-mobile');
+    const committed = txs[0].querySelector('[data-line="committed"]') as HTMLElement;
+    expect(within(committed).getByText('committed in')).toHaveClass('text-text-dim');
+    expect(within(committed).getByRole('link', { name: '#12' })).not.toHaveClass('text-text-dim');
+    const blocks = screen.getAllByTestId('fork-block-row-mobile');
+    const dropped = blocks.find((row) => row.textContent!.includes('′'))!;
+    const fate = dropped.querySelector('[data-line="fate"]') as HTMLElement;
+    expect(within(fate).getByText('uncle in')).toHaveClass('text-text-dim');
+    expect(within(fate).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
+    for (const row of blocks)
+      expect(row.querySelector('[style*="--ink"]'), 'a hash in the link ink').toBeNull();
+  });
+
+  // PAGE-LANE-NOTES (sweep at the new sizes, af272a5f; the sweep at 390 / 360): the five whole
+  // block hashes of tier 2 ("This node's fork event, as stored" and "Uncles in") scrolled inside
+  // their own box: at 13 px a hash is 66 × 7.8 = 514.8 px and its cell 474.6 at 1280 (588 less the
+  // 101.4 px label column and the 12 px gap: 40 px of scroll), 20 at 640, and on a phone. One id is
+  // wrapped, never scrolled (lane P4): each hash is set as a head's id is (HeadId), one line where
+  // its line holds it, else its two halves, `0x` and 32 digits over 32, 34 × 7.8 = 265.2 px.
+  it('sets tier 2’s whole hashes in designed lines, never in a box that scrolls (P4)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2.querySelector('.overflow-x-auto')).toBeNull();
+    expect(tier2.querySelector('[data-full-value]')).toBeNull();
+    const event = uncleFixture.event;
+    const ids = [...tier2.querySelectorAll('[data-head-id]')].map((id) => id.getAttribute('title'));
+    for (const hash of [
+      event.forkPointHash,
+      event.firstOrphanHash!,
+      event.oldTipHash,
+      event.newTipHash,
+      uncleFixture.orphanedBlocks[0].hash,
+    ])
+      expect(ids, hash).toContain(hash);
   });
 
   // A4 Chrome F4: at 1280 tier 2's two columns gave each hash 466 px (588 less a 110 px label

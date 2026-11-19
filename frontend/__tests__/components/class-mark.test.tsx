@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge, CompositionMark } from '@/components/ui/composition-mark';
+import { CompositionSet } from '@/components/ui/composition-set';
 import { CLASS_COLORS, COMPOSITION_BADGES, COMPOSITION_COLORS } from '@/lib/design-tokens';
 
 const mark = (name: string) => screen.getByRole('img', { name }) as unknown as SVGSVGElement;
@@ -109,7 +110,42 @@ describe('CompositionBadge (IV-24)', () => {
       .getByText('Centralized mix')
       .closest('[data-composition]') as HTMLElement;
     expect(central.style.backgroundImage).toBe('');
-    expect(central).toHaveClass('text-text-dim');
+    // Re-pinned on purpose (readability P2, lane p-assets: "the composition badge on every row
+    // stays; only its colour is made to agree with the filter's"): an off-chain tier reads as the
+    // composition legend, the inventory's filter, draws it, its words in the reading ink and its
+    // mark as it was (it was the quiet ink)
+    expect(central).toHaveClass('text-text');
+    expect(central).not.toHaveClass('text-text-dim');
     expect(screen.getByText('Decode pending')).toBeInTheDocument();
+  });
+
+  it('draws a tier as the composition legend draws it: one colour for the filter and the rows', () => {
+    const { container } = render(
+      <>
+        <CompositionBadge tier="decentralized_mixture" />
+        <CompositionSet
+          counts={{
+            pure_ckb: 1,
+            btc_ckb: 1,
+            decentralized_mixture: 1,
+            centralized_mixture: 0,
+            unknown: 0,
+            decode_pending: 0,
+          }}
+          total={3}
+          filter={{ selected: undefined, onSelect: () => {}, label: 'composition' }}
+        />
+      </>
+    );
+    const badge = container.querySelector('[data-composition="decentralized_mixture"]')!;
+    const legend = within(screen.getByRole('group', { name: 'composition' }))
+      .getByText('Decentralized mix')
+      .closest('button')!;
+    const words = (el: Element) =>
+      Array.from(el.querySelectorAll('span')).find((s) => s.textContent === 'Decentralized mix') ??
+      el;
+    expect(words(badge).className.match(/text-text(-dim)?\b/g)?.[0] ?? 'text-text').toBe(
+      words(legend).className.match(/text-text(-dim)?\b/g)?.[0] ?? 'text-text'
+    );
   });
 });

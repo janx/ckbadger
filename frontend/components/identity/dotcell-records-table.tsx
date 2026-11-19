@@ -38,8 +38,9 @@ export function DotCellRecordsTable({ records }: Props) {
               <td className="text-text px-4 py-2 align-top [overflow-wrap:anywhere]">
                 {record.decodedAddress ? (
                   <Link
+                    look="inline"
                     href={`/address/${record.decodedAddress.address}`}
-                    className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                    className="transition-colors"
                   >
                     {record.decodedAddress.address}
                   </Link>

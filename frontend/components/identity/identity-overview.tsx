@@ -3,6 +3,7 @@ import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } fro
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
@@ -108,7 +109,11 @@ function blockFact(label: string, timestamp: string | number, block: number): As
     label,
     title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
     value: <NoBreak>{formatUtc8Date(timestamp)}</NoBreak>,
-    note: <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>,
+    note: (
+      <AppLink look="inline" href={`/blocks/${block}`}>
+        {formatBlockNumber(block)}
+      </AppLink>
+    ),
   };
 }
 
@@ -118,7 +123,9 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
     label: 'Owner',
     size: 'body',
     value: <Address address={cell.ownerAddress} size="row" look="key" className="text-body" />,
-    note: `${cell.lockName ?? 'lock not named'}${note}`,
+    // the owner's lock by the one decision (lane B4; lane p-assets: it wrote the API's name, "lock
+    // not named" where it had none): nothing for the default lock, so the note is its words alone
+    note: [cellOwnerLockPart(cell), note],
   };
 }
 
@@ -127,9 +134,7 @@ function physicalSince(protocol: IdentityProtocol, first: string) {
     protocol.versions.map((v) => v.cell),
     (c) => c.ownerLockHash
   );
-  return run.changes === 0
-    ? ` · since ${first}`
-    : ` · since ${formatUtc8Date(run.since.timestamp)}`;
+  return run.changes === 0 ? `since ${first}` : `since ${formatUtc8Date(run.since.timestamp)}`;
 }
 
 /** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
@@ -170,7 +175,7 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
     value: party.address ? (
       <Address address={party.address} size="row" look="key" className="text-body" />
     ) : party.lockHash ? (
-      <AppLink href={`/address/${party.lockHash}`}>
+      <AppLink look="key" href={`/address/${party.lockHash}`}>
         <Hash hash={party.lockHash} kind="hash" size="row" className="text-body" />
       </AppLink>
     ) : (
@@ -189,7 +194,7 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
 export function PartyLine({ party, size }: { party: DotCellPartyRef; size: ShortSize }) {
   return party.lockHash ? (
     <>
-      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
+      <AppLink look="inline" href={`/address/${party.address ?? party.lockHash}`}>
         <Hash
           hash={party.address ?? party.lockHash}
           kind={party.address ? 'address' : 'hash'}
@@ -234,7 +239,7 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
         <span className="flex flex-col gap-0.5">
           {bitCells.map((c) => (
             <span key={c.id}>
-              <AppLink href={`/identities/bit-cell/${c.id}`}>
+              <AppLink look="key" href={`/identities/bit-cell/${c.id}`}>
                 {c.name ?? <ShortId value={c.id} kind="hash" size="row" />}
               </AppLink>
               <span className="text-text-dim font-normal">
@@ -266,9 +271,7 @@ export function identityFacts({
       return [
         ownerFact(
           protocol,
-          sameKey
-            ? ' · owner and manager are the same key'
-            : ' · owner and manager are different keys'
+          sameKey ? 'owner and manager are the same key' : 'owner and manager are different keys'
         ),
         expiryFact(term, now),
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),
@@ -299,7 +302,7 @@ export function identityFacts({
           label: '.bit account',
           size: 'body',
           value: d.linkedAccount ? (
-            <AppLink href={`/identities/dotbit/${d.linkedAccount.id}`}>
+            <AppLink look="key" href={`/identities/dotbit/${d.linkedAccount.id}`}>
               {d.linkedAccount.name ?? d.linkedAccount.id}
             </AppLink>
           ) : (
@@ -417,8 +420,9 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(Number(d.registeredAt) * 1000)}</NoBreak>
           </B>
           {renewals ? ` and renewed ${times(renewals)}` : ''}
+          {/* R8: that it is no longer a live account is the page's lede, said once */}
           {!isLive ? (
-            '; it is no longer a live account. '
+            '. '
           ) : term.kind === 'term' ? (
             <>, {termClause(now >= term.expiresAt ? '' : 'it is ')}. </>
           ) : (
@@ -440,8 +444,7 @@ export function IdentitySummary({
       break;
     }
     case 'bit_cell': {
-      const d = protocol.versions.at(-1)!.decoded,
-        mint = protocol.versions[0].cell;
+      const mint = protocol.versions[0].cell;
       const owners = ownerRun(
         protocol.versions.map((v) => v.cell),
         (c) => c.ownerLockHash
@@ -456,9 +459,10 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
           </B>{' '}
           into <B>{wallet}</B>
+          {/* R8: that the cell is no longer live, or outlives its account, is the page's lede */}
           {unitNode(
             !isLive
-              ? '; the cell is no longer live. '
+              ? '. '
               : owners.changes === 0
                 ? ' that still holds it. '
                 : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `
@@ -466,12 +470,7 @@ export function IdentitySummary({
           {term.kind === 'term' && (
             <>
               {now >= term.expiresAt ? (
-                <>
-                  {termClause('', "The name's")}
-                  {d.linkedAccount && !d.linkedAccount.isLive
-                    ? '; the .bit account is no longer live, but this cell remains.'
-                    : '.'}
-                </>
+                <>{termClause('', "The name's")}.</>
               ) : (
                 <>It is {termClause('')}.</>
               )}
@@ -518,7 +517,7 @@ export function IdentitySummary({
             </>
           )}
           {names.length > 0 && <> It names {listJoin(names)}.</>}
-          {isLive ? ' It has no expiry date.' : ' It is no longer live.'}
+          {/* R8: whether it is live, and that it has no expiry, is the page's lede */}
         </>
       );
       break;

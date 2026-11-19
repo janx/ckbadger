@@ -129,7 +129,9 @@ it('shows inactive identity state without manufacturing a live owner', async () 
   );
   render(<Page collectionId="dotbit" />);
   const region = await screen.findByRole('region', { name: 'Collection items' });
-  expect(await within(region).findByText(/Inactive/)).toBeInTheDocument();
+  // re-pinned on purpose (lane p-assets): the list says "inactive" under a name no longer live
+  // (each row said "<standard> · Live" or "· Inactive")
+  expect(await within(region).findByText('inactive')).toBeInTheDocument();
   expect(within(region).getByText('No live owner')).toBeInTheDocument();
 });
 it('keeps holders visible independently of the records tabs and handles empty pages', async () => {
@@ -212,13 +214,14 @@ it('names each identity owner by address, a .cell owner by its prefix when unres
   // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters
   const alice = await within(region).findByRole('link', { name: 'ckb1…rofalice' });
   expect(alice).toHaveAttribute('href', '/mainnet/address/ckb1qzownerofalice');
-  // A named prefix with no indexed lock is shown as exactly that, never "No live owner".
-  const bob = within(region).getByText('bob.cell').closest('article')!;
+  // A named prefix with no indexed lock is shown as exactly that, never "No live owner". (Re-pinned
+  // on purpose, lane p-assets: an item is a table row now, it was an article.)
+  const bob = within(region).getByText('bob.cell').closest('tr')!;
   expect(bob).toHaveTextContent('0x' + '57'.repeat(20));
   expect(bob).toHaveTextContent('named owner prefix · no indexed lock');
   expect(bob).not.toHaveTextContent('No live owner');
   // A lock hash whose script is not indexed is not dressed up as an address link.
-  const carol = within(region).getByText('carol.bit').closest('article')!;
+  const carol = within(region).getByText('carol.bit').closest('tr')!;
   expect(within(carol).queryByRole('link', { name: /0x4646/ })).not.toBeInTheDocument();
   expect(carol).toHaveTextContent('address not indexed');
 });
@@ -285,4 +288,15 @@ it('counts PDS identities in the singular for one (visual pass)', async () => {
   const pds = await screen.findByRole('region', { name: 'PDS distribution' });
   expect(await within(pds).findByText('1 identity')).toBeInTheDocument();
   expect(pds).not.toHaveTextContent('1 identities');
+});
+
+// Readability R7 (lane p-assets): the history stays in tier 1, after the collection's names (its
+// first list), 160 px under one sentence its points give; it stood before the names.
+it('draws its history after the names it lists, under one sentence (R7)', async () => {
+  render(<Page collectionId="dotbit" />);
+  const names = await screen.findByRole('heading', { name: 'Identities 1 live' });
+  const history = await screen.findByRole('region', { name: 'History' });
+  expect(document.querySelector('[data-tier="1"]')).toContainElement(history);
+  expect(names.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(await within(history).findByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
 });

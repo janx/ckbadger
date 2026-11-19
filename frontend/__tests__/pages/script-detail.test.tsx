@@ -513,20 +513,29 @@ describe('ScriptDetailPage', () => {
     }
   });
 
-  it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "… the hero with its
+  // history, …"): the history left the hero for a History section of its own after the hero's
+  // figures, in tier 1 (it was the hero's picture, under the figure, with no heading).
+  it('follows the board order: the hero, its figures, the history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
     expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
     const tier1 = document.querySelector('[data-tier="1"]')!;
     const tier2 = document.querySelector('[data-tier="2"]')!;
-    // Hierarchy v3 (R13): the history is the hero's picture, under the figure, with no heading.
-    expect(within(tier1 as HTMLElement).queryByRole('heading', { name: 'History' })).toBeNull();
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(tier1).toContainElement(history);
+    expect(within(history).getByRole('heading', { name: 'History' })).toBeInTheDocument();
+    expect(await within(history).findByTestId('script-history')).toBeInTheDocument();
     expect(
-      await within(screen.getByRole('region', { name: 'SECP256K1_BLAKE160' })).findByTestId(
+      within(screen.getByRole('region', { name: 'SECP256K1_BLAKE160' })).queryByTestId(
         'script-history'
       )
-    ).toBeInTheDocument();
+    ).toBeNull();
+    expect(
+      screen.getByLabelText('Script figures').compareDocumentPosition(history) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     // Phase 5 (A18, A19): the versions run on their count, the cells on the live count.
     expect(
       within(tier1 as HTMLElement).getByRole('heading', { name: 'Versions 2' })

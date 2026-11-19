@@ -84,10 +84,13 @@ describe('FiberChannelsPage', () => {
     // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
     // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
-    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
-      'href',
-      '#evidence'
-    );
+    // Re-pinned on purpose (lane P4, the link-look gate): the way down is a way onward, its look
+    // the link owner's (celadon, its "↓" written by the component and hidden from the name); it was
+    // a raw anchor with a typed arrow and a hand-written hover
+    const how = within(lede).getByRole('link', { name: 'How it works' });
+    expect(how).toHaveAttribute('href', '#evidence');
+    expect(how).toHaveClass('text-jade');
+    expect(how.textContent).toBe('How it works\u00a0↓');
     // no jade uppercase eyebrow in tier 1 (FF-F6)
     expect(screen.queryByText(/Payment channels · on-chain view/)).toBeNull();
     // the display figure: open now, in Fiber's jade, its unit quieter, its locked CKB beside it
@@ -121,7 +124,8 @@ describe('FiberChannelsPage', () => {
       '1m 40s · 2 of 2 closed within an hour',
     ]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
-    // R11: the figure is tier 1's only jade text
+    // R11: the figure is tier 1's only jade text. Re-pinned on purpose (lane P4): but for the way
+    // onward, whose celadon is its look's (components/ui/link.tsx), not the page's colour
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     const jade = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
       el
@@ -129,11 +133,16 @@ describe('FiberChannelsPage', () => {
         .split(/\s+/)
         .some((c) => /^text-jade(\/\d+)?$/.test(c))
     );
-    expect(jade).toEqual([figure]);
+    expect(jade).toEqual([how, figure]);
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 
-  it('moves the concept and the graph explainer to tier 2, every sentence kept (F1)', async () => {
+  // Re-pinned on purpose (lane P4, the plan's P4 sentence: "keys that a tier-1 figure needs come
+  // up from tier 2 as a legend, not as prose"; renamed, it said "moves the concept and the graph
+  // explainer to tier 2, every sentence kept"): the graph's explainer is its key in tier 1 now,
+  // and tier 2 keeps the concept and what a party is, in one column (it was two, the explainer's
+  // "How to read the graph" the second)
+  it('keeps the concept in tier 2; how to read the graph is its key in tier 1 (P4)', async () => {
     server.use(
       http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
       http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
@@ -149,20 +158,20 @@ describe('FiberChannelsPage', () => {
       'Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one shared cell and pay each other off chain as often as they like. Only opening and closing a channel touch the chain, so that is what CKBadger sees.'
     );
     expect(
-      await within(tier2).findByRole('heading', { name: 'How to read the graph' })
+      await within(tier2).findByText(/Parties are on-chain addresses, not Fiber node ids/)
     ).toBeInTheDocument();
-    expect(tier2).toHaveTextContent(/Each circle is a party: the address that funded/);
-    expect(tier2).toHaveTextContent(/Parties are on-chain addresses, not Fiber node ids/);
-    // two balanced columns: what the chain sees (with what a party is) | how to read the graph
+    expect(within(tier2).queryByRole('heading', { name: 'How to read the graph' })).toBeNull();
+    expect(tier2).not.toHaveTextContent(/Each circle is a party/);
     const columns = tier2.querySelector(':scope > div')!.children;
-    expect(columns).toHaveLength(2);
+    expect(columns).toHaveLength(1);
     expect(columns[0]).toHaveTextContent(/Fiber is a payment-channel network/);
     expect(columns[0]).toHaveTextContent(/Parties are on-chain addresses/);
-    expect(columns[1]).toHaveTextContent(/Each circle is a party: the address/);
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     expect(tier1).not.toHaveTextContent(/Fiber is a payment-channel network/);
     expect(tier1).not.toHaveTextContent(/Parties are on-chain addresses/);
-    expect(tier1).not.toHaveTextContent(/Each circle is a party: the address/);
+    expect(within(tier1).getByRole('list', { name: 'Graph key' })).toHaveTextContent(
+      /party · size and number: its channels/
+    );
   });
 
   it('defaults the table to Open, sorted by capacity, with state counts and the board columns (FF-F4, FF-F6, N5)', async () => {
@@ -343,38 +352,51 @@ describe('Fiber channel phone row (board L8)', () => {
 
   // Readability F3-e: every column budgeted from the widest value it holds, at 0.6 em a glyph (the
   // row's 14 px, a meta line's and the unit's 12) and the 16 px gap after every column but the
-  // last. The parties are the flexible column: one party whole at its minimum (a lock hash at the
-  // row size, the wider form), the pair on one line where the container gives more.
+  // last. Re-pinned on purpose (lane P4, review fiber-channels: "every amount .00000000 CKB, some
+  // 380 px empty between Parties and Capacity"): the capacity is a list column's figure, the
+  // summary form (R5; it was every decimal, 213 px); the parties hold the pair on one line, two
+  // lock hashes at the row size and the arrow between them, so the pair never wraps; and the
+  // flexible column is the last, the lifetime, read from its left, so the room the container gives
+  // beyond the sum stands at the row's end, not between the parties and their capacity (it was
+  // the parties', one party at its minimum).
   it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
       // the channel id at the row size, or the widest state under it ("all" lists the state)
       ceil(Math.max(at('0x01010101…010101', 14), at('force-closed · not settled', 12)) + 16),
-      // one party, its lock hash at the row size
-      ceil(at('0xbbbbbbbb…bbbbbb', 14) + 16),
-      // a capacity under a billion CKB, every decimal, and its unit
-      ceil(at('999,999,999.99999999', 14) + at(' CKB', 12) + 16),
+      // the pair on one line: two lock hashes at the row size, "↔ " before the second, and the
+      // 6 px between the two parties
+      ceil(at('0xbbbbbbbb…bbbbbb↔ 0xbbbbbbbb…bbbbbb', 14) + 6 + 16),
+      // a capacity under a billion CKB in the summary form, and its unit
+      ceil(at('999,999,999', 14) + at(' CKB', 12) + 16),
       // the date it opened
       ceil(at('2023-11-15', 14) + 16),
       // four digits of days and the hours; the last column
       ceil(at('9999d 23h', 14)),
     ];
-    expect(budgets).toEqual([204, 159, 213, 100, 76]);
+    expect(budgets).toEqual([204, 325, 138, 100, 76]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(752);
+    expect(sum).toBe(843);
     serve();
     const { unmount } = render(<FiberChannelsPage />);
     const table = await screen.findByRole('table', { name: 'Open channels' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
-    expect(cols[1].width).toBe('auto');
+    expect(cols.map((c) => c.width)).toEqual(['204px', '325px', '138px', '100px', 'auto']);
+    // the lifetime reads from its left (not a numeric column), so the room stands after it
+    const lifetime = within(table).getByText('3m 20s').closest('td')!;
+    expect(lifetime).not.toHaveClass('text-right');
+    // the capacity in the summary form, its unit after it
+    expect(
+      Array.from(table.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
+    ).toEqual(['3,000 CKB']);
     expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
     unmount();
     for (const [width, form] of [
       [1232, 'table'],
-      [752, 'table'],
-      [751, 'rows'],
+      [843, 'table'],
+      [842, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

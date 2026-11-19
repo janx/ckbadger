@@ -53,6 +53,35 @@ it('tells an item’s life from its cell versions', () => {
   expect(() => itemLifeSentence([])).toThrow('at least one cell version');
 });
 
+// Readability R8 (lane p-assets): as an object page's lede the sentence says what it is and
+// whether it is live, and names no figure the metrics row states (C7): no count of moves, no span
+// of time, no block.
+it('tells an item’s life as a lede: its path and its state, no figure', () => {
+  const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
+  const moved = v({ timestamp: '30000', lockName: 'Nervape Shadow Lock', isLive: true });
+  const third = v({ timestamp: String(8 * 86_400_000), lockName: 'JoyID', isLive: true });
+  const lede = (versions: ItemCellVersion[]) =>
+    itemLifeSentence(versions, 'Minted', undefined, true);
+  expect(lede([{ ...moved, timestamp: '0' }])).toBe(
+    'Minted to a Nervape Shadow Lock, where it sits now.'
+  );
+  expect(lede([minted, moved])).toBe(
+    'Minted to a secp256k1 lock, then moved to a Nervape Shadow Lock, where it sits now.'
+  );
+  expect(lede([minted, { ...moved, isLive: false }, third])).toBe(
+    'Minted to a secp256k1 lock, then moved; the last move put it under a JoyID lock, where it sits now.'
+  );
+  expect(lede([minted, { ...moved, isLive: false, consumedAtBlock: 12_345_678 }])).toBe(
+    'Minted to a secp256k1 lock, then moved; its last cell was consumed, so it is gone.'
+  );
+  for (const versions of [
+    [minted, moved],
+    [minted, { ...moved, isLive: false }, third],
+    [minted, { ...moved, isLive: false, consumedAtBlock: 12_345_678 }],
+  ])
+    expect(lede(versions)).not.toMatch(/moved \d|later|block|12,345,678/);
+});
+
 it('keeps how long ago an item was minted and last moved for the sentence’s hover', () => {
   const now = 10 * 86_400_000;
   const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
@@ -110,7 +139,10 @@ it('pairs every composition tier with one sentence and keeps Live one style', ()
   const { rerender } = render(<LiveBadge live gone="Melted" />);
   expect(screen.getByText('Live')).toHaveClass('text-jade');
   rerender(<LiveBadge live={false} gone="Melted" />);
-  expect(screen.getByText('Melted')).toHaveClass('text-text-dim');
+  // Re-pinned on purpose (readability R8, lane p-assets): a gone object's state reads in the
+  // reading ink on a border that shows (it was the quiet ink on a border near the ground)
+  expect(screen.getByText('Melted')).toHaveClass('text-text', 'border-text-dim');
+  expect(screen.getByText('Melted').className).not.toMatch(/text-text-dim|border-base-border/);
 });
 
 it('lists readable traits only and reports hover', () => {

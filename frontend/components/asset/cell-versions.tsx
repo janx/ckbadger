@@ -7,7 +7,7 @@ import { Hash } from '@/components/ui/hash';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { getScriptDetailHref } from '@/lib/detail-routes';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { cn } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 export interface CellVersionsProps {
@@ -119,10 +119,10 @@ export function CellVersions({
               )}
             >
               <div className="min-w-0">
-                <AppLink className="text-text-bright" href={`/cell/${v.txHash}-${v.outputIndex}`}>
+                <AppLink look="key" href={`/cell/${v.txHash}-${v.outputIndex}`}>
                   {label(v, i)}
                 </AppLink>
-                <AppLink href={`/blocks/${v.blockNumber}`} className="text-text-dim mt-1 block">
+                <AppLink look="inline" href={`/blocks/${v.blockNumber}`} className="mt-1 block">
                   {formatBlockNumber(v.blockNumber)}
                 </AppLink>
               </div>
@@ -158,14 +158,14 @@ export function CellVersions({
                 <div className="text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
                   <span>
                     {lockAddressLabel}{' '}
-                    <AppLink href={`/address/${v.ownerAddress}`}>
+                    <AppLink look="inline" href={`/address/${v.ownerAddress}`}>
                       <Hash hash={v.ownerAddress} kind="address" size="row" className="text-meta" />
                     </AppLink>
                   </span>
-                  <AppLink href={getScriptDetailHref({ ...v.lock, scriptKind: 'lock' })}>
-                    {v.lockName ?? 'Lock'}{' '}
-                    <Hash hash={v.lock.codeHash} size="row" className="text-meta" />
-                  </AppLink>
+                  {/* the owner's lock by the one decision (lane B4; lane p-assets: it wrote the
+                      API's name, "Lock" where it had none, and the code hash): nothing for the
+                      default lock */}
+                  {cellOwnerLockPart(v)}
                 </div>
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
@@ -181,10 +181,11 @@ export function CellVersions({
                 </div>
                 {v.consumedByTx && (
                   <AppLink
+                    look="onward"
                     href={`/tx/${v.consumedByTx}`}
-                    className="text-text-dim text-meta mt-1 block"
+                    className="text-meta mt-1 block"
                   >
-                    Consumed in transaction →
+                    Consumed in transaction
                   </AppLink>
                 )}
               </div>

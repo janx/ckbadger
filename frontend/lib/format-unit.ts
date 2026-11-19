@@ -7,7 +7,7 @@
  * grouped by `formatCount`, exact values by their own formatters; this module only joins and
  * spells.
  */
-import { MINUS, formatTick, stepDecimals } from '@/lib/chart-ticks';
+import { MINUS, exactTickDigits, formatTick, stepDecimals } from '@/lib/chart-ticks';
 import { formatPercent } from '@/lib/ckb-decimal';
 
 /**
@@ -60,17 +60,18 @@ const PREFIXED_UNITS: ReadonlySet<string> = new Set(['P', 'PH/s']);
 
 /**
  * The y-axis number for a chart in `unit`: one prefix per value (CH-12), so a unit that is already
- * prefixed reads `6,000 P`, never `6k P`; every other unit takes the axis' k / M / B.
+ * prefixed reads `6,000 P`, never `6k P`; every other unit takes the axis' k / M / B. Either way the
+ * label is exactly its tick's value (the lead's ruling of 2026-11-19): grouped, at least the
+ * decimals its step needs, every digit it has.
  */
 export function chartAxisFormat(unit: string): (value: number, step: number) => string {
   if (!PREFIXED_UNITS.has(unit)) return formatTick;
   return (value, step) => {
-    const decimals = stepDecimals(step);
-    const text = Math.abs(value).toLocaleString('en-US', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    });
-    return value < 0 && Number(text.replace(/,/g, '')) !== 0 ? `${MINUS}${text}` : text;
+    const [whole, fraction] = exactTickDigits(value);
+    const decimals = Math.max(stepDecimals(step), fraction.length);
+    const grouped = BigInt(whole).toLocaleString('en-US');
+    const text = decimals ? `${grouped}.${fraction.padEnd(decimals, '0')}` : grouped;
+    return value < 0 ? `${MINUS}${text}` : text;
   };
 }
 

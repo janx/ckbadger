@@ -128,6 +128,13 @@ The 640–767 band has one content width to design for. Below 640 the container 
   dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a
   line of uncles, joined by one strap that runs down through their stones, gilt through the
   proposal window). Never scaled, never folded, a plate never narrower than 99 px.
+- **Fork tree** (the fork page, `lib/fork-tree.ts`): heights left to right with 110 px tiles
+  wherever the measured box holds every height (four heights from 548 px); otherwise it stands on
+  end as a column, one block a row in order of height, each branch in a lane of its own (today's
+  chain, the branch that lost, a branch adopted then dropped since: 56 px lanes 8 px apart), and
+  every tile's time and miner beside it on its row, from 8 px right of the last lane (132 px with
+  two lanes: 222 px of words at 390, 192 at 360). Nothing folds: a fold must never take the branch.
+  Lines run only in the lanes and the gaps between them, so no line crosses a word.
 - **Lists and tables**: a table is shown when the measured container holds every column's minimum
   width; otherwise each row is a designed phone row of two or three lines that keeps every column
   (no generic label/value dump). Twenty rows per page below `md`. A column's minimum is budgeted

@@ -280,8 +280,8 @@ export function ObjectGeneticsView({
                 {collection.genetics.eligibleItems.toLocaleString('en-US')}
               </span>
               {collectionHref && (
-                <AppLink href={collectionHref} className="text-small">
-                  Open the collection →
+                <AppLink look="onward" href={collectionHref} className="text-small">
+                  Open the collection
                 </AppLink>
               )}
             </div>
@@ -859,6 +859,7 @@ function PatternReading({
                         <>
                           {' '}
                           <AppLink
+                            look="inline"
                             href={`/script/${step.decoderBinaryHash}`}
                             title={step.decoderBinaryHash}
                           >
@@ -869,6 +870,7 @@ function PatternReading({
                         <>
                           {', binary '}
                           <AppLink
+                            look="inline"
                             href={`/script/${step.decoderBinaryHash}`}
                             title={step.decoderBinaryHash}
                           >
@@ -995,7 +997,7 @@ function PatternReading({
           <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
             <span>
               one object, read this way ·{' '}
-              <AppLink href={sample.href} title={sample.id}>
+              <AppLink look="inline" href={sample.href} title={sample.id}>
                 <ShortId value={sample.id} kind="hash" size="row" />
               </AppLink>
             </span>

@@ -105,6 +105,16 @@ it('keeps recycled identity history while showing no live capacity', async () =>
   expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
+  // Readability R8 (lane p-assets): the head says the state in words, as the page's lede; the
+  // standard's sentence ("The name and everything about it live in one CKB cell.") contradicted it
+  const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+  const lede = header.querySelector('[data-role="lede"]')!;
+  expect(lede).toHaveTextContent(
+    'A .bit name that is no longer a live account: no CKB cell holds it now.'
+  );
+  expect(header).not.toHaveTextContent('live in one CKB cell');
+  // said once: tier 2's "in words" no longer says it again
+  expect(screen.getByTestId('identity-summary')).not.toHaveTextContent('no longer a live account');
 });
 it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
   query = 'activity_cursor=100:0';

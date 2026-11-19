@@ -132,7 +132,12 @@ async function page() {
   return view;
 }
 
-it('opens with one hero section — name, status, id and the composition sentence as its lede — then its readable traits; its life story is in tier 2 (OB-6, OB-16, F4, R13)', async () => {
+// Re-pinned on purpose (readability R8, lane p-assets; renamed, it was "opens with one hero
+// section — name, status, id and the composition sentence as its lede — then its readable traits;
+// its life story is in tier 2 (OB-6, OB-16, F4, R13)"): the lede says what it is and whether it is
+// live, its life without the figures the metrics state (C7), then the composition sentence; "This
+// object, in words" keeps the collection sentence.
+it('opens with one hero section — name, status, id, its life and the composition sentence as its lede — then its readable traits (R8, OB-6, OB-16, F4, R13)', async () => {
   const { container } = await page();
   const header = screen.getByRole('banner');
   const hero = within(header).getByRole('region', { name: 'Nervape 3x' });
@@ -156,20 +161,22 @@ it('opens with one hero section — name, status, id and the composition sentenc
   ]);
   expect(within(traits).getByText('Nature Green')).toBeInTheDocument();
   expect(within(traits).getByText('empty')).toHaveClass('text-text-dim');
-  // the life summary and the collection sentence: tier 2, every word kept
+  // its life is the lede, before the composition; the collection sentence stays in tier 2
   const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-  const story = await within(tier2).findByText(
+  const story = await within(hero).findByText(
     // Lane P: the path only; the dates are the metrics, the ages the sentence's hover.
     /^Minted to a secp256k1 lock, then moved/
   );
   expect(story).toHaveTextContent(
-    'then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+    /^Minted to a secp256k1 lock, then moved to a Nervape Shadow Lock, where it sits now\.$/
   );
   expect(story).toHaveAttribute(
     'title',
     expect.stringMatching(/^minted .+ ago · last moved .+ ago$/)
   );
+  expect(story.compareDocumentPosition(lede) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(tier2).not.toHaveTextContent('Minted to a secp256k1 lock');
   expect(tier2).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
   expect(tier1).not.toHaveTextContent(/^Minted \d/);
   expect(tier1).not.toHaveTextContent('each held by a different address');
@@ -213,7 +220,7 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     'Among Nervape 3x · its variant in each gene, and how common it is among the 90'
   );
   expect(container.querySelector('[data-overlay="me"]')!.textContent).toContain('this one');
-  expect(within(among).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
+  expect(within(among).getByRole('link', { name: 'Open the collection' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/clusters/${NERVAPE3X_CLUSTER}`)
   );
@@ -289,7 +296,7 @@ it('places it in its collection with the composition count and cluster cell (OB-
   const heading = within(coll).getByRole('heading', { name: 'Collection Nervape 3x' });
   expectPrompt(heading, 'Collection', 'Nervape 3x');
   expect(promptNote(heading)).toContainElement(
-    within(coll).getByRole('link', { name: 'Open the collection →' })
+    within(coll).getByRole('link', { name: 'Open the collection' })
   );
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');

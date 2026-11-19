@@ -52,11 +52,13 @@ export default function FiberChannelDetailPage() {
             channel.data ? [titleHash(channel.data.channelId), 'Fiber channel'] : ['Fiber channel']
           }
         />
-        <nav aria-label="Breadcrumb" className="text-text-dim text-small">
-          <Link href="/fiber/channels" className="hover:text-text">
+        {/* The way back up is a link inside the breadcrumb's line (as the chart pages' is): it
+            reads in the line's ink, underlined, not quiet (R3: a link reads). */}
+        <nav aria-label="Breadcrumb" className="text-small">
+          <Link href="/fiber/channels" look="inline">
             Fiber
           </Link>{' '}
-          <span className="text-text-ghost">/</span> channels
+          <span className="text-text-ghost">/</span> <span className="text-text-dim">channels</span>
         </nav>
         {/* Hierarchy v3: once loaded, the board's hero section holds the title, state and id. */}
         {!channel.data && (
@@ -64,7 +66,10 @@ export default function FiberChannelDetailPage() {
             <h1 className="text-text-bright text-entity max-md:text-index mt-2.5 font-medium">
               Fiber channel
             </h1>
-            <p className="text-text-dim text-small max-w-measure mt-1.5 break-all">{channelId}</p>
+            {/* The id the address asked for, a value in the reading ink (R3), wrapped, never
+                scrolled; the head's designed lines (HeadId) take it once the API has answered with
+                a channel, since a malformed address is not yet known to be a hex id here. */}
+            <p className="text-text text-small max-w-measure mt-1.5 break-all">{channelId}</p>
           </>
         )}
         {isAwaited(channel) && (
