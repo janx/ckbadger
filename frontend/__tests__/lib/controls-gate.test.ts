@@ -199,12 +199,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
   },
-  'components/asset/genetics.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 2 },
-    reason:
-      'the DNA as hex and every gene one row each, inner disclosures with no rule (a form the component lacks)',
-  },
   'components/asset/item-evidence.tsx': {
     lane: 'p-assets',
     sites: { fold: 1 },
@@ -273,7 +267,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // data" became SectionDisclosure, the one place a `<details>` is written)
 // → 21 (the disclosure sweep: asset-history's supply changes are SectionDisclosure's section form)
 // → 19 (the description and the issuer info as stored are SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 19;
+// → 17 (the DNA as hex and every gene one row each are SectionDisclosure's inner form)
+const TOLERATED_TOTAL = 17;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
