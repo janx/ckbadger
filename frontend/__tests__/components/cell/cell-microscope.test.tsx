@@ -9,6 +9,7 @@ import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
+import { color, inkOnFill, type PaletteKey } from '@/lib/palette';
 import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
@@ -486,6 +487,25 @@ describe('cell microscope field detail rail (old issue B)', () => {
     expectHead('lock · Multisig', '2 B occupied');
     fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
     expectHead('data', '4 B occupied');
+  });
+
+  // Lane P1 (the F1 follow-up in the page-lane notes): an ELF region's words stood in the page
+  // ground's ink (`text-base-bg`) on the region's tone at 35 %, 2.04 : 1 by night and 1.72 by day.
+  // They take the fill-ink rule's ink for that fill (`inkOnFill`), which reads at text grade.
+  it('writes an ELF region’s words in the ink its fill reads in (P1)', () => {
+    render(<CellMicroscope cell={elfCell} />);
+    const map = screen.getByRole('group', { name: 'ELF binary map' });
+    const labelled = Array.from(map.querySelectorAll<HTMLElement>('[data-region]')).filter(
+      (region) => region.textContent !== ''
+    );
+    expect(labelled.length).toBeGreaterThan(0);
+    for (const region of labelled) {
+      expect(region).not.toHaveClass('text-base-bg');
+      const key = /^var\(--c-(.+)\)$/.exec(region.style.borderTopColor)![1] as PaletteKey;
+      const { ink, contrast } = inkOnFill('dark', key, 0.35);
+      expect(region.style.color, region.textContent!).toBe(color(ink));
+      expect(contrast, region.textContent!).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('lets an ELF region’s range wrap under its name', () => {
