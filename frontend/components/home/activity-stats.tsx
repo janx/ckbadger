@@ -48,11 +48,8 @@ export function ActivityStats() {
           command="activity"
           args="--24 h"
           note={
-            <Link
-              href="/charts"
-              className="text-interactive hover:text-jade text-small transition-colors"
-            >
-              charts →
+            <Link href="/charts" look="onward" className="text-small">
+              charts
             </Link>
           }
         />

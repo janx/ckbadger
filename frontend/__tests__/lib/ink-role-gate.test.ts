@@ -170,11 +170,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the CKBytes formula under the figure (a note under a figure, or a reading: P1 decides)',
   },
-  'components/home/ranked-bars.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: "the ranked list's title link in the quiet ink",
-  },
+  // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
+  // link is its key, the key look's ink)
   'components/transaction/script-group-matrix.tsx': {
     family: 'chain',
     // link 1 → 0 (lane P1): a group only attached names its script in the reading ink

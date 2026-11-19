@@ -120,6 +120,12 @@ interface ChartFigureProps {
   subtitle: string;
   /** The headline value, right-aligned in the caption. */
   headline?: string;
+  /**
+   * The headline's unit, beside it in the quiet ink (the readability plan's P3: "9.14" stood with its
+   * unit 200 px away in the subtitle and read against the status strip's "7.91 s"); a readout of the
+   * same series takes it too.
+   */
+  unit?: string;
   /** A control beside the headline, e.g. a range toggle. */
   controls?: ReactNode;
   body: ChartBody;
@@ -137,6 +143,7 @@ export function ChartFigure({
   href,
   subtitle,
   headline,
+  unit,
   controls,
   body,
   className,
@@ -153,10 +160,7 @@ export function ChartFigure({
       <figcaption className="flex items-end justify-between gap-2">
         <span className="flex min-w-0 flex-col">
           {href ? (
-            <Link
-              href={href}
-              className="text-text-bright hover:text-jade text-body block w-fit max-w-full truncate transition-colors"
-            >
+            <Link href={href} look="key" className="text-body block w-fit max-w-full truncate">
               {title}
             </Link>
           ) : (
@@ -176,6 +180,7 @@ export function ChartFigure({
               )}
             >
               {readout ? readout.value : headline}
+              {unit && <span className="text-text-dim text-small font-normal"> {unit}</span>}
             </span>
           )}
           {controls}

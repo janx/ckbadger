@@ -191,31 +191,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 1, ink: 1 },
     reason: '1 without a look; inks by hand (text-text)',
   },
-  'components/home/activity-feed.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-interactive, hover:text-jade)',
-  },
-  'components/home/activity-stats.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-interactive, hover:text-jade)',
-  },
-  'components/home/ckbytes-section.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-interactive)',
-  },
-  'components/home/mini-chart.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
-  },
-  'components/home/ranked-bars.tsx': {
-    lane: 'p-lists',
-    sites: { look: 2, ink: 1 },
-    reason: '2 without a look; inks by hand (text-text-dim, hover:text-jade)',
-  },
+  // 'components/home/activity-feed.tsx' left the list (lane P3: look 1, ink 1 → 0; "view all" a way onward)
+  // 'components/home/activity-stats.tsx' left the list (lane P3: look 1, ink 1 → 0; "charts" a way onward)
+  // 'components/home/ckbytes-section.tsx' left the list (lane P3: look 3, ink 2 → 0; "supply" the heading's key, its block inline, "DAO details" a way onward)
+  // 'components/home/mini-chart.tsx' left the list (lane P3: look 1, ink 1 → 0; a card's title its key)
+  // 'components/home/ranked-bars.tsx' left the list (lane P3: look 2, ink 1 → 0; the title its key, a row one block)
   'components/not-found-page.tsx': {
     lane: 'p-lists',
     sites: { look: 5, ink: 5 },
@@ -305,8 +285,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
 // block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
-// → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4)
-const TOLERATED_TOTAL = 105;
+// → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
+// (lane P3: the home page's five files, 14)
+const TOLERATED_TOTAL = 91;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

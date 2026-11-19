@@ -159,8 +159,11 @@ function BlockTimeFigure() {
       testId="home-block-time"
       title="Block time"
       href="/charts/average-block-time"
-      subtitle="daily average, s"
+      // its window named, the day the headline is the average of (P3: it read against the status
+      // strip's recent blocks)
+      subtitle={v ? `average of ${v.last.label}` : 'daily average'}
       headline={v?.lastExact}
+      unit="s"
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
@@ -227,8 +230,9 @@ function HashRateFigure() {
       testId="home-hash-rate"
       title="Hash rate"
       href="/charts/hash-rate"
-      subtitle={v ? `daily, ${v.unit}` : 'daily'}
+      subtitle={v ? `average of ${v.last.label}` : 'daily average'}
       headline={v ? v.lastExact : undefined}
+      unit={v?.unit}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
@@ -271,7 +275,7 @@ function UncleRateFigure() {
       testId="home-uncle-rate"
       title="Uncle rate"
       href="/charts/uncle-rate"
-      subtitle={v ? `daily, NC-Max target ${v.targetExact}%` : 'daily'}
+      subtitle={v ? `on ${v.last.label} · target ${v.targetExact}%` : 'daily'}
       headline={v ? `${v.lastExact}%` : undefined}
       body={bodyOf(d, (view) => (
         <LineChart
@@ -287,10 +291,10 @@ function UncleRateFigure() {
 
 type TxRange = '24h' | '14d';
 
-// The range names the span, so the sub-label names only the bucket.
+// The range names the span, so the sub-label names the headline's window: its last full bucket.
 const TX_RANGES: Record<TxRange, { span: string; subtitle: string; series: string }> = {
-  '24h': { span: '24 h', subtitle: 'per hour', series: 'hourlyData' },
-  '14d': { span: '14 d', subtitle: 'per day', series: 'dailyData' },
+  '24h': { span: '24 h', subtitle: 'in the last full hour', series: 'hourlyData' },
+  '14d': { span: '14 d', subtitle: 'on the last full day', series: 'dailyData' },
 };
 /** The range's spans, in the one spelling of a span (the controls board's `24 h · 14 d`). */
 const TX_SPANS = (Object.keys(TX_RANGES) as TxRange[]).map((key) => ({

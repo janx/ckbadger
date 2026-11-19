@@ -38,7 +38,8 @@ describe('ActivityStats', () => {
     expect(command).toHaveTextContent(/^activity$/);
     expect(args).toHaveTextContent(/^--24 h$/);
     expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
-    const link = screen.getByRole('link', { name: 'charts →' });
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    const link = screen.getByRole('link', { name: /^charts/ });
     expect(link).toHaveAttribute('href', '/mainnet/charts');
     const note = link.closest('[data-prompt-note]') as HTMLElement;
     expect(note).toHaveClass('ml-auto');

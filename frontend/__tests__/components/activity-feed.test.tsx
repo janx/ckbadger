@@ -1,3 +1,5 @@
+// Re-pinned on purpose (lists lane P3, the link-look gate): "view all" is a way onward, its arrow
+// the look's (it typed " →" in a span of its own), so the link is found by its words.
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
@@ -96,12 +98,14 @@ describe('ActivityFeed', () => {
     expect(tabs.querySelector('.section-mark')).toBeNull();
     expect(transactions).toHaveClass('whitespace-nowrap');
     // re-pinned (A4 Chrome sweep): the phrase may break; only its arrow is held to its last word
-    const viewAll = screen.getByRole('link', { name: 'view all →' });
+    const viewAll = screen.getByRole('link', { name: /^view all/ });
     expect(viewAll).not.toHaveClass('whitespace-nowrap');
     expect(viewAll.lastElementChild).toHaveClass('whitespace-nowrap');
-    expect(viewAll.lastElementChild!.textContent).toBe(' →');
+    // re-pinned on purpose (lists lane P3): the onward look writes the arrow, held to its last word
+    // by a no-break space (ONWARD_GLUE), aria-hidden
+    expect(viewAll.lastElementChild!.textContent).toBe('\u00a0→');
     expect(transactions).toHaveAttribute('aria-selected', 'false');
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/activities'
     );
@@ -122,7 +126,7 @@ describe('ActivityFeed', () => {
     expect(args).toHaveTextContent(/^--last 8$/);
     expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
     // the note: the view-all link, at the row's right end, outside the heading's name
-    const link = screen.getByRole('link', { name: 'view all →' });
+    const link = screen.getByRole('link', { name: /^view all/ });
     const note = link.closest('[data-prompt-note]') as HTMLElement;
     expect(note).toHaveClass('ml-auto');
     expect(note.parentElement).toBe(heading.parentElement);
@@ -143,7 +147,7 @@ describe('ActivityFeed', () => {
     expect(within(tabRow).queryByRole('link')).toBeNull();
     // the note follows the tab; the heading stays the feed's
     await user.click(screen.getByRole('tab', { name: 'Transactions' }));
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
@@ -421,7 +425,7 @@ describe('ActivityFeed', () => {
       'aria-selected',
       'true'
     );
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
