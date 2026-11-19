@@ -14371,6 +14371,251 @@ mod tests {
             assert_eq!(token_state(&store, &ext_type_hash()), expected);
         }
 
+        // ── The one claim rule: the first claim at or after the token's first
+        // block, in chain order, whatever path and batching wrote the blocks ──
+
+        /// A transaction claiming `max_supply` for the issued token with an
+        /// Omnilock supply-info cell, spending `spent` (`available` shannons):
+        /// output 0 the info cell, output 1 the change.
+        fn claim_tx(
+            hash: u8,
+            spent: CellInput,
+            available: u64,
+            max_supply: u128,
+        ) -> TransactionView {
+            let info_type = Script {
+                code_hash: format!("0x{}", hex::encode([0x55; 32])),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode([hash; 32])),
+            };
+            let info_type_hash = crate::parser::ScriptParser::compute_script_hash(&info_type);
+            let mut args = vec![0u8; 21];
+            args.push(0b0000_1000);
+            args.extend_from_slice(&info_type_hash);
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u128.to_le_bytes());
+            data.extend_from_slice(&max_supply.to_le_bytes());
+            data.extend_from_slice(&ext_type_hash());
+            const INFO_CAPACITY: u64 = 300_00000000;
+            let omnilock = Script {
+                code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(&args)),
+            };
+            d3_tx(
+                hash,
+                vec![spent],
+                vec![
+                    (
+                        output(INFO_CAPACITY, omnilock, Some(info_type)),
+                        format!("0x{}", hex::encode(&data)),
+                    ),
+                    (
+                        output(available - INFO_CAPACITY, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// The token's issuance, spending `spent` (`available` shannons):
+        /// output 0 the token cell, output 1 the change.
+        fn issue_tx(hash: u8, spent: CellInput, available: u64) -> TransactionView {
+            d3_tx(
+                hash,
+                vec![spent],
+                vec![
+                    (
+                        output(
+                            EXT_CELL_CAPACITY,
+                            lock_script(),
+                            Some(xudt_ext_type_script()),
+                        ),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(available - EXT_CELL_CAPACITY, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// Block `number` with its cellbase and `txs`.
+        fn claim_rule_block(number: u64, txs: Vec<TransactionView>) -> BlockResponseWithCycles {
+            let mut transactions = vec![cellbase_tx(
+                0xc0 + u8::try_from(number - 100).unwrap(),
+                500_00000000,
+            )];
+            transactions.extend(txs);
+            block(number, AR, transactions)
+        }
+
+        /// The token row of `blocks` written by bulk build, by live sync one
+        /// block a batch, and by live sync in one batch after the funding
+        /// block: byte-equal rows, the one returned.
+        async fn token_row_on_every_path(blocks: &[BlockResponseWithCycles]) -> TokenInfo {
+            let per_block_row =
+                assert_bulk_row_equals_live(blocks, &per_block(blocks), &ext_type_hash()).await;
+            let one_batch_row = assert_bulk_row_equals_live(
+                blocks,
+                &[blocks[..1].to_vec(), blocks[1..].to_vec()],
+                &ext_type_hash(),
+            )
+            .await;
+            assert_eq!(per_block_row, one_batch_row);
+            per_block_row
+        }
+
+        /// The lead's rule: a claim made before the token's first block is
+        /// not the token's (it names an id nothing carries yet). Claim in
+        /// block 101, issuance in 102, no claim again: no max supply, on every
+        /// path and batching.
+        #[tokio::test]
+        async fn a_claim_before_the_token_exists_is_not_the_tokens() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700)],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![issue_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - 300_00000000,
+                    )],
+                ),
+            ];
+            assert_eq!(token_row_on_every_path(&blocks).await.max_supply, None);
+        }
+
+        /// A claim in the token's first block counts, before or after the
+        /// issuance's transaction in that block.
+        #[tokio::test]
+        async fn a_claim_in_the_tokens_first_block_counts_in_either_order() {
+            let claim_first = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700),
+                        issue_tx(0xa2, input(0xa1, 1), FUNDING_CAPACITY - 300_00000000),
+                    ],
+                ),
+            ];
+            let issue_first = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        issue_tx(0xa2, input(0xc0, 0), FUNDING_CAPACITY),
+                        claim_tx(
+                            0xa1,
+                            input(0xa2, 1),
+                            FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                            7700,
+                        ),
+                    ],
+                ),
+            ];
+            for blocks in [claim_first, issue_first] {
+                assert_eq!(
+                    token_row_on_every_path(&blocks).await.max_supply,
+                    Some(7700)
+                );
+            }
+        }
+
+        /// Two claims after the issuance, different values: the first
+        /// stands, on every path and batching.
+        #[tokio::test]
+        async fn the_first_claim_after_the_issuance_stands() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(101, vec![issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY)]),
+                claim_rule_block(102, vec![claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)]),
+                claim_rule_block(
+                    103,
+                    vec![claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks).await.max_supply,
+                Some(7700)
+            );
+            // a claim before the token, then two after: still the first after
+            let mut with_early_claim = vec![
+                funding_block(),
+                claim_rule_block(
+                    100 + 1,
+                    vec![claim_tx(0xa0, input(0xc0, 0), FUNDING_CAPACITY, 6600)],
+                ),
+            ];
+            let left = FUNDING_CAPACITY - 300_00000000;
+            with_early_claim.push(claim_rule_block(
+                102,
+                vec![issue_tx(0xa1, input(0xa0, 1), left)],
+            ));
+            with_early_claim.push(claim_rule_block(
+                103,
+                vec![claim_tx(
+                    0xa2,
+                    input(0xa1, 1),
+                    left - EXT_CELL_CAPACITY,
+                    7700,
+                )],
+            ));
+            assert_eq!(
+                token_row_on_every_path(&with_early_claim).await.max_supply,
+                Some(7700)
+            );
+        }
+
+        /// The rollback of the claim's block takes the claim with it; the
+        /// rollback of the issuance's block takes the token row.
+        #[tokio::test]
+        async fn rolling_back_the_claim_or_the_issuance_restores_the_rule() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(101, vec![issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY)]),
+                claim_rule_block(102, vec![claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)]),
+                claim_rule_block(
+                    103,
+                    vec![claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            for keep in [101usize, 102] {
+                let store = write_batches_live(&per_block(&blocks), None).await;
+                rollback_to(&store, keep as i64);
+                let reference = write_batches_live(&per_block(&blocks[..=keep - 100]), None).await;
+                assert_eq!(
+                    token_state(&store, &ext_type_hash()),
+                    token_state(&reference, &ext_type_hash()),
+                    "rolled back to {keep}"
+                );
+            }
+            // the issuance's block rolled back: no token
+            let store = write_batches_live(&per_block(&blocks), None).await;
+            rollback_to(&store, 100);
+            assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
+        }
+
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback
         /// restores every metadata field, `metadata_source` and
         /// `chain_metadata` included, and the transfer count.

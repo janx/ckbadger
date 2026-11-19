@@ -33,7 +33,10 @@ pub(crate) struct TokenOwner {
     daily_deltas: FxHashMap<Vec<u8>, FxHashMap<u32, TokenDailyDelta>>,
     /// On-chain max-supply claims (Omnilock supply-info cells, extension-bound
     /// Unique Cells): the first claim per token, as live keeps it.
-    max_supply_observations: FxHashMap<Vec<u8>, u128>,
+    /// Every max-supply claim of the run per token, in chain order
+    /// (block, transaction, output); the rule
+    /// (`token_helpers::token_max_supply_claim`) picks the token's at finalize.
+    max_supply_observations: FxHashMap<Vec<u8>, crate::sync::token_helpers::MaxSupplyClaims>,
     /// The current transaction's Unique Cell infos (by 20-byte type args), in
     /// output order: an extension binds only within the creating transaction,
     /// as live binds it. Cleared and reused per transaction.
@@ -73,7 +76,12 @@ impl TokenOwner {
             },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
-            |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
+            |k, claims| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
+                    + (claims.capacity()
+                        * std::mem::size_of::<crate::sync::token_helpers::MaxSupplyObservation>())
+                        as u64
+            },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.token_onchain_info, |k, v| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
                 + 1
@@ -83,7 +91,50 @@ impl TokenOwner {
         })
     }
 
-    fn observe_max_supply_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+    /// Record one claim on the run's claims of its token, at its place.
+    fn record_max_supply_claim(
+        &mut self,
+        token_type_hash: &[u8],
+        max_supply: u128,
+        tx: &ResolvedTxFacts<'_>,
+        cell: &CellFacts,
+    ) {
+        let claim = crate::sync::token_helpers::MaxSupplyObservation {
+            max_supply,
+            block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            output_index: cell.outpoint.index,
+        };
+        let claims = self
+            .max_supply_observations
+            .entry(token_type_hash.to_vec())
+            .or_default();
+        // Once the token exists and a claim at or after its first block
+        // precedes this one, the rule can never pick this one: it is not kept
+        // (an Omnilock supply-info cell is claimed again by every mint).
+        if let Some(first_block) = self
+            .tokens
+            .get(token_type_hash)
+            .map(|token| token.first_seen_block)
+        {
+            if crate::sync::token_helpers::token_max_supply_claim(claims, first_block, i64::MAX)
+                .is_some_and(|first| {
+                    (first.block_number, first.tx_index, first.output_index)
+                        < (claim.block_number, claim.tx_index, claim.output_index)
+                })
+            {
+                return;
+            }
+        }
+        crate::sync::token_helpers::insert_max_supply_claim(claims, claim);
+    }
+
+    fn observe_max_supply_from_output(
+        &mut self,
+        cell: &CellFacts,
+        tx: &ResolvedTxFacts<'_>,
+        ctx: &ReducerContext<'_>,
+    ) {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
         if !crate::sync::token_helpers::is_omnilock(lock_code_hash, cell.lock_hash_type) {
             return;
@@ -106,10 +157,8 @@ impl TokenOwner {
         else {
             return;
         };
-        // The first claim wins, as `token_helpers::observe_max_supply` keeps it.
-        self.max_supply_observations
-            .entry(token_type_hash.to_vec())
-            .or_insert(max_supply);
+        // Every claim is kept; the rule picks the token's at finalize.
+        self.record_max_supply_claim(&token_type_hash, max_supply, tx, cell);
     }
 
     fn observe_unique_cell_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
@@ -134,7 +183,12 @@ impl TokenOwner {
     /// info, displacing any co-occurrence binding; the bound cell's total
     /// supply is a max-supply claim
     /// (`token_helpers::collect_token_max_supply_observations`).
-    fn resolve_unique_cell_for_xudt(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+    fn resolve_unique_cell_for_xudt(
+        &mut self,
+        cell: &CellFacts,
+        tx: &ResolvedTxFacts<'_>,
+        ctx: &ReducerContext<'_>,
+    ) {
         let Some(CellProtocolFacts::XudtExtensions(extension_args)) = &cell.protocol_facts else {
             return;
         };
@@ -148,23 +202,23 @@ impl TokenOwner {
                 continue;
             }
             // Last Unique Cell output with these args, as live's per-tx map.
-            let Some((_, info)) = self
+            let Some(info) = self
                 .tx_unique_infos
                 .iter()
                 .rev()
                 .find(|(id, _)| ctx.resolve_identity(*id) == args.as_slice())
+                .map(|(_, info)| info.clone())
             else {
                 continue;
             };
             if let Some(total_supply) = info.total_supply {
-                self.max_supply_observations
-                    .entry(token_type_hash.to_vec())
-                    .or_insert(total_supply);
+                let token_type_hash = token_type_hash.to_vec();
+                self.record_max_supply_claim(&token_type_hash, total_supply, tx, cell);
             }
             self.token_onchain_info.insert(
                 token_type_hash.to_vec(),
                 crate::sync::token_helpers::OnchainTokenInfo {
-                    info: info.clone(),
+                    info,
                     binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
                 },
             );
@@ -334,7 +388,7 @@ impl BulkReducer for TokenOwner {
 
         // Collect max_supply observations from omnilock supply info output cells
         for cell in tx.cells.iter() {
-            self.observe_max_supply_from_output(cell, ctx);
+            self.observe_max_supply_from_output(cell, tx, ctx);
         }
 
         // This transaction's Unique Cell outputs, then the extension bindings
@@ -347,7 +401,7 @@ impl BulkReducer for TokenOwner {
         }
         if !self.tx_unique_infos.is_empty() {
             for cell in tx.cells.iter() {
-                self.resolve_unique_cell_for_xudt(cell, ctx);
+                self.resolve_unique_cell_for_xudt(cell, tx, ctx);
             }
         }
         // Same-tx issuance co-occurrence binding (no extension flags)
@@ -584,13 +638,28 @@ impl TokenOwner {
                 info.chain_metadata = existing.chain_metadata.clone();
             }
 
-            // max_supply: the stored value, then the first on-chain claim by
-            // the live rule (`udt::apply_observed_max_supply`: a claim fills an
-            // unknown value; a conflicting one keeps the stored value).
+            // max_supply: the stored value, then the token's claim by the one
+            // rule (`token_helpers::token_max_supply_claim`: the first claim at
+            // or after the token's first block; `udt::apply_observed_max_supply`:
+            // a claim fills an unknown value, a conflicting one keeps the
+            // stored value).
             info.max_supply = existing.and_then(|existing| existing.max_supply);
-            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
+            if let Some(claim) = self
+                .max_supply_observations
+                .get(type_hash)
+                .and_then(|claims| {
+                    crate::sync::token_helpers::token_max_supply_claim(
+                        claims,
+                        info.first_seen_block,
+                        i64::MAX,
+                    )
+                })
+            {
                 crate::db::writer::udt::apply_observed_max_supply(
-                    type_hash, &mut info, observed, true,
+                    type_hash,
+                    &mut info,
+                    claim.max_supply,
+                    true,
                 );
             }
 

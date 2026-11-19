@@ -40,25 +40,30 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   as bulk build does (resync/all): a build stamped 2 read them only in a
 ///   batch that moved a UDT, so a store it live-synced can miss a claim
 ///   (`tokens` max supply).
-/// - 4: protocols by their pair (resync/protocol-pairs): the indexer
+/// - 4: one max-supply rule for both sync paths: a token's max supply is the
+///   first claim at or after its first block, in chain order
+///   (`token_helpers::token_max_supply_claim`). A store stamped 3 took, live,
+///   whichever claim its batch cuts let through and, by bulk, a claim older
+///   than the token.
+/// - 5: protocols by their pair (resync/protocol-pairs): the indexer
 ///   recognises a protocol and a standard lock by the pair its script runs
 ///   (`ProtocolRegistry::script`), so a cell locked by a protocol lock's code
 ///   hash under another hash type writes no protocol action, Fiber channel,
 ///   `.cell` listing or max-supply claim, and is a called lock
 ///   (`lock_calls`); a standard lock's binary by a data hash type is a
-///   standard lock. A store stamped 3 holds those rows by code hash alone.
+///   standard lock. A store stamped 4 holds those rows by code hash alone.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
 /// type's usage, its activity rows are another layout, its participants
 /// carry no senders bit.
-pub const STORE_LAYOUT: u32 = 4;
+pub const STORE_LAYOUT: u32 = 5;
 
 /// What [`STORE_LAYOUT`] changed, for the refusal's words.
 pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by their pair (code \
      hash, hash type), generic type references counted by their live code, each transaction in \
-     one activity kind, the senders bit on participants, max-supply claims read in every live \
-     batch, protocols recognised by their pair";
+     one activity kind, the senders bit on participants, a token's max supply its first claim \
+     at or after its first block on both sync paths, protocols recognised by their pair";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,16 +252,29 @@ mod tests {
         );
     }
 
-    /// Stamp 3 is the re-sync set before protocols were read by their pair
-    /// (resync/all): its channels, actions, listings, claims and called locks
-    /// took a protocol's code hash by any hash type, so this build refuses it.
+    /// Stamp 3 is the re-sync set before one max-supply rule held for both
+    /// sync paths: a live store's claim depended on where its batches were
+    /// cut, a bulk store took a claim older than the token. Refused.
     #[test]
-    fn a_store_stamped_before_protocols_were_read_by_their_pair_is_refused() {
+    fn a_store_stamped_before_the_one_max_supply_rule_is_refused() {
         let (_dir, store) = store();
         store.set_store_layout(3).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
             Err(StoreLayoutMismatch { found: Some(3) })
+        );
+    }
+
+    /// Stamp 4 is the re-sync set before protocols were read by their pair
+    /// (resync/all): its channels, actions, listings, claims and called locks
+    /// took a protocol's code hash by any hash type, so this build refuses it.
+    #[test]
+    fn a_store_stamped_before_protocols_were_read_by_their_pair_is_refused() {
+        let (_dir, store) = store();
+        store.set_store_layout(4).unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: Some(4) })
         );
     }
 

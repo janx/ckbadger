@@ -7,7 +7,9 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{TokenInfo, TokenTransferRecord};
 
 use crate::parser::ParsedUdtTransfer;
-use crate::sync::token_helpers::{MaxSupplyObservation, OnchainTokenInfoTimeline};
+use crate::sync::token_helpers::{
+    token_max_supply_claim, MaxSupplyClaims, MaxSupplyObservation, OnchainTokenInfoTimeline,
+};
 
 use ckbadger_store::keys;
 
@@ -205,7 +207,7 @@ impl BatchWriter {
     pub(crate) fn process_udt_transfers_batch_with_state(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyObservation>,
+        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyClaims>,
         onchain_token_info: &HashMap<Vec<u8>, OnchainTokenInfoTimeline>,
         block_timestamps: &HashMap<i64, i64>,
         block_chain_times_ms: &HashMap<i64, i64>,
@@ -227,7 +229,7 @@ impl BatchWriter {
                         type_hash,
                         base: TokenRowBase::Stored(Box::new(info)),
                         transfers: None,
-                        max_supply: max_supply_observations.get(type_hash).copied(),
+                        max_supply: claims_of(max_supply_observations, type_hash),
                         onchain: onchain_token_info.get(type_hash),
                     }
                     .write(batch)?;
@@ -303,7 +305,7 @@ impl BatchWriter {
                 type_hash,
                 base,
                 transfers: Some(transfers),
-                max_supply: max_supply_observations.get(type_hash).copied(),
+                max_supply: claims_of(max_supply_observations, type_hash),
                 onchain: onchain_token_info.get(type_hash),
             }
             .write(batch)?;
@@ -328,7 +330,7 @@ impl BatchWriter {
                     type_hash,
                     base: TokenRowBase::Stored(Box::new(info)),
                     transfers: None,
-                    max_supply: max_supply_observations.get(type_hash).copied(),
+                    max_supply: claims_of(max_supply_observations, type_hash),
                     onchain: None,
                 }
                 .write(batch)?;
@@ -608,7 +610,9 @@ struct TokenRowThroughBatch<'a> {
     base: TokenRowBase<'a>,
     /// `None` for a row this batch does not count transfers into.
     transfers: Option<TokenTransfersThroughBatch<'a>>,
-    max_supply: Option<MaxSupplyObservation>,
+    /// Every claim of the batch on this token, in chain order; the rule
+    /// ([`token_max_supply_claim`]) says which one is the token's.
+    max_supply: &'a [MaxSupplyObservation],
     onchain: Option<&'a OnchainTokenInfoTimeline>,
 }
 
@@ -644,11 +648,17 @@ impl TokenRowThroughBatch<'_> {
                 }
             }
         };
-        if let Some(observed) = self
-            .max_supply
-            .filter(|observed| observed.block_number <= block_number)
-        {
-            apply_observed_max_supply(self.type_hash, &mut row, observed.max_supply, report);
+        // The token's first block: the stored row's, or the block of the
+        // cell that creates it in this batch.
+        let first_block = match &self.base {
+            TokenRowBase::Stored(stored) => stored.first_seen_block,
+            TokenRowBase::CreatedBy {
+                block_number: created_at,
+                ..
+            } => *created_at,
+        };
+        if let Some(claim) = token_max_supply_claim(self.max_supply, first_block, block_number) {
+            apply_observed_max_supply(self.type_hash, &mut row, claim.max_supply, report);
         }
         if let Some(bound) = self
             .onchain
@@ -673,9 +683,7 @@ impl TokenRowThroughBatch<'_> {
         if let TokenRowBase::CreatedBy { block_number, .. } = &self.base {
             change_blocks.insert(*block_number);
         }
-        if let Some(observed) = self.max_supply {
-            change_blocks.insert(observed.block_number);
-        }
+        change_blocks.extend(self.max_supply.iter().map(|claim| claim.block_number));
         if let Some(timeline) = self.onchain {
             change_blocks.extend(timeline.blocks());
         }
@@ -713,6 +721,14 @@ impl TokenRowThroughBatch<'_> {
         }
         Ok(())
     }
+}
+
+/// The batch's claims on `type_hash`, in chain order; none when it has none.
+fn claims_of<'a>(
+    claims: &'a HashMap<Vec<u8>, MaxSupplyClaims>,
+    type_hash: &[u8],
+) -> &'a [MaxSupplyObservation] {
+    claims.get(type_hash).map_or(&[], Vec::as_slice)
 }
 
 /// How a token's on-chain Unique Cell metadata merges into the row about to
@@ -769,7 +785,7 @@ mod tests {
     fn process_transfers_in_one_batch(
         writer: &BatchWriter,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyObservation>,
+        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyClaims>,
         onchain_token_info: &HashMap<Vec<u8>, OnchainTokenInfoTimeline>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
@@ -1177,10 +1193,12 @@ mod tests {
         let mut max_supply_observations = HashMap::new();
         max_supply_observations.insert(
             type_hash.clone(),
-            MaxSupplyObservation {
+            vec![MaxSupplyObservation {
                 max_supply: 1_000,
                 block_number: 100,
-            },
+                tx_index: 1,
+                output_index: 0,
+            }],
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -1720,10 +1738,12 @@ mod tests {
         let mut max_supply_observations = HashMap::new();
         max_supply_observations.insert(
             type_hash.clone(),
-            MaxSupplyObservation {
+            vec![MaxSupplyObservation {
                 max_supply: 1_000_000,
                 block_number: 100,
-            },
+                tx_index: 1,
+                output_index: 0,
+            }],
         );
 
         let mut batch = StoreBatch::new(&store);

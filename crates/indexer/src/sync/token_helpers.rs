@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, Result};
-use tracing::warn;
 
 use ckbadger_store::types::PositionedCellInfo;
 use ckbadger_store::CkbadgerStore;
@@ -452,13 +451,48 @@ impl OnchainTokenInfoTimeline {
     }
 }
 
-/// The first max-supply observation of one live batch for a token, with the
-/// block of the transaction that carried it: a shallow rollback below that
+/// One max-supply claim (an Omnilock supply-info cell, or a Unique Cell an
+/// xUDT extension binds) and its place in chain order: the block, the
+/// transaction and the output that carry it. A shallow rollback below its
 /// block must undo it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MaxSupplyObservation {
     pub max_supply: u128,
     pub block_number: i64,
+    pub tx_index: i32,
+    pub output_index: u32,
+}
+
+impl MaxSupplyObservation {
+    fn place(&self) -> (i64, i32, u32) {
+        (self.block_number, self.tx_index, self.output_index)
+    }
+}
+
+/// Every claim on one token, in chain order (block, transaction, output).
+pub(crate) type MaxSupplyClaims = Vec<MaxSupplyObservation>;
+
+/// Add `claim` to a token's claims at its place in chain order.
+pub(crate) fn insert_max_supply_claim(claims: &mut MaxSupplyClaims, claim: MaxSupplyObservation) {
+    let at = claims.partition_point(|existing| existing.place() <= claim.place());
+    claims.insert(at, claim);
+}
+
+/// THE max-supply rule, both sync paths: a token's max supply is the first
+/// claim made at or after the token's first block (the block of its first
+/// cell), in chain order. A claim made before the token exists is not the
+/// token's: it names an id nothing carries yet. `through_block` is the last
+/// block the row is being computed for (`i64::MAX` for the row after all of
+/// them). `claims` is in chain order.
+pub(crate) fn token_max_supply_claim(
+    claims: &[MaxSupplyObservation],
+    first_block: i64,
+    through_block: i64,
+) -> Option<MaxSupplyObservation> {
+    claims
+        .iter()
+        .find(|claim| claim.block_number >= first_block && claim.block_number <= through_block)
+        .copied()
 }
 
 /// Type script hash by outpoint — a borrowed view over cells the caller has
@@ -680,46 +714,40 @@ fn collect_issuance_cooccurrence_binding(
     minted.map(|token_type_hash| (token_type_hash.clone(), unique_info))
 }
 
+/// Record one claim of `tx`'s output `output_index` on `token_type_hash`.
+/// Every claim is kept, in chain order: which one is the token's is the rule's
+/// to say ([`token_max_supply_claim`]), once the token's first block is known.
 pub(crate) fn observe_max_supply(
-    observations: &mut HashMap<Vec<u8>, MaxSupplyObservation>,
+    observations: &mut HashMap<Vec<u8>, MaxSupplyClaims>,
     tx: &TxData,
+    output_index: usize,
     token_type_hash: Vec<u8>,
     max_supply: u128,
-    source: &str,
 ) {
-    if let Some(existing) = observations.get(&token_type_hash) {
-        if existing.max_supply != max_supply {
-            warn!(
-                tx_hash = %hex::encode(tx.hash),
-                token_type_hash = %hex::encode(&token_type_hash),
-                existing_max_supply = existing.max_supply,
-                observed_max_supply = max_supply,
-                source = source,
-                "conflicting max supply observations in the same batch; keeping first value"
-            );
-        }
-        return;
-    }
-
-    observations.insert(
-        token_type_hash,
+    let output_index = u32::try_from(output_index)
+        .expect("a transaction's output index fits u32 (CKB caps outputs)");
+    insert_max_supply_claim(
+        observations.entry(token_type_hash).or_default(),
         MaxSupplyObservation {
             max_supply,
             block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            output_index,
         },
     );
 }
 
+/// Every max-supply claim of a batch, per token, in chain order.
 pub(crate) fn collect_token_max_supply_observations(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, MaxSupplyObservation> {
+) -> HashMap<Vec<u8>, MaxSupplyClaims> {
     let mut observations = HashMap::new();
 
     for tx_data in all_tx_data {
         let unique_cell_total_supply_by_type_args =
             collect_unique_cell_total_supply_by_type_args(&tx_data.cells);
 
-        for cell in &tx_data.cells {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
             if !is_omnilock(&cell.lock_code_hash, cell.lock_hash_type) {
                 continue;
             }
@@ -744,9 +772,9 @@ pub(crate) fn collect_token_max_supply_observations(
             observe_max_supply(
                 &mut observations,
                 tx_data,
+                output_index,
                 token_type_hash.to_vec(),
                 max_supply,
-                "omnilock_supply_info_cell",
             );
         }
 
@@ -754,7 +782,7 @@ pub(crate) fn collect_token_max_supply_observations(
             continue;
         }
 
-        for cell in &tx_data.cells {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
             let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
                 continue;
             };
@@ -794,9 +822,9 @@ pub(crate) fn collect_token_max_supply_observations(
                 observe_max_supply(
                     &mut observations,
                     tx_data,
+                    output_index,
                     token_type_hash.clone(),
                     max_supply,
-                    "xudt_extension_script_unique_cell",
                 );
             }
         }
@@ -1329,7 +1357,7 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
+                .map(|claims| claims[0].max_supply),
             Some(1_000)
         );
 
@@ -1370,7 +1398,7 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
+                .map(|claims| claims[0].max_supply),
             Some(total_supply)
         );
     }
@@ -1402,7 +1430,7 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
+                .map(|claims| claims[0].max_supply),
             Some(total_supply)
         );
     }
@@ -1924,12 +1952,28 @@ mod tests {
             observing_tx(0xE1, 11, 42_000),
             observing_tx(0xE2, 12, 43_000),
         ]);
+        // every claim, in chain order; the token's is the rule's to pick
         assert_eq!(
-            observations.get(token_type_hash.as_slice()),
-            Some(&MaxSupplyObservation {
-                max_supply: 42_000,
-                block_number: 11,
-            })
+            observations
+                .get(token_type_hash.as_slice())
+                .map(Vec::as_slice),
+            Some(
+                [
+                    MaxSupplyObservation {
+                        max_supply: 42_000,
+                        block_number: 11,
+                        tx_index: 0,
+                        output_index: 1,
+                    },
+                    MaxSupplyObservation {
+                        max_supply: 43_000,
+                        block_number: 12,
+                        tx_index: 0,
+                        output_index: 1,
+                    },
+                ]
+                .as_slice()
+            )
         );
     }
 }
