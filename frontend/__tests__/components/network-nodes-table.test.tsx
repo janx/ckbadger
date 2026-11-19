@@ -9,6 +9,8 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
+import { insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { NARROWEST_LINE_PX } from '@/lib/control-row-fit';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -146,6 +148,53 @@ describe('PeersTable', () => {
     );
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
     expect(screen.queryByText(rowId('e'.repeat(64)))).toBeNull();
+  });
+
+  // The coordinator's Chrome check (lane C2 topics): a native select is as wide as its widest
+  // option and, where its well is narrower, clips its value without a mark, and a clipped state is
+  // another state. Every choice of both filters holds the 328 px line of a 360 px phone alone in
+  // its well, well and all (where the pair does not fit, the select wraps under its label): the
+  // well's border, the select's padding and the glyphs of lib/type-metrics.ts at the select's
+  // 13 px, 291 px for the words, 37 glyphs.
+  it('fits every choice of both filters in a 360 px phone’s line, alone in its well', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const over: string[] = [];
+    for (const name of ['crawler dial state', 'address observation']) {
+      const select = screen.getByLabelText<HTMLSelectElement>(name);
+      const chrome = insetsPx(select.parentElement!, 360).box + insetsPx(select, 360).box;
+      expect(chrome, name).toBe(2 + 35);
+      for (const option of Array.from(select.options)) {
+        const px = Math.round((chrome + textRunPx(option.textContent!, select, 360)) * 100) / 100;
+        if (px > NARROWEST_LINE_PX) over.push(`${name}: "${option.textContent}" ${px} px`);
+      }
+    }
+    expect(over).toEqual([]);
+  });
+
+  // A filter says what the rows say: the dial-state filter names a state as the row's badge does,
+  // the observation filter an observation as the evidence does, so a reader finds the choice by
+  // the words in the row.
+  it('names a dial state as the row’s badge does, an observation as the evidence does', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const choices = (name: string) =>
+      Array.from(screen.getByLabelText<HTMLSelectElement>(name).options, (o) => o.textContent);
+    const badges = Array.from(document.querySelectorAll('[data-row-tag]'), (t) => t.textContent);
+    expect(badges).toEqual([
+      'Same-network Identify',
+      'Aliases exhausted',
+      'Not dialed by this crawler',
+    ]);
+    for (const badge of badges) expect(choices('crawler dial state')).toContain(badge);
+    fireEvent.click(
+      screen.getByRole('button', { name: `Show evidence for ${UNVERIFIED_PEER_ID}` })
+    );
+    // the last round's observations: each address, then its result in the evidence's words
+    const round = (await screen.findByText('Last completed round #5')).parentElement!;
+    const observed = Array.from(round.querySelectorAll('li > span > span'), (s) => s.textContent);
+    expect(observed.length).toBeGreaterThan(0);
+    for (const words of observed) expect(choices('address observation')).toContain(words);
   });
 
   it('expands a peer into address-level probe evidence', async () => {
