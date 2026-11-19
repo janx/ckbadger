@@ -236,13 +236,8 @@ function CellFacts({
       <Fact label="Occupied">
         <span>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
         <span className="text-text-dim text-small">
-          ·{' '}
-          {capacity === occupied ? (
-            '0'
-          ) : (
-            <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" />
-          )}{' '}
-          free
+          · {/* no free CKB with its unit too (lane P1, third round; NOTE 5: it read "0 free") */}
+          <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" /> free
         </span>
       </Fact>
       <ScriptFact
