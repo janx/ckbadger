@@ -14,13 +14,7 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { useScanFill } from '@/components/ui/scan-fill';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
-import {
-  clipToCap,
-  formatCompactSigned,
-  formatTick,
-  niceTicks,
-  signedAxisCap,
-} from '@/lib/chart-ticks';
+import { clipToCap, formatTick, niceTicks, signedAxisCap } from '@/lib/chart-ticks';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
