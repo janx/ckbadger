@@ -157,6 +157,7 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_BLOCK_FEES',
         'WIDEST_TX_VALUE',
         'WIDEST_TX_OUTPUT',
+        'WIDEST_TX_OUTPUT_SUMMARY',
         'WIDEST_TX_FEE',
         'WIDEST_POOL_VALUE_LINE',
         'WIDEST_FEE_RATE',

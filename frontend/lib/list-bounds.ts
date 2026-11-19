@@ -170,6 +170,12 @@ export const WIDEST_TX_VALUE = ckbAmountText(ckbNines(9), 'column');
  */
 export const WIDEST_TX_OUTPUT = ckbAmountText(ckbNines(11), 'column');
 
+/**
+ * Of record: WIDEST_TX_OUTPUT as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `99,999,999,999`. Source: WIDEST_TX_OUTPUT.
+ */
+export const WIDEST_TX_OUTPUT_SUMMARY = ckbAmountText(ckbNines(11), 'summary');
+
 /** Of record: a transaction's fee under 100 CKB. Source: mainnet's transactions' fees. */
 export const WIDEST_TX_FEE = ckbAmountText(ckbNines(2), 'column');
 
