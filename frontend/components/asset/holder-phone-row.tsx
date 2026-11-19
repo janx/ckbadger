@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   PHONE_SHARE_TRACK,
   ShareAxis,
@@ -11,11 +11,15 @@ import {
 const SHARE_TEXT = 'inline-block w-[7ch] text-right';
 
 /**
- * A holder on a phone (board L5): rank, holder, lock and amount on one line; the bar on the list's
- * one scale (ruling R7: the table's rounded maximum, marked on the first row's axis) with its
- * number beside it and any quiet fact at the end, on the second. Token holders, collection holders
- * and DAO depositors share it. In a wide container (the 640 band, where a table does not fit) one
- * line: rank · holder · lock · fact · amount · bar · share, the bar ending at one x.
+ * A holder on a phone (board L5, the phone-rows board; PB-09): the rank, the holder and the amount,
+ * the figure the list sorts by, on line 1; the bar on the list's one scale (ruling R7: the table's
+ * rounded maximum, marked on the first row's axis) with its number beside it, and at that line's
+ * right edge, held there, the holder's lock where it is not the default lock and any quiet fact. The
+ * lock stood on line 1 after the address, where a long one dropped the amount under it: one list
+ * took two shapes by the length of its strings. Token holders, collection holders and DAO
+ * depositors share it, each stating its first line (`head`). In a wide container (the 640 band,
+ * where a table does not fit) one line: rank · holder · lock · fact · amount · bar · share, the bar
+ * ending at one x.
  */
 export function HolderPhoneRow({
   rank,
@@ -26,6 +30,7 @@ export function HolderPhoneRow({
   note,
   bar,
   axis,
+  head,
   wide = false,
 }: {
   rank: number;
@@ -41,20 +46,26 @@ export function HolderPhoneRow({
   bar: { value: number; scale: number; color: string };
   /** The scale's end as its axis mark ("60%"): the list's first row carries it over its track. */
   axis?: string;
+  /** Line 1's width as its list states it (PhoneRow's `head`). */
+  head: number;
   wide?: boolean;
 }) {
+  const hasLock = lock !== undefined && lock !== null && lock !== false;
+  // the rank's box: 22 px holds two digits at the key's 14 px (16.8) and a 4 px gap; a longer rank
+  // widens it, never running into the holder (a fixed 22 px box let "100" overlap the address)
+  const rankBox = (
+    <span data-role="rank" className="text-text-dim inline-block min-w-[22px] pr-1">
+      {rank.toLocaleString('en-US')}
+    </span>
+  );
+  const lockWords = hasLock && (
+    <span className="text-text-dim text-small whitespace-nowrap">{lock}</span>
+  );
   const holder = (
     <>
-      <span data-role="rank" className="text-text-dim inline-block w-[22px]">
-        {rank.toLocaleString('en-US')}
-      </span>
+      {rankBox}
       {party}
-      {lock !== undefined && lock !== null && lock !== false && (
-        <>
-          {' '}
-          <span className="text-text-dim text-small whitespace-nowrap">{lock}</span>
-        </>
-      )}
+      {lockWords && <> {lockWords}</>}
     </>
   );
   const figure = <span className="text-text-bright text-body">{amount}</span>;
@@ -65,6 +76,7 @@ export function HolderPhoneRow({
     return (
       <PhoneRow
         testId="holder-row-mobile"
+        head={head}
         lines={[
           axis !== undefined && {
             key: 'axis',
@@ -96,8 +108,19 @@ export function HolderPhoneRow({
   return (
     <PhoneRow
       testId="holder-row-mobile"
+      head={head}
       lines={[
-        { key: 'holder', tone: 'head', left: holder, right: figure },
+        {
+          key: 'holder',
+          tone: 'head',
+          left: (
+            <>
+              {rankBox}
+              {party}
+            </>
+          ),
+          right: figure,
+        },
         axis !== undefined && {
           key: 'axis',
           tone: 'quiet',
@@ -116,7 +139,10 @@ export function HolderPhoneRow({
               {shareText}
             </span>
           ),
-          right: note,
+          // held at the line's right edge: where the lock and the fact stand never depends on how
+          // long the share's text is
+          hold: true,
+          right: (hasLock || note !== undefined) && <Dotted parts={[lockWords, note]} />,
         },
       ]}
     />

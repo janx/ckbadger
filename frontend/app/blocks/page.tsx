@@ -38,7 +38,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { useState } from 'react';
 import { unitNode } from '@/components/ui/units';
-import { charPx, columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, charPx, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { BAR_FIGURE_GAP, COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import {
@@ -49,6 +49,7 @@ import {
   WIDEST_BLOCK_NUMBER,
   WIDEST_BLOCK_REWARD,
   WIDEST_COUNT,
+  WIDEST_COUNT_DIGITS,
   WIDEST_PROPOSALS,
   shortChars,
 } from '@/lib/list-bounds';
@@ -452,6 +453,25 @@ function reward(block: Block) {
 }
 
 /**
+ * Line 1 of a block's phone row, the model the other lists follow (the phone-rows board's head():
+ * 238 of 328 px there, for "#21,009,134" and "1 tx · 20s ago"), at its widest: the block's stone
+ * and its gap (ROW_SEAL.block.footprint, 24), the widest height, "#99,999,999" at the key's 14 px
+ * (92.4), the 12 px between the parts and the widest right part at 13 px, "9,999 txs · 10y 364d
+ * ago" (WIDEST_COUNT transactions and the oldest age a live list writes, 24 characters, 187.2):
+ * 315.6 of a 360 px phone's 328 px line, 12.4 to spare (42.4 at 390).
+ */
+const BLOCK_PHONE_HEAD_PX = phoneHead(
+  'blocks',
+  ROW_SEAL.block.footprint +
+    textPx(WIDEST_BLOCK_NUMBER.length, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(
+      `${formatCount(Number(WIDEST_COUNT_DIGITS), 'tx', 'txs')} · ${WIDEST_AGE}`.length,
+      fontPx('small')
+    )
+);
+
+/**
  * A block on a phone (board L1): its seal leading the row, the height with its transactions and
  * age, who mined it and the fees, then the quiet figures — hash, proposals and uncles, size,
  * cycles and when the reward is paid. What every reader comes for leads; the consensus detail
@@ -459,11 +479,10 @@ function reward(block: Block) {
  * after the hash that starts that line on every row, each count one unbroken unit and only when
  * non-zero.
  *
- * The head line never wraps: the 13 px height, "#20,987,284" (11 characters, 85.8 px), and the
- * 12 px gap leave 206.2 px at 360 and 236.2 at 390 for the right part, 28 and 32 characters at
- * 12 px; "999 txs · 59m ago" is 17 (122.4 px, 220.2 in all). Only an age that is not an age, "this
- * device's clock is behind" (29 characters), drops it under the height, whole. With the counts it
- * read "4 txs · 1 proposal · 13s ago" (28) and dropped at 360 while its neighbours did not.
+ * The head line never wraps (BLOCK_PHONE_HEAD_PX, the board's head(): 315.6 of a 360 px phone's
+ * 328 px line at the widest). Only an age that is not an age, "this device's clock is behind" (29
+ * characters), drops it under the height, whole. With the counts it read "4 txs · 1 proposal · 13s
+ * ago" (28) and dropped at 360 while its neighbours did not.
  *
  * The miner line keeps one shape at 390 and 360 px (text columns of 334 and 304 px beside the
  * stone: 390 and 360 less the two 16 px gutters and the block stone's 24; 12 px, 7.2 px a
@@ -479,6 +498,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
   return (
     <PhoneRow
       testId="block-row-mobile"
+      head={BLOCK_PHONE_HEAD_PX}
       mark={<RowSeal id={blockSeal(block)} />}
       lines={[
         {

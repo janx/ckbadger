@@ -50,7 +50,9 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
+import { useFromSm } from '@/hooks/useFromMd';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
@@ -86,6 +88,25 @@ export function RowArticle({
 function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
   return age ? <Utc8Age timestamp={timestamp} /> : <Utc8Date timestamp={timestamp} />;
 }
+
+/**
+ * Line 1 of an activity row on a phone (the phone-rows board's head(): 262 of 328 px there for "CKB
+ * Transfer" beside "#21,009,129 · 50s ago"), at its widest: the class mark and its 8 px (24), the
+ * headline's first 12 characters at the key's 14 px (100.8), the 12 px between the parts and the
+ * evidence at the meta step, the widest block with the oldest age a live list writes, "#99,999,999
+ * · 10y 364d ago" (26 characters, 187.2): 324 of a 360 px phone's 328 px line (16 characters of
+ * headline at 390). A longer headline wraps between its words beside the evidence, which keeps its
+ * place on the line; so the headline's longest word and the evidence must fit together, "Withdraw"
+ * (67.2) the longest of the site's own headlines' words.
+ */
+const ACTIVITY_PHONE_HEAD_PX = phoneHead(
+  'activities',
+  16 +
+    8 +
+    textPx(12, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_BLOCK_NUMBER} · ${WIDEST_AGE}`.length, fontPx('meta'))
+);
 
 /**
  * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
@@ -134,34 +155,43 @@ export function ActivityRowHead({
   const line = layout === 'line';
   const linked = line && href !== undefined;
   const titleClass = cn('text-text-bright text-body font-medium', line && 'leading-row');
-  return (
+  // Below sm (the phone-rows board, PA-10): the headline and the evidence share line 1 and the line
+  // does not wrap its parts — the headline takes the room the evidence leaves it (basis 0) and
+  // wraps between its words; the evidence shrinks only where it alone is wider than the line (this
+  // device's clock behind), its list then breaking between its parts. What was called stands on a
+  // line of its own under it (`head-details`).
+  const fromSm = useFromSm();
+  const phone = line && !fromSm;
+  const headline = linked ? (
+    <Link
+      data-role="headline"
+      href={href}
+      className={cn(titleClass, 'hover:text-jade transition-colors')}
+    >
+      {title}
+    </Link>
+  ) : (
+    <span data-role="headline" className={titleClass}>
+      {title}
+    </span>
+  );
+  const head = (
     <div
       data-role="row-head"
+      data-head-px={phone ? ACTIVITY_PHONE_HEAD_PX : undefined}
       className={cn(
-        'flex flex-wrap items-baseline justify-between gap-x-4',
+        'flex items-baseline justify-between',
+        phone ? 'flex-nowrap gap-x-3' : 'flex-wrap gap-x-4',
         line ? 'leading-row gap-y-0' : 'gap-y-0.5'
       )}
     >
-      {line ? (
+      {phone ? (
+        <span data-role="head-main" className="min-w-0 flex-1 basis-0">
+          {headline}
+        </span>
+      ) : line ? (
         <span data-role="head-main" className="min-w-0">
-          <Dotted
-            parts={[
-              linked ? (
-                <Link
-                  data-role="headline"
-                  href={href}
-                  className={cn(titleClass, 'hover:text-jade transition-colors')}
-                >
-                  {title}
-                </Link>
-              ) : (
-                <span data-role="headline" className={titleClass}>
-                  {title}
-                </span>
-              ),
-              ...(details ?? []),
-            ]}
-          />
+          <Dotted parts={[headline, ...(details ?? [])]} />
         </span>
       ) : (
         <span data-role="headline" className={titleClass}>
@@ -171,7 +201,11 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
+          className={cn(
+            'text-text-dim text-meta',
+            line && 'leading-row ml-auto',
+            phone && 'min-w-0'
+          )}
         >
           {evidence}
         </span>
@@ -187,7 +221,11 @@ export function ActivityRowHead({
           // part after it, and inside a part only where the part lets it (the block number has no
           // space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
           // device's clock is behind" break between its words).
-          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
+          className={cn(
+            'text-text-dim text-meta',
+            line && 'leading-row ml-auto',
+            phone && 'min-w-0'
+          )}
         >
           <Dotted
             parts={[
@@ -224,6 +262,15 @@ export function ActivityRowHead({
         </span>
       )}
     </div>
+  );
+  if (!phone || !details || details.length === 0) return head;
+  return (
+    <>
+      {head}
+      <div data-role="head-details" className="text-small leading-row min-w-0">
+        <Dotted parts={details} />
+      </div>
+    </>
   );
 }
 
@@ -853,58 +900,65 @@ function ParticipantLine({
   const lineTier = lineCompositionTier(p.itemDeltas);
   const showComposition = lineTier === null;
   const lock = partyLock(p);
-  return (
-    <div
-      data-role="participant"
-      // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
-      // indent, so the continuation never reads as the next participant.
-      className="text-small leading-row flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px]"
+  const fromSm = useFromSm();
+  const party = (
+    <span
+      data-role="party"
+      data-party={p.key}
+      data-this-address={focus || undefined}
+      className={fromSm ? '-ml-3 max-w-full' : undefined}
     >
-      <span
-        data-role="party"
-        data-party={p.key}
-        data-this-address={focus || undefined}
-        className="-ml-3 max-w-full"
-      >
-        <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
-        {focus && <span className="sr-only">this address</span>}
-      </span>
-      {lock && (
-        // LockKind's default form, never a chip (material pass v2, move 5: boxes stay on
-        // controls): plain words at the line's own size, only for a lock that is not the default
-        // (R9, lane B4)
-        <span data-role="lock-kind">
-          <LockWordsView words={lock} size="row" />
-        </span>
+      <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
+      {focus && <span className="sr-only">this address</span>}
+    </span>
+  );
+  const lockPart = lock && (
+    // LockKind's default form, never a chip (material pass v2, move 5: boxes stay on
+    // controls): plain words at the line's own size, only for a lock that is not the default
+    // (R9, lane B4)
+    <span data-role="lock-kind">
+      <LockWordsView words={lock} size="row" />
+    </span>
+  );
+  const notePart = p.lockHash !== null && notes?.has(p.lockHash) && (
+    <span data-role="participant-note" className="text-text-dim text-meta">
+      {notes.get(p.lockHash)}
+    </span>
+  );
+  const ckb = (
+    <span
+      data-role="ckb"
+      data-fee={fee || undefined}
+      className={fromSm ? undefined : 'ml-auto shrink-0 whitespace-nowrap'}
+    >
+      {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
+          mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
+      {fee ? (
+        <>
+          <span data-role="fee-label" className="text-text-dim">
+            fee
+          </span>{' '}
+          <CkbAmount form="summary" shannons={-BigInt(p.ckbDelta)} signed={false} tone="plain" />
+        </>
+      ) : (
+        <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
       )}
-      {p.lockHash !== null && notes?.has(p.lockHash) && (
-        <span data-role="participant-note" className="text-text-dim text-meta">
-          {notes.get(p.lockHash)}
-        </span>
-      )}
-      {lead.map((item, i) => (
-        // the page's own token, before the CKB that holds it (B4)
-        <ItemOnLine
-          key={`lead${i}`}
-          item={item}
-          tone={itemTone}
-          showComposition={showComposition}
-        />
-      ))}
-      <span data-role="ckb" data-fee={fee || undefined}>
-        {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
-            mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
-        {fee ? (
-          <>
-            <span data-role="fee-label" className="text-text-dim">
-              fee
-            </span>{' '}
-            <CkbAmount form="summary" shannons={-BigInt(p.ckbDelta)} signed={false} tone="plain" />
-          </>
-        ) : (
-          <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
-        )}
-      </span>
+    </span>
+  );
+  const occupied = p.usedDelta !== '0' && (
+    <span
+      data-role="occupied"
+      className={cn('text-meta text-text-dim whitespace-nowrap tabular-nums', !fromSm && 'ml-auto')}
+    >
+      occupied {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
+    </span>
+  );
+  const leadItems = lead.map((item, i) => (
+    // the page's own token, before the CKB that holds it (B4)
+    <ItemOnLine key={`lead${i}`} item={item} tone={itemTone} showComposition={showComposition} />
+  ));
+  const items = (
+    <>
       {phoneObjects && (
         <span
           data-role="phone-items"
@@ -937,26 +991,64 @@ function ParticipantLine({
           <CompositionBadge tier={lineTier} size="sm" />
         </span>
       )}
-      {p.usedDelta !== '0' && (
-        <span
-          data-role="occupied"
-          className="text-meta text-text-dim whitespace-nowrap tabular-nums"
-        >
-          occupied {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
-        </span>
-      )}
-      {phoneObjects && objectsOpen && (
-        <div
-          data-role="phone-objects"
-          className="flex basis-full flex-wrap items-center gap-x-2.5 pl-2 md:hidden"
-        >
-          {p.itemDeltas
-            .filter((i) => i.kind === 'object')
-            .map((item, i) => (
-              <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
-            ))}
+    </>
+  );
+  const openObjects = phoneObjects && objectsOpen && (
+    <div
+      data-role="phone-objects"
+      className="flex basis-full flex-wrap items-center gap-x-2.5 pl-2 md:hidden"
+    >
+      {p.itemDeltas
+        .filter((i) => i.kind === 'object')
+        .map((item, i) => (
+          <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
+        ))}
+    </div>
+  );
+  // Below sm (the phone-rows board, PA-10): the party on one line, the address and its lock
+  // wrapping beside the CKB, which ends the line on the row's one right edge; what else it moved and
+  // its occupied bytes on the line under it, the bytes quiet at that line's right.
+  if (!fromSm) {
+    const moved = lead.length > 0 || rest.length > 0 || lineTier !== null;
+    return (
+      <div data-role="participant" className="text-small leading-row pl-[18px]">
+        <div data-role="party-line" className="flex flex-nowrap items-baseline gap-x-3">
+          <span className="min-w-0 flex-1 basis-0 [overflow-wrap:anywhere]">
+            {party}
+            {lockPart && <> {lockPart}</>}
+            {notePart && <> {notePart}</>}
+          </span>
+          {ckb}
         </div>
-      )}
+        {(moved || occupied) && (
+          <div
+            data-role="party-figures"
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-3"
+          >
+            {leadItems}
+            {items}
+            {occupied}
+          </div>
+        )}
+        {openObjects}
+      </div>
+    );
+  }
+  return (
+    <div
+      data-role="participant"
+      // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
+      // indent, so the continuation never reads as the next participant.
+      className="text-small leading-row flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px]"
+    >
+      {party}
+      {lockPart}
+      {notePart}
+      {leadItems}
+      {ckb}
+      {items}
+      {occupied}
+      {openObjects}
     </div>
   );
 }

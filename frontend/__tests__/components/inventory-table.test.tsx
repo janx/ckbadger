@@ -1,5 +1,13 @@
 import { afterEach, vi } from 'vitest';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { InventoryRows } from '@/components/asset/inventory-table';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
@@ -688,62 +696,60 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     compositionTier: 'pure_ckb',
   };
 
-  it('writes a token in three lines at 358 px: name and holders · standard, transfers, ×H · supply and CKB', () => {
+  // Re-pinned on purpose (lane D4, the phone-rows board; the describe below pins the rows): line 1's
+  // figure is the CKB the cells hold, the list's sort (it was the holders); the tags and the named
+  // figures are line 2, the H-multiplier named and grouped (it was a bare "×1.6393442625" at the
+  // right); line 3 the supply and the occupied CKB; the transfers of the last 24 h left the row for
+  // its title (it was "xUDT · 4 transfers · 0 in 24 h"; xUDT, the default standard, is no tag, as in
+  // the table).
+  it('writes a token in three lines at 358 px: name and CKB · named figures · supply and occupied', () => {
     atContainerWidth(358);
     render(<InventoryRows assetType="token" rows={[asset]} />);
     expect(screen.queryByRole('table')).toBeNull();
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
-      ['identity', 'head', 'T Token', '2 holders'],
-      ['activity', 'body', 'xUDT · 4 transfers · 0 in 24 h', '×1.6393442625'],
-      [
-        'figures',
-        'quiet',
-        // The supply, the CKB held and occupied with its exact share, in a phone row's summary
-        // form (readability R5, re-pinned on purpose: was every digit; each cut figure has its
-        // exact value in its title).
-        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
-        null,
-      ],
+      ['identity', 'head', 'Token', '100 CKB'],
+      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      // the supply and the occupied CKB with its exact share, in a phone row's summary form
+      // (readability R5; each cut figure has its exact value in its title)
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
     expect(row.querySelector('.truncate')).toBeNull();
   });
 
-  it('writes a token in two lines at 608 px, the standard beside the name', () => {
+  // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts (it was two
+  // lines, the standard beside the name and the counts at the right of the supply).
+  it('writes a token as the phone row’s three parts at 608 px', () => {
     atContainerWidth(608);
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', 'T Token · xUDT', '2 holders'],
-      [
-        'figures',
-        // a phone row's summary form (readability R5, re-pinned on purpose)
-        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
-        '4 transfers · 0 in 24 h · ×1.6393442625',
-      ],
+      ['identity', 'Token', '100 CKB'],
+      ['what', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      ['figures', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
   });
 
+  // Re-pinned on purpose (lane D4): the composition chip keeps line 2's right edge (held), the
+  // collection's live objects are named there with its holders and activities, and the id left the
+  // quiet line (PA-09: it ended the row as a bare hash; the row's title and the collection's page
+  // keep it). Line 1's figure is the CKB its cells hold (it was "93 objects").
   it('writes a collection in three lines with the composition mark (board L4)', () => {
     atContainerWidth(358);
     render(<InventoryRows assetType="object" rows={[spore]} />);
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     const lines = phoneLines(row);
     expect(lines.map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', 'Wyltek Founding Members', '93 objects'],
-      ['activity', 'Spore · 32 holders · 95 activities', 'Pure CKB'],
-      [
-        'figures',
-        expect.stringMatching(
-          // a phone row's summary form (R5, re-pinned on purpose: was "100.00000001")
-          /^of 93 minted · 100 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
-        ),
-        null,
-      ],
+      ['identity', 'Wyltek Founding Members', '100 CKB'],
+      ['what', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
+      // a phone row's summary form (R5: was "100.00000001")
+      ['figures', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.64', null],
     ]);
     expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
   });
 
+  // Re-pinned on purpose (lane D4): line 1's figure is the CKB the cells hold (it was "5 live"), the
+  // live, registered and holder counts named on line 2.
   it('writes an identity system with its live, registered and holder counts', () => {
     atContainerWidth(358);
     render(
@@ -763,10 +769,146 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     );
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '.bit', '5 live'],
-      ['activity', '9 ever registered · 2 holders', null],
-      // a phone row's summary form (readability R5, re-pinned on purpose: was "100.00000001")
-      ['figures', '100 CKB held · 61 occupied (61.00%)', null],
+      ['identity', '.bit', '100 CKB'],
+      ['what', '5 live · 9 ever registered · 2 holders', null],
+      // a phone row's summary form (readability R5: was "100.00000001")
+      ['figures', '61 CKB occupied (61.00%)', null],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board, its tokens pane; objects and identities by its rules): line 1 the
+// class's mark, the name and the CKB its cells hold, the figure the list sorts by ("sorted by ckb
+// held in its cells"), at the key's step in the bright ink; line 2 what it is and who uses it, a
+// separated list of named figures that wraps between them — its tags, its holders, its transfers or
+// objects or names, the H-multiplier named and grouped (PA-09: it was a bare "×15019.09") — and, on
+// an object collection's row, the composition chip at its right, where it stays whatever the
+// list's length (the owner's rule: on every row of an object list); line 3 quiet, the rest. The
+// collection's id leaves the row (PA-09: a bare hash at its end); the transfers of the last 24 h
+// leave it for the row's title.
+describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const spore: Asset = {
+    ...asset,
+    id: '0x' + 'cd'.repeat(32),
+    assetType: 'object',
+    standard: 'spore',
+    name: 'Wyltek Founding Members',
+    symbol: null,
+    holdersCount: 32,
+    liveCount: 93,
+    totalSupply: '93',
+    activitiesCount: 95,
+    compositionTier: 'pure_ckb',
+  };
+  const lines = (row: HTMLElement) => phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right]);
+
+  it('writes a token as name and CKB held · tags and named figures · supply and occupied', () => {
+    atContainerWidth(358);
+    render(
+      <InventoryRows
+        assetType="token"
+        rows={[
+          asset,
+          { ...asset, id: '0x' + 'ef'.repeat(32), standard: 'sudt', hMultiplier: '15019.0912' },
+        ]}
+      />
+    );
+    const [token, sudt] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(token)).toEqual([
+      ['identity', 'head', 'Token', '100 CKB'],
+      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+    ]);
+    expect(phoneLines(sudt)[1].left).toBe(
+      'T · sUDT · 2 holders · 4 transfers · H-mult. ×15,019.09'
+    );
+    const labels = Array.from(token.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual([
+      'holders',
+      'transfers',
+      'H-mult.',
+      'supply',
+      'occupied',
+    ]);
+    for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');
+    expect(token.querySelector('[data-line="identity"] > [data-part="right"] > *')).toHaveClass(
+      'text-body',
+      'text-text-bright'
+    );
+  });
+
+  it('writes an object collection with its composition chip on line 2, and no bare id', () => {
+    atContainerWidth(358);
+    render(<InventoryRows assetType="object" rows={[spore]} />);
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(row)).toEqual([
+      ['identity', 'head', 'Wyltek Founding Members', '100 CKB'],
+      ['what', 'body', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
+      ['figures', 'quiet', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.64', null],
+    ]);
+    // the chip holds line 2's right edge: the line does not wrap it under its figures
+    const what = row.querySelector('[data-line="what"]')!;
+    expect(what).toHaveClass('flex-nowrap');
+    expect(what.querySelector('[data-part="right"] [data-composition="pure_ckb"]')).not.toBeNull();
+    expect(row.textContent).not.toMatch(/0xcdcd/);
+  });
+
+  it('writes an identity system with its live, registered and holder counts named', () => {
+    atContainerWidth(358);
+    render(
+      <InventoryRows
+        assetType="identity"
+        rows={[
+          {
+            ...asset,
+            assetType: 'identity',
+            standard: 'dotbit',
+            name: '.bit',
+            liveCount: 5,
+            totalSupply: '9',
+          },
+        ]}
+      />
+    );
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(row)).toEqual([
+      ['identity', 'head', '.bit', '100 CKB'],
+      ['what', 'body', '5 live · 9 ever registered · 2 holders', null],
+      ['figures', 'quiet', '61 CKB occupied (61.00%)', null],
+    ]);
+    expect(dottedItems(row.querySelector('[data-line="what"]')!)).toEqual([
+      '5 live',
+      '9 ever registered',
+      '2 holders',
+    ]);
+  });
+
+  // The board's head(): the class's mark and its 6 px (18), an 18-character name at the key's
+  // 14 px (151.2), the 12 px between the parts and the widest CKB a row's cells hold at the key's
+  // step, "99,999,999,999" (117.6) and " CKB" at the unit's 12 px (28.8): 327.6 of 328 px. A longer
+  // name drops the widest figure under it, whole.
+  it('states its first line, 327.6 of 328 px, and draws an 18-character name with the widest figure', () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    render(
+      <InventoryRows
+        assetType="token"
+        rows={[
+          {
+            ...asset,
+            name: 'Eighteen chars nam',
+            ownedCapacity: '9999999999999999999',
+            ownedKnowledge: '100000000',
+          },
+        ]}
+      />
+    );
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(row)[0].right).toBe('99,999,999,999 CKB');
+    expect(statedHeadPx(row)).toBe(327.6);
+    expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });

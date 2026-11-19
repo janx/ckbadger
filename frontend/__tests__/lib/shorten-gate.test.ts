@@ -404,10 +404,10 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
   'app/forks/page.tsx': [phoneRow('<Miners event={event} size="tight" />')],
   // the folded peer row below 560 px of container (from it, one line at the row size)
   'app/network/nodes-table.tsx': [phoneRow('value={peer.peerId}')],
-  'app/scripts/page.tsx': [phoneRow("shortenHash(s.codeHash, 'tight')")],
+  'app/scripts/page.tsx': [phoneRow('<ShortId value={s.codeHash} kind="hash" size="tight" />')],
   'app/transactions/page.tsx': [phoneRow('hash={tx.hash}')],
   'components/address/address-history.tsx': [
-    phoneRow('<TxHash tx={tx} size="tight" />'),
+    phoneRow('hash={tx.txHash}'),
     phoneRow('<CellOutPoint cell={c} size="tight" />'),
     phoneRow('<CellContains cell={c} size="tight" />'),
   ],
@@ -421,11 +421,7 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
     tileLabel('value={step.decoderReference.hash}'),
     tileLabel('value={step.decoderBinaryHash}'),
   ],
-  'components/asset/inventory-table.tsx': [
-    phoneRow('hash={a.id}'),
-    phoneRow('hash={a.id}'),
-    phoneRow('hash={a.id}'),
-  ],
+  'components/asset/inventory-table.tsx': [phoneRow('hash={a.id}')],
   // the uncles' labels in the 178 px tiles of "Position in the chain"
   'components/blocks/block-position.tsx': [
     svgLabel("shortenHash(uncle.hash, 'tight')"),

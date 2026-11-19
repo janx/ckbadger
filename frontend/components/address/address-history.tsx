@@ -11,10 +11,15 @@ import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
-import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
+import {
+  PoolStatusBadge,
+  TimeInPool,
+  PoolInterpretationNotice,
+  poolStatusLabel,
+} from '@/components/ui/pool-status';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import { ClassMark } from '@/components/ui/class-mark';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
@@ -34,7 +39,8 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { formatUtc8Date } from '@/lib/utils';
 import {
   MAX_BLOCK_BYTES,
   MAX_BLOCK_CYCLES,
@@ -46,6 +52,7 @@ import {
   shortChars,
 } from '@/lib/list-bounds';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 interface AddressActivityProps {
@@ -328,6 +335,137 @@ const columns: ListColumn<AddressTransaction>[] = [
     ),
   },
 ];
+/**
+ * Line 1 of an address's transaction on a phone (the phone-rows board's head(), as the transactions
+ * list's): the tight hash at the key's 14 px (92.4; no stone, as the table's), the 12 px between the
+ * parts and, at 13 px, the wider of where a transaction stands: its block and day, "#99,999,999 ·
+ * 2026-11-02" (24 characters, 187.2), or the widest pool status with the widest wait under 100 days,
+ * "Confirming · in pool for 99d" (28 characters, 218.4): 322.8 of a 360 px phone's 328 px line.
+ */
+const ADDRESS_TX_PHONE_HEAD_PX = phoneHead(
+  'address transactions',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(
+      Math.max(
+        `${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`.length,
+        `${poolStatusLabel('committed_awaiting_index')} · in pool for 99d`.length
+      ),
+      fontPx('small')
+    )
+);
+
+/**
+ * An address's transaction on a phone (the phone-rows board, as the transactions list's row): the
+ * hash and where it stands; what it touched, the scripts by name and the notes the API attaches;
+ * then, quiet, the cells, this address's change and the fee, each figure after its name. Bytes and
+ * cycles are on the transaction's page and in the table; the cards from 560 px (`wide`) keep them at
+ * the end of the quiet line.
+ */
+function AddressTxPhoneRow({ tx, wide }: { tx: AddressTransaction; wide: boolean }) {
+  // where it stands, as the blocks list's head writes its two figures: a unit each, " · " between
+  // them; "this device's clock is behind" in the wait's place is words and breaks between them
+  const where =
+    tx.blockNumber === null ? (
+      <>
+        {tx.poolStatus ? poolStatusLabel(tx.poolStatus) : 'Unconfirmed'}
+        {tx.timeAddedToPool && (
+          <>
+            {' · '}
+            <TimeInPool since={tx.timeAddedToPool} />
+          </>
+        )}
+      </>
+    ) : (
+      <>
+        <NoBreak>
+          <Link href={`/blocks/${tx.blockNumber}`} look="inline">
+            {formatBlockNumber(tx.blockNumber)}
+          </Link>
+        </NoBreak>
+        {tx.timestamp !== null && (
+          <>
+            {' · '}
+            <Utc8Date timestamp={tx.timestamp} />
+          </>
+        )}
+      </>
+    );
+  // the notice draws nothing for an interpretation it has no reason to name: then it is no part
+  const partial =
+    tx.interpretation?.status === 'partial' && (tx.interpretation.reasons ?? []).length > 0;
+  const touched = [
+    partial && (
+      <PoolInterpretationNotice
+        key="notice"
+        interpretation={tx.interpretation}
+        className="text-warning text-meta"
+      />
+    ),
+    tx.txType === 'named' && (
+      <span key="named" className="text-text-dim">
+        Named participant
+      </span>
+    ),
+    ...tx.scriptLabels.map((label) => {
+      const script = scriptLabel(label, tx.txHash);
+      return (
+        <Link key={label} href={`/scripts/${encodeURIComponent(label)}`} look="inline">
+          <ClassMark kind={script.mark} size={12} className="mr-1.5" />
+          {script.name}
+        </Link>
+      );
+    }),
+  ];
+  const figures = [
+    <span key="cells" className="whitespace-nowrap">
+      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
+    </span>,
+    <Labelled key="change" label="this address">
+      <CkbAmount form="summary" shannons={BigInt(tx.capacityChange)} />
+    </Labelled>,
+    <Labelled key="fee" label="fee">
+      <CkbAmount form="summary" shannons={BigInt(tx.fee)} signed={false} tone="plain" />
+    </Labelled>,
+    ...(wide
+      ? [
+          <span key="size" className="whitespace-nowrap">
+            {tx.txSize === null ? 'size unavailable' : `${tx.txSize.toLocaleString('en-US')} B`}
+          </span>,
+          <span key="cycles" className="whitespace-nowrap">
+            {tx.cycles === null
+              ? tx.cyclesStatus === 'failed'
+                ? 'cycles failed'
+                : 'cycles not computed'
+              : `${tx.cycles.toLocaleString('en-US')} cycles`}
+          </span>,
+        ]
+      : []),
+  ];
+  // a part with nothing to say is no line (an ordinary transfer touches no script the API names)
+  const said = touched.some(Boolean);
+  return (
+    <PhoneRow
+      testId="address-tx-row-mobile"
+      head={ADDRESS_TX_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/tx/${tx.txHash}`} look="key">
+              <Hash hash={tx.txHash} size="tight" copyable={false} className="text-body" />
+            </Link>
+          ),
+          right: where,
+        },
+        said && { key: 'what', tone: 'body', left: <Dotted parts={touched} /> },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+      ]}
+    />
+  );
+}
+
 export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
   return (
     <ListTable
@@ -336,22 +474,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
       rows={rows}
       rowKey={(tx) => tx.txHash}
       empty="No transactions."
-      mobileRow={(tx) => (
-        <div data-testid="address-tx-row-mobile" className="text-small space-y-3">
-          <div className="flex flex-wrap justify-between gap-2">
-            <TxHash tx={tx} size="tight" />
-            <TxPosition tx={tx} />
-          </div>
-          <dl className="space-y-2">
-            {columns.slice(2).map((c) => (
-              <div key={c.key} className="flex flex-wrap justify-between gap-2">
-                <dt className="text-text-dim">{c.label}</dt>
-                <dd className="max-w-full text-right">{c.render(tx)}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
+      mobileRow={(tx, wide) => <AddressTxPhoneRow tx={tx} wide={wide} />}
     />
   );
 }

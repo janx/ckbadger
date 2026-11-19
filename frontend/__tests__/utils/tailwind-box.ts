@@ -787,6 +787,17 @@ export function textRunPx(text: string, parent: Element, viewport: number): numb
   return n * (MONO_ADVANCE_EM * fontAt(parent, viewport) + trackingAt(parent, viewport));
 }
 
+/**
+ * How a measure reads a box it cannot size by its classes alone. `capped`: a box capped at its
+ * container (`max-w-full`) is read as its content (lane D4: a phone row's first line at
+ * max-content, where every part stands at its natural width and the line asks whether it fits; a
+ * part capped at the line is its content until the line is narrower, which the measure is there to
+ * find). Off, the default, such a box is refused, as the room it is given is not read.
+ */
+export interface BoxRead {
+  capped?: boolean;
+}
+
 const isBlockLevel = (display: string) =>
   ['block', 'flex', 'grid', 'table', 'list-item'].includes(display);
 
@@ -795,7 +806,7 @@ const isBlockLevel = (display: string) =>
  * them in a flex container; else its inline content on one line, a block child as wide as its
  * widest line.
  */
-export function contentPx(el: Element, viewport: number): number {
+export function contentPx(el: Element, viewport: number, read: BoxRead = {}): number {
   const o = own(el, viewport);
   const flex = o.display === 'flex' || o.display === 'inline-flex';
   if (o.display === 'grid' || o.display === 'inline-grid')
@@ -814,7 +825,7 @@ export function contentPx(el: Element, viewport: number): number {
       continue;
     }
     if (!(child instanceof Element)) continue;
-    const w = outerPx(child, viewport);
+    const w = outerPx(child, viewport, read);
     if (w === null) continue;
     if (flex) items.push(w);
     else if (isBlockLevel(own(child, viewport).display)) {
@@ -834,11 +845,11 @@ export function contentPx(el: Element, viewport: number): number {
  * its own, else its content and its insets, at least its min-width. A part whose width is the room
  * it is given has no width of its own to read: measure the room around it instead.
  */
-export function boxPx(el: Element, viewport: number): number | null {
+export function boxPx(el: Element, viewport: number, read: BoxRead = {}): number | null {
   const o = own(el, viewport);
   if (o.display === 'none' || !o.inFlow) return null;
-  if (o.display === 'contents') return contentPx(el, viewport);
-  if (o.flexible !== null)
+  if (o.display === 'contents') return contentPx(el, viewport, read);
+  if (o.flexible !== null && !(read.capped && o.flexible === 'unread:max-w-full'))
     throw new Error(
       `tailwind-box: <${el.tagName.toLowerCase()} class="${el.className}"> takes the room it is given (${o.flexible})`
     );
@@ -848,7 +859,8 @@ export function boxPx(el: Element, viewport: number): number | null {
     o.display !== 'inline' ||
     REPLACED.has(el.tagName.toLowerCase()) ||
     ['flex', 'inline-flex', 'grid', 'inline-grid'].includes(parent);
-  const box = sized && o.width !== null ? o.width : contentPx(el, viewport) + o.padding + o.border;
+  const box =
+    sized && o.width !== null ? o.width : contentPx(el, viewport, read) + o.padding + o.border;
   return o.minWidth !== null ? Math.max(box, o.minWidth) : box;
 }
 
@@ -856,8 +868,8 @@ export function boxPx(el: Element, viewport: number): number | null {
 const REPLACED = new Set(['svg', 'img', 'input', 'video', 'canvas', 'iframe', 'select']);
 
 /** An element's box and its margins, as its parent lays it (null when it takes no room). */
-export function outerPx(el: Element, viewport: number): number | null {
-  const box = boxPx(el, viewport);
+export function outerPx(el: Element, viewport: number, read: BoxRead = {}): number | null {
+  const box = boxPx(el, viewport, read);
   return box === null ? null : box + own(el, viewport).margin;
 }
 
