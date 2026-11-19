@@ -382,7 +382,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const pool = within(table).getByRole('link', { name: 'Example Pool' });
     expect(pool).toHaveAttribute('href', `/mainnet/address/${miner}`);
-    expect(pool).toHaveAttribute('title', miner);
+    // re-pinned (lane P1 follow-up, MinerLink's title): the pool whole, then the address
+    expect(pool).toHaveAttribute('title', `Example Pool · ${miner}`);
     // T5: the block number is the row's one bright thing; a named pool reads in body ink.
     expect(pool).toHaveClass('text-text');
     expect(pool).not.toHaveClass('text-text-bright');
@@ -823,7 +824,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       const pool = within(table).getByRole('link', { name: long });
       expect(pool.closest('td')).toHaveClass('truncate');
-      expect(pool).toHaveAttribute('title', miner);
+      // re-pinned (lane P1 follow-up, MinerLink's title; the F3-e note): the cell cuts the pool's
+      // name, and the title names it whole, then the address
+      expect(pool).toHaveAttribute('title', `${long} · ${miner}`);
     });
 
     // re-pinned on purpose (the coordinator's ruling): the table from 1,193 px, so at 1,232 too
@@ -1078,16 +1081,17 @@ describe('BlocksPage · Blocks v3 board', () => {
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
       expect(testnet.left).toBe('miner ckt1…x3ze7p'); // testnet's prefix, same form
-      // the miner stays a link to its address, the full address its title
-      for (const [card, name, address] of [
-        [cards[0], 'ckb1…93hhsj', miner],
-        [cards[1], 'Example Pool', miner],
-        [cards[2], 'ckt1…x3ze7p', testnetMiner],
+      // the miner stays a link to its address, the full address its title (re-pinned, lane P1
+      // follow-up, MinerLink's title: a pool's name whole before it)
+      for (const [card, name, address, title] of [
+        [cards[0], 'ckb1…93hhsj', miner, miner],
+        [cards[1], 'Example Pool', miner, `Example Pool · ${miner}`],
+        [cards[2], 'ckt1…x3ze7p', testnetMiner, testnetMiner],
       ] as const) {
         const line = card.querySelector('[data-line="miner"]') as HTMLElement;
         const link = within(line).getByRole('link', { name });
         expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
-        expect(link).toHaveAttribute('title', address);
+        expect(link).toHaveAttribute('title', title);
         // one flex line: the miner on the left, the fees as its right part
         expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);

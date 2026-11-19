@@ -122,7 +122,8 @@ describe('RewardBreakdown', () => {
     const pool = screen.getByRole('link', { name: 'Example Pool' });
     expect(screen.getByTestId('reward-total')).toContainElement(pool);
     expect(pool.getAttribute('href')).toMatch(new RegExp(`/address/${rewardBlock.minerAddress}$`));
-    expect(pool).toHaveAttribute('title', rewardBlock.minerAddress);
+    // re-pinned (lane P1 follow-up): the title names the pool whole, then the address
+    expect(pool).toHaveAttribute('title', `Example Pool · ${rewardBlock.minerAddress}`);
     unmount();
     const unnamed = { ...rewardBlock, minerPool: null };
     wrap(<RewardBreakdown block={unnamed} />);
