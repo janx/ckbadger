@@ -553,7 +553,27 @@ export function WhatMoved({
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  // the parties' ids at the row size, tight only below sm, as the strips write them
+  const size = useTightBelowSm();
   const flows = txFlows({ hash, activity, fee, compensation });
+  // the owners of a Nervos DAO step who are no end of any flow: their CKB did not change (lane
+  // exactness, part B6)
+  const ends = new Set(
+    flows.flatMap((flow) =>
+      [...flow.from, ...flow.to].flatMap((end) =>
+        end.t === 'party'
+          ? [end.party.lockHash]
+          : end.t === 'more'
+            ? end.ends.flatMap((e) => (e.t === 'party' ? [e.party.lockHash] : []))
+            : []
+      )
+    )
+  );
+  const unmoved = activity.participants.flatMap((party) => {
+    if (party.lockHash === null || ends.has(party.lockHash)) return [];
+    const steps = daoStepsOf(activity, party);
+    return steps ? [{ party, steps }] : [];
+  });
   const form: 'ribbons' | 'list' =
     width === null || width >= RIBBON_FORM_MIN_W ? 'ribbons' : 'list';
   const Strip = form === 'ribbons' ? RibbonStrip : ListStrip;
@@ -572,6 +592,35 @@ export function WhatMoved({
             <Strip flow={flow} daoStep={(party) => daoStepsOf(activity, party)} onHover={onHover} />
           </div>
         ))}
+        {/* The Nervos DAO steps of owners whose CKB did not change (lane exactness, part B6, the
+            pages reader's NOTE 3): such an owner is no end of the CKB flow (a withdrawal request whose fee another
+            party paid), so its step is drawn here, its owner named, in the DAO's gold */}
+        {unmoved.length > 0 && (
+          <div data-dao-steps-unmoved="" className="py-4">
+            {unmoved.map(({ party, steps }) => (
+              <div key={party.lockHash!} className="leading-row min-w-0">
+                <span className="text-text-dim text-small">no CKB moved for </span>
+                <ParticipantRefView participant={party} size={size} compact quiet look="inline" />
+                {steps.map((step, i) => (
+                  <div key={i} data-dao-step="" className="text-gold text-small">
+                    {step.words}
+                    {step.capacity !== null && (
+                      <>
+                        {' '}
+                        <CkbAmount
+                          form="summary"
+                          shannons={step.capacity}
+                          signed={false}
+                          tone="plain"
+                        />
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </TerminalPanel>
   );

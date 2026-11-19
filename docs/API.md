@@ -808,11 +808,15 @@ network store too), no re-sync:
   (`utils::assets::free_part`), which refuses an occupied part under zero or
   above the whole.
 - Activities' Nervos DAO actions (part B6) — each `protocolActions[]` entry of
-  protocol `dao` carries `metadata.lockHash`: the lock hash (hex, no `0x`) of
-  the cell that took the step (a deposit's output deposit cell, a withdrawal
-  request's output request cell, a completed withdrawal's input request cell),
-  written by the indexer with the action. A page says whose step each is from
-  it, matching a participant's `lockHash`.
+  protocol `dao` carries, written by the indexer with the action (the route
+  passes the metadata through; its type, free JSON, guarantees no key):
+  `capacity` (shannons, an exact decimal string) and `lockHash`, the lock hash
+  (hex, no `0x`) of the cell that took the step (a deposit's output deposit
+  cell, a withdrawal request's output request cell, a completed withdrawal's
+  input request cell); a `withdraw_request` also `depositBlock`, a
+  `withdraw_complete` also `compensation` (shannons). A page says whose step
+  each is from `lockHash`, matching a participant's `lockHash`, and refuses an
+  action whose owner is missing, malformed or no participant.
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five

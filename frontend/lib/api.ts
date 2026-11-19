@@ -1372,6 +1372,16 @@ interface ActivityProtocolAction {
   /** The protocol's display name from the backend registry (`Fiber`, `RGB++`, …). */
   protocolName: string;
   action: string;
+  /**
+   * The action's facts, free-form JSON with every integer an exact decimal string: the route's type
+   * (`serde_json::Value`) guarantees no key; the indexer writes them (lane exactness, part B6). A
+   * Nervos DAO action (`protocol` `dao`) carries `capacity` (shannons) and `lockHash`, the lock
+   * hash of the cell that took the step, hex without `0x` (a deposit's output deposit cell, a
+   * withdrawal request's output request cell, a completed withdrawal's input request cell); a
+   * withdrawal request `depositBlock` too, a completed withdrawal `compensation` (shannons). Read
+   * it through `protocolActionMeta`, which refuses a malformed value, and whose a step is through
+   * `daoStepOwners`, which refuses an owner missing or no participant of the transaction.
+   */
   metadata: Record<string, ExactJson>;
 }
 
@@ -1379,11 +1389,6 @@ interface ActivityProtocolAction {
 const TAG_TOKEN = 1;
 const TAG_OBJECT = 2;
 const TAG_IDENTITY = 4;
-/**
- * A party whose cells hold this transaction's Nervos DAO step (a deposit made, a withdrawal asked,
- * a deposit withdrawn): the indexer's TAG_DAO (crates/ckbadger-store/src/types.rs, bit 3).
- */
-const TAG_DAO = 8;
 const TAG_CELLBASE = 32;
 
 /** Address activity response (GET /addresses/{addr}/activities). */
@@ -4046,7 +4051,7 @@ export type {
   FiberChannelQueryParams,
 };
 
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_CELLBASE };
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE };
 
 export interface LabelCount {
   label: string;

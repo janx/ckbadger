@@ -386,7 +386,12 @@ function party(
 ): GlobalActivity['participants'][number] {
   return {
     address: seededAddress(tail),
-    lockHash: `0x${tail.padStart(64, '0')}`,
+    // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
+    // is read as one): the tail's characters as hex, padded
+    lockHash: `0x${[...tail]
+      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+      .padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
     ckbDelta,
