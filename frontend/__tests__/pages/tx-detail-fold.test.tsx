@@ -218,6 +218,30 @@ describe('the witnesses fold their runs of empty ones (lane D3)', () => {
     expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
   });
 
+  // Review of phases C and D, SHOULD 5 (lane P1): the runs open and fold by one control after the
+  // list, mounted in both states, so the keyboard's focus stays on it; it was the run line's Pager
+  // part, gone once the runs opened, and a second "fewer ↑" button after the last witness.
+  it('opens and folds the runs by one control after the list, which keeps the focus (P1)', async () => {
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-witness-item-0');
+    const tab = screen.getByTestId('tx-witness-tab');
+    const control = within(tab).getByRole('button', { name: /^all 158\switnesses ↓$/ });
+    const list = document.getElementById(control.getAttribute('aria-controls') ?? '')!;
+    expect(list).not.toBeNull();
+    expect(list).toContainElement(screen.getByTestId('tx-witness-run-1'));
+    expect(within(screen.getByTestId('tx-witness-run-1')).queryByRole('button')).toBeNull();
+    expect(control).toHaveAttribute('aria-expanded', 'false');
+    control.focus();
+    fireEvent.click(control);
+    expect(rows()).toHaveLength(LONG_TX_INPUTS);
+    expect(document.activeElement).toBe(control);
+    expect(control).toHaveTextContent(/^fewer ↑$/);
+    expect(control).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(control);
+    expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
+    expect(document.activeElement).toBe(control);
+  });
+
   it('never folds the witness the URL selects; a lone empty witness keeps its row', async () => {
     mockSearchParams = new URLSearchParams('witness=2');
     render(<TransactionDetailPage />);
