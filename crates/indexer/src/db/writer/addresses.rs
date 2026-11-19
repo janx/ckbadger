@@ -1791,9 +1791,15 @@ mod tests {
         assert_eq!(updated.lock_owned_capacity_sum, huge_delta);
     }
 
-    /// Lane rd/api-lock-names: a live usage update writes the pair's
-    /// reference row only; the registry's label row (label import's alone)
-    /// is left exactly as it was, and no other label row appears.
+    /// Lane rd/api-lock-names: the per-pair usage writer
+    /// (`apply_script_reference_usage_deltas`) writes the pair's reference row
+    /// only; the registry's label row (label import's alone) is left exactly
+    /// as it was, and no other label row appears. A pin of this writer, not of
+    /// the live path: it never wrote `script_info` at the base either. The
+    /// live path's pin is `sync/batch.rs`
+    /// `live_batch_writes_no_script_info_row_and_counts_each_pair_apart`, and
+    /// a block's batch that wrote a label row is refused at commit (store.rs
+    /// `label_import_is_the_only_writer_of_script_info`).
     #[test]
     fn script_usage_update_leaves_the_label_row_untouched() {
         let dir = tempfile::tempdir().unwrap();

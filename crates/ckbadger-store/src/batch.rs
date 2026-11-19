@@ -269,6 +269,21 @@ impl<'a> StoreBatch<'a> {
         };
         let journaled =
             cf_spec(name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        // A never-journaled whole column family admits only the writer its
+        // entry names (`script_info`: label import, L N1), never a block's
+        // batch: the write is refused at commit, the column family named.
+        if let Some(entry) = crate::store::outside_journal_entry(name, key)
+            .filter(|entry| entry.never_journaled && entry.writer.is_some())
+        {
+            journal.error.get_or_insert(anyhow::anyhow!(
+                "a block's batch wrote {name} key=0x{}, which no batch journals: OUTSIDE_JOURNAL \
+                 admits only {:?} ({}) to write it",
+                bytes_to_hex(key),
+                entry.writer,
+                entry.owner
+            ));
+            return true;
+        }
         // A key that is never journaled goes straight into the commit.
         if !journaled || crate::block_overlay::is_outside_journal(name, key) {
             return false;
