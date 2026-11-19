@@ -3,6 +3,7 @@ import {
   exactUnsignedInteger,
   formatCompactInteger,
   formatScaledInteger,
+  cutScaledInteger,
   formatDecimal,
   exactDecimalRatio,
   exactSignedDecimalRatio,
@@ -75,27 +76,28 @@ describe('exact integer display', () => {
 
 // Lane D4 follow-up (the coordinator's item 3; the house rule, readability R5 and the brief's rule
 // 5: a shortened figure is the exact value CUT, never rounded, as a rounded figure can show a digit
-// that is not on chain). The one function that shortens an exact ratio to a few decimals,
-// formatScaledInteger, rounded half-up: 1.005 read "1.01" and 999,999 read "1.00M". It cuts, and the
-// compact forms take the next unit only where the value reaches it.
-describe('an exact ratio shortened is cut, never rounded', () => {
+// that is not on chain). The H-multiplier was shortened by formatScaledInteger, which rounds
+// half-up: 1.005 read "1.01". Its cut is cutScaledInteger. formatScaledInteger rounds still, as its
+// other callers read it — chart readouts and labels, the home network figures, the compact forms, a
+// token's largest share and its holders' bar geometry, the orphan-rate target — and the API writes
+// the epoch-durations buckets' labels by the same half-up rule, which the chart's grid check
+// reproduces with it: whether those cut is the coordinator's ruling (the lane's hand-back lists
+// each, old and new).
+describe('an exact ratio cut, never rounded', () => {
   it('cuts at the display precision where half-up and cut differ', () => {
-    expect(formatScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.00');
-    expect(formatScaledInteger(BigInt(1999), BigInt(1000), 2)).toBe('1.99');
-    expect(formatScaledInteger(BigInt(15), BigInt(10), 0)).toBe('1');
-    expect(formatScaledInteger(BigInt('9007199254740993'), BigInt('1000000000000000'), 2)).toBe(
+    expect(cutScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.00');
+    expect(formatScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.01');
+    expect(cutScaledInteger(BigInt(1999), BigInt(1000), 2)).toBe('1.99');
+    expect(cutScaledInteger(BigInt(15), BigInt(10), 0)).toBe('1');
+    expect(cutScaledInteger(BigInt('9007199254740993'), BigInt('1000000000000000'), 2)).toBe(
       '9.00'
     );
-    expect(formatDecimal('1.005', 2)).toBe('1.00');
-    expect(formatDecimal('15019.0999', 2)).toBe('15019.09');
-    expect(formatDecimal('0.126499999999999999', 2, 100)).toBe('12.64');
+    expect(cutScaledInteger(BigInt(150190999), BigInt(10000), 2)).toBe('15019.09');
   });
 
-  it('takes the next compact unit only where the value reaches it', () => {
-    expect(formatCompactInteger('999999', 'count')).toBe('999.99k');
-    expect(formatCompactInteger('1000000', 'count')).toBe('1.00M');
-    expect(formatCompactInteger('9007199254740993', 'difficulty')).toBe('9.00P');
-    expect(formatCompactRatio(BigInt(999999), BigInt(1))).toBe('999.99k');
-    expect(formatCompactRatio(BigInt(1005), BigInt(1000))).toBe('1.00');
+  it('refuses what formatScaledInteger refuses', () => {
+    expect(() => cutScaledInteger(BigInt(-1), BigInt(1), 2)).toThrow('invalid exact integer');
+    expect(() => cutScaledInteger(BigInt(1), BigInt(0), 2)).toThrow('invalid exact integer');
+    expect(() => cutScaledInteger(BigInt(1), BigInt(1), -1)).toThrow('invalid exact integer');
   });
 });

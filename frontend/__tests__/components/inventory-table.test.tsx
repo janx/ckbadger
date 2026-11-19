@@ -60,10 +60,12 @@ function expectWordHeads(table: HTMLElement) {
 }
 
 describe('Inventory rows', () => {
-  it('rounds a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
+  // Re-pinned on purpose (lane D4 follow-up, the house rule): the H-multiplier is cut at 2 dp, never
+  // rounded — 1.6393442625 reads ×1.63 (it read ×1.64, rounded half-up)
+  it('cuts a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const table = screen.getByRole('table', { name: 'Tokens' });
-    const value = within(table).getByText('×1.64');
+    const value = within(table).getByText('×1.63');
     expect(value.closest('td')).not.toHaveClass('!whitespace-normal');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       'H-mult. ×1.6393442625'
@@ -386,7 +388,8 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
       cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-ckb-amount]')
     ).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
-    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
+    // re-pinned on purpose (lane D4 follow-up): cut, never rounded (it read ×1.64)
+    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.63');
   });
 
   it('moves the id, live of minted, occupied and the exact digits into the row title', () => {
@@ -514,7 +517,7 @@ describe('inventory columns budgeted from what they hold (readability F3-e)', ()
         // a supply to 19 characters ("100,000,000,000,000"); a wider one ends in the ellipsis
         ceil(at('100,000,000,000,000', 13) + 16),
         held,
-        // "×1.64" or "Unavailable", the last column
+        // "×1.63" or "Unavailable", the last column
         ceil(at('Unavailable', 13)),
       ],
       [268, 102, 102, 165, 168, 86],
@@ -709,7 +712,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
-      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
       // the supply and the occupied CKB with its exact share, in a phone row's summary form
       // (readability R5; each cut figure has its exact value in its title)
       ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
@@ -725,7 +728,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', 'Token', '100 CKB'],
-      ['what', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      ['what', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
       ['figures', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
   });
@@ -743,7 +746,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
       // a phone row's summary form (R5: was "100.00000001")
-      ['figures', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.64', null],
+      ['figures', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.63', null],
     ]);
     expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
   });
@@ -820,7 +823,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     const [token, sudt] = screen.getAllByTestId('inventory-row-mobile');
     expect(lines(token)).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
-      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.64', null],
+      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
       ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
     expect(phoneLines(sudt)[1].left).toBe(
@@ -848,7 +851,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(row)).toEqual([
       ['identity', 'head', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'body', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
-      ['figures', 'quiet', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.64', null],
+      ['figures', 'quiet', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.63', null],
     ]);
     // the chip holds line 2's right edge: the line does not wrap it under its figures
     const what = row.querySelector('[data-line="what"]')!;
