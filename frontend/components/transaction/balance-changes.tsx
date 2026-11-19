@@ -2,6 +2,7 @@
 import { ItemDeltaFact, readable } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/lib/occupied';
+import { orderParticipants } from '@/lib/participant-order';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -129,6 +130,10 @@ export function BalanceChanges({
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const form = balanceForm(width);
+  // the order a reader needs (lane P1 follow-up; review chain-b): who gave, then who got, each
+  // the largest first, as the feed and What moved order them; the Net row, with the fee, last. Read
+  // in the section's boundary, so a value it cannot read fails the section in place.
+  const parties = () => orderParticipants(activity.participants);
   const net = () =>
     balanceNet({
       hash: activity.txHash,
@@ -159,7 +164,7 @@ export function BalanceChanges({
                 </span>
                 <span role="columnheader">Items</span>
               </div>
-              {activity.participants.map((p, i) => (
+              {parties().map((p, i) => (
                 <div
                   key={partyKey(p, i)}
                   role="row"
@@ -215,7 +220,7 @@ export function BalanceChanges({
             </div>
           ) : (
             <ul aria-label="Balance changes by participant" data-form={form}>
-              {activity.participants.map((p, i) => {
+              {parties().map((p, i) => {
                 // the three-line card is a phone's (under 480 px of container): tight; the
                 // two-line card is drawn at 1024 too (the 640 px column), beside the summary,
                 // the tiles and What moved, which write the same party at the row size (R9)
