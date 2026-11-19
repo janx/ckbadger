@@ -5,6 +5,7 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { factsOf } from '@/__tests__/utils/facts';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -67,6 +68,36 @@ describe('Cell page against the Cell board', () => {
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
     mockObjectReads();
+  });
+
+  // Lane D2 (PA-13; gate D0′'s strip, with the cell's own four facts): its state, when it was
+  // created, the block that created it and its capacity stand in the status strip under the id
+  // line (the state was on the kind line, the rest in the facts after the lede); the other facts
+  // stay in the cell's facts section, none deleted.
+  it('states status, created, block and capacity in one strip under the id line (lane D2)', async () => {
+    const { container } = view();
+    const strip = await screen.findByRole('group', { name: 'Cell status' });
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'created', 'block', 'capacity']);
+    expect(facts[0][1]).toBe('live');
+    expect(facts[1][1]).toMatch(/^2026-10-22 22:43:55 UTC\+8 · \S+ ago$/);
+    expect(facts[2][1]).toBe('#20,801,533');
+    expect(facts[3][1]).toBe('320 CKB');
+    expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
+      'var(--c-jade)'
+    );
+    // under the stone and the plate, before the lede
+    const { kindLine, below } = expectNamePlate(container, 'Cell');
+    expect(below!.firstElementChild).toBe(strip);
+    expect(below!.lastElementChild).toHaveAttribute('data-detail-lede');
+    // the state is said once: the kind line holds the kind word alone
+    expect(kindLine).toHaveTextContent(/^Cell$/);
+    // the rest stay in the facts section
+    const rest = screen.getByRole('region', { name: 'Cell facts' });
+    expect(rest).not.toHaveTextContent('Capacity');
+    expect(rest).toHaveTextContent('Occupied320 B · 0 free');
+    expect(rest).toHaveTextContent('Epoch15,157 · 112/1800');
+    expect(rest).toHaveTextContent('Unspent for3d 10h');
   });
 
   // A4 review 3: the out point's copy button copies through the one copy path (hooks/useCopy):

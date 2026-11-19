@@ -164,6 +164,39 @@ beforeEach(() => {
 });
 
 describe('Address v3', () => {
+  // Lane D2 (PA-13; gate D0′'s strip, with the address's own four facts): the lock, the live
+  // cells, the transactions and the holdings stand in the status strip under the id line. They
+  // were said twice: on the kind line and again in the metrics row under the balance.
+  it('states the lock, live cells, transactions and holdings in one strip under the id line (lane D2)', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    const strip = await screen.findByRole('group', { name: 'Address status' });
+    await waitFor(() =>
+      expect(factsOf(strip).map(([label]) => label)).toEqual([
+        'lock',
+        'live cells',
+        'transactions',
+        'holdings',
+      ])
+    );
+    expect(factsOf(strip).map(([, value]) => value)).toEqual([
+      'JoyID · type · 22-byte args',
+      '40',
+      '1,021',
+      '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+    ]);
+    expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/scripts/JoyID')
+    );
+    // under the stone and the plate; the kind line holds the kind word alone
+    const { kindLine, below } = expectNamePlate(container, 'Address');
+    expect(below!.firstElementChild).toBe(strip);
+    expect(kindLine).toHaveTextContent(/^Address$/);
+    // said once: no metrics row repeats them
+    expect(screen.queryByRole('region', { name: 'Metrics' })).toBeNull();
+  });
+
   it('renders the real address Fiber endpoint empty array without a page crash', async () => {
     vi.mocked(api.getAddressFiberChannels).mockResolvedValue([]);
     render(<AddressDetailPage />);

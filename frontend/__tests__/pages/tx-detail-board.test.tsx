@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectRestingLink } from '@/__tests__/utils/resting-link';
+import { factsOf } from '@/__tests__/utils/facts';
 import {
   expectBefore,
   expectNamePlate,
@@ -601,6 +602,98 @@ describe('Transaction board, tier 1', () => {
     expect(table).not.toHaveTextContent('502.00000000');
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent(
       'Net−0.00064119 CKB+26 Bthe fee, paid to the miner'
+    );
+  });
+});
+
+// Lane D2 (gate D0′, the transaction board; PA-13, U-13): the facts rail becomes the status strip
+// under the id line — status, time, block and fee — and tier 1 takes the whole measure. A fact is
+// said once: the fee stands in the strip and in the created sheet's balance row, so neither the
+// lede nor the comment repeats it.
+describe('Transaction board, the status strip (lane D2)', () => {
+  it('states status, time, block and fee in one strip under the id line', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    expect(strip).toHaveAttribute('data-status-strip');
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'time', 'block', 'fee']);
+    expect(facts[0][1]).toBe('committed · 27,369 confirmations');
+    // the site's one clock: the date-time, then its age (Utc8Age)
+    expect(facts[1][1]).toMatch(/^2026-10-22 22:43:55 UTC\+8 · \S+ ago$/);
+    expect(facts[2][1]).toBe('#101');
+    // the fee exact (the board's form, its trailing zeros dropped), who paid it at the row size
+    expect(facts[3][1]).toBe(`0.00064119 CKB · paid by ${row('cjk9lz')}`);
+    // committed: the jade dot before the word
+    const dot = strip.querySelector<HTMLElement>('[data-strip-dot]')!;
+    expect(dot.style.backgroundColor).toBe('var(--c-jade)');
+    // the block and the payer are links inside the strip's line
+    expect(within(strip).getByRole('link', { name: '#101' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/101'
+    );
+    // under the id line: the first thing under the stone and the plate, then the summary and the
+    // comment
+    const { below } = expectNamePlate(
+      container.querySelector('header') as HTMLElement,
+      'Transaction'
+    );
+    const summary = await screen.findByTestId('tx-summary');
+    const comment = container.querySelector('.comment') as HTMLElement;
+    expect(Array.from(below!.children)).toEqual([strip, summary, comment]);
+  });
+
+  it('gives tier 1 the whole measure: no facts rail beside it (U-13)', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    await screen.findByRole('group', { name: 'Transaction status' });
+    expect(screen.queryByRole('complementary', { name: 'Transaction facts' })).toBeNull();
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('aside')).toBeNull();
+    expect(tier1.className).not.toMatch(/280px|col-start|row-span/);
+    for (const name of ['What moved', 'Balance changes', 'Cells 1 in → 1 out'])
+      expect(
+        (await screen.findByRole('heading', { name })).closest('[data-tier="1"] > *')!.className
+      ).not.toMatch(/col-start/);
+  });
+
+  it('says the fee once: neither the lede nor the comment repeats it', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    // before: "… to ckb1…. The sender paid a 0.00064119 CKB fee."
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\.$`
+      )
+    );
+    const comment = container.querySelector('.comment') as HTMLElement;
+    // before: three lines, the second "0.00064119 ckb to the miner."
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual(['1 cell became 1.', 'common knowledge grew by 26 bytes.']);
+    // the head states the fee once, in the strip
+    const header = container.querySelector('header') as HTMLElement;
+    expect(header.textContent!.match(/0\.00064119/g)).toHaveLength(1);
+    expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
+      '0.00064119 CKB'
+    );
+    // and the created sheet closes on it
+    expect(await screen.findByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
+  });
+
+  it('states a pool transaction’s status, its time in the pool and its fee, and no block', async () => {
+    const tx = { ...committed(), status: 'pending', pendingSince: '2026-10-30T08:14:17Z' };
+    for (const key of ['blockNumber', 'blockHash', 'index', 'timestamp', 'confirmations'] as const)
+      delete (tx as Partial<TransactionDetail>)[key];
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const facts = factsOf(strip);
+    // a fact the page does not know is not passed: no block, no block time
+    expect(facts.map(([label]) => label)).toEqual(['status', 'pending since', 'fee']);
+    expect(facts[0][1]).toBe('pending');
+    expect(facts[1][1]).toMatch(/^2026-10-30 16:14:17 UTC\+8 · /);
+    expect(facts[2][1]).toBe(`0.00064119 CKB · paid by ${row('cjk9lz')}`);
+    expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
+      'var(--c-info)'
     );
   });
 });

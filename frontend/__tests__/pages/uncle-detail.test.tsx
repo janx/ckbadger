@@ -7,6 +7,8 @@ import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { factsOf } from '@/__tests__/utils/facts';
+import { expectBefore } from '@/__tests__/utils/seals';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -27,6 +29,33 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
 }
 
 describe('Uncle detail page', () => {
+  // Lane D2 (PA-13, PA-06; gate D0′'s strip, with the uncle's own four facts): the block that
+  // included it, its time, the canonical block at its height and its epoch stand in the status
+  // strip under the id line, and its sentence follows the strip as every entity page's lede does
+  // (the facts stood before the head's sentence, which was the page's first content).
+  it('states included by, time, canonical and epoch in one strip under the id line, then its sentence (lane D2)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    const { container } = render(<UncleDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Uncle status' });
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['included by', 'time', 'canonical', 'epoch']);
+    expect(facts[0][1]).toBe('#8,775,638 · uncle 0');
+    expect(facts[1][1]).toMatch(/^2026-02-22 07:59:40 UTC\+8 · \S+ ago · 92 ms after its sibling$/);
+    expect(facts[2][1]).toBe(`0x${'bb'.repeat(4)}…${'bb'.repeat(3)}`);
+    expect(facts[3][1]).toBe('5,414 · 1 / 1,800');
+    // the uncle's state in the dead ink
+    expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
+      'var(--c-text-dim)'
+    );
+    // the id line, the strip, then the sentence: in the head, in that order
+    const header = container.querySelector('header') as HTMLElement;
+    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
+    expect(header).toContainElement(strip);
+    expect(header).toContainElement(sentence);
+    expectBefore(container.querySelector('[data-head-id]') as HTMLElement, strip);
+    expectBefore(strip, sentence);
+  });
+
   it('reads the uncle through its including block, with header and DAO evidence', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);

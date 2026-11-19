@@ -12,6 +12,7 @@ import multiFixture from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncl
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
+import { expectOneRowSeal } from '@/__tests__/utils/seals';
 
 const route = { height: '10', orphan: '17404795' };
 vi.mock('@/src/navigation', () => ({
@@ -107,6 +108,54 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)
     expect(screen.queryByText('scroll sideways for both branches')).toBeNull();
     expect(tree.closest('.overflow-x-auto')).toBeNull();
+  });
+
+  // Lane D2 (U-03, the UI review's ruling R8): a block row leads with its row stone, drawn from its
+  // hash and the transactions it held; the dropped block's in the dead ink, the main chain's
+  // pressed. In the table and in the phone rows.
+  it('leads every block row with its stone, the dropped block’s in the dead ink (lane D2, R8)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const table = await screen.findByRole('table', { name: 'Blocks' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    const byHeight = (text: string) => rows.find((r) => within(r).queryByText(text) !== null)!;
+    const dropped = uncleFixture.orphanedBlocks[0];
+    const [main11, main12] = uncleFixture.canonicalBranch;
+    expectOneRowSeal(
+      byHeight('#11′'),
+      { kind: 'block', hash: dropped.hash, txs: dropped.transactionsCount },
+      'ink'
+    );
+    expectOneRowSeal(
+      byHeight('#11'),
+      { kind: 'block', hash: main11.hash, txs: main11.transactionsCount },
+      'pressed'
+    );
+    expectOneRowSeal(
+      byHeight('#12'),
+      { kind: 'block', hash: main12.hash, txs: main12.transactionsCount },
+      'pressed'
+    );
+  });
+
+  it('leads every phone block row with its stone, the dropped block’s in the dead ink (lane D2, R8)', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const rows = await screen.findAllByTestId('fork-block-row-mobile');
+    const dropped = uncleFixture.orphanedBlocks[0];
+    const row = rows.find((r) => r.textContent!.includes('#11′'))!;
+    expectOneRowSeal(
+      row,
+      { kind: 'block', hash: dropped.hash, txs: dropped.transactionsCount },
+      'ink'
+    );
+    for (const other of rows.filter((r) => r !== row))
+      expect(other.querySelector('[data-seal]')).toHaveAttribute('data-seal-state', 'pressed');
   });
 
   it('lists the blocks in one table with miner, transactions and fate, and the uncle sentence (FF-D5, FF-D6)', async () => {
