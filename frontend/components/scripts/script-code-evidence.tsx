@@ -476,11 +476,17 @@ export function ScriptCapacityEvidenceChart({
   const dateIndex = new Map(chart.data.map((point, index) => [point.date, index]));
   const displaySeries = chart.series.map((series) => ({
     ...series,
-    label: series.key === 'used' ? 'Occupied' : series.key === 'unused' ? 'Free' : series.label,
+    // the held bands by the routes' names (lane exactness, part B, S4: they were used and unused)
+    label:
+      series.key === 'occupiedCapacity'
+        ? 'Occupied'
+        : series.key === 'freeCapacity'
+          ? 'Free'
+          : series.label,
     color:
-      series.key === 'used'
+      series.key === 'occupiedCapacity'
         ? 'var(--c-data-framing)'
-        : series.key === 'unused'
+        : series.key === 'freeCapacity'
           ? 'var(--c-jade-dim)'
           : series.color,
   }));

@@ -546,6 +546,8 @@ fn format_transaction_rates(
     ))
 }
 
+/// The status bar's hash rate in the unit its exact value reaches, cut at two places, never
+/// rounded (lane exactness, part B (the third read's S3): it chose the unit at a lowered threshold so a half-up carry landed in it).
 fn format_hash_rate(hash_rate: u128) -> String {
     let (scale, unit) = [
         (1_000_000_000_000_000_000u128, "EH/s"),
@@ -556,14 +558,11 @@ fn format_hash_rate(hash_rate: u128) -> String {
         (1_000, "KH/s"),
     ]
     .into_iter()
-    .find(|(scale, _)| hash_rate >= *scale - *scale / 200_000)
+    .find(|(scale, _)| hash_rate >= *scale)
     .unwrap_or((1, "H/s"));
     let whole = hash_rate / scale;
-    let remainder = hash_rate % scale;
-    let cents = ckbadger_common::work::rounded_ratio(remainder * 100, scale)
-        .expect("scale is nonzero and bounded");
-    let whole = whole + cents / 100;
-    format!("{whole}.{:02} {unit}", cents % 100)
+    let cents = (hash_rate % scale) * 100 / scale;
+    format!("{whole}.{cents:02} {unit}")
 }
 
 fn format_difficulty(difficulty: u64) -> String {
@@ -583,12 +582,12 @@ fn format_difficulty(difficulty: u64) -> String {
         (KILO, "K"),
     ]
     .into_iter()
-    .find(|(scale, _)| difficulty >= *scale - *scale / 200_000);
+    // the unit the exact value reaches, the figure cut in it (lane exactness, part B (the third read's S3))
+    .find(|(scale, _)| difficulty >= *scale);
     let Some((scale, unit)) = scale else {
         return difficulty.to_string();
     };
-    let hundredths = ckbadger_common::work::rounded_ratio(difficulty as u128 * 100, scale as u128)
-        .expect("u64 difficulty times 100 fits u128 and scale is nonzero");
+    let hundredths = difficulty as u128 * 100 / scale as u128;
     format!("{}.{:02} {unit}", hundredths / 100, hundredths % 100)
 }
 
@@ -3747,8 +3746,8 @@ fn average_daily_difficulty(
             stats.block_count, stats.difficulty_sum
         )));
     }
-    ckbadger_common::work::rounded_ratio(stats.difficulty_sum, stats.block_count as u128)
-        .map_err(|e| ApiError::internal(format!("daily difficulty date={date_key}: {e}")))
+    // the day's average, cut to the integer the chart states, never rounded (lane exactness, part B (the third read's S3))
+    Ok(stats.difficulty_sum / stats.block_count as u128)
 }
 
 /// Exact daily network hash rate in hashes per second (H/s, the unit of
@@ -5435,8 +5434,11 @@ async fn get_asset_ecosystem(
 
 #[cfg(test)]
 mod tests {
+    // re-pinned for lane exactness, part B (the third read's S3): the unit is the one the exact value reaches, and the figure is cut in
+    // it: one under the unit is 999.99 of the unit below, the unit itself 1.00 (half up, the unit
+    // was chosen at scale − scale / 200,000 so a carry landed in it: 999,995 read 1.00 M)
     #[test]
-    fn compact_work_display_promotes_rounded_unit_boundaries() {
+    fn compact_work_display_takes_the_unit_the_value_reaches() {
         for (scale, previous, next) in [
             (1_000_000u128, "K", "M"),
             (1_000_000_000, "M", "G"),
@@ -5444,26 +5446,31 @@ mod tests {
             (1_000_000_000_000_000, "T", "P"),
             (1_000_000_000_000_000_000, "P", "E"),
         ] {
-            let boundary = scale - scale / 200_000;
+            let lowered = scale - scale / 200_000;
+            assert_eq!(format_hash_rate(scale - 1), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(lowered), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(scale), format!("1.00 {next}H/s"));
             assert_eq!(
-                format_hash_rate(boundary - 1),
-                format!("999.99 {previous}H/s")
-            );
-            assert_eq!(format_hash_rate(boundary), format!("1.00 {next}H/s"));
-            assert_eq!(
-                format_difficulty((boundary - 1) as u64),
+                format_difficulty((scale - 1) as u64),
                 format!("999.99 {previous}")
             );
-            assert_eq!(format_difficulty(boundary as u64), format!("1.00 {next}"));
+            assert_eq!(
+                format_difficulty(lowered as u64),
+                format!("999.99 {previous}")
+            );
+            assert_eq!(format_difficulty(scale as u64), format!("1.00 {next}"));
         }
     }
 
+    // re-pinned for lane exactness, part B (the third read's S3): cut, never rounded: 9.007… P is 9.00 P (was 9.01), 9.005… P 9.00 P (was
+    // 9.01), 1.005 P 1.00 P (was 1.01)
     #[test]
-    fn difficulty_display_rounds_exactly_above_f64_integer_precision() {
-        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.01 P");
-        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.01 P");
-        assert_eq!(super::format_difficulty(9_004_999_999_999_999), "9.00 P");
-        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.01 P");
+    fn difficulty_display_cuts_exactly_above_f64_integer_precision() {
+        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.00 P");
+        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.00 P");
+        assert_eq!(super::format_difficulty(9_009_999_999_999_999), "9.00 P");
+        assert_eq!(super::format_difficulty(9_010_000_000_000_000), "9.01 P");
+        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.00 P");
     }
     use super::*;
 
@@ -5999,8 +6006,9 @@ mod tests {
 
     #[test]
     fn test_network_hash_rate_formats_integer_without_float_rounding() {
-        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.91 PH/s");
-        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.01 PH/s");
+        // re-pinned for lane exactness, part B (the third read's S3): cut, 93.905 PH/s is 93.90 (was 93.91), 9.007… PH/s 9.00 (was 9.01)
+        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.90 PH/s");
+        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.00 PH/s");
         assert_eq!(format_hash_rate(999), "999.00 H/s");
     }
 
@@ -6011,11 +6019,14 @@ mod tests {
             block_count: 2,
             total_uncles: 0,
         };
+        // re-pinned for lane exactness, part B (the third read's S3): the day's average difficulty is cut to the integer, never rounded:
+        // (2 × 9,007,199,254,740,993 + 1) / 2 is 9,007,199,254,740,993.5, 9,007,199,254,740,993
+        // (half up …994)
         assert_eq!(
             average_daily_difficulty("20261024", &stats)
                 .unwrap()
                 .to_string(),
-            "9007199254740994"
+            "9007199254740993"
         );
         let corrupt = ckbadger_store::DailyBlockStats {
             difficulty_sum: 0,

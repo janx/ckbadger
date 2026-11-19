@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse, RankedPage,
@@ -1887,20 +1887,7 @@ fn build_capacity_history_chart_with_initial(
 
     Ok(StackedAreaChartResponse {
         data,
-        series: vec![
-            StackedAreaSeries {
-                id: None,
-                key: "used".to_string(),
-                label: "Used".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                id: None,
-                key: "unused".to_string(),
-                label: "Unused".to_string(),
-                color: "#00c389".to_string(),
-            },
-        ],
+        series: super::asset_calendar::held_series(),
         title,
         bands: None,
     })
@@ -1929,7 +1916,7 @@ fn latest_capacity_from_chart(
         );
         Ok(value)
     };
-    let used = read("used")?;
+    let used = read("occupiedCapacity")?;
     // the day's capacity, which the point states (lane exactness, part A2, N6: the total was
     // used + unused here)
     let total = read("capacity")?;
@@ -4648,8 +4635,8 @@ mod tests {
             data: vec![StackedAreaDataPoint {
                 date: "2026-10-24".to_string(),
                 values: HashMap::from([
-                    ("used".to_string(), "oops".to_string()),
-                    ("unused".to_string(), "1".to_string()),
+                    ("occupiedCapacity".to_string(), "oops".to_string()),
+                    ("freeCapacity".to_string(), "1".to_string()),
                 ]),
             }],
             series: vec![],

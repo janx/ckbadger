@@ -13,7 +13,7 @@ import {
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { expectHeadId } from '@/__tests__/utils/head-id';
 import { api } from '@/lib/api';
-import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { mockItemReads, emptyPage, rankedPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   clusterDetailProducer,
@@ -195,7 +195,7 @@ it('retains the stored description and exact current decoder version without inv
 });
 it('handles empty gallery and holder sets without using collection totals as page lengths', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
-  vi.mocked(api.getSporeClusterHolders).mockResolvedValue(emptyPage());
+  vi.mocked(api.getSporeClusterHolders).mockResolvedValue(rankedPage());
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByText('No objects.')).toBeInTheDocument();
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();

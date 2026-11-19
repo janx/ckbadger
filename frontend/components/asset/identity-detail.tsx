@@ -45,6 +45,7 @@ import { identityTitleParts, type IdentityItemKind } from '@/lib/identity-title'
 import { formatStandard } from '@/components/activity-event-row';
 import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { versionFree } from '@/lib/held-point';
 
 type IdentityKind = IdentityItemKind;
 export interface CanonicalIdentityDetailProps {
@@ -194,7 +195,13 @@ export function CanonicalIdentityDetail({
   const subject = parts.full;
   const current = versions.data?.data.at(-1);
   const held = current ? (current.isLive ? current.capacity : '0') : null,
-    occupied = current ? (current.isLive ? current.occupiedCapacity : '0') : null;
+    occupied = current ? (current.isLive ? current.occupiedCapacity : '0') : null,
+    // the free part, the route's (lane exactness, part B5: it was held − occupied, in two places below)
+    free = current
+      ? current.isLive
+        ? versionFree(current, `${current.txHash}:${current.outputIndex}`).toString()
+        : '0'
+      : null;
   const collectionHref = getIdentityCollectionHref(standard, kind);
   const didDecoded = p?.kind === 'did_ckb' ? p.versions.at(-1)!.decoded : undefined;
   const records =
@@ -408,24 +415,14 @@ export function CanonicalIdentityDetail({
               'none is free.'
             ) : (
               <>
-                <CkbAmount
-                  form="exact"
-                  shannons={BigInt(held) - BigInt(occupied)}
-                  signed={false}
-                  tone="plain"
-                />{' '}
-                are free.
+                <CkbAmount form="exact" shannons={BigInt(free!)} signed={false} tone="plain" /> are
+                free.
               </>
             )}
           </p>
         )}
         {held !== null && occupied !== null && (
-          <CapacityPartition
-            subject={subject}
-            total={held}
-            occupied={occupied}
-            free={(BigInt(held) - BigInt(occupied)).toString()}
-          />
+          <CapacityPartition subject={subject} total={held} occupied={occupied} free={free!} />
         )}
         {versions.data ? (
           <>

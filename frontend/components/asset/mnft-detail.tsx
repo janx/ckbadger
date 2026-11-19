@@ -37,6 +37,7 @@ import {
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { versionFree } from '@/lib/held-point';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -384,8 +385,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               note: current ? (
                 <>
                   <span className="text-text">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
-                  occupied · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))}{' '}
-                  free
+                  occupied ·{' '}
+                  {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))} free
                 </>
               ) : undefined,
             },

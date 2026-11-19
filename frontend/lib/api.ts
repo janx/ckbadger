@@ -131,6 +131,16 @@ interface CursorPaginatedResponse<T> {
 }
 
 /**
+ * A page of a ranked list (the route's `RankedPage`: the holders of a token, a collection or a
+ * cluster). `firstRank` is the 1-based rank of the page's first row in the read view that served
+ * the page (lane exactness, part A3); a row's rank is it plus the row's place, read by
+ * lib/pagination.ts `rankedRead` / `rankOf` (part B5), which refuse a response without it.
+ */
+interface RankedCursorPage<T> extends CursorPaginatedResponse<T> {
+  firstRank: number;
+}
+
+/**
  * A collection feed page (`/assets/objects/{id}/activity-feed`, `/transactions`, the Spore cluster
  * feeds). Round 3 (contracts L2, coordinator ruling): `total` is null = unknown while the indexer
  * has not derived the collection's activity count (say nothing, never 0).
@@ -1199,7 +1209,6 @@ export interface AddressHoldings {
   lockScriptHash: string;
   balance: string;
   occupiedCapacity: string;
-  /** Ordinary free capacity; DAO free is a disjoint partition. */
   /**
    * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
    * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
@@ -1373,6 +1382,16 @@ interface ActivityProtocolAction {
   /** The protocol's display name from the backend registry (`Fiber`, `RGB++`, …). */
   protocolName: string;
   action: string;
+  /**
+   * The action's facts, free-form JSON with every integer an exact decimal string: the route's type
+   * (`serde_json::Value`) guarantees no key; the indexer writes them (lane exactness, part B6). A
+   * Nervos DAO action (`protocol` `dao`) carries `capacity` (shannons) and `lockHash`, the lock
+   * hash of the cell that took the step, hex without `0x` (a deposit's output deposit cell, a
+   * withdrawal request's output request cell, a completed withdrawal's input request cell); a
+   * withdrawal request `depositBlock` too, a completed withdrawal `compensation` (shannons). Read
+   * it through `protocolActionMeta`, which refuses a malformed value, and whose a step is through
+   * `daoStepOwners`, which refuses an owner missing or no participant of the transaction.
+   */
   metadata: Record<string, ExactJson>;
 }
 
@@ -1380,11 +1399,6 @@ interface ActivityProtocolAction {
 const TAG_TOKEN = 1;
 const TAG_OBJECT = 2;
 const TAG_IDENTITY = 4;
-/**
- * A party whose cells hold this transaction's Nervos DAO step (a deposit made, a withdrawal asked,
- * a deposit withdrawn): the indexer's TAG_DAO (crates/ckbadger-store/src/types.rs, bit 3).
- */
-const TAG_DAO = 8;
 const TAG_CELLBASE = 32;
 
 /** Address activity response (GET /addresses/{addr}/activities). */
@@ -1694,6 +1708,8 @@ export interface ItemCellVersion {
   ownerAddress: string;
   capacity: string;
   occupiedCapacity: string;
+  /** The free part, capacity − occupied, the route's (`utils::assets::free_part`; lane exactness, part B5). */
+  freeCapacity: string;
   lock: Script;
   type: Script | null;
   anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };
@@ -2043,7 +2059,7 @@ interface TokenHolder {
   lockKind: string | null;
 }
 
-export interface TokenHoldersResponse extends CursorPaginatedResponse<TokenHolder> {
+export interface TokenHoldersResponse extends RankedCursorPage<TokenHolder> {
   totalSupply: string;
   anchor: { blockNumber: number; blockHash: string } | null;
 }
@@ -2214,12 +2230,7 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
-  /**
-   * The live DAO cells under a legacy name: `liveCellsCount`, which the route checks it equals (a
-   * withdrawal request is no active deposit). Its last reader is the home page's card; it goes when
-   * that reads `liveCellsCount` (lane exactness, part A2, S2; part B).
-   */
-  activeDeposits: number;
+  /** The deposit cells, the home page's "Active deposits" (a withdrawal request is none). */
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
   /** The live DAO cells, deposits and withdrawal requests, the route's (lane exactness, part A). */
@@ -2860,7 +2871,9 @@ interface UncleRateChartResponse extends ChartResponse {
  * one block (`blockNumber`); every amount is a shannon string. `circulating` = knowledge + daoFree
  * + free exactly. `knowledge` is the occupied capacity of every live cell (DAO cells included),
  * `daoFree` the free capacity of the live NervosDAO cells (deposits and withdraw requests), `free`
- * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part.
+ * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part: the
+ * home page's "in all DAO cells", the Supply chart's deposited + withdrawing at this block
+ * (`/charts/total-supply`, `daoDeposited + daoWithdrawing`: one amount, lane exactness, part B5).
  */
 interface CkbytesAllocation {
   blockNumber: number;
@@ -3369,7 +3382,7 @@ interface MempoolTransaction {
   fee: string;
   size: number;
   cycles: number;
-  /** Shannon per byte, rounded half-up to two decimals. */
+  /** Shannon per byte, cut at two decimals (lane exactness, part B4: it was half up). */
   feeRate: string;
   ancestorsCount: number;
   timestamp: number;
@@ -3407,7 +3420,7 @@ interface PendingProposal {
   fee: string | null;
   size: number | null;
   cycles: number | null;
-  /** Shannon per byte, rounded half-up to two decimal places. */
+  /** Shannon per byte, cut at two decimal places (lane exactness, part B4). */
   feeRate: string | null;
 }
 
@@ -3422,7 +3435,7 @@ interface BlockFeeStats {
   totalSize: number;
   totalCycles: number | null;
   cyclesStatus: 'pending' | 'complete' | 'failed';
-  /** Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples. */
+  /** Shannon per 1000 bytes, cut at two decimals (lane exactness, part B4); null without fee samples. */
   avgFeeRate: string | null;
   minFeeRate: string | null;
   maxFeeRate: string | null;
@@ -3959,6 +3972,7 @@ export type {
   MostUtilizedScriptsChartResponse,
   MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
+  RankedCursorPage,
   PoolSummary,
   PoolStatus,
   AddressPendingSummary,
@@ -4045,7 +4059,7 @@ export type {
   FiberChannelQueryParams,
 };
 
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_CELLBASE };
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE };
 
 export interface LabelCount {
   label: string;
@@ -4943,7 +4957,7 @@ export const api = {
   getSporeClusterHolders: (
     clusterId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -5051,7 +5065,7 @@ export const api = {
   getObjectCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -5092,7 +5106,7 @@ export const api = {
   getIdentityCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);

@@ -93,7 +93,7 @@ pub(super) struct DaoLifecycleRecord {
 #[serde(rename_all = "camelCase")]
 pub(super) struct DaoStatisticsAnchor {
     pub(super) tip_block_number: i64,
-    pub(super) active_deposits: i64,
+    pub(super) live_cells_count: i64,
     pub(super) total_deposited: String,
     pub(super) pending_withdrawal_capacity: String,
 }
@@ -594,10 +594,10 @@ pub(super) fn compare_statistics(
 ) -> anyhow::Result<Vec<Finding>> {
     let mut details = Vec::new();
     let live = chain.deposits + chain.requests;
-    if u64::try_from(stats.active_deposits).ok() != Some(live) {
+    if u64::try_from(stats.live_cells_count).ok() != Some(live) {
         details.push(format!(
-            "activeDeposits={} but the chain has {live} live DAO cells ({} deposits + {} withdraw requests)",
-            stats.active_deposits, chain.deposits, chain.requests
+            "liveCellsCount={} but the chain has {live} live DAO cells ({} deposits + {} withdraw requests)",
+            stats.live_cells_count, chain.deposits, chain.requests
         ));
     }
     let deposited = parse_shannons(&stats.total_deposited, "totalDeposited", "/dao/statistics")?;
@@ -972,7 +972,7 @@ mod tests {
 
         let stats = DaoStatisticsAnchor {
             tip_block_number: 100,
-            active_deposits: 2,
+            live_cells_count: 2,
             total_deposited: "100".to_string(),
             pending_withdrawal_capacity: "200".to_string(),
         };
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(stat_findings.len(), 1);
         let details = &stat_findings[0].details;
         assert!(
-            details.iter().any(|d| d.starts_with("activeDeposits=2")),
+            details.iter().any(|d| d.starts_with("liveCellsCount=2")),
             "{details:?}"
         );
         assert!(
@@ -1288,7 +1288,7 @@ mod tests {
 
     fn consistent_stats() -> serde_json::Value {
         json!({
-            "tipBlockNumber": ANCHOR, "activeDeposits": 2,
+            "tipBlockNumber": ANCHOR, "liveCellsCount": 2,
             "totalDeposited": "100000000000", "pendingWithdrawalCapacity": "10000000000"
         })
     }
@@ -1328,7 +1328,7 @@ mod tests {
             ),
         ]);
         let stats = json!({
-            "tipBlockNumber": ANCHOR, "activeDeposits": 3,
+            "tipBlockNumber": ANCHOR, "liveCellsCount": 3,
             "totalDeposited": "100000000000", "pendingWithdrawalCapacity": "20000000000"
         });
         // The cell layer saw the spend: the summary is right.

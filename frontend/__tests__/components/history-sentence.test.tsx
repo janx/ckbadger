@@ -267,16 +267,16 @@ describe('the script history: 160 px under its sentence', () => {
               {
                 date: '2025-01-07',
                 values: {
-                  used: String(600 * 1e8),
-                  unused: String(400 * 1e8),
+                  occupiedCapacity: String(600 * 1e8),
+                  freeCapacity: String(400 * 1e8),
                   capacity: String(1000 * 1e8),
                 },
               },
               {
                 date: '2025-01-08',
                 values: {
-                  used: String(600 * 1e8),
-                  unused: String(400 * 1e8),
+                  occupiedCapacity: String(600 * 1e8),
+                  freeCapacity: String(400 * 1e8),
                   capacity: String(1000 * 1e8),
                 },
               },
@@ -313,7 +313,10 @@ describe('the script history: 160 px under its sentence', () => {
                 data: [
                   {
                     date: '2025-01-07',
-                    values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
+                    values: {
+                      occupiedCapacity: String(600 * 1e8),
+                      freeCapacity: String(400 * 1e8),
+                    },
                   },
                 ],
               } as never
@@ -326,7 +329,11 @@ describe('the script history: 160 px under its sentence', () => {
         )
       // re-pinned on purpose (lane P2's fifth round, item 3): a day without the whole is from an API
       // older than this page, refused by name (it was "2025-01-07: capacity", the number reader's)
-    ).toThrow('JoyID 2025-01-07: the API sends no capacity: it is older than this page');
+    ).toThrow(
+      // the one reader of a held day (lib/held-point.ts), its context the plot's (lane exactness,
+      // part B, S4)
+      'JoyID capacity history 2025-01-07: the API sends no capacity: it is older than this page'
+    );
     error.mockRestore();
   });
 });

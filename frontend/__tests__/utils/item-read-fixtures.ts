@@ -6,6 +6,7 @@ import {
   type DotCellItem,
   type SporeDobDecoded,
   type CursorPaginatedResponse,
+  type RankedCursorPage,
   type AssetCapacityHistory,
 } from '@/lib/api';
 import * as producer from '@/__tests__/msw/fixtures/item-producer';
@@ -22,6 +23,11 @@ export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> =>
     hasMore: false,
     nextCursor: null,
   });
+/** One page of a ranked list (a holders list), its first row the first (lane exactness, part B5). */
+export const rankedPage = <T>(data: T[] = []): RankedCursorPage<T> => ({
+  ...emptyPage(data),
+  firstRank: 1,
+});
 const SECP_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 export const protocols: Record<ItemKind, ItemProtocol> = {
   spore: producer.sporeProtocolProducer,
@@ -124,15 +130,19 @@ export function mockItemReads() {
     anchor: { blockNumber: 100, blockHash: '0x' + 'aa'.repeat(32), chainTime: '1700000000000' },
     title: 'Collection capacity',
     data: [
-      { date: '2023-11-13', values: { used: '0', unused: '0', capacity: '0' } },
+      { date: '2023-11-13', values: { occupiedCapacity: '0', freeCapacity: '0', capacity: '0' } },
       {
         date: '2023-11-14',
-        values: { used: '183200000000', unused: '216800000000', capacity: '400000000000' },
+        values: {
+          occupiedCapacity: '183200000000',
+          freeCapacity: '216800000000',
+          capacity: '400000000000',
+        },
       },
     ],
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   };
   vi.spyOn(api, 'getSporeClusterCapacityChart').mockResolvedValue(chart);
@@ -141,7 +151,7 @@ export function mockItemReads() {
   // B4 second fix round: a holder whose address, lock hash and lock are one lock's, a gallery
   // row's default-lock owner (the cell's owner beside the default lock's name was not one)
   const holder = producer.collectionGalleryProducer.data[0];
-  const holders = emptyPage([
+  const holders = rankedPage([
     {
       lockScriptHash: holder.ownerLockHash,
       address: holder.ownerAddress,

@@ -105,7 +105,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
     const hero = screen.getByRole('region', { name: 'JoyID' });
     expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
-      /in 161,049 live cells · 4\.19% occupied$/
+      // lane exactness, part B2: 19,096,283 of 456,002,179.57 CKB occupied is 4.1877…%, 4.18% (half up 4.19%)
+      /in 161,049 live cells · 4\.18% occupied$/
     );
     const metrics = within(hero.parentElement!).getByLabelText('Script figures');
     expect(metrics).toHaveTextContent('2,707,778 cells');
@@ -625,7 +626,7 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
     const row = amount.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
-    expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.19% occupied$/);
+    expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.18% occupied$/);
     // lane P2's third round (item 10): the companion line states the figure's counts, a statement
     // in the reading ink
     expect(row.lastElementChild).toHaveClass('text-body', 'text-text');

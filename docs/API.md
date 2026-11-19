@@ -196,7 +196,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
 - `RankedPage<CollectionHolderResponse>` — holders with item counts, a cursor page with `firstRank`
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
-- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
+- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 
 ---
 
@@ -506,9 +506,12 @@ itemCount: number, compositionCounts: <the same six counters>}`. These are
   whole-owner totals, independent of the currently displayed item page.
 
 All capacities/compensation are exact decimal **shannon strings**. The balance
-is stated in three disjoint parts, each true by its name, and the route fails
-with the address and the operands if they do not make it:
+is stated in three disjoint parts, each true by its name, which make it by their
+definition (the balance is the classes' capacity summed):
 `balance = daoCellsCapacity + otherCellsOccupiedCapacity + otherCellsFreeCapacity`.
+The check the route makes is of each live cell, in its scan: a cell whose
+capacity is below its occupied bytes fails the request, named by its out point
+(part B, the third read's N1).
 `daoCellsCapacity` is the whole capacity of the address's Nervos DAO cells
 (deposits and withdrawal requests, the `dao` class); `otherCellsOccupiedCapacity`
 is what pays for the bytes of its other cells; `otherCellsFreeCapacity` is the
@@ -680,6 +683,12 @@ bands it draws and the wholes it divides by, read-only on the store:
   amount the site calls circulating everywhere; it is not a band. (Part A2's
   four bands keyed the first `circulatingNotDeposited`, the withdrawal requests
   in it; lane D1's keyed it `outsideDao` with the same meaning.)
+  `daoDeposited + daoWithdrawing` is `protocol_deposited`, the capacity of
+  every live DAO cell (deposits and withdrawal requests) at the day's end: the
+  amount `/statistics/ckbytes-allocation`'s `daoCapacity` states at its block
+  (the home page's "in all DAO cells"; the indexer sums the same live DAO
+  entries' capacity for both), the two figures one amount at two moments
+  (part B5).
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
   `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
@@ -709,7 +718,10 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/uncle-rate` (a fraction, six decimals), `/charts/capacity-turnover-ratio`
   (a percentage, six decimals), `/charts/address-cohort-retention` (a
   percentage, six decimals) and `/dao/charts/circulation-ratio` (a percentage,
-  four decimals) cut their shares at their precision, never round.
+  four decimals) cut their shares at their precision, never round. An API older
+  than this cut sent the same shapes rounded half up, so a page cannot tell one
+  from the other and draws it (part B8: accepted, the frontend and the API ship
+  together).
 - `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
   the charts read (transfers, the three DAO actions, tokens, objects,
   identities, script calls) summed. Kinds overlap, an action counting in each
@@ -752,9 +764,14 @@ network store too), no re-sync:
   ranking cached by the view's tip block). A cursor is a place in the order
   (count or balance descending, lock ascending), not a row: a page starts at the
   first row after it, whether or not its holder still stands there (a holder
-  that moved or left no longer makes the next page a 400).
+  that moved or left no longer makes the next page a 400). The holders pages
+  rank each row by it (the page's `firstRank` plus the row's place) and count
+  the pager's rows from it (part B5); they refuse a response without it, as an
+  API older than the page.
 - `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
-  pool, pending and proposed (not `awaitingIndex`).
+  pool, pending and proposed (not `awaitingIndex`). The pool tab states its
+  pending, proposed and awaiting counts apart and sums none of them, so no page
+  reads `totals.waiting` (part B5).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
 - `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
@@ -766,15 +783,16 @@ network store too), no re-sync:
   `withdrawalRequestCellsCount` (withdrawal requests) and `liveCellsCount`
   (their total, the live DAO cells); `secondaryIssuance` (shannons): the
   miners' share, the depositors' compensation and the burnt share, which make
-  it. `activeDeposits` is the same live-cell total under its legacy name (a
-  withdrawal request is no active deposit); the route refuses a row where it is
-  not the deposits and the requests, and it goes when its last reader, the home
-  page, reads `liveCellsCount`.
+  it. The legacy `activeDeposits`, the same live-cell total under an untrue
+  name (a withdrawal request is no active deposit), is no longer sent (part B5);
+  the route still refuses a stored row whose legacy count is not the deposits and
+  the requests. The home page's "Active deposits" reads `depositCellsCount`.
 - `GET /charts/block-time-distribution` — `bucketCounts`: each bucket's
   intervals, one per point of `data`, so a tie or the most common interval is
   read from counts, not from the cut shares.
 - `GET /tokens/{type_hash}/charts/capacity-history` — each point states
-  `capacity` beside `used` and `unused`, as the other "CKB held" histories do.
+  `capacity` beside `occupiedCapacity` and `freeCapacity`, as the other "CKB held"
+  histories do.
 - `GET /network/map` — a located node whose GeoIP record has no country is
   `Unknown`, as the distributions name it (it was `""`).
 - Cut at the places the pages show, never rounded half up (part A2, S5), the
@@ -782,7 +800,36 @@ network store too), no re-sync:
   `/statistics/network`'s `avgBlockTime` (two) and `tps`,
   `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
   `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
-  realized APC (two) and `/dao/evidence`'s percentages (two and four).
+  realized APC (two) and `/dao/evidence`'s percentages (two and four). The
+  inventory writes `hMultiplier` as it is, its whole part grouped, and refuses a
+  value not at two places (part B5: it cut the route's figure a second time).
+- `/statistics/network`'s `hashRate` and `difficulty` (part B, the third read's
+  S3): in the unit the exact value reaches (no lowered threshold), cut at two
+  places; the difficulty chart's day is the day's average cut to the integer.
+  `estimatedEpochTime` stays the nearest second of an estimate (the remaining
+  blocks at the window's average interval), which the page writes after "≈".
+- Fee rates (part B4): every rate the routes serve at two places is cut there,
+  never rounded half up — `/mempool/transactions`' `feeRate`,
+  `/mempool/blocks`' `feeRateRange` and `medianFeeRate`, the pending
+  proposals' `feeRate`, `/blocks/{id}/fee-stats`' `avgFeeRate`, `minFeeRate`
+  and `maxFeeRate` (one function, `utils::exact_fee`); the whole-number rates
+  (`tx_fee_rate`, shannons per KB) were already floored.
+- `GET …/cell-versions` (spore objects, object items, identity items) — each
+  version's `freeCapacity`, `capacity − occupiedCapacity`, stated so a page
+  subtracts nothing (part B5). The token history's days, the "CKB held"
+  histories and the cell versions take their free part from one helper
+  (`utils::assets::free_part`), which refuses an occupied part under zero or
+  above the whole.
+- Activities' Nervos DAO actions (part B6) — each `protocolActions[]` entry of
+  protocol `dao` carries, written by the indexer with the action (the route
+  passes the metadata through; its type, free JSON, guarantees no key):
+  `capacity` (shannons, an exact decimal string) and `lockHash`, the lock hash
+  (hex, no `0x`) of the cell that took the step (a deposit's output deposit
+  cell, a withdrawal request's output request cell, a completed withdrawal's
+  input request cell); a `withdraw_request` also `depositBlock`, a
+  `withdraw_complete` also `compensation` (shannons). A page says whose step
+  each is from `lockHash`, matching a participant's `lockHash`, and refuses an
+  action whose owner is missing, malformed or no participant.
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five
@@ -875,7 +922,7 @@ network store too), no re-sync:
 - `TokenHoldersResponse` — flat cursor page plus `totalSupply`, nullable `anchor` and `firstRank`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`
-- `StackedAreaChartResponse` — used/unused capacity series
+- `StackedAreaChartResponse` — occupied and free capacity series (`occupiedCapacity`, `freeCapacity`)
 
 **D4 exact read contracts**
 
@@ -998,7 +1045,7 @@ Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/ma
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
 - `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON
-- `StackedAreaChartResponse` for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
+- `StackedAreaChartResponse` for capacity history charts. Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 
 ---
 
@@ -1163,8 +1210,21 @@ disabled or empty state. A point lookup still returns not found.
 - `CodeCellResponse` — `tx_hash`, `output_index` (option of either)
 - `CodeCellsResponse` — `code_cells: Vec<CodeCellEntry>`, counts, optional `resolved_version_hash`, optional ambiguity
 - `ScriptFamilyDetailResponse` — family + `versions` (from `crate::response`)
+- `ScriptCustodyResponse` (`custody`, on each observed reference, each deployment
+  and each history event) — who can change a code cell: `class` (`fixed`,
+  `unspendable`, `one_key`, `multisig`, `unsupported`, `retired`, `mixed` or
+  `ambiguous`), the custodian lock (`lockCodeHash`, `lockHashType`, `lockArgs`),
+  a multisig's `threshold`, `keyCount`, `requireFirstN` and `keyHashes` where
+  its config is read, `witnessState` (`never_signed`, `verified`,
+  `unavailable`, `not_applicable`), and `owners`, every distinct current
+  custodian of a type reference with its code cells. A multisig config read
+  from a spending transaction's witness names that transaction,
+  `verifiedByTx`, and the code cell it spent, `verifiedCodeCell`
+  (`0x<tx hash>:<output index>`): both or neither, so a page opens the
+  transaction at the cell it spent (lane exactness, part B, the third read's
+  N3).
 - `ScriptUsageResponse` — totals + `by_deployment: Vec<DeploymentUsage>`
-- `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
+- `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 
 ---
 

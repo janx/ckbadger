@@ -17,7 +17,7 @@ use super::assets::{
     list_canonical_nft_collection_activities_page, normalize_activity_action_filter,
     MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard,
 };
-use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
@@ -525,20 +525,7 @@ fn build_capacity_history_chart_with_initial(
 
     Ok(StackedAreaChartResponse {
         data,
-        series: vec![
-            StackedAreaSeries {
-                id: None,
-                key: "used".to_string(),
-                label: "Used".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                id: None,
-                key: "unused".to_string(),
-                label: "Unused".to_string(),
-                color: "#06b6d4".to_string(),
-            },
-        ],
+        series: super::asset_calendar::held_series(),
         title,
         bands: None,
     })

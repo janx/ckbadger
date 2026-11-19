@@ -81,7 +81,8 @@ describe('script code evidence', () => {
       />
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('55.56% runs code no one can change');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5 of 9 shannons is 55.555…%, 55.55% (half up 55.56%)
+    expect(sentence).toContain('55.55% runs code no one can change');
     expect(sentence).toContain('44.44% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });
@@ -225,10 +226,10 @@ describe('script code evidence', () => {
     ];
     const chart: StackedAreaChartResponse = {
       title: 'Capacity',
-      series: [{ key: 'used', label: 'Used', color: '#fff' }],
+      series: [{ key: 'occupiedCapacity', label: 'Occupied', color: '#fff' }],
       data: [
-        { date: '2024-08-01', values: { used: '100000000' } },
-        { date: '2024-11-01', values: { used: '200000000' } },
+        { date: '2024-08-01', values: { occupiedCapacity: '100000000' } },
+        { date: '2024-11-01', values: { occupiedCapacity: '200000000' } },
       ],
     };
     const { container } = render(<ScriptCapacityEvidenceChart chart={chart} markers={markers} />);
@@ -317,13 +318,17 @@ describe('script code evidence', () => {
         chart={{
           title: 'Capacity',
           series: [
-            { key: 'used', label: 'Used', color: '#f59e0b' },
-            { key: 'unused', label: 'Unused', color: '#00c389' },
+            { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+            { key: 'freeCapacity', label: 'Free', color: '#00c389' },
           ],
           data: [
             {
               date: '2024-01-02',
-              values: { used: '100000000', unused: '200000000', capacity: '300000000' },
+              values: {
+                occupiedCapacity: '100000000',
+                freeCapacity: '200000000',
+                capacity: '300000000',
+              },
             },
           ],
         }}

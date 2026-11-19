@@ -909,14 +909,28 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
     assert_eq!(json["title"], "TEST Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    // lane exactness, part B (the third read's S4): one name for a held point's parts on every
+    // route, the cell versions' and the token history's: occupiedCapacity and freeCapacity (the
+    // capacity histories sent used and unused), drawn as "Occupied" and "Free"
+    let series: Vec<(&str, &str)> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["key"].as_str().unwrap(), s["label"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        series,
+        [("occupiedCapacity", "Occupied"), ("freeCapacity", "Free")],
+        "{json}"
+    );
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "60");
-    assert_eq!(data[1]["values"]["unused"], "40");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[1]["values"]["freeCapacity"], "40");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
     // lane exactness, part A2 (the routes review's N6): the token's history states the whole its cells hold, as
     // the other four histories do: 100 − 20 CKB
     assert_eq!(data[2]["values"]["capacity"], "80", "{json}");
@@ -935,8 +949,8 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 }
 
 #[tokio::test]
@@ -999,8 +1013,8 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 }
 
 #[tokio::test]

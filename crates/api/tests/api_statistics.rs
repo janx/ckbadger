@@ -1207,7 +1207,7 @@ async fn test_network_stats_reads_derived_statistics() {
     //  - avgBlockTime = windowed average with ms precision (two 8s gaps →
     //    "8.00s"), not a hardcoded 10.00s;
     //  - hashRate = the window's summed per-block work over its span in true
-    //    H/s ("165.01 PH/s"; equal to difficulty / avg seconds here because
+    //    H/s ("165.00 PH/s", cut; equal to difficulty / avg seconds here because
     //    the seeded window is uniform-difficulty), not the 1000×-understated
     //    per-millisecond figure;
     //  - transactionsPerDay = the rolling last-24h rate normalized to a day
@@ -1292,8 +1292,9 @@ async fn test_network_stats_reads_derived_statistics() {
     assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
-    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165.01 PH/s.
-    assert_eq!(json["hashRate"], "165.01 PH/s");
+    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165,007,367,725,940,091.125 H/s, cut
+    // 165.00 PH/s (re-pinned for lane exactness, part B (the third read's S3): half up it read 165.01 PH/s)
+    assert_eq!(json["hashRate"], "165.00 PH/s");
 }
 
 #[tokio::test]

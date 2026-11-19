@@ -610,7 +610,9 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["totalDeposited"], "12300000000");
     assert_eq!(json["totalDepositors"], 7);
-    assert_eq!(json["activeDeposits"], 13);
+    // lane exactness, part B5: the live DAO cells are stated once, liveCellsCount, with their two parts; the legacy
+    // activeDeposits, the same count under an untrue name, is gone
+    assert!(json.get("activeDeposits").is_none(), "{json}");
     assert_eq!(json["depositCellsCount"], 9);
     assert_eq!(json["withdrawalRequestCellsCount"], 4);
     // lane exactness, part A, A5 (ii): the live DAO cells, deposits and withdrawal requests, the route's count
@@ -2309,8 +2311,9 @@ async fn dao_stats_refuse_a_live_cell_count_that_disagrees_with_its_parts() {
         tip_block_hash: [0xAA; 32],
         total_deposited: 123_00000000,
         total_depositors: 7,
-        // re-pinned for lane exactness, part A2 (S2): the legacy count of live DAO cells is the
-        // deposits and the requests, 9 + 4 (it was 9 beside a total of 13)
+        // the refused row: its legacy count of live DAO cells, 12, is not its deposits and its
+        // requests, 9 + 4 (the tests reader's NOTE-5: a comment copied from the agreeing fixture
+        // said this was re-pinned to agree)
         active_deposits: 12,
         deposit_cells_count: 9,
         // re-pinned for lane exactness, part A: a request cell too, so the live total is not
@@ -2357,8 +2360,10 @@ async fn dao_stats_refuse_a_live_cell_count_that_disagrees_with_its_parts() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let message = json["message"].as_str().unwrap_or_default();
-    for part in ["block 10", "12", "9 deposits", "4 withdrawal requests"] {
-        assert!(message.contains(part), "{part}: {json}");
-    }
+    // the message whole (NOTE-5: "12" alone would match "123…")
+    assert_eq!(
+        json["message"],
+        "dao_latest_stats at block 10: active_deposits 12 is not 9 deposits + 4 withdrawal requests",
+        "{json}"
+    );
 }
