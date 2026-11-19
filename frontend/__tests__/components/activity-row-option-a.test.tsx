@@ -183,8 +183,10 @@ describe('option A: the headline line', () => {
     const { container } = render(<ActivityRow activity={feedSamples.daoWithdrawRequest} />);
     const line = head(container);
     expect(within(line).getByRole('link', { name: /DAO Withdraw Request$/ })).toBeInTheDocument();
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(line.querySelector('[data-role="detail"]')).toHaveTextContent(
-      '26,050.00000000 CKB · deposited at #19,695,550'
+      '26,050 CKB · deposited at #19,695,550'
     );
   });
 
@@ -266,16 +268,17 @@ describe('option A: every participant, one line each (D1)', () => {
     // each with its exact value in its title (was every decimal: "+3,052.11026713 CKB").
     expect(joy.querySelector('[data-ckb-amount]')).toHaveTextContent('+3,052 CKB');
     expect(joy.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '+3,052.11026713 CKB');
-    // An asset delta is a signed delta: jade / rouge by sign like the CKB, its symbol dim.
+    // An asset delta is a signed delta: jade / rouge by sign like the CKB. Re-pinned on purpose
+    // (the P3 follow-up's 2c): the amount keeps that ink itself and the symbol is the link's word,
+    // in the line's ink (the link wrote the sign ink, and the symbol was dim on a span inside it).
     const rgbpp = within(joy).getByRole('link', { name: '+13,000 RGB++' });
-    expect(rgbpp).toHaveClass('text-positive');
-    expect(within(rgbpp).getByText('RGB++')).toHaveClass('text-text-dim');
+    expect(rgbpp.querySelector('[data-token-amount]')).toHaveClass('text-positive');
+    expect(rgbpp.className).not.toMatch(/\btext-(positive|negative|text)/);
     expect(joy.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +207');
     // No second line per asset: the intent lock's LP delta is on its own participant line.
     const intent = lineOf(container, intentParty);
     const lp = within(intent).getByRole('link', { name: `${MINUS}5,913 LP-UTXOSwap V1` });
-    expect(lp).toHaveClass('text-negative');
-    expect(within(lp).getByText('LP-UTXOSwap V1')).toHaveClass('text-text-dim');
+    expect(lp.querySelector('[data-token-amount]')).toHaveClass('text-negative');
     expect(intent.querySelector('[data-role="occupied"]')).toHaveTextContent(
       `occupied ${MINUS}231`
     );
@@ -452,8 +455,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   it('keeps two actions inline while the head stays one line at 1440', () => {
     const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
     const { container } = render(<ActivityRow activity={two} />);
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Deposit · 1,000\.00000000 CKB locked · DAO Deposit · 2,000\.00000000 CKB locked$/
+      /^DAO Deposit · 1,000 CKB locked · DAO Deposit · 2,000 CKB locked$/
     );
     expect(toggle(container)).toBeNull();
     expect(listRows(container)).toHaveLength(0);
@@ -484,16 +489,19 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     // Regression (dCKB 0xfe6f0cd0): a character budget of 130 listed a head that fit one line.
     layOut({});
     const two = row([party('r43nr7')], {
+      // re-pinned on purpose (the P3 follow-up's 2c): the facts are the summary form in a line, so
+      // the head keeps its length past 130 characters with larger deposits (it was 545,000 CKB
+      // at #6,012,189 in the padded column form)
       protocolActions: [
-        { ...withdraw(0), metadata: { capacity: '54500000000000', depositBlock: '6012189' } },
-        { ...withdraw(1), metadata: { capacity: '54512000000000', depositBlock: '6193839' } },
+        { ...withdraw(0), metadata: { capacity: '54500000000000000', depositBlock: '16012189' } },
+        { ...withdraw(1), metadata: { capacity: '54512000000000000', depositBlock: '16193839' } },
       ],
     });
     const { container } = render(<ActivityRow activity={two} />);
     expect(headMain(container).textContent!.length).toBeGreaterThan(130);
     expect(toggle(container)).toBeNull();
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 545,000\.00000000 CKB · deposited at #6,012,189 · DAO Withdraw Request · /
+      /^DAO Withdraw Request · 545,000,000 CKB · deposited at #16,012,189 · DAO Withdraw Request · /
     );
     vi.restoreAllMocks();
   });
@@ -543,8 +551,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(
       <ActivityRow activity={row([party('r43nr7')], { protocolActions: [withdraw(0)] })} />
     );
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 100\.00000000 CKB · deposited at #6,000,000$/
+      /^DAO Withdraw Request · 100 CKB · deposited at #6,000,000$/
     );
     expect(toggle(container)).toBeNull();
   });

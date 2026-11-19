@@ -270,8 +270,11 @@ export function activityHeadline(activity: ActivityBody): string {
 /**
  * A participant's Layer-2 change as a fact: `±amount SYMBOL`, or `<id> arrived / departed`.
  * `tone="sign"` colours a token amount by its sign (the Address board, and the T7 activity rows);
- * the default draws it bright. `symbol="dim"` (T7) draws the symbol dim beside the amount, as the
- * unit beside an exact CKB amount; the default keeps it in the amount's ink.
+ * the default draws it in the reading ink (the amount's `plain` tone). The amount and its symbol
+ * are one link inside the line (`inline`): the symbol takes the line's ink, as a link's words do,
+ * and the amount keeps its own ink by the amount's rule (the P3 follow-up's 2c: the link wrote
+ * the sign inks itself, and a T7 row drew the symbol dim on a span inside it, a link's word in the
+ * quiet ink).
  * `showComposition={false}` (consistency C3) leaves an object's composition badge to its caller,
  * which says a tier shared by a whole participant line once; the default draws it per object.
  * `size` is the size of the row the fact stands in, for an id it writes (U-09).
@@ -280,18 +283,15 @@ export function ItemDeltaFact({
   item,
   size,
   tone = 'plain',
-  symbol = 'same',
   showComposition = true,
 }: {
   item: ItemDelta;
   size: ShortSize;
   tone?: 'plain' | 'sign';
-  symbol?: 'same' | 'dim';
   showComposition?: boolean;
 }) {
   switch (item.kind) {
     case 'token': {
-      const delta = BigInt(item.delta);
       const label = item.symbol?.trim() || (
         <ShortId value={item.typeScriptHash} kind="hash" size={size} />
       );
@@ -300,27 +300,19 @@ export function ItemDeltaFact({
           <ClassMark kind="tokens" size={12} className="self-center" />
           <Link
             href={getTokenDetailHref(item.typeScriptHash)}
-            className={cn(
-              'hover:text-jade tabular-nums transition-colors',
-              tone === 'plain'
-                ? 'text-text-bright'
-                : delta > BigInt(0)
-                  ? 'text-positive'
-                  : delta < BigInt(0)
-                    ? 'text-negative'
-                    : 'text-text-bright'
-            )}
+            look="inline"
+            className="tabular-nums"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* A feed line: the summary form (R5), the exact change in its title. */}
+            {/* A feed line: the summary form (R5), the exact change in its title; its own ink. */}
             <TokenAmount
               form="summary"
               amount={item.delta}
               decimals={item.decimals ?? null}
               signed
-              tone="inherit"
+              tone={tone}
             />{' '}
-            {symbol === 'dim' ? <span className="text-text-dim">{label}</span> : label}
+            {label}
           </Link>
         </span>
       );
@@ -334,7 +326,7 @@ export function ItemDeltaFact({
           {collectionName ? `${collectionName} ` : 'object '}
           <Link
             href={getObjectDetailHref(item.objectId)}
-            className="hover:text-jade transition-colors"
+            look="inline"
             onClick={(e) => e.stopPropagation()}
           >
             <ShortId value={item.objectId} kind="hash" size={size} />
@@ -355,7 +347,7 @@ export function ItemDeltaFact({
           {`${formatStandard(item.standard)} `}
           <Link
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
-            className="hover:text-jade transition-colors"
+            look="inline"
             onClick={(e) => e.stopPropagation()}
           >
             <ShortId value={item.identityId} kind="hash" size={size} />
@@ -378,12 +370,20 @@ export type ProtocolNoteFact =
   | { kind: 'other'; node: React.ReactNode };
 
 /**
+ * The form a note's amounts take (R5), named by its caller: `summary` in a line (a feed, a list's
+ * cell), `exact` where the row is the thing's own record (the transaction's own page).
+ */
+export type NoteForm = 'summary' | 'exact';
+
+/**
  * What a protocol action's metadata says, as quiet parts of one line: DAO amounts and the deposit
  * block, a Fiber channel and its capacity, an RGB++ BTC txid. Empty when the action carries none.
+ * Its amounts take `form`; its links are links inside the line (`inline`).
  */
 export function protocolActionNoteFacts(
   pa: ActivityProtocolAction,
-  size: ShortSize
+  size: ShortSize,
+  form: NoteForm
 ): ProtocolNoteFact[] {
   const meta = protocolActionMeta(pa);
   const facts: ProtocolNoteFact[] = [];
@@ -403,7 +403,7 @@ export function protocolActionNoteFacts(
             channel{' '}
             <Link
               href={`/cell/${hash}-${index}`}
-              className="hover:text-jade transition-colors"
+              look="inline"
               onClick={(e) => e.stopPropagation()}
             >
               <ShortId value={hash} kind="hash" size={size} />
@@ -421,7 +421,7 @@ export function protocolActionNoteFacts(
       suffix,
       node: (
         <>
-          <CkbAmount form="column" shannons={meta.capacity} signed={false} tone="plain" />
+          <CkbAmount form={form} shannons={meta.capacity} signed={false} tone="plain" />
           {suffix}
         </>
       ),
@@ -437,7 +437,7 @@ export function protocolActionNoteFacts(
           deposited at{' '}
           <Link
             href={`/blocks/${meta.depositBlock}`}
-            className="hover:text-jade transition-colors"
+            look="inline"
             onClick={(e) => e.stopPropagation()}
           >
             {formatBlockNumber(meta.depositBlock)}
@@ -451,7 +451,7 @@ export function protocolActionNoteFacts(
       kind: 'other',
       node: (
         <>
-          +<CkbAmount form="column" shannons={meta.compensation} signed={false} tone="plain" />{' '}
+          +<CkbAmount form={form} shannons={meta.compensation} signed={false} tone="plain" />{' '}
           compensation
         </>
       ),
@@ -482,7 +482,8 @@ export function protocolActionNoteFacts(
 
 export function protocolActionNoteParts(
   pa: ActivityProtocolAction,
-  size: ShortSize
+  size: ShortSize,
+  form: NoteForm
 ): React.ReactNode[] {
-  return protocolActionNoteFacts(pa, size).map((f) => f.node);
+  return protocolActionNoteFacts(pa, size, form).map((f) => f.node);
 }

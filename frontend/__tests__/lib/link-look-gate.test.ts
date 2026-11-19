@@ -164,12 +164,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // row's key, "How it works" a way onward)
   // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
   // a way onward, the pool's squares blocks, the pool's hash a key whose Hash inherits its ink)
-  'components/activity-event-row.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 6 },
-    reason:
-      '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive), and one on a child (a span’s text-text-dim)',
-  },
+  // 'components/activity-event-row.tsx' left the list (the P3 follow-up's 2c: look 5, ink 6 → 0;
+  // every link of an item fact and a protocol note inline in its line, a token amount in its own
+  // ink by the amount's rule, a dim symbol the line's ink)
   // 'components/activity/activity-row.tsx' left the list (lane P3: look 4, ink 4 → 0; the headline
   // its row's key, the evidence's block and transaction and a call's name inline in their lines)
   // 'components/crash-page.tsx' left the list (lane P3: look 1, ink 1 → 0; the way on a way onward)
@@ -267,8 +264,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
 // (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
 // (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8) → 48 (lane P3: the DAO
-// depositors, 7)
-const TOLERATED_TOTAL = 48;
+// depositors, 7) → 37 (the P3 follow-up's 2c: the item facts and protocol notes, 11)
+const TOLERATED_TOTAL = 37;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

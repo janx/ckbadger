@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '../utils/test-utils';
+import { render, screen } from '../utils/test-utils';
 import {
   ItemDeltaFact,
   protocolActionNoteParts,
@@ -150,6 +150,31 @@ describe('ItemDeltaFact', () => {
     );
   });
 
+  // The P3 follow-up's 2c (the link-look gate's entry): the link states its look, a link inside a
+  // line; a signed amount's ink is the amount's (its sign), never the link's; the symbol is the
+  // link's word, in the line's ink, with no ink written inside the link.
+  it('states its link inline: the amount keeps its sign ink, the symbol the line’s', () => {
+    render(
+      <ItemDeltaFact
+        size="row"
+        tone="sign"
+        item={{
+          kind: 'token',
+          typeScriptHash: '0xseal',
+          delta: '-3658346853885',
+          symbol: 'Seal',
+          decimals: 8,
+        }}
+      />
+    );
+    const link = screen.getByRole('link', { name: `${MINUS}36,583 Seal` });
+    expect(link).toHaveClass('underline');
+    expect(link.className).not.toMatch(/\btext-(positive|negative|text|jade)/);
+    expect(link.querySelector('[data-token-amount]')).toHaveClass('text-negative');
+    expect(link.querySelectorAll('[class*="text-text"]')).toHaveLength(0);
+    expect(link.parentElement!.className).not.toMatch(/\btext-/);
+  });
+
   it('states an object or identity as arrived or departed', () => {
     render(
       <>
@@ -269,8 +294,17 @@ describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
 
 // The action metadata as the rows read it: its parts in the one separated list (E1 kept a dead
 // ProtocolActionNote wrapper for these tests; it is gone, and they read the live composition).
-function ProtocolActionNote({ pa }: { pa: Parameters<typeof protocolActionNoteParts>[0] }) {
-  return <Dotted parts={protocolActionNoteParts(pa, 'row')} />;
+// Re-pinned on purpose (the P3 follow-up's 2c): a caller names the note's amount form, `summary`
+// in a line, `exact` where the row is the thing's own record; every one was `column`, padded to
+// eight decimals in a sentence ("26,050.00000000 CKB").
+function ProtocolActionNote({
+  pa,
+  form = 'summary',
+}: {
+  pa: Parameters<typeof protocolActionNoteParts>[0];
+  form?: Parameters<typeof protocolActionNoteParts>[2];
+}) {
+  return <Dotted parts={protocolActionNoteParts(pa, 'row', form)} />;
 }
 
 describe('protocol action metadata — in one quiet line', () => {
@@ -285,12 +319,13 @@ describe('protocol action metadata — in one quiet line', () => {
         }}
       />
     );
-    expect(document.body).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
+    expect(document.body).toHaveTextContent('26,050 CKB · deposited at #19,695,550');
     // Lane L: the deposit block is a link wherever the note is read (tx summary, feeds).
-    expect(screen.getByRole('link', { name: '#19,695,550' })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/19695550'
-    );
+    const block = screen.getByRole('link', { name: '#19,695,550' });
+    expect(block).toHaveAttribute('href', '/mainnet/blocks/19695550');
+    // a link inside the note's line (the P3 follow-up's 2c): the inline look, no ink of its own
+    expect(block).toHaveClass('underline');
+    expect(block.className).not.toMatch(/hover:text-jade/);
   });
 
   it('reads a Fiber close: the channel and its capacity', () => {
@@ -307,27 +342,32 @@ describe('protocol action metadata — in one quiet line', () => {
         }}
       />
     );
-    expect(document.body).toHaveTextContent('channel 0x0d3870bb…006e26:0 · 750.00000000 CKB');
+    expect(document.body).toHaveTextContent('channel 0x0d3870bb…006e26:0 · 750 CKB');
     // The channel's out point is its funding cell: it opens that cell's page.
-    expect(screen.getByRole('link', { name: '0x0d3870bb…006e26:0' })).toHaveAttribute(
-      'href',
-      expect.stringMatching(/\/cell\/0x0d3870bb0+6e26-0$/)
-    );
+    const channel = screen.getByRole('link', { name: '0x0d3870bb…006e26:0' });
+    expect(channel).toHaveAttribute('href', expect.stringMatching(/\/cell\/0x0d3870bb0+6e26-0$/));
+    expect(channel).toHaveClass('underline');
   });
 
   it('reads an amount past 2^53 exactly', () => {
-    render(
-      <ProtocolActionNote
-        pa={{
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'withdraw_complete',
-          metadata: { capacity: '9007199254740993', compensation: '12345678901234567' },
-        }}
-      />
-    );
+    const pa = {
+      protocol: 'dao',
+      protocolName: 'Nervos DAO',
+      action: 'withdraw_complete',
+      metadata: { capacity: '9007199254740993', compensation: '12345678901234567' },
+    };
+    // the thing's own record: every digit, no padding
+    const { unmount } = render(<ProtocolActionNote pa={pa} form="exact" />);
     expect(document.body).toHaveTextContent(
       '90,071,992.54740993 CKB · +123,456,789.01234567 CKB compensation'
+    );
+    unmount();
+    // a line: cut, never rounded, the exact value in its title
+    render(<ProtocolActionNote pa={pa} />);
+    expect(document.body).toHaveTextContent('90,071,992 CKB · +123,456,789 CKB compensation');
+    expect(screen.getByText('90,071,992').closest('[title]')).toHaveAttribute(
+      'title',
+      expect.stringContaining('90,071,992.54740993')
     );
   });
 
@@ -368,7 +408,10 @@ describe('row parts (F2-tx)', () => {
         }}
       />
     );
-    expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+    // re-pinned on purpose (the P3 follow-up's 2c): the amount's own ink, by its tone (the reading
+    // ink of a plain amount), not the link's; the link was text-text-bright, then the sign inks
+    const amount = () => screen.getByRole('link').querySelector('[data-token-amount]');
+    expect(amount()).toHaveClass('text-text');
     rerender(
       <ItemDeltaFact
         size="row"
@@ -382,7 +425,7 @@ describe('row parts (F2-tx)', () => {
         }}
       />
     );
-    expect(screen.getByRole('link')).toHaveClass('text-positive');
+    expect(amount()).toHaveClass('text-positive');
     rerender(
       <ItemDeltaFact
         size="row"
@@ -390,10 +433,13 @@ describe('row parts (F2-tx)', () => {
         item={{ kind: 'token', typeScriptHash: '0xickb', delta: '-1', symbol: 'iCKB', decimals: 8 }}
       />
     );
-    expect(screen.getByRole('link')).toHaveClass('text-negative');
+    expect(amount()).toHaveClass('text-negative');
   });
 
-  it('draws the symbol dim beside a signed amount when a row asks for it (T7 feed rows)', () => {
+  // Re-pinned on purpose (the P3 follow-up's 2c): a T7 feed row drew the symbol dim on a span
+  // inside the link; the symbol is the link's word now, in the line's ink, and only the amount
+  // keeps an ink of its own.
+  it('draws the symbol as the link’s word beside a signed amount (T7 feed rows)', () => {
     const item = {
       kind: 'token' as const,
       typeScriptHash: '0xickb',
@@ -401,14 +447,12 @@ describe('row parts (F2-tx)', () => {
       symbol: 'iCKB',
       decimals: 8,
     };
-    const { rerender } = render(<ItemDeltaFact size="row" tone="sign" item={item} />);
-    // Default: the symbol shares the amount's ink (Address board, unchanged).
+    render(<ItemDeltaFact size="row" tone="sign" item={item} />);
     expect(screen.getByText(/iCKB$/)).toBe(screen.getByRole('link'));
-    rerender(<ItemDeltaFact size="row" tone="sign" symbol="dim" item={item} />);
     // the summary form (R5, re-pinned on purpose: was every digit)
     const link = screen.getByRole('link', { name: `${MINUS}84,651 iCKB` });
-    expect(link).toHaveClass('text-negative');
-    expect(within(link).getByText('iCKB')).toHaveClass('text-text-dim');
+    expect(link.querySelector('[data-token-amount]')).toHaveClass('text-negative');
+    expect(link.className).not.toMatch(/\btext-(negative|positive|text)/);
   });
 });
 

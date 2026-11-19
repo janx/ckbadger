@@ -644,7 +644,9 @@ describe('ActivitiesStreamExplorer', () => {
     );
     // The other row still reads.
     expect(screen.getByText(/DAO Deposit/)).toBeInTheDocument();
-    expect(screen.getAllByRole('article')[1]).toHaveTextContent('102.00000000 CKB locked');
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form (it was
+    // the padded column form, "102.00000000 CKB locked")
+    expect(screen.getAllByRole('article')[1]).toHaveTextContent('102 CKB locked');
   });
 
   it('sticks its toolbar right below the site header, at the height the header publishes', async () => {

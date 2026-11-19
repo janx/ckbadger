@@ -218,7 +218,9 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('DAO Withdraw Request')).toBeInTheDocument();
     const note = row.querySelector('[data-role="detail"]') as HTMLElement;
-    expect(note).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
+    expect(note).toHaveTextContent('26,050 CKB · deposited at #19,695,550');
     // T7: the action's facts follow the headline inline, dim, quieter than the headline.
     expect(note.closest('[data-role="row-head"]')).not.toBeNull();
     expect(note).toHaveClass('text-text-dim', 'text-small');
@@ -312,8 +314,10 @@ describe('ActivityFeed', () => {
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Fiber · Channel Close')).toBeInTheDocument();
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'channel 0x0d3870bb…006e26:0 · 750.00000000 CKB'
+      'channel 0x0d3870bb…006e26:0 · 750 CKB'
     );
     expect(
       [

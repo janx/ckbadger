@@ -617,7 +617,7 @@ type ProtocolRead =
 /** The one read of a protocol action for a row (its note's facts). */
 function readProtocolAction(action: Parameters<typeof protocolActionNoteFacts>[0]): ProtocolRead {
   try {
-    return { facts: protocolActionNoteFacts(action, 'row') };
+    return { facts: protocolActionNoteFacts(action, 'row', 'summary') };
   } catch (error) {
     return { error };
   }
@@ -774,13 +774,7 @@ function ItemOnLine({
 }) {
   return (
     <span data-role="item" className={cn('min-w-0 max-w-full', className)}>
-      <ItemDeltaFact
-        item={item}
-        size="row"
-        tone={tone}
-        symbol="dim"
-        showComposition={showComposition}
-      />
+      <ItemDeltaFact item={item} size="row" tone={tone} showComposition={showComposition} />
     </span>
   );
 }
