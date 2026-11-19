@@ -30,7 +30,14 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
-import { daoStepsAttributed, flowKey, onlyFeeMoved, txFlows } from '@/lib/tx-flows';
+import {
+  daoStepsAttributed,
+  flowKey,
+  onlyFeeMoved,
+  txFlows,
+  type FlowEnd,
+  type TxFlow,
+} from '@/lib/tx-flows';
 import { anchoredOutPoint } from '@/lib/tx-cell-link';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
@@ -92,6 +99,7 @@ import {
   capacityEquation,
   txLinks,
   txMovements,
+  type TxMovement,
   type TxHover,
   type TxLinkSets,
 } from '@/lib/tx-detail-model';
@@ -377,6 +385,85 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
   );
 }
 
+/**
+ * One movement in the lede, as the figure draws it (lane P1, third round; review p-logic-chain
+ * SHOULD 5 and NOTE 2): what left the givers, what reached the receivers, and, where the flow has
+ * one, the part minted here or burnt here (a flow has at most one of each terminal, `txFlows`).
+ * "100 Seal moved from A to B." / "100 Seal reached B: 50 from A, and 50 minted here." / "100 Seal
+ * left A: 60 to B, and 40 burnt." / "100 Seal was minted to B." / "100 Seal left A and was burnt."
+ */
+function MovementSentence({ m, flow }: { m: TxMovement; flow: TxFlow }) {
+  const minted = flow.from.find((e) => e.t === 'minted')?.amount;
+  const burnt = flow.to.find((e) => e.t === 'burnt')?.amount;
+  const named = (amount: bigint) =>
+    m.item ? (
+      <ItemName item={m.item} amount={amount} />
+    ) : (
+      <CkbAmount form="summary" shannons={amount} signed={false} tone="plain" />
+    );
+  // a part of a token's flow, in its units (the name stands once, at the sentence's head)
+  const part = (amount: bigint) => {
+    if (m.item?.kind !== 'token')
+      throw new Error(`${flow.key}: a part minted or burnt beside its parties, of no token`);
+    return (
+      <TokenAmount
+        form="summary"
+        amount={amount.toString()}
+        decimals={m.item.decimals ?? null}
+        tone="plain"
+      />
+    );
+  };
+  if (m.from.length > 0 && m.to.length > 0) {
+    if (minted === undefined && burnt === undefined)
+      return (
+        <>
+          {named(flow.received)} moved from <Parties parties={m.from} /> to{' '}
+          <Parties parties={m.to} />.{' '}
+        </>
+      );
+    if (burnt === undefined)
+      return (
+        <>
+          {named(flow.received)} reached <Parties parties={m.to} />: {part(flow.sent)} from{' '}
+          <Parties parties={m.from} />, and {part(minted!)} minted here.{' '}
+        </>
+      );
+    if (minted === undefined)
+      return (
+        <>
+          {named(flow.sent)} left <Parties parties={m.from} />: {part(flow.received)} to{' '}
+          <Parties parties={m.to} />, and {part(burnt)} burnt.{' '}
+        </>
+      );
+    return (
+      <>
+        {named(flow.sent)} left <Parties parties={m.from} /> and {part(minted)} were minted here;{' '}
+        {part(flow.received)} reached <Parties parties={m.to} /> and {part(burnt)} were burnt.{' '}
+      </>
+    );
+  }
+  if (m.to.length > 0)
+    return m.item && minted !== undefined ? (
+      <>
+        {named(flow.received)} was minted to <Parties parties={m.to} />.{' '}
+      </>
+    ) : (
+      <>
+        {named(flow.received)} arrived at <Parties parties={m.to} />.{' '}
+      </>
+    );
+  return m.item && burnt !== undefined ? (
+    <>
+      {named(flow.sent)} left <Parties parties={m.from} /> and was burnt.{' '}
+    </>
+  ) : (
+    <>
+      {named(flow.sent)} left <Parties parties={m.from} />.{' '}
+    </>
+  );
+}
+
 function TxSummary({
   activity,
   fee,
@@ -386,9 +473,19 @@ function TxSummary({
   fee: string;
   compensation: bigint | null;
 }) {
-  const moves = txMovements(activity);
+  const items = txMovements(activity);
   const flows = txFlows({ hash: activity.txHash, activity, fee, compensation });
   const feeOnly = onlyFeeMoved(activity, flows);
+  // the CKB leg beside the items (lane P1, third round; review p-logic-chain NOTE 2: an NFT sale
+  // said the NFT and not the payment): where an item moved, the CKB that reached parties is said
+  // after it, from the CKB flow's parties
+  const ckbFlow = flows.find((f) => f.key === 'ckb');
+  const partiesOf = (ends: readonly FlowEnd[]) =>
+    ends.flatMap((e) => (e.t === 'party' ? [e.party] : []));
+  const moves: TxMovement[] =
+    items.some((m) => m.item !== null) && ckbFlow && ckbFlow.received > BigInt(0)
+      ? [...items, { item: null, from: partiesOf(ckbFlow.from), to: partiesOf(ckbFlow.to) }]
+      : items;
   const flowOf = (item: ItemDelta | null) => {
     const key = item ? flowKey(item) : 'ckb';
     const flow = flows.find((f) => f.key === key);
@@ -412,39 +509,9 @@ function TxSummary({
     <p data-testid="tx-summary" className="text-text text-body max-w-measure">
       {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
       {ran.length > 0 && `It ran ${listWords(ran)}. `}
-      {moves.map((m, i) => {
-        const flow = flowOf(m.item);
-        // what the sentence says moved: what reached its receivers, or what left its givers
-        const amount = m.to.length > 0 ? flow.received : flow.sent;
-        return (
-          <Fragment key={i}>
-            {m.item ? (
-              <ItemName item={m.item} amount={amount} />
-            ) : (
-              <CkbAmount form="summary" shannons={amount} signed={false} tone="plain" />
-            )}
-            {m.from.length > 0 && m.to.length > 0 ? (
-              <>
-                {' moved from '}
-                <Parties parties={m.from} />
-                {' to '}
-                <Parties parties={m.to} />
-              </>
-            ) : m.to.length > 0 ? (
-              <>
-                {' arrived at '}
-                <Parties parties={m.to} />
-              </>
-            ) : (
-              <>
-                {' left '}
-                <Parties parties={m.from} />
-              </>
-            )}
-            {'. '}
-          </Fragment>
-        );
-      })}
+      {moves.map((m, i) => (
+        <MovementSentence key={i} m={m} flow={flowOf(m.item)} />
+      ))}
       {feeOnly && (
         <>
           {'Only the fee moved: '}
@@ -452,7 +519,11 @@ function TxSummary({
           {` kept the rest of ${activity.participants.length === 1 ? 'its' : 'their'} CKB. `}
         </>
       )}
-      {moves.length === 0 && readable(activity.txHash, () => <DaoSentences activity={activity} />)}
+      {/* the DAO's steps beside whatever else moved (lane P1, third round; NOTE 2: they were
+          skipped when an item moved, an iCKB deposit saying only its iCKB) */}
+      {readable(activity.txHash, () => (
+        <DaoSentences activity={activity} />
+      ))}
       {moves.length === 0 &&
         // the DAO's steps are said above, in their sentences; the other protocols' facts here
         activity.protocolActions

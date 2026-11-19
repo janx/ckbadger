@@ -719,9 +719,11 @@ describe('Transaction board, the status strip (lane D2)', () => {
     const { container } = render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     // before: "… to ckb1…. The sender paid a 0.00064119 CKB fee."
+    // Re-pinned on purpose (lane P1, third round; review p-logic-chain NOTE 2: the CKB leg went
+    // unsaid when an item moved): the CKB that reached parties is said after the item
     expect(summary).toHaveTextContent(
       new RegExp(
-        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\.$`
+        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\. 528 CKB moved from ${row('cjk9lz')} to ${row('shp3hr')} and ${row('204m4g')}\\.$`
       )
     );
     const comment = container.querySelector('.comment') as HTMLElement;
@@ -1765,11 +1767,97 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
-    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up
+    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up; re-pinned (lane P1, third round,
+    // NOTE 2): the CKB the receiver's new cell holds is said after the token
     expect(summary).toHaveTextContent(
-      new RegExp(`^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`)
+      new RegExp(
+        `^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\. 215 CKB moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`
+      )
     );
     expect(within(summary).getByRole('link', { name: 'Seal' })).toBeInTheDocument();
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 5 and NOTE 2): a token minted and given in
+  // one transaction read "100 Seal moved from A to B" while 50 left A and 50 were minted, which the
+  // figure drew apart; a burn read "36,583 Seal left A" with no word that it was burnt. The lede
+  // says what the figure draws: what left the givers, what was minted or burnt, what reached the
+  // receivers.
+  describe('a token minted or burnt beside its parties', () => {
+    const seal = (delta: string) => ({
+      kind: 'token' as const,
+      typeScriptHash: '0xseal',
+      delta,
+      symbol: 'Seal',
+      decimals: 8,
+    });
+    const tokenTx = (giver: string, receiver: string | null): GlobalActivity => {
+      const [to, from] = feedSamples.tokenTransfer.participants;
+      return {
+        ...feedSamples.tokenTransfer,
+        txHash: TX_HASH,
+        participants: [
+          { ...from, ckbDelta: '-8888', itemDeltas: [seal(giver)] },
+          ...(receiver === null ? [] : [{ ...to, ckbDelta: '0', itemDeltas: [seal(receiver)] }]),
+        ],
+      };
+    };
+    const lede = async (activity: GlobalActivity) => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(activity);
+      render(<TransactionDetailPage />);
+      return screen.findByTestId('tx-summary');
+    };
+
+    it('says what was minted beside what left the giver', async () => {
+      const summary = await lede(tokenTx('-5000000000', '10000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(
+          `^100 Seal reached ${row('3fzxu7')}: 50 from ${row('j3pkeh')}, and 50 minted here\\.$`
+        )
+      );
+    });
+
+    it('says what was burnt beside what reached the receiver', async () => {
+      const summary = await lede(tokenTx('-10000000000', '6000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')}: 60 to ${row('3fzxu7')}, and 40 burnt\\.$`)
+      );
+    });
+
+    it('says a burn is a burn', async () => {
+      const summary = await lede(tokenTx('-10000000000', null));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')} and was burnt\\.$`)
+      );
+    });
+  });
+
+  // Lane P1, third round (review p-logic-chain NOTE 2): the DAO sentences were skipped when an item
+  // moved (an iCKB deposit said only its iCKB); they are said beside the item.
+  it('says a Nervos DAO step beside an item that moved', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+    const [to, from] = feedSamples.tokenTransfer.participants;
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.tokenTransfer,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+      ],
+      participants: [{ ...to, tags: 1 | 8 }, { ...from }],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}.`
+    );
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('3fzxu7')}.`
+    );
   });
 
   // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"; review chain-b
