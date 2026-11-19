@@ -134,12 +134,14 @@ describe('Code versions rows (table-rows L1-4)', () => {
     await waitFor(() => expect(live).toHaveTextContent('161,049'));
   });
 
-  it('marks a replaced version "replaced at #N" in dim ink, held by the holder of its code cell', async () => {
+  // re-pinned on purpose (lane P2's follow-up, item 4; renamed, it was "… in dim ink, …"): "replaced
+  // at #N" holds a value, the replacing block, in the reading ink
+  it('marks a replaced version "replaced at #N" in the reading ink, held by the holder of its code cell', async () => {
     const { rows } = await versions();
     const v4 = cells(rows[1]);
     expect(v4[4]).toHaveTextContent(/^multisig 0x07a2…68ca$/);
     expect(v4[5]).toHaveTextContent(/^replaced at #17,894,900$/);
-    expect(v4[5].firstElementChild).toHaveClass('text-text-dim');
+    expect(v4[5].firstElementChild).toHaveClass('text-text');
     // Lane L: the block that replaced it is a link.
     expect(within(v4[5]).getByRole('link', { name: '#17,894,900' })).toHaveAttribute(
       'href',

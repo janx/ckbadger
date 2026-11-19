@@ -254,7 +254,7 @@ export function ObjectGeneticsView({
               key={u.step}
               role="status"
               title={u.reason}
-              className="text-text-dim text-meta max-w-measure"
+              className="text-text text-meta max-w-measure"
             >
               Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
               is used.
@@ -309,7 +309,7 @@ export function ObjectGeneticsView({
                   )}
                 />
                 {own3.absent.length > 0 && (
-                  <p role="status" className="text-text-dim text-meta max-w-measure">
+                  <p role="status" className="text-text text-meta max-w-measure">
                     Its {own3.absent.join(', ')} variant is not among the collection’s counted
                     variants.
                   </p>
@@ -362,7 +362,7 @@ export function ObjectGeneticsEvidence({
       >
         DNA evidence
       </h2>
-      <p className="text-text-dim text-meta max-w-measure">
+      <p className="text-text text-meta max-w-measure">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null
           ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
@@ -531,7 +531,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: geneSpanPx(`${WIDEST_DNA_SPAN} · clipped`),
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
-                <span className="text-text-dim leading-row block truncate tabular-nums">
+                <span className="text-text leading-row block truncate tabular-nums">
                   {span(g.offset, g.length)}
                   {g.truncated ? ' · clipped' : ''}
                 </span>
@@ -542,9 +542,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               label: 'rule',
               minWidth: geneText(),
               header: <span className="text-meta">rule</span>,
-              render: (g) => (
-                <span className="text-text-dim leading-row block truncate">{g.rule}</span>
-              ),
+              render: (g) => <span className="text-text leading-row block truncate">{g.rule}</span>,
             },
             {
               key: 'value',
@@ -584,19 +582,19 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
         />
       )}
       {declaredOnly && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
       )}
       {clipped.length > 0 && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
           {clipped.length === 1 ? 's' : ''} bytes past its {count(layout.bytes.length)}.
         </p>
       )}
       {layout.unmapped.map((u) => (
-        <p key={u.name} className="text-text-dim text-meta max-w-measure">
+        <p key={u.name} className="text-text text-meta max-w-measure">
           {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this DNA
           fall in the declared range.
         </p>
@@ -739,16 +737,14 @@ function PatternReading({
           label: 'bytes',
           minWidth: geneSpanPx(WIDEST_DNA_SPAN),
           header: <span className="text-meta">bytes</span>,
-          render: (row) => (
-            <span className={cn(cell, 'text-text-dim tabular-nums')}>{row.span}</span>
-          ),
+          render: (row) => <span className={cn(cell, 'text-text tabular-nums')}>{row.span}</span>,
         },
         {
           key: 'rule',
           label: 'rule',
           minWidth: geneText(),
           header: <span className="text-meta">rule</span>,
-          render: (row) => <span className={cn(cell, 'text-text-dim')}>{row.rule}</span>,
+          render: (row) => <span className={cn(cell, 'text-text')}>{row.rule}</span>,
         },
         {
           key: 'found',
@@ -756,7 +752,7 @@ function PatternReading({
           minWidth: geneText(true),
           width: 'auto',
           header: <span className="text-meta">{foundHead}</span>,
-          render: (row) => <span className={cn(cell, 'text-text-dim')}>{found(row) ?? '—'}</span>,
+          render: (row) => <span className={cn(cell, 'text-text')}>{found(row) ?? '—'}</span>,
         },
       ]}
       mobileRow={(row) => (
@@ -968,14 +964,14 @@ function PatternReading({
         </div>
       ) : (
         genes.length > 0 && (
-          <p className="text-text-dim text-meta">
+          <p className="text-text text-meta">
             Its ranges run past what a ruler can draw; the table gives them exactly.
           </p>
         )
       )}
       {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
       {declared && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
@@ -1026,7 +1022,7 @@ function PatternReading({
             </dl>
           )}
           {outside.length > 0 && (
-            <p className="text-text-dim text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
+            <p className="text-text text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
               <TraitText
                 text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}

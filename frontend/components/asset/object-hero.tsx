@@ -122,7 +122,7 @@ export function ObjectTraits({
           );
         })}
       </dl>
-      <p className="text-text-dim text-meta max-w-measure">
+      <p className="text-text text-meta max-w-measure">
         Each trait is read from the object’s DNA, below
         {/* PB-23: the dot goes with the hint; when the page's one hint is elsewhere, no dot */}
         <TapOrHoverHint what="one to find its gene" dotted />

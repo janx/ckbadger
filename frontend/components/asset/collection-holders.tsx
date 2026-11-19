@@ -461,12 +461,12 @@ function ScopedCollectionHolders({
                   !!holders.data && BigInt(holders.data.data.length) > totals.holders;
                 return (
                   <>
-                    <p className="text-text-dim text-meta max-w-measure mb-2 break-words">
+                    <p className="text-text text-meta max-w-measure mb-2 break-words">
                       Full collection: <AssetCount value={totals.holders.toString()} /> holders ·{' '}
                       <AssetCount value={totals.items.toString()} /> items
                     </p>
                     {readsDiffer && (
-                      <p role="note" className="text-text-dim text-meta max-w-measure mb-2">
+                      <p role="note" className="text-text text-meta max-w-measure mb-2">
                         The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown)
                         and the distribution ({totals.holders.toLocaleString('en-US')} holder
                         {totals.holders === BigInt(1) ? '' : 's'}) were read at different moments.

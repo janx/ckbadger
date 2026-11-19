@@ -159,7 +159,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
               </AppLink>
             </p>
           ) : (
-            <p className="text-text-dim">Top-level name</p>
+            <p className="text-text">Top-level name</p>
           )}
           <DotCellChildren item={item} />
           {ring.data ? (

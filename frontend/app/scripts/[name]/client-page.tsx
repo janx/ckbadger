@@ -1124,7 +1124,7 @@ export default function ScriptDetailPage({
               title="Conflicting live bytecode"
               args={formatCount(codeHashAmbiguity.versionHashes.length, 'version')}
             >
-              <p className="text-text-dim text-small mb-4">
+              <p className="text-text text-small mb-4">
                 Current live type resolution points to more than one bytecode version.
               </p>
               <ul className="text-small space-y-2">
@@ -1737,7 +1737,7 @@ export default function ScriptDetailPage({
           }
         >
           <DetailSection title="Capacity history">
-            <p className="text-text-dim text-small max-w-measure mb-3">
+            <p className="text-text text-small max-w-measure mb-3">
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
@@ -1787,7 +1787,7 @@ export default function ScriptDetailPage({
                     minWidth: 210,
                     width: '30%',
                     render: (row) => (
-                      <span className="text-text-dim [overflow-wrap:anywhere]">
+                      <span className="text-text [overflow-wrap:anywhere]">
                         {row.currentVersionHash ?? 'Retired · no current code cell'}
                       </span>
                     ),

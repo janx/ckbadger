@@ -64,7 +64,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
       >
         What its configuration permits
       </h2>
-      <p className="text-text-dim text-meta max-w-measure">
+      <p className="text-text text-meta max-w-measure">
         Configure 0x{configure.toString(16).padStart(2, '0')} · zero permission bits allow the
         operation.
       </p>

@@ -92,9 +92,7 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
   const single = parseBtcfsUri(uri);
   const inscriptions = single ? [single] : inscriptionList(uri);
   if (inscriptions === null)
-    return (
-      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
-    );
+    return <p className="text-text text-meta">Not a recognisable btcfs inscription reference.</p>;
   const readings = inscriptions.map((inscription) => (
     <InscriptionReading
       key={`${inscription.txid}i${inscription.index}`}

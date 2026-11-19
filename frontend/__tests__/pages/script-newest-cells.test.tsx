@@ -116,7 +116,9 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       'The newest live cells this script locks, newest block first · it is not a list of transactions'
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-small', 'text-text-dim');
+    // re-pinned on purpose (lane P2's follow-up, item 4): the caption states what the list is, a
+    // statement in the reading ink (it was the quiet ink)
+    expect(caption).toHaveClass('text-small', 'text-text');
     // R16 measures a text node's parent box: the words sit in their own inline box, not the
     // full-width paragraph.
     expect(caption.children).toHaveLength(1);

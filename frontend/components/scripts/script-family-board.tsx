@@ -858,7 +858,7 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text-dim text-meta max-w-measure mt-2.5">
+        <p key={handover.day} className="text-text text-meta max-w-measure mt-2.5">
           ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
           {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
           {handover.total - handover.common} of {handover.total}

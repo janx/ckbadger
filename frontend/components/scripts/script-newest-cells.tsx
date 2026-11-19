@@ -387,7 +387,7 @@ export function ScriptNewestCells({
       )}
       {newest.kind && (
         // The section's one caption, under its evidence (as the custody timeline's is).
-        <p data-role="caption" className="text-text-dim text-small max-w-measure mt-2">
+        <p data-role="caption" className="text-text text-small max-w-measure mt-2">
           {/* The words' own box (R16 measures a text node's parent: a bare <p> is full width). */}
           <span>
             The newest live cells this script {verb}, newest block first · it is not a list of

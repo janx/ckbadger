@@ -93,7 +93,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           <div className="text-text-bright text-body">
             {where ? `Its image is ${where}` : 'Its class names a renderer'}
           </div>
-          <p className="text-text-dim text-small max-w-measure break-all">{renderer}</p>
+          <p className="text-text text-small max-w-measure break-all">{renderer}</p>
           {where && (
             <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-small">
               Open the file ↗
@@ -442,7 +442,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 className="align-middle"
               />
             </p>
-            <p className="text-text-dim text-meta max-w-measure mt-2">
+            <p className="text-text text-meta max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets
             </p>

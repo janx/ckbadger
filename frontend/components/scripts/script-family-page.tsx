@@ -452,7 +452,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
             )}
           />
           {references.some((r) => r.hashType === 'type') && (
-            <p className="text-text-dim max-w-measure m-0">
+            <p className="text-text max-w-measure m-0">
               A type reference follows every upgrade; its data hash with hash type data1 or data2
               pins this exact binary; an upgrade will not reach cells that pin it.
             </p>
@@ -838,7 +838,7 @@ export function ScriptFamilyPage({
         row.current ? (
           <RowTag variant="accent">live · current</RowTag>
         ) : (
-          <span className="text-text-dim">
+          <span className="text-text">
             {/* Lane L: the replacing block is a link. */}
             <SentenceNodes parts={replacedParts(leadOf(row))} />
           </span>
@@ -921,7 +921,7 @@ export function ScriptFamilyPage({
       // A status breaks before the transaction it names; that hash at the row size is one unit (17
       // characters at 13 px, 132.6), and the gap (F3-e: it was 112).
       minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
-      className: `text-text-dim ${NARROW}`,
+      className: `text-text ${NARROW}`,
       render: (row) =>
         row.version.deployments.map((d) => (
           <span key={outpointKey(d)} className="block">
@@ -1297,7 +1297,7 @@ export function ScriptFamilyPage({
                       minWidth: columnPx(small(`${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`)),
                       numeric: true,
                       render: (cell) => (
-                        <span className="text-text-dim">
+                        <span className="text-text">
                           {blockLink(cell.createdAtBlock)}
                           {unitNode(
                             cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`
@@ -1310,7 +1310,7 @@ export function ScriptFamilyPage({
                 />
               )}
               {cellRows.length > 0 && (
-                <p className="text-text-dim text-small max-w-measure mt-2">
+                <p className="text-text text-small max-w-measure mt-2">
                   Oldest first, as the cell index keeps them · {cellRows.length} of{' '}
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>

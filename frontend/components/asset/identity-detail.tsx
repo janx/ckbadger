@@ -223,7 +223,7 @@ export function CanonicalIdentityDetail({
         note={termNote(term, kind)}
       />
     ) : term?.kind === 'unrecorded' ? (
-      <p className="text-text-dim max-w-measure">
+      <p className="text-text max-w-measure">
         Version {term.version} of its cell records no expiry.
       </p>
     ) : null;
