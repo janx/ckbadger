@@ -89,8 +89,11 @@ beforeEach(() => {
     },
     title: 'Collection capacity',
     data: [
-      { date: '2026-10-21', values: { used: '0', unused: '0' } },
-      { date: '2026-10-22', values: { used: '2892000000000', unused: '0' } },
+      { date: '2026-10-21', values: { used: '0', unused: '0', capacity: '0' } },
+      {
+        date: '2026-10-22',
+        values: { used: '2892000000000', unused: '0', capacity: '2892000000000' },
+      },
     ],
     series: [
       { key: 'used', label: 'Used', color: '#f59e0b' },

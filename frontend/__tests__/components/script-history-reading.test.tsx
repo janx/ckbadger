@@ -17,8 +17,11 @@ const first = lineage[0].indexedDay;
 const last = lineage[lineage.length - 1].indexedDay;
 const chart = {
   data: [
-    { date: '2023-10-01', values: { used: '100000000', unused: '200000000' } },
-    { date: last, values: { used: '100000000', unused: '300000000' } },
+    {
+      date: '2023-10-01',
+      values: { used: '100000000', unused: '200000000', capacity: '300000000' },
+    },
+    { date: last, values: { used: '100000000', unused: '300000000', capacity: '400000000' } },
   ],
 } as unknown as StackedAreaChartResponse;
 

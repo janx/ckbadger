@@ -165,7 +165,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
 - `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
-- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`)
+- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 
@@ -868,7 +868,7 @@ Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/ma
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
 - `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON
-- `StackedAreaChartResponse` for capacity history charts
+- `StackedAreaChartResponse` for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 
@@ -1034,7 +1034,7 @@ disabled or empty state. A point lookup still returns not found.
 - `CodeCellsResponse` — `code_cells: Vec<CodeCellEntry>`, counts, optional `resolved_version_hash`, optional ambiguity
 - `ScriptFamilyDetailResponse` — family + `versions` (from `crate::response`)
 - `ScriptUsageResponse` — totals + `by_deployment: Vec<DeploymentUsage>`
-- `StackedAreaChartResponse` (from statistics) for capacity history charts
+- `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 

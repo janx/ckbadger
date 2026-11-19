@@ -20,7 +20,7 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { formatExactDecimal } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -507,11 +507,11 @@ export function ScriptHistoryFigure({
     onActiveIndexChange: onActive,
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
-  // R7: the sentence over the plots, from the series' own points: CKB held is the stack's top,
-  // occupied and free of one day (the series sends no other total)
+  // R7: the sentence over the plots, from the series' own points: CKB held is each day's
+  // `capacity`, which the route states beside its parts (the page sums nothing)
   const days = chart.data.map((point) => ({
     date: point.date,
-    held: BigInt(point.values.used) + BigInt(point.values.unused),
+    held: exactUnsignedInteger(point.values.capacity, `${family.name} ${point.date}: capacity`),
   }));
   return (
     <div className="min-w-0">
@@ -575,6 +575,10 @@ export function ScriptHistoryReading({
   const point = chart.data[index];
   const used = point ? BigInt(point.values.used) : null;
   const unused = point ? BigInt(point.values.unused) : null;
+  // the whole the day's cells hold, as the route states it (the page sums nothing)
+  const held = point
+    ? exactUnsignedInteger(point.values.capacity, `history ${point.date}: capacity`)
+    : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
   // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)
@@ -595,7 +599,7 @@ export function ScriptHistoryReading({
       data-testid="script-history-reading"
       className="border-row-rule text-small mt-2.5 border-t pt-2"
     >
-      {point && used !== null && unused !== null ? (
+      {point && used !== null && unused !== null && held !== null ? (
         // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): five
         // facts in a row of their own words. A series' swatch leads its value.
         <DetailFacts
@@ -611,9 +615,7 @@ export function ScriptHistoryReading({
             },
             {
               label: 'CKB held',
-              value: (
-                <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
-              ),
+              value: <CkbAmount form="column" shannons={held} signed={false} tone="plain" />,
             },
             {
               label: 'occupied',

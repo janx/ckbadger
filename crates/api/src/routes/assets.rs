@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
@@ -1874,15 +1874,15 @@ fn build_capacity_history_chart_with_initial(
             used_delta,
             &format!("building capacity history chart at date {}", date),
         )?;
-        let unused = cumulative_capacity - cumulative_used;
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values: HashMap::from([
-                ("used".to_string(), cumulative_used.to_string()),
-                ("unused".to_string(), unused.to_string()),
-            ]),
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                cumulative_capacity,
+                cumulative_used,
+                "capacity history",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     Ok(StackedAreaChartResponse {
@@ -4297,6 +4297,7 @@ async fn get_object_collection_capacity_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::statistics::StackedAreaDataPoint;
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::{AssetAction, CachedBlockHeader, ProtocolAction, TxIndexEntry};
 

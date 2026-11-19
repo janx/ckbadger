@@ -137,7 +137,7 @@ describe('ScriptByCodeHashPage', () => {
       data: [
         {
           date: '2024-01-15',
-          values: { used: '1000000000', unused: '1500000000' },
+          values: { used: '1000000000', unused: '1500000000', capacity: '2500000000' },
         },
       ],
     });

@@ -266,7 +266,12 @@ describe('script code evidence', () => {
             { key: 'used', label: 'Used', color: '#f59e0b' },
             { key: 'unused', label: 'Unused', color: '#00c389' },
           ],
-          data: [{ date: '2024-01-02', values: { used: '100000000', unused: '200000000' } }],
+          data: [
+            {
+              date: '2024-01-02',
+              values: { used: '100000000', unused: '200000000', capacity: '300000000' },
+            },
+          ],
         }}
       />
     );

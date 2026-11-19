@@ -12,7 +12,12 @@ const history: AssetCapacityHistory = {
   series: [],
   data: Array.from({ length: 14 }, (_, i) => ({
     date: `2023-11-${String(i + 1).padStart(2, '0')}`,
-    values: { used: '6100000000', unused: String(BigInt(3900000000) + BigInt(i)) },
+    values: {
+      used: '6100000000',
+      unused: String(BigInt(3900000000) + BigInt(i)),
+      // the whole the day's cells hold, as the route states it (lane p-assets)
+      capacity: String(BigInt(10000000000) + BigInt(i)),
+    },
   })),
 };
 it('preserves single shannons, complete-day cutoff and shared capacity/transfer range', () => {
@@ -61,11 +66,28 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
       <CapacityHistory
         assetClass="objects"
         subject="Broken"
-        history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
+        // re-pinned on purpose (lane p-assets): the day states its capacity, so its missing
+        // occupied part is the fault read (it read occupied first, before capacity was sent)
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { unused: '1', capacity: '1' } }],
+        }}
         weekly={[]}
       />
     )
   ).toThrow('occupied');
+  // a day without the whole its cells hold, which the route states, fails too: the page sums
+  // nothing in its place
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{ ...history, data: [{ date: '2023-11-01', values: { used: '1', unused: '1' } }] }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('Broken 2023-11-01: capacity');
   log.mockRestore();
 });
 

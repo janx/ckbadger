@@ -17,7 +17,7 @@ use super::assets::{
     list_canonical_nft_collection_activities_page, normalize_activity_action_filter,
     MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard,
 };
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
@@ -512,15 +512,15 @@ fn build_capacity_history_chart_with_initial(
             used_delta,
             &format!("building spore capacity history chart at date {}", date),
         )?;
-        let unused = running_capacity - running_used;
-        let mut values = std::collections::HashMap::new();
-        values.insert("used".to_string(), running_used.to_string());
-        values.insert("unused".to_string(), unused.to_string());
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values,
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                running_capacity,
+                running_used,
+                "spore capacity history",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     Ok(StackedAreaChartResponse {
