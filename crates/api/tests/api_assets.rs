@@ -2817,7 +2817,8 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
     batch.commit().unwrap();
 
     let owner_new = vec![0x99u8; 32];
-    seed_block_headers_at(&store, &[(1, 1_700_000_001_000)]);
+    let mut tip = 1i64;
+    seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
     let app = create_router(test_config(store.clone())).await;
     for path in [
         "/assets/objects/dotbit/holders",
@@ -2831,7 +2832,8 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_new, 5);
         batch.commit().unwrap();
-        seed_block_headers_at(&store, &[(2, 1_700_000_002_000)]);
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
         let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
         assert_eq!(status, StatusCode::OK, "{path}: {second}");
         assert_eq!(
@@ -2844,7 +2846,8 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_a, 0);
         batch.commit().unwrap();
-        seed_block_headers_at(&store, &[(3, 1_700_000_003_000)]);
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
         let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
         assert_eq!(status, StatusCode::OK, "{path}: {third}");
         assert_eq!(
@@ -2859,8 +2862,8 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
         batch.put_identity_owner_count(&collection_id, &owner_a, 2);
         batch.put_identity_owner_count(&collection_id, &owner_new, 0);
         batch.commit().unwrap();
-        let next = if path.contains("objects") { 4 } else { 5 };
-        seed_block_headers_at(&store, &[(next, 1_700_000_000_000 + next * 1000)]);
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
     }
 }
 

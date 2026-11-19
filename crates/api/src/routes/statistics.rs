@@ -2467,7 +2467,7 @@ async fn get_block_time_distribution_chart(
 
 /// The block-intervals chart's cache key, the route's and the warmup's (v4: every interval of the
 /// window in the whole, the ones beyond the drawn range stated, and the window's epochs).
-pub(crate) const CACHE_KEY_BLOCK_TIME_DISTRIBUTION: &str = "chart:block-time-distribution:v4";
+pub(crate) const CACHE_KEY_BLOCK_TIME_DISTRIBUTION: &str = "chart:block-time-distribution:v5";
 
 /// `/charts/block-time-distribution`: the histogram and what its page states of the window (lane
 /// D1's third round, S4): a share is of every interval of the window, the ones longer than the
@@ -2484,6 +2484,9 @@ pub struct BlockTimeDistributionChartResponse {
     pub intervals: u64,
     /// The intervals longer than the drawn range (over 50 s): in the whole, in no bucket.
     pub beyond_range: u64,
+    /// Each bucket's intervals, one per point of `data` in its order (lane exactness, part A2, N5): a page reads
+    /// a tie, or the most common interval, from these counts, not from the cut shares.
+    pub bucket_counts: Vec<u64>,
 }
 
 /// The epoch-durations chart's cache key (v2: its bucket labels cut).
@@ -2584,6 +2587,7 @@ pub(crate) fn build_block_time_distribution_response(
             epochs: 0,
             intervals: 0,
             beyond_range: 0,
+            bucket_counts: Vec::new(),
         });
     }
 
@@ -2647,6 +2651,12 @@ pub(crate) fn build_block_time_distribution_response(
         epochs: actual_epochs,
         intervals: total_blocks,
         beyond_range,
+        // one per point: none where the window holds no interval and the route draws no bucket
+        bucket_counts: if total_blocks == 0 {
+            Vec::new()
+        } else {
+            bucket_counts.clone()
+        },
     })
 }
 
@@ -3822,9 +3832,12 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
-/// The keys of `/charts/total-supply`'s four bands, in the order they stack.
+/// The keys of `/charts/total-supply`'s four bands, in the order they stack (lane exactness, part A2, M1: each
+/// named for what it holds). `circulatingNotDeposited` is the protocol circulation less the DAO's
+/// deposits, `supply.liquid`: a withdrawal request's principal left `total_deposited` at its
+/// request, so it is in this band, and its frozen compensation in `unclaimedCompensation`.
 const TOTAL_SUPPLY_BAND_KEYS: [&str; 4] = [
-    "outsideDao",
+    "circulatingNotDeposited",
     "daoDeposited",
     "unclaimedCompensation",
     "burnt",
@@ -3864,7 +3877,7 @@ async fn get_total_supply_chart(
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
     // v4: four bands that partition C, and the protocol circulation (lane D1, second follow-up)
-    let cache_key = complete_days_cache_key("chart:total-supply:v4", chain)?;
+    let cache_key = complete_days_cache_key("chart:total-supply:v5", chain)?;
     if let Some(cached) = state
         .cache
         .get::<StackedAreaChartResponse>(&cache_key)
@@ -3941,8 +3954,8 @@ async fn get_total_supply_chart(
     let series = TOTAL_SUPPLY_BAND_KEYS
         .iter()
         .zip([
-            ("Outside the DAO", "#00c389"),
-            ("In the Nervos DAO", "#3b82f6"),
+            ("Circulating, not deposited", "#00c389"),
+            ("Deposited in the Nervos DAO", "#3b82f6"),
             ("Unclaimed DAO compensation", "#a68b57"),
             ("Burnt", "#6b7280"),
         ])

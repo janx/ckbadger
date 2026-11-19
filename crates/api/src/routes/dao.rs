@@ -690,6 +690,15 @@ fn dao_latest_to_response(
     );
     let live_cells_count =
         i64::from(latest.deposit_cells_count) + i64::from(latest.withdrawal_request_cells_count);
+    // the singleton's legacy `active_deposits` counts the same cells under an untrue name (a
+    // withdrawal request is no active deposit): it is their sum, or the row is wrong (lane exactness, part A2, S2)
+    anyhow::ensure!(
+        i64::from(latest.active_deposits) == live_cells_count,
+        "dao_latest_stats at block {block}: active_deposits {} is not {} deposits + {} withdrawal requests",
+        latest.active_deposits,
+        latest.deposit_cells_count,
+        latest.withdrawal_request_cells_count
+    );
     let secondary_issuance = latest
         .mining_reward
         .checked_add(latest.deposit_compensation)
