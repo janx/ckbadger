@@ -64,6 +64,30 @@ const SCRIPT_W = 250;
 const WITNESS_W = 230;
 const CODE_MIN = 180;
 
+/**
+ * The rows' legend, a section heading's right end: what a ● and a ○ mean, after the page's own
+ * note (the transaction page's "2 ran, 1,923,713 cycles"). One legend for the transaction page and
+ * the cell page's developer tier (lane D3).
+ */
+export function ScriptGroupLegend({ children }: { children?: ReactNode }) {
+  return (
+    <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
+      {children}
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
+        runs here
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
+        />
+        attached, runs when spent
+      </span>
+    </span>
+  );
+}
+
 /** `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. */
 export function cellsInWords(
   cellIds: readonly string[],

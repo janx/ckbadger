@@ -119,8 +119,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/cell/cell-transactions.tsx': {
     lane: 'p-chain',
-    sites: { look: 5, ink: 4 },
-    reason: '5 without a look; inks by hand (hover:text-jade, text-[color:var(--ink)], style)',
+    // look 5 → 3, ink 4 → 2 (lane D3): the transaction's full-hash link and the groups' dep links
+    // went; the one link to the transaction states its look
+    sites: { look: 3, ink: 2 },
+    reason: '3 without a look; inks by hand (hover:text-jade, text-[color:var(--ink)], style)',
   },
   'components/cell/code-cell-board.tsx': {
     lane: 'p-chain',
@@ -156,11 +158,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     lane: 'p-chain',
     sites: { look: 5, ink: 5 },
     reason: '5 without a look; inks by hand (hover:text-jade, hover:underline, text-text-bright)',
-  },
-  'components/transaction/tx-structure.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
   },
   'components/transaction/what-moved.tsx': {
     lane: 'p-chain',
@@ -510,7 +507,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // two links (2), the cell page's Created block link (2: look, ink), the address page's kind-line
 // lock link and its Lock metric's (4: two looks, two inks), the uncle page's canonical-hash link
 // (1), the identity owner line's address (1)
-const TOLERATED_TOTAL = 569;
+const TOLERATED_TOTAL = 563;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

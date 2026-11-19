@@ -164,7 +164,6 @@ export function FiberChannelStep({
             continuity={continuity}
             meOut={carries ? `out:${carries.index}` : undefined}
             onward="the channel, onward"
-            hideGroups
           />
           <div
             className="text-small flex flex-col items-start gap-1 border border-dashed px-3 py-2.5"

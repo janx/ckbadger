@@ -3,7 +3,6 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import Link from '@/components/ui/link';
 import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import { Seal } from '@/components/ui/seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -88,17 +87,6 @@ export const SEAM_SEAL = {
   reach: 55,
 } as const;
 
-export interface TxStructureGroup {
-  id: string;
-  kind: 'lock' | 'type';
-  label: string;
-  href: string;
-  cellIds: readonly string[];
-  executed: boolean;
-  witness: ReactNode;
-  dependency: ReactNode;
-  cycles?: string | null;
-}
 export interface TxContinuity {
   from: string;
   to: string;
@@ -128,17 +116,7 @@ export interface TxStructureProps {
   consumedCapacity?: string;
   /** The created sheet's total (C11): the API's exact `outputsCapacity`, as `consumedCapacity`. */
   createdCapacity?: string;
-  groups?: readonly TxStructureGroup[];
   continuity?: readonly TxContinuity[];
-  witnesses?: ReactNode;
-  dependencies?: ReactNode;
-  hideGroups?: boolean;
-  /**
-   * Lane U follow-up: the groups list's heading. Default "Script groups"; a page showing several
-   * transactions names each list by its transaction (the cell page: "… of the transaction that
-   * created it"), so it never reads as two bare "Script groups" sections.
-   */
-  groupsTitle?: string;
   focusedCellIds?: readonly string[];
   onClearFocus?: () => void;
   onCellHover?: (id: string | null) => void;
@@ -188,12 +166,7 @@ export function TxStructure({
   fee,
   consumedCapacity,
   createdCapacity,
-  groups = [],
   continuity = [],
-  witnesses,
-  dependencies,
-  hideGroups = false,
-  groupsTitle = 'Script groups',
   focusedCellIds = [],
   onClearFocus,
   onCellHover,
@@ -206,7 +179,7 @@ export function TxStructure({
   seamSeal,
   fold,
 }: TxStructureProps) {
-  const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
+  const [hover, setHover] = useState<{ kind: 'cell'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const [centers, setCenters] = useState<Record<string, number>>({});
   const sheets = foldSheets(txHash, inputs, outputs, continuity, fold);
@@ -240,29 +213,22 @@ export function TxStructure({
   const ids = new Set([...inputs, ...outputs].map((c) => c.id));
   if (ids.size !== inputs.length + outputs.length)
     throw new Error(`${txHash}: duplicate cell id in transaction structure`);
-  for (const g of groups)
-    for (const id of g.cellIds)
-      if (!ids.has(id))
-        throw new Error(`${txHash}: script group ${g.id} references unknown cell ${id}`);
   for (const l of continuity)
     if (!inputs.some((c) => c.id === l.from) || !outputs.some((c) => c.id === l.to))
       throw new Error(`${txHash}: invalid continuity ${l.from} → ${l.to}`);
   if (meOut !== undefined && !outputs.some((c) => c.id === meOut))
     throw new Error(`${txHash}: onward cell ${meOut} is not an output`);
-  const activeGroup = hover?.kind === 'group' ? groups.find((g) => g.id === hover.id) : null;
   const linked = new Set(
     linking === 'page'
       ? focusedCellIds
-      : activeGroup
-        ? activeGroup.cellIds
-        : hover
-          ? [
-              hover.id,
-              ...continuity.flatMap((l) =>
-                l.from === hover.id ? [l.to] : l.to === hover.id ? [l.from] : []
-              ),
-            ]
-          : focusedCellIds
+      : hover
+        ? [
+            hover.id,
+            ...continuity.flatMap((l) =>
+              l.from === hover.id ? [l.to] : l.to === hover.id ? [l.from] : []
+            ),
+          ]
+        : focusedCellIds
   );
   const ys = Object.values(centers);
   const tile = (cell: CellTileData) => (
@@ -459,67 +425,6 @@ export function TxStructure({
             </li>
           ))}
         </ul>
-      )}
-      {!hideGroups && groups.length > 0 && (
-        <section>
-          <h3 className="text-text-bright text-body mb-3 font-medium">{groupsTitle}</h3>
-          <div className="divide-row-rule divide-y">
-            {groups.map((g) => (
-              <div
-                key={g.id}
-                data-group-id={g.id}
-                data-highlighted={
-                  hover?.id === g.id || (hover?.kind === 'cell' && g.cellIds.includes(hover.id))
-                }
-                tabIndex={0}
-                onMouseEnter={() => setHover({ kind: 'group', id: g.id })}
-                onMouseLeave={() => setHover(null)}
-                onFocus={() => setHover({ kind: 'group', id: g.id })}
-                onBlur={() => setHover(null)}
-                className={cn(
-                  'text-small grid min-w-0 gap-2 py-3 sm:grid-cols-2 lg:grid-cols-4',
-                  (hover?.id === g.id ||
-                    (hover?.kind === 'cell' && g.cellIds.includes(hover.id))) &&
-                    'bg-base-surface'
-                )}
-              >
-                <span className="min-w-0 [overflow-wrap:anywhere]">
-                  <span className="text-text-dim mr-2">{g.kind}</span>
-                  <Link href={g.href} className="text-text-bright hover:text-jade">
-                    {g.label}
-                  </Link>
-                  <span className="text-text-dim ml-2">
-                    {g.executed ? 'executed' : 'not executed'}
-                  </span>
-                </span>
-                <span className="text-text-dim min-w-0 break-all">{g.cellIds.join(', ')}</span>
-                <div className="min-w-0 [overflow-wrap:anywhere]">{g.witness}</div>
-                <div className="min-w-0 [overflow-wrap:anywhere]">
-                  {g.dependency}
-                  {g.cycles !== undefined && (
-                    <span className="text-text-dim block">
-                      {g.cycles === null
-                        ? 'cycles not available'
-                        : `${exactUnsignedInteger(g.cycles, `${txHash}: ${g.id} cycles`).toLocaleString('en-US')} cycles`}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-      {witnesses && (
-        <section>
-          <h3 className="text-text-bright text-body mb-3 font-medium">Witnesses</h3>
-          {witnesses}
-        </section>
-      )}
-      {dependencies && (
-        <section>
-          <h3 className="text-text-bright text-body mb-3 font-medium">Dependencies</h3>
-          {dependencies}
-        </section>
       )}
     </div>
   );

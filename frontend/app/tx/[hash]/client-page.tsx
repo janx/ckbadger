@@ -41,7 +41,7 @@ import {
 } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, registeredName } from '@/components/transaction/transaction-cell-tiles';
-import { ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
+import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import {
   groupCells,
   groupHref,
@@ -1377,7 +1377,6 @@ export default function TransactionDetailPage() {
                 // C11: the sheets' heads end with the API's exact totals
                 consumedCapacity={required(tx.inputsCapacity, hash, 'inputsCapacity')}
                 createdCapacity={required(tx.outputsCapacity, hash, 'outputsCapacity')}
-                hideGroups
                 linking="page"
                 inflow={inflow}
                 continuityList={false}
@@ -1577,7 +1576,7 @@ export default function TransactionDetailPage() {
         <DetailSection
           title="Script groups"
           actions={
-            <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
+            <ScriptGroupLegend>
               <span data-testid="tx-groups-ran">
                 {isProvisional
                   ? 'will run when committed'
@@ -1587,18 +1586,7 @@ export default function TransactionDetailPage() {
                       ? `${ran} ran, ${cycles.toLocaleString('en-US')} cycles`
                       : `${ran} ran`}
               </span>
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
-                runs here
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
-                />
-                attached, runs when spent
-              </span>
-            </span>
+            </ScriptGroupLegend>
           }
         >
           <Prose className="-mt-2 mb-3">

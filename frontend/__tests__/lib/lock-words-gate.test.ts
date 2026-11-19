@@ -240,7 +240,9 @@ const KNOWN: Reads = {
   'components/identity/identity-evidence.tsx': { 'api name': 1 },
   'components/address/address-holdings.tsx': { 'script info name': 1 },
   'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
-  'components/cell/cell-transactions.tsx': { 'api name': 2, 'registry name': 1 },
+  // registry name 1 → 0 (lane D3): the structure's group names, the third copy of the registry
+  // rule (9), went with the list; the cell page's groups are the rows of script-group-rows.tsx
+  'components/cell/cell-transactions.tsx': { 'api name': 2 },
   'components/cell/cell-microscope.tsx': { 'api name': 1 },
   // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
   // address-holdings.tsx's one read
@@ -315,12 +317,13 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // reads"): the transaction page's script groups (known writer 12) moved to their own module,
   // components/transaction/script-group-rows.tsx, and read the registry once for a group's name and
   // its link where they read it twice: the known reads fall 26 → 25 and all 39 → 38, in one more
-  // file
-  it('pins the totals: 38 reads in 21 files, the known writers 13 files and 25 reads', () => {
+  // file. Then (lane D3, renamed again, it was "… 38 reads in 21 files, … 13 files and 25 reads")
+  // the cell page's own copy of the groups' names went: 25 → 24 known reads, 38 → 37 in all
+  it('pins the totals: 37 reads in 21 files, the known writers 13 files and 24 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(21);
-    expect(total(all)).toBe(38);
+    expect(total(all)).toBe(37);
     expect(Object.keys(KNOWN)).toHaveLength(13);
-    expect(total(KNOWN)).toBe(25);
+    expect(total(KNOWN)).toBe(24);
   });
 });

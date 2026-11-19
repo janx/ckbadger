@@ -1,8 +1,8 @@
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellScriptGroups, CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
@@ -171,11 +171,17 @@ const sporeTx = {
   ],
 } as unknown as TransactionDetail;
 
+/**
+ * The cell's transactions as the page draws them (lane D3, re-pinned on purpose: it was the one
+ * section, the groups inside each transaction's structure): the embed in tier 1, then the script
+ * groups of the developer tier, in the transaction page's rows.
+ */
 function view(target: Cell, props: { lockName?: string | null; typeName?: string | null } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <CellTransactions cell={target} {...props} />
+      <CellScriptGroups cell={target} />
     </QueryClientProvider>
   );
 }
@@ -203,11 +209,20 @@ describe('Its transactions against the Cell board', () => {
     const continuity = await within(structure).findByRole('list', { name: 'Cell continuity' });
     expect(continuity).toHaveTextContent('in:2 → out:1 · same object continues');
     expect(continuity).toHaveTextContent('in:0 → out:0 · same file cell continues');
+    // Re-pinned on purpose (lane D3, the board's embed): the embed draws this cell (out:1) and its
+    // continuity partner (in:2), so the link between them is drawn; the file cell's link joins two
+    // cells the embed counts, not draws (in:0 → out:0), and stays in the list above (both links
+    // were drawn, every cell being drawn)
     expect(structure.querySelector('[data-continuity-kind="objects"]')).not.toBeNull();
-    expect(structure.querySelector('[data-continuity-kind="file"]')).not.toBeNull();
-    // C11 round 3: those two links are the only lines between the sheets (no row-aligned
-    // connector suggests that input N became output N)
-    expect(seamLines(structure)).toHaveLength(2);
+    expect(structure.querySelector('[data-continuity-kind="file"]')).toBeNull();
+    expect(
+      Array.from(structure.querySelectorAll<HTMLElement>('[data-cell-id]')).map(
+        (t) => t.dataset.cellId
+      )
+    ).toEqual(['in:2', 'out:1']);
+    // C11 round 3: the link is the only line between the sheets (no row-aligned connector
+    // suggests that input N became output N)
+    expect(seamLines(structure)).toHaveLength(1);
     // and beyond the created sheet, the onward bridge that carries the board's live cell on
     expect(canvasLines(structure)).toEqual([
       ...seamLines(structure),
@@ -217,9 +232,10 @@ describe('Its transactions against the Cell board', () => {
     const out1 = structure.querySelector('[data-cell-id="out:1"]') as HTMLElement;
     await within(out1).findByText('Nervape Shadow Lock');
     // B4 fix round (re-pinned on purpose): a tile names its owner's lock only when it is not the
-    // default lock, as every row does (it wrote "Default Lock" beside every default-lock owner)
+    // default lock, as every row does (it wrote "Default Lock" beside every default-lock owner).
+    // Re-pinned on purpose (lane D3): read on the drawn partner, in:2 (in:1 is counted, not drawn)
     expect(
-      within(structure.querySelector('[data-cell-id="in:1"]') as HTMLElement).queryByText(
+      within(structure.querySelector('[data-cell-id="in:2"]') as HTMLElement).queryByText(
         'Default Lock'
       )
     ).toBeNull();
@@ -269,18 +285,25 @@ describe('Its transactions against the Cell board', () => {
 
   it('labels groups by script name once, and wraps prose between words (SC-C8)', async () => {
     view(cell);
-    const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
-    const groups = [...structure.querySelectorAll<HTMLElement>('[data-group-id]')];
-    // the four of the board, then the two output locks that do not run here
-    expect(groups).toHaveLength(6);
+    // Re-pinned on purpose (lane D3, PA-24): the groups are the developer tier's rows, in the
+    // transaction page's words ("typeSporeexecuted" and "Output-only group: runs when these cells
+    // are spent" were the structure's own list's)
+    const groups = await waitFor(() => {
+      const rows = document.querySelectorAll<HTMLElement>('[data-group-row]');
+      // the four of the board, then the two output locks that do not run here
+      expect(rows).toHaveLength(6);
+      return Array.from(rows);
+    });
     await within(groups[2]).findByRole('link', { name: 'Spore' });
-    expect(groups[2].textContent).toMatch(/^typeSporeexecuted/);
+    expect(groups[2].textContent).toMatch(/^typeSpore/);
+    // it ran here: its cycles, measured
+    expect(groups[2]).toHaveTextContent('300,000 cycles');
     expect(groups[0].textContent).not.toMatch(/locklock|typetype/);
     expect(groups[0].textContent).not.toContain(SECP.slice(0, 16));
-    const outputOnly = within(groups[3]).getByText(
-      'Output-only group: runs when these cells are spent'
-    );
-    expect(outputOnly.closest('.break-normal')).not.toBeNull();
+    expect(groups[3]).toHaveTextContent('attached, runs when spent');
+    // prose wraps between words: no cell of a row breaks a word
+    for (const part of Array.from(groups[3].querySelectorAll('[role="cell"]')))
+      expect(part.className).not.toMatch(/break-all/);
   });
 
   it('follows a code cell through its Type ID and says it is not replaced yet (SC-K5)', async () => {
@@ -356,7 +379,9 @@ describe('Its transactions · visual pass', () => {
     const groups = await screen.findByRole('heading', {
       name: 'Script groups of the transaction that created it',
     });
-    const box = screen.getByTestId('not-spent-yet');
+    // re-pinned on purpose (lane D3): the groups' heading is the developer tier's, drawn before
+    // the transaction is read, so the box is waited for (it was found with the heading)
+    const box = await screen.findByTestId('not-spent-yet');
     expect(box.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const onward = screen.getByText('this cell, onward: not spent yet');
     expect(onward.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
