@@ -370,13 +370,19 @@ function DetailBody({
             <Prose>
               <p>{description.overview}</p>
             </Prose>
-            <ul className="text-text max-w-measure mt-3 space-y-2">
-              {description.legendItems.map((item) => (
-                <li key={item.label}>
-                  <span className="text-text-bright">{item.label}:</span> {item.description}
-                </li>
-              ))}
-            </ul>
+            {/* Rule 10 (CH-15): one formula line in the fields the page reads. */}
+            <p data-role="formula" className="text-text max-w-measure mt-3">
+              {description.formula}
+            </p>
+            {description.legendItems.length > 0 && (
+              <ul className="text-text max-w-measure mt-3 space-y-2">
+                {description.legendItems.map((item) => (
+                  <li key={item.label}>
+                    <span className="text-text-bright">{item.label}:</span> {item.description}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <div className="border-base-border min-w-0 border-t pt-3">
             <div className="text-text-dim mb-2">Evidence path</div>
@@ -387,6 +393,13 @@ function DetailBody({
                 interpolated.
               </p>
             </Prose>
+            {/* Rule 10: one real instance, the head's figure exactly, where the page reads it */}
+            {head.figure && (
+              <p data-role="instance" className="text-text max-w-measure mt-3">
+                <span className="text-text-dim">The figure, exactly:</span> {head.figure.title}
+                {head.at && ` · ${head.at}`}
+              </p>
+            )}
             <div className="mt-3 flex flex-col gap-1">
               {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
               {definition.source === 'blocks' &&
