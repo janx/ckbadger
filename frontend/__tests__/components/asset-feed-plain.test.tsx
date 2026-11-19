@@ -104,13 +104,15 @@ it('keeps the script-call lines on a feed that does not ask for plain rows', asy
 
 it('folds a batch of objects behind "+N more objects", leading with this one (OB-M3)', async () => {
   const { container } = feed(true);
-  const more = await screen.findAllByRole('button', { name: '+2 more objects' });
+  // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline words
+  const more = await screen.findAllByRole('button', { name: /^\+2\smore\sobjects$/ });
   expect(more).toHaveLength(2);
   const first = container.querySelector('[data-role="participants"]')!;
   expect(first.querySelectorAll('a[href*="/objects/"]')).toHaveLength(2);
   expect(first.innerHTML).toContain(obj(2, 1).objectId.slice(0, 10));
   fireEvent.click(more[0]);
-  expect(screen.getAllByRole('button', { name: '+2 more objects' })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: /^\+2\smore\sobjects$/ })).toHaveLength(1);
+  expect(more[0]).toHaveTextContent(/^fewer$/);
   expect(first.querySelectorAll('a[href*="/objects/"]').length).toBe(4);
 });
 

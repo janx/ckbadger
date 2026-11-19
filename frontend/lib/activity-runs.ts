@@ -16,8 +16,11 @@
  *    action (`dao:deposit`), as a multiset (each with its count); an action's own figures, such as
  *    a deposit's capacity, are not compared;
  * 3. **the script code**: each by its code (its code hash and its hash type: a script is the
- *    pair), as a multiset. Not the args: the same code with other args is the same (the three
- *    oracles' 0x00, 0x01, 0x02; two tokens of one standard). Three lists, as the API states them:
+ *    pair), as a SET: the code that was called, not how many cells carried it (the lead's final
+ *    round, item 1: as a multiset, two Godwoken transfers with two and three Withdrawal Lock
+ *    outputs were two runs, which no reader would call two things done). Not the args: the same
+ *    code with other args is the same (the three oracles' 0x00, 0x01, 0x02; two tokens of one
+ *    standard). Three lists, as the API states them:
  *    - `itemTypes`, the type script of every token, object and identity the row moved and the
  *      Nervos DAO's, as the indexer classified each item (the page-phase review's MUST-1: an
  *      item's type is never a call, so without them an sUDT and an xUDT transfer were one run);
@@ -79,6 +82,8 @@ function partyId(p: RunParty, txHash: string): string {
 }
 
 const multiset = (values: readonly string[]) => [...values].sort();
+/** Each code once, in one order: what was called, not how often. */
+const codeSet = (values: readonly string[]) => [...new Set(values)].sort();
 
 /** The key two rows share exactly when they are the same (see the module's rule). */
 export function runKey(s: RunSubject): string {
@@ -88,9 +93,9 @@ export function runKey(s: RunSubject): string {
     s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
     multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
-    multiset(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
-    multiset(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
-    multiset(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
+    codeSet(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
+    codeSet(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
+    codeSet(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
   ]);
 }
 

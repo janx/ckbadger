@@ -53,7 +53,6 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { FoldToggle } from '@/components/ui/fold-toggle';
 import { ShortId } from '@/components/ui/short-id';
-import { unitNode } from '@/components/ui/units';
 import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 import { useFromSm } from '@/hooks/useFromMd';
@@ -136,6 +135,7 @@ export function ActivityRowHead({
   layout = 'wrap',
   href,
   details,
+  detailsId,
   age = false,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
@@ -153,6 +153,8 @@ export function ActivityRowHead({
   href?: string;
   /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
   details?: readonly (ReactNode | DottedGroup)[];
+  /** The id of the element that holds `details`, which the head's names' fold controls. */
+  detailsId?: string;
   /** PA-22: a row of a live list says its age, the date-time its hover; else the date. */
   age?: boolean;
 }) {
@@ -196,7 +198,7 @@ export function ActivityRowHead({
           {headline}
         </span>
       ) : line ? (
-        <span data-role="head-main" className="min-w-0">
+        <span id={detailsId} data-role="head-main" className="min-w-0">
           <Dotted parts={[headline, ...(details ?? [])]} />
         </span>
       ) : (
@@ -267,7 +269,7 @@ export function ActivityRowHead({
   return (
     <>
       {head}
-      <div data-role="head-details" className="text-small leading-row min-w-0">
+      <div id={detailsId} data-role="head-details" className="text-small leading-row min-w-0">
         <Dotted parts={details} />
       </div>
     </>
@@ -286,38 +288,61 @@ function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string
   );
 }
 
+/** A run of a head's script names: type scripts (a run's item types, the type calls) or locks. */
+interface ScriptRun {
+  kind: 'type' | 'lock';
+  parts: ReactNode[];
+}
+
+/** The fold of a head's script names: open or not, the way to turn it, the names' element. */
+export interface HeadFold {
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  controls: string;
+}
+
 /**
- * A run of calls as parts of the head's list. Over PARTICIPANT_LIMIT, the first five and an
- * explicit "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390),
- * written after the last name shown, so it never stands alone after a separator.
+ * The scripts a head names, by ONE rule for a row's head and a folded run's (the lead's final
+ * round, item 2: "the same list of the same things"): one list, in its runs' order (a run's item
+ * types first, then the type calls, then the lock calls), of at most PARTICIPANT_LIMIT names, six;
+ * over six, the first five and "+N more locks" (types, scripts: what the fold holds), the inline
+ * fold that opens the rest in place and folds it back (B#26: 29 lock calls, one per line at 390).
+ * The fold is written after the last name shown, so it never stands alone after a separator.
  */
-function foldedCalls(
-  parts: ReactNode[],
-  noun: 'types' | 'locks',
-  open: boolean,
-  onOpen: () => void
-): ReactNode[] {
-  const folded = !open && parts.length > PARTICIPANT_LIMIT;
-  if (!folded) return parts;
-  const shown = parts.slice(0, PARTICIPANT_LIMIT - 1);
-  const last = shown.length - 1;
-  return shown.map((part, i) =>
-    i < last ? (
-      part
-    ) : (
-      <>
-        {part}{' '}
-        <button
-          type="button"
-          aria-expanded={false}
-          onClick={onOpen}
-          className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
-        >
-          +{parts.length - shown.length} more {noun}
-        </button>
-      </>
-    )
-  );
+function headScripts(runs: readonly ScriptRun[], fold: HeadFold): DottedGroup[] {
+  const total = runs.reduce((n, r) => n + r.parts.length, 0);
+  const foldable = total > PARTICIPANT_LIMIT;
+  const keep = foldable && !fold.open ? PARTICIPANT_LIMIT - 1 : total;
+  const held = new Set<ScriptRun['kind']>();
+  let before = 0;
+  // one group a run in both states (an empty one draws nothing), so the fold's group keeps its
+  // place in the head's list and stays the same element as the names open and fold
+  const groups = runs.map((r) => {
+    const take = Math.max(0, Math.min(r.parts.length, keep - before));
+    before += r.parts.length;
+    if (take < r.parts.length) held.add(r.kind);
+    return detailRun(r.parts.slice(0, take));
+  });
+  if (!foldable) return groups;
+  const noun = held.size === 1 ? [...held][0] : 'script';
+  return [
+    ...groups,
+    // after the last name shown, joined to it: never alone after a separator
+    dottedGroup(
+      [
+        <FoldToggle
+          key="fold"
+          form="inline"
+          open={fold.open}
+          count={total - (PARTICIPANT_LIMIT - 1)}
+          singular={noun}
+          controls={fold.controls}
+          onToggle={fold.onToggle}
+        />,
+      ],
+      { role: 'names-fold', className: DETAIL, joined: true }
+    ),
+  ];
 }
 
 /** A called script as the row names it (T7): its name, its page, and the call with its full args. */
@@ -342,18 +367,19 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 }
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
-  // a lock's words are the one decision's (components/ui/lock-kind.tsx), as a list names locks
-  const name = lockNoun(
-    namedLockWords(
-      {
-        name: lc.scriptName ?? null,
-        codeHash: lc.lockCodeHash,
-        hashType: normalizeScriptRefHashType(lc.lockHashType),
-      },
-      'column'
-    ),
-    'row'
+  // a lock's words and its page are the one decision's (lib/lock-words.ts), fed its code hash, hash
+  // type and the API's name together, as a list names locks: a lock on a registered code hash by
+  // another hash type is not that lock, so neither its words nor its link take the name (the lead's
+  // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
+  const words = namedLockWords(
+    {
+      name: lc.scriptName ?? null,
+      codeHash: lc.lockCodeHash,
+      hashType: normalizeScriptRefHashType(lc.lockHashType),
+    },
+    'column'
   );
+  const name = lockNoun(words, 'row');
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
@@ -361,7 +387,7 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
     name,
     call: notDecoded ? `${call} ${notDecoded}` : call,
     href: getScriptDetailHref({
-      name: lc.scriptName,
+      name: words.form === 'not-indexed' ? undefined : (words.name ?? undefined),
       codeHash: lc.lockCodeHash,
       hashType: lc.lockHashType,
       scriptKind: 'lock',
@@ -391,11 +417,12 @@ function itemTypeRef(t: ActivityItemType): CallRef {
 }
 
 /**
- * The calls by name, once per script (name and page), in first-call order, each with its count
- * and, on a row (`args`), every call it stands for in its hover. Without args on the row, two calls
- * of one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say
- * the same. A folded run's head names the code its rows called (`args` false): its rows' args
- * differ, so no row's args are its hover.
+ * The calls by name, once per script (name and page), in first-call order. On a row (`args`) each
+ * has its count and every call it stands for in its hover: without args on the row, two calls of
+ * one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the
+ * same. A folded run's head (`args` false) names the code its rows called, each once: its rows
+ * differ in how many cells carried a code (the fold compares the set, the lead's final round, item
+ * 1) and in their args, so no row's count or args are the run's.
  */
 function callNames(refs: CallRef[], args: boolean): ReactNode[] {
   const groups: { name: string; href: string; calls: string[] }[] = [];
@@ -414,7 +441,7 @@ function callNames(refs: CallRef[], args: boolean): ReactNode[] {
       >
         {g.name}
       </Link>
-      {g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
+      {args && g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
     </span>
   ));
 }
@@ -695,8 +722,10 @@ export function rowReadFails(activity: ActivityBody): boolean {
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
-  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void },
-  args = true
+  fold: HeadFold,
+  args = true,
+  /** A folded run's head: the code its rows' items carry, named first (`itemTypes`). */
+  itemTypes: readonly ActivityItemType[] = []
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -729,24 +758,20 @@ function activityDetails(
       facts,
     });
   });
-  const calls: DottedGroup[] = [];
-  if (showScriptDetails && types.length > 0)
-    calls.push(
-      detailRun(
-        foldedCalls(callNames(types.map(typeCallRef), args), 'types', folds.types, () =>
-          folds.open('types')
-        )
-      )
-    );
-  if (showScriptDetails && locks.length > 0)
-    // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
-    calls.push(
-      detailRun(
-        foldedCalls(callNames(locks.map(lockCallRef), args), 'locks', folds.locks, () =>
-          folds.open('locks')
-        )
-      )
-    );
+  const runs: ScriptRun[] = [
+    { kind: 'type', parts: callNames(itemTypes.map(itemTypeRef), args) },
+    ...(showScriptDetails
+      ? [
+          { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
+          // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
+          { kind: 'lock' as const, parts: callNames(locks.map(lockCallRef), args) },
+        ]
+      : []),
+  ];
+  const calls = headScripts(
+    runs.filter((r) => r.parts.length > 0),
+    fold
+  );
   return {
     actions,
     primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
@@ -784,10 +809,6 @@ function feeOnlyParty(activity: ActivityBody): number | null {
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
-
-/** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
-const LINE_BUTTON =
-  'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';
 
 /** One Layer-2 fact as one item of the participant line: it wraps whole, never inside. */
 function ItemOnLine({
@@ -835,6 +856,7 @@ function ItemsOnLine({
   itemTone,
   showComposition,
   className,
+  controls,
 }: {
   items: ItemDelta[];
   foldObjects: boolean;
@@ -842,10 +864,13 @@ function ItemsOnLine({
   itemTone: 'plain' | 'sign';
   showComposition: boolean;
   className?: string;
+  /** The id of the participant's line, which the objects' fold opens and folds. */
+  controls: string;
 }) {
   const [open, setOpen] = useState(false);
   const objects = items.filter((i) => i.kind === 'object');
-  const folded = foldObjects && !open && objects.length >= 2;
+  const foldable = foldObjects && objects.length >= 2;
+  const folded = foldable && !open;
   const lead = folded
     ? (objects.find((o) => o.kind === 'object' && o.objectId === focusItemId) ?? objects[0])
     : null;
@@ -861,16 +886,19 @@ function ItemsOnLine({
           className={className}
         />
       ))}
-      {folded && (
-        <button
-          type="button"
-          data-role="more-objects"
-          aria-expanded={false}
-          onClick={() => setOpen(true)}
-          className={cn(LINE_BUTTON, className)}
-        >
-          +{objects.length - 1} more {countNoun(objects.length - 1, 'object')}
-        </button>
+      {/* the rest of the batch inside the line: FoldToggle's inline form, which stays and folds
+          back (the lead's final round, item 3) */}
+      {foldable && (
+        <span data-role="more-objects" className={cn('inline-flex', className)}>
+          <FoldToggle
+            form="inline"
+            open={open}
+            count={objects.length - 1}
+            singular="object"
+            controls={controls}
+            onToggle={setOpen}
+          />
+        </span>
       )}
     </>
   );
@@ -927,6 +955,7 @@ function ParticipantLine({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [objectsOpen, setObjectsOpen] = useState(false);
+  const lineId = useId();
   const leads = (i: ItemDelta) =>
     focusTokenTypeHash !== undefined &&
     i.kind === 'token' &&
@@ -1005,15 +1034,19 @@ function ParticipantLine({
           {otherItems.map((item, i) => (
             <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
           ))}
-          <button
-            type="button"
-            data-role="object-count"
-            aria-expanded={objectsOpen}
-            onClick={() => setObjectsOpen((open) => !open)}
-            className={LINE_BUTTON}
-          >
-            {objectCountLabel(p.itemDeltas)}
-          </button>
+          {/* the objects as one signed count, the figure that stands for them folded: FoldToggle's
+              inline form in its words (the lead's final round, item 3) */}
+          <span data-role="object-count">
+            <FoldToggle
+              form="inline"
+              open={objectsOpen}
+              count={p.itemDeltas.filter((i) => i.kind === 'object').length}
+              singular="object"
+              words={objectCountLabel(p.itemDeltas)}
+              controls={lineId}
+              onToggle={setObjectsOpen}
+            />
+          </span>
         </span>
       )}
       <ItemsOnLine
@@ -1023,6 +1056,7 @@ function ParticipantLine({
         itemTone={itemTone}
         showComposition={showComposition}
         className={phoneObjects ? 'hidden md:inline-flex' : undefined}
+        controls={lineId}
       />
       {lineTier !== null && (
         <span data-role="composition" className="inline-flex">
@@ -1049,7 +1083,7 @@ function ParticipantLine({
   if (!fromSm) {
     const moved = lead.length > 0 || rest.length > 0 || lineTier !== null;
     return (
-      <div data-role="participant" className="text-small leading-row pl-[18px]">
+      <div id={lineId} data-role="participant" className="text-small leading-row pl-[18px]">
         <div data-role="party-line" className="flex flex-nowrap items-baseline gap-x-3">
           <span className="min-w-0 flex-1 basis-0 [overflow-wrap:anywhere]">
             {party}
@@ -1074,6 +1108,7 @@ function ParticipantLine({
   }
   return (
     <div
+      id={lineId}
       data-role="participant"
       // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
       // indent, so the continuation never reads as the next participant.
@@ -1156,11 +1191,12 @@ function Participants({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const listId = useId();
   const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
   const foldable = expanded || hidden > 0;
   if (participants.length === 0) return null;
   return (
-    <div data-role="participants" className="flex min-w-0 flex-col">
+    <div id={listId} data-role="participants" className="flex min-w-0 flex-col">
       {shown.map((p) => (
         <ParticipantLine
           key={p.key}
@@ -1175,17 +1211,18 @@ function Participants({
           notes={notes}
         />
       ))}
+      {/* the participants' way to go under their lines: FoldToggle's box, "all 8 participants ↓"
+          and "fewer ↑" on one button (the lead's final round, item 3) */}
       {foldable && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
-        >
-          {unitNode(
-            expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`
-          )}
-        </button>
+        <div className="self-start pl-[18px]">
+          <FoldToggle
+            open={expanded}
+            count={participants.length}
+            singular="participant"
+            controls={listId}
+            onToggle={setExpanded}
+          />
+        </div>
       )}
     </div>
   );
@@ -1268,10 +1305,12 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
-    ...openRuns,
-    open: (run) => setOpenRuns((runs) => ({ ...runs, [run]: true })),
+    open: namesOpen,
+    onToggle: setNamesOpen,
+    controls: namesId,
   });
   // Lane F follow-up 2: over PARTICIPANT_LIMIT lines the run is a list under the head; two to six
   // stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
@@ -1317,6 +1356,7 @@ export function ActivityRow({
         // headline stays text, which also keeps a headline with links of its own unnested.
         href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
         details={runs}
+        detailsId={namesId}
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
@@ -1454,19 +1494,18 @@ export function FoldedActivityRow({
   }
   if (first.itemTypes === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
-  const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
   // the script code is the same on every row of a run: the first row's item types and calls, by
-  // name, are the run's (with no row's args in their hover): "Token transfer · Simple UDT"
-  const { calls } = activityDetails(
+  // name, are the run's (with no row's count or args), by a row's head's one rule (`headScripts`):
+  // "Token transfer · Simple UDT"
+  const { calls: details } = activityDetails(
     first,
     showScriptDetails,
-    { ...openCalls, open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })) },
-    false
+    { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
+    false,
+    first.itemTypes
   );
-  const details =
-    first.itemTypes.length > 0
-      ? [detailRun(callNames(first.itemTypes.map(itemTypeRef), false)), ...calls]
-      : calls;
   const transactions = formatCount(rows.length, 'transaction');
   const toggle = (
     <FoldToggle
@@ -1487,6 +1526,7 @@ export function FoldedActivityRow({
         layout="line"
         title={title}
         details={details}
+        detailsId={namesId}
         hash={first.txHash}
         blockNumber={first.blockNumber}
         timestamp={first.timestamp}

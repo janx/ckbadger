@@ -270,6 +270,13 @@ const FEEDS: Reads = {
   // an address record that is the owner's or manager's own: the party's name handed with the
   // record's address to `partyLockSentence` (lane P2's third round, item 12)
   'components/identity/identity-records.tsx': { 'api name': 1 },
+  // a called lock: its `scriptName` handed with its code hash and hash type to the decision, whose
+  // words and name its link takes (the lead's final round, item 7; it was known, 2 reads, the
+  // link's name the API's as read)
+  'components/activity/activity-row.tsx': { 'api name': 1 },
+  // the AI view's primary lock call: its `scriptName` handed with its code hash and hash type to
+  // the decision, the words the page's row writes (the lead's final round, item 7; it was known)
+  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -324,9 +331,10 @@ const KNOWN: Reads = {
   // follow-up; known writer 12): the cellbase witness's miner lock and a lock group are named by
   // the decision, their reads feed it
   // 13, found when the gate learned `lockScriptName` (lane cd-fixes-controls), for the topic page
-  // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
-  // "lock hash", outside lockWords
-  'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
+  // lane (p-topics): the Fiber graph's party row wrote the registry's name of its lock before
+  // "lock hash", outside lockWords. It left (the lead's final round, item 7): the row writes
+  // `partyLockWordsText`, the decision fed the lock its address encodes with the route's name (the
+  // route reads both from one stored lock script, so a party with no address has no name)
   // 14–20, found when the gate learned the identity parties' lock name (lane P2's third round,
   // item 12, the test review's MUST-1): a .cell / .bit party's `scriptName`, renamed on the wire
   // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Then the .cell
@@ -334,9 +342,8 @@ const KNOWN: Reads = {
   // identity overview (4), the roles (1), the records (2 → 1, which feeds it), the party chip (2,
   // its badge gone), the named party (2) and the AI view's owner and manager rows (2). Left: the
   // AI view's primary lock call (an activity's called lock, its hash type not sent) and the lists
-  // lane's activity row, not this lane's to edit
-  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
-  'components/activity/activity-row.tsx': { 'api name': 2 },
+  // lane's activity row, not this lane's to edit; both left (the lead's final round, item 7: a
+  // called lock's name feeds the decision, in the row, its link and the AI view alike)
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -491,11 +498,20 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // known writers, this lane the identity parties'; what is left known is the Fiber graph's (2),
   // the AI view's primary lock call (1) and the lists lane's activity row (2): 5 known reads in 3
   // files; the records' read feeds the decision; 23 reads in all in 16 files
-  it('pins the totals: 23 reads in 16 files, the known writers 3 files and 5 reads', () => {
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… 23 reads in 16
+  // files, … 3 files and 5 reads"): the activity row's called lock feeds the decision, one read
+  // where there were two: 22 reads in 16 files, the known writers 2 files and 3 reads
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… the known writers 2
+  // files and 3 reads"): the AI view's called lock feeds the decision: the known writers 1 file,
+  // the Fiber graph's, and 2 reads; 22 reads in 16 files in all
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "22 reads in 16 files,
+  // the known writers 1 file and 2 reads"): the Fiber graph's party row writes the decision's
+  // words, its two reads gone: KNOWN is empty, 20 reads in 15 files in all
+  it('pins the totals: 20 reads in 15 files, and no known writer', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(16);
-    expect(total(all)).toBe(23);
-    expect(Object.keys(KNOWN)).toHaveLength(3);
-    expect(total(KNOWN)).toBe(5);
+    expect(Object.keys(all)).toHaveLength(15);
+    expect(total(all)).toBe(20);
+    expect(Object.keys(KNOWN)).toHaveLength(0);
+    expect(total(KNOWN)).toBe(0);
   });
 });

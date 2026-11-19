@@ -263,9 +263,81 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
         l.textContent?.includes('Lock 0 lock')
       ) as HTMLElement;
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
-    const more = within(lockLine()).getByRole('button', { name: '+24 more locks' });
+    // re-pinned on purpose (the lead's final round, item 3): the inline fold, one button that
+    // stays, names what it opens and folds back ("fewer"); it was a button that went once pressed
+    // the fold is the head's part joined after the last name shown (its own item, so it stays)
+    const head = container.querySelector('[data-role="head-main"]') as HTMLElement;
+    const more = within(head).getByRole('button', { name: /^\+24\smore\slocks$/ });
     expect(more).toHaveAttribute('aria-expanded', 'false');
+    const names = document.getElementById(more.getAttribute('aria-controls')!)!;
+    expect(names).toContainElement(lockLine());
+    more.focus();
     fireEvent.click(more);
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(29);
+    expect(within(head).getByRole('button', { name: 'fewer' })).toBe(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
+  });
+
+  // The lead's final round, item 2: a head names its scripts by ONE rule, a row's and a folded
+  // run's alike: one list (a run's item types first, then the type calls, then the lock calls) of
+  // at most six names; over six, the first five and "+N more", the inline fold. Per run, three
+  // types and four locks were seven names on one head.
+  it('names six scripts at most on a row’s head, types and locks one list, the rest behind "+N more"', () => {
+    const named = dotbitRegistration();
+    const typeCall = (i: number) => ({
+      typeCodeHash: '0x' + String(i).padStart(64, 'e'),
+      typeHashType: 'type',
+      typeArgs: '0x',
+      scriptHash: '0x' + String(i).padStart(64, 'f'),
+      scriptName: `Type ${i}`,
+    });
+    const row = {
+      ...named,
+      protocolActions: [],
+      typeCalls: [typeCall(0), typeCall(1), typeCall(2)],
+      lockCalls: named.lockCalls.slice(0, 4).map((l, i) => ({
+        ...l,
+        lockCodeHash: '0x' + String(i).padStart(64, '0'),
+        scriptName: `Lock ${i}`,
+      })),
+    } as ActivityRowData;
+    const { container } = render(<ActivityRow activity={row} />);
+    const head = () => container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(head().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
+    expect(head()).toHaveTextContent(
+      /Type 0 · Type 1 · Type 2 · Lock 0 lock · Lock 1 lock \+2\smore\slocks/
+    );
+    const more = within(head()).getByRole('button', { name: /^\+2\smore\slocks$/ });
+    fireEvent.click(more);
+    expect(head().querySelectorAll('a[href*="/script"]')).toHaveLength(7);
+    // six names are six: no fold for one name
+    const six = { ...row, lockCalls: row.lockCalls.slice(0, 3) } as ActivityRowData;
+    const again = render(<ActivityRow activity={six} />);
+    const sixHead = again.container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(sixHead.querySelectorAll('a[href*="/script"]')).toHaveLength(6);
+    expect(within(sixHead).queryByRole('button')).toBeNull();
+  });
+
+  it('says "+N more scripts" where the fold holds types and locks', () => {
+    const named = dotbitRegistration();
+    const typeCall = (i: number) => ({
+      typeCodeHash: '0x' + String(i).padStart(64, 'e'),
+      typeHashType: 'type',
+      typeArgs: '0x',
+      scriptHash: '0x' + String(i).padStart(64, 'f'),
+      scriptName: `Type ${i}`,
+    });
+    const row = {
+      ...named,
+      protocolActions: [],
+      typeCalls: Array.from({ length: 6 }, (_, i) => typeCall(i)),
+      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, scriptName: 'Lock 0' })),
+    } as ActivityRowData;
+    const { container } = render(<ActivityRow activity={row} />);
+    const head = container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(within(head).getByRole('button', { name: /^\+2\smore\sscripts$/ })).toBeInTheDocument();
   });
 });

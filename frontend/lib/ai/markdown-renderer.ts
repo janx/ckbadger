@@ -1,6 +1,6 @@
 import { CHART_ROUTES } from '@/lib/ai/page-registry';
-import { partyLockWordsText } from '@/lib/lock-words';
-import type { ScriptRefHashType } from '@/lib/script-ref';
+import { lockNoun, namedLockWords, partyLockWordsText } from '@/lib/lock-words';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
   type Address,
@@ -277,8 +277,20 @@ function renderActivityDetail(activity: GlobalActivity): string {
   }
 
   if (classified.primaryLockCall) {
-    return (
-      classified.primaryLockCall.scriptName ?? hashShort(classified.primaryLockCall.lockCodeHash)
+    // the one lock decision's words, fed the lock's code hash, hash type and name together, as the
+    // page's row writes a called lock (activity-row.tsx `lockCallRef`): a lock on a registered code
+    // hash by another hash type is not that lock (the lead's final round, item 7)
+    const lc = classified.primaryLockCall;
+    return lockNoun(
+      namedLockWords(
+        {
+          name: lc.scriptName ?? null,
+          codeHash: lc.lockCodeHash,
+          hashType: normalizeScriptRefHashType(lc.lockHashType),
+        },
+        'column'
+      ),
+      'row'
     );
   }
 

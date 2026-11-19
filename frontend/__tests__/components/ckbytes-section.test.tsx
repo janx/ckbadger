@@ -70,16 +70,37 @@ describe('CkbytesSection', () => {
   // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.8 px), the
   // decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at 360, and the figure
   // and its unit are one unbreakable unit; "in circulation" moves under it whole.
-  it('keeps the supply figure and its unit one unit, the decimals 13 px below 640 (PA-19)', async () => {
+  // re-pinned on purpose (the lead's final round, item 5): at 320 the figure and its unit ran 14 px
+  // past the window (main 9): a 320 px window's line is 288 px, the figure alone 283.8 (the
+  // integer 214.8 and the decimals 69.0) and with " CKB" 314.5. The figure stays one unbreakable
+  // run, exact to the shannon; its unit goes under it where they cannot share the line, as a chart
+  // head's unit does on a phone, and beside it where they can (314.5 in a 360 px window's 328).
+  it('keeps the supply figure whole and lets its unit go under it where the line cannot hold both (PA-19)', async () => {
     render(<CkbytesSection />);
     const total = await screen.findByTestId('ckbytes-circulating');
     expect(total).not.toHaveClass('[overflow-wrap:anywhere]');
     expect(total.children).toHaveLength(2);
-    const figure = total.firstElementChild as HTMLElement;
+    const pair = total.firstElementChild as HTMLElement;
+    expect(pair).not.toHaveClass('whitespace-nowrap');
+    expect(pair).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
+    const [figure, unit] = [...pair.children] as HTMLElement[];
     expect(figure).toHaveClass('whitespace-nowrap');
-    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
+    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125$/);
     expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
+    // the one break of the pair is the space before its unit
+    expect(unit.textContent).toBe(' CKB');
+    expect(unit).toHaveClass('text-text-dim', 'text-[0.5em]');
+    expect(unit).not.toHaveClass('whitespace-nowrap');
     expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
+    // the arithmetic below 640: 26 px for the integer and 13 for the rest, −0.01 em each glyph
+    const run = (chars: number, px: number) => chars * (px * 0.6 - px * 0.01);
+    const alone = run(14, 26) + run(9, 13);
+    const withUnit = alone + run(4, 13);
+    expect(Math.round(alone * 10) / 10).toBe(283.8);
+    expect(Math.round(withUnit * 10) / 10).toBe(314.5);
+    expect(alone).toBeLessThanOrEqual(320 - 32);
+    expect(withUnit).toBeGreaterThan(320 - 32);
+    expect(withUnit).toBeLessThanOrEqual(360 - 32);
   });
 
   // A4 Chrome F1: the figure (nowrap) and the label (nowrap) followed each other with no
@@ -92,10 +113,11 @@ describe('CkbytesSection', () => {
     const total = await screen.findByTestId('ckbytes-circulating');
     expect(total).toHaveClass('flex', 'flex-wrap', 'gap-x-3');
     expect(total).not.toHaveClass('whitespace-nowrap');
-    const [figure, label] = [...total.children] as HTMLElement[];
-    expect(figure).toHaveClass('whitespace-nowrap');
+    const [pair, label] = [...total.children] as HTMLElement[];
+    // re-pinned on purpose (the lead's final round, item 5): the figure inside its pair is nowrap
+    expect(pair.firstElementChild).toHaveClass('whitespace-nowrap');
     expect(label).toBe(within(total).getByTestId('ckbytes-label'));
-    expect(figure).not.toContainElement(label);
+    expect(pair).not.toContainElement(label);
     // nothing between the row and the page lays the two out on one unbreakable line
     for (let el: HTMLElement | null = total; el; el = el.parentElement)
       expect(el).not.toHaveClass('whitespace-nowrap');

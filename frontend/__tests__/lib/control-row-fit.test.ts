@@ -13,6 +13,7 @@ import {
   type ChipRowItem,
   type TabRowItem,
 } from '@/lib/control-row-fit';
+import { tabRowForm } from '@/lib/control-row-fit';
 import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 
 /**
@@ -305,5 +306,27 @@ describe('a select’s pair stands on one line, or its well goes under its label
 
   it('refuses a select with no option', () => {
     expect(() => selectPairPx('state', [])).toThrow('select "state": no option to measure');
+  });
+});
+
+// The lead's final round, item 4: a tab row's form on the line it is given, from its labels: its
+// counts while the row with them holds the line, its names alone while they do, else its narrow
+// form, the Select. Before the line is measured, the row with its counts.
+describe('tabRowForm: tabs with counts, tabs without, or the Select', () => {
+  const views = [{ label: 'transactions' }, { label: 'cellbases' }, { label: 'in the pool' }];
+  const address = [
+    { label: 'activities', count: 3 },
+    { label: 'transactions', count: 3 },
+    { label: 'live cells', count: 3 },
+  ];
+  it('decides on the measured line, the counts leaving first', () => {
+    expect(tabRowForm(views, 'body', true, null)).toBe('counts');
+    expect(tabRowForm(views, 'body', true, 328)).toBe('counts');
+    expect(tabRowForm(views, 'body', true, 316.8)).toBe('counts');
+    expect(tabRowForm(views, 'body', true, 288)).toBe('select');
+    expect(tabRowForm(address, 'body', true, 390 - 32)).toBe('counts');
+    expect(tabRowForm(address, 'body', true, 328)).toBe('names');
+    expect(tabRowForm(address, 'body', true, 316.8)).toBe('names');
+    expect(tabRowForm(address, 'body', true, 316.79)).toBe('select');
   });
 });

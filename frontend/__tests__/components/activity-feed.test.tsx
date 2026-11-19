@@ -389,12 +389,14 @@ describe('ActivityFeed', () => {
     const parties = () => [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     // The five largest |Δ| (900, 700, 500, 300, 200), paid first.
     expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7'].map(shown));
-    const more = within(row).getByRole('button', { name: '+3 participants' });
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's box under the lines
+    const more = within(row).getByRole('button', { name: /^all 8\sparticipants ↓$/ });
     expect(more).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(more);
     expect(parties()).toEqual(['p4', 'p6', 'p1', 'p8', 'p2', 'p5', 'p7', 'p3'].map(shown));
-    const fewer = within(row).getByRole('button', { name: 'Show fewer participants' });
+    const fewer = within(row).getByRole('button', { name: 'fewer ↑' });
+    expect(fewer).toBe(more);
     expect(fewer).toHaveAttribute('aria-expanded', 'true');
 
     await user.click(fewer);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { lockNoun, namedLockWords } from '@/lib/lock-words';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { parseMarkdownSourcePath } from '@/lib/ai/markdown-route';
 import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-renderer';
@@ -7,7 +8,10 @@ import { api } from '@/lib/api';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 
-vi.mock('@/lib/api', () => ({
+// the module's own constants (its tags, which an activity's classification reads) beside the
+// mocked reads (the lead's final round, item 7: a called lock's activity reaches the tags)
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     getActivitySummary24h: vi.fn(),
     getBlocks: vi.fn(),
@@ -284,6 +288,75 @@ describe('renderMarkdownPage', () => {
       cursor: undefined,
       filter: 'dao',
     });
+  });
+
+  // The lead's final round, item 7: the AI view's primary lock call is written by the one lock
+  // decision, from its code hash, hash type and name together, so the page's row
+  // (__tests__/components/activity-runs.test.tsx, "a called lock on a registered code hash by
+  // another hash type") and its markdown view say the same lock: a lock on the Default Lock's code
+  // hash by data, which today's API names "Default Lock", is its code hash and "by data".
+  it('writes an activity’s called lock as the page’s row does, by the lock decision', async () => {
+    // the 24 h summary as the one-kind API states it (merged with resync/int: its kinds partition
+    // its activities; the per-action counters and kindOccurrences/daoCount are gone)
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 1,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 0 },
+      coinbaseCount: 0,
+      uniqueAddressCount: 1,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      scriptCalls: 0,
+      scriptRest: null,
+      protocolActionCounts: {},
+      hoursCovered: 24,
+    });
+    const byData = {
+      lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+      lockHashType: 'data',
+      lockArgs: '0x' + 'ab'.repeat(20),
+      scriptHash: '0x' + 'cd'.repeat(32),
+      scriptName: 'Default Lock',
+      decoded: null,
+      decodeError: null,
+    };
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'a'.repeat(64)}`,
+            blockNumber: 123,
+            txIndex: 1,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [byData],
+            protocolActions: [],
+            participants: [],
+            itemTypes: [],
+            itemTypesUnread: null,
+          },
+        ],
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.status).toBe(200);
+    const page = lockNoun(
+      namedLockWords(
+        { name: 'Default Lock', codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data' },
+        'column'
+      ),
+      'row'
+    );
+    expect(page).toBe('lock 0x9bd7e06f…a3cce8 by data');
+    expect(result.body).toContain(page);
+    expect(result.body).not.toContain('Default Lock');
   });
 
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {

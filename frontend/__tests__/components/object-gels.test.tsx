@@ -404,11 +404,82 @@ describe('SequencingGel at the measured width (V3)', () => {
     }
   );
 
-  it('refuses a box too narrow for 16 lanes of 14 px', () => {
-    stubChartWidth(200);
+  // Lane P2's fourth round (item 1, MUST): a page must not crash because of the window's width. The
+  // map threw below 262 px (the 38 px ruler and 16 lanes of 14 px), and a 320 px window gives the
+  // object page's copper plate 244 px: 320 − 2 × 16 (the page) − 2 × (1 + 5) (the plate's border
+  // and padding) − 2 × 16 (its content's padding). Below the width of 16 lanes the lanes wrap,
+  // 8 a row (then 4, 2, 1), each row over the whole DNA with its own ruler; the map refuses only a
+  // box that cannot hold one lane of 14 px beside the ruler, 52 px (a 128 px window), which no
+  // browser lays a page out in. Re-pinned on purpose: it refused 200 px.
+  it('wraps the lanes 8 a row in the 244 px box a 320 px window gives, each row with its ruler', () => {
+    stubChartWidth(244);
+    const { container } = render(<ControlledGel />);
+    const svg = container.querySelector('svg[role="img"]')!;
+    expect(svg).toHaveAttribute('width', '244');
+    const rows = [...svg.querySelectorAll('[data-gel-row]')];
+    expect(rows).toHaveLength(2);
+    // each row's lane digits: 0–7, then 8–f
+    const digits = (row: Element) =>
+      [...row.querySelectorAll('[data-lane-digit]')].map((t) => t.textContent).join('');
+    expect(rows.map(digits)).toEqual(['01234567', '89abcdef']);
+    // every digit of the DNA is one band, in the row of its value: a9 is nibble 0 in lane a (the
+    // second row, its third lane) and nibble 1 in lane 9 (the second row, its second lane)
+    expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
+    const band = (pos: number) => container.querySelector(`[data-nibble="${pos}"]`)!;
+    expect(rows[1].contains(band(0))).toBe(true);
+    expect(rows[1].contains(band(1))).toBe(true);
+    // lanes of 20 px from the 38 px ruler: lane a's band at 38 + 2 × 20 + 3, lane 9's at 38 + 20 + 3
+    expect(band(0).getAttribute('x')).toBe('81');
+    expect(band(1).getAttribute('x')).toBe('61');
+    for (const b of Array.from(svg.querySelectorAll('[data-nibble]')))
+      expect(Number(b.getAttribute('x')) + Number(b.getAttribute('width'))).toBeLessThanOrEqual(
+        244
+      );
+    // the ruler counts the bytes in each row: 0, 8, … 48 and the DNA's 53 "byte"
+    for (const row of rows)
+      expect([...row.querySelectorAll('[data-ruler]')].map((t) => t.textContent)).toEqual([
+        '0',
+        '8',
+        '16',
+        '24',
+        '32',
+        '40',
+        '48',
+        '53',
+      ]);
+    // the second row stands under the first
+    const y = (row: Element) =>
+      Number(/translate\(0[ ,]+([\d.]+)\)/.exec(row.getAttribute('transform') ?? '')?.[1] ?? 0);
+    expect(y(rows[1])).toBeGreaterThan(y(rows[0]));
+    expect(screen.getByText(fullText(/the 16 lanes in 2 rows of 8/))).toBeInTheDocument();
+  });
+
+  it('draws 16 lanes a row from 262 px, the ruler and 16 lanes of 14 px, and 8 a row under it', () => {
+    stubChartWidth(262);
+    const { container, unmount } = render(<ControlledGel />);
+    expect(container.querySelectorAll('[data-gel-row]')).toHaveLength(1);
+    expect(container.querySelector('[data-nibble="0"]')!.getAttribute('x')).toBe(
+      String(38 + 10 * 14 + 3)
+    );
+    unmount();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    stubChartWidth(261);
+    const narrower = render(<ControlledGel />).container;
+    expect(narrower.querySelectorAll('[data-gel-row]')).toHaveLength(2);
+  });
+
+  it('refuses only a box that cannot hold one lane of 14 px beside its 38 px ruler', () => {
+    stubChartWidth(52);
+    const { container, unmount } = render(<ControlledGel />);
+    expect(container.querySelectorAll('[data-gel-row]')).toHaveLength(16);
+    unmount();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    stubChartWidth(51);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<ControlledGel />)).toThrow(
-      /Nervape 3x: a 200 px DNA map cannot hold 16 lanes/
+      /Nervape 3x: a 51 px DNA map cannot hold one lane of 14 px beside its 38 px ruler/
     );
   });
 

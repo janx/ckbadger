@@ -253,7 +253,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   );
   const said = (el: Element) =>
     el.getAttribute('data-role') === 'activity-run'
-      ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
+      ? `${el.querySelector('[data-role="head-main"]')!.textContent!.replace(/\s+/g, ' ')} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
       : el.querySelector('[data-role="headline"]')!.textContent;
   const drawnFeed = async (rows: GlobalActivity[]) => {
     vi.setSystemTime(Number(rows[0].timestamp) + 60_000);
@@ -286,14 +286,29 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     ]);
   });
 
+  // The lead's final round, item 1: the code is a set, so the 29 transfers that called the same
+  // codes with two to five Godwoken Withdrawal Lock outputs are one run, and its head names each
+  // code once: no "×2", which is a row's count of its own calls, not the run's
+  it('folds the live token transfers into one run whose head names each code once', async () => {
+    const drawn = await drawnFeed(feeds.token);
+    expect(drawn).toHaveLength(1);
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '29');
+    expect(folded.querySelector('[data-role="head-main"]')!.textContent).not.toMatch(/×/);
+  });
+
   // the page-phase review's MUST-1: a folded run names the code its rows' items carry, here the
   // standard of the tokens they moved ("Simple UDT"), whatever tokens each row moved
   it('names the standard a run of token transfers carries, its tokens apart', async () => {
+    // re-pinned on purpose (the lead's final round, item 1): four runs, [11, 11, 3, 4], cut only by
+    // the count of Godwoken Withdrawal Lock outputs ("×2" to "×5" on the head), are one
     expect(await drawnFeed(feeds.token)).toEqual([
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×2 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 13 senders',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×3 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 13 senders',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×4 · lock 0xff022d55…d32733 | all 3 transactions ↓ · 5 senders',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×5 · lock 0xff022d55…d32733 | all 4 transactions ↓ · 6 senders',
+      // re-pinned on purpose (the lead's final round, item 2): a folded head names its item types
+      // first and six names at most, as a row's head does; the eight were "… · lock
+      // 0xede19974…56f0ba · Godwoken Withdrawal Lock · lock 0xff022d55…d32733". Re-pinned on
+      // purpose (resync/int): the run counts its 31 senders (the parties whose CKB fell), where it
+      // counted 149 participants
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 31 senders',
     ]);
   });
 
@@ -450,7 +465,9 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream([crowd]);
     render(<ActivitiesStreamExplorer />);
-    const more = await screen.findByRole('button', { name: '+2 participants' });
+    // re-pinned on purpose (the lead's final round, item 3): the participants' fold is
+    // FoldToggle's box under their lines, "all 7 participants ↓" / "fewer ↑"
+    const more = await screen.findByRole('button', { name: /^all 7\sparticipants ↓$/ });
     await user.click(more);
     expect(more).toHaveAttribute('aria-expanded', 'true');
     const article = document.querySelector(`article[data-feed-row="${crowd.txHash}"]`)!;
@@ -459,7 +476,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     expect(article.isConnected).toBe(true);
     expect(more.isConnected).toBe(true);
     expect(more).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: 'Show fewer participants' })).toBe(more);
+    expect(within(article as HTMLElement).getByRole('button', { name: 'fewer ↑' })).toBe(more);
   });
 
   it('a new row that says the same as an open run joins it, open, its head and focus kept', async () => {
@@ -611,7 +628,7 @@ describe('a folded run counts its senders and names no party (Gate B)', () => {
     await user.click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
     // opened, each row draws its own parties by the rows' rule (over six, five and the count)
     const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
-    expect(row).toHaveTextContent('+2 participants');
+    expect(row).toHaveTextContent(/all 7\sparticipants ↓/);
   });
 });
 
@@ -833,5 +850,54 @@ describe('a run is set back as its rows are (R4)', () => {
         r.getAttribute('data-feed-row')
       )
     ).toEqual([rows[2].txHash]);
+  });
+});
+
+// The lead's final round, item 7: a called lock is written by the one lock decision from its code
+// hash, hash type and name together. A lock on the Default Lock's code hash referenced by data is
+// not the Default Lock: today's API sends it the registered name ("Default Lock"), which the row
+// must not write, in a row's head, a folded head or the opened run's rows, nor in a link's hover or
+// address; it is written by its code hash and "by data".
+describe('a called lock on a registered code hash by another hash type (the lock decision)', () => {
+  const BY_DATA = {
+    lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+    lockHashType: 'data',
+    lockArgs: '0x' + 'ab'.repeat(20),
+    scriptHash: '0x' + 'cd'.repeat(32),
+    scriptName: 'Default Lock',
+    decoded: null,
+    decodeError: null,
+  };
+  const called = (n: number): GlobalActivity => ({
+    ...oracle(n, 'q3q7ue', '0x00', n * 49),
+    lockCalls: [BY_DATA],
+  });
+  const said = (el: Element) =>
+    [
+      el.textContent ?? '',
+      ...[...el.querySelectorAll('[title]')].map((e) => e.getAttribute('title') ?? ''),
+      ...[...el.querySelectorAll('a[href]')].map((a) =>
+        decodeURIComponent(a.getAttribute('href') ?? '')
+      ),
+    ].join('\n');
+
+  it('writes it by its code hash and "by data", never "Default Lock", in a row and a run, opened or not', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([called(1), called(2)]));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded.querySelector('[data-role="head-main"]')).toHaveTextContent(
+      /lock 0x9bd7e06f…a3cce8 by data/
+    );
+    expect(said(folded)).not.toMatch(/Default Lock/);
+    await userEvent
+      .setup({ advanceTimers: () => {} })
+      .click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
+    const rows = [...document.querySelectorAll('article[data-feed-row]')];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelector('[data-role="head-main"]')).toHaveTextContent(/by data/);
+      expect(said(row)).not.toMatch(/Default Lock/);
+    }
   });
 });

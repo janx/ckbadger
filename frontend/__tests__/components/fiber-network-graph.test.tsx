@@ -10,6 +10,8 @@ import {
 import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { fullText } from '@/__tests__/utils/full-text';
 import {
   allTextLines,
@@ -169,6 +171,38 @@ describe('FiberNetworkGraph', () => {
     expect(within(panel()).getByRole('list', { name: 'Graph key' })).toBeInTheDocument();
     fireEvent.mouseLeave(node('ppedrr'));
     expect(node('kdeakp')).toHaveAttribute('data-lit', 'true');
+  });
+
+  // The lead's final round, item 7: a party's lock is written by the one lock decision, from the
+  // lock its address encodes and the registry's name the route sends for it, never the name alone.
+  // The route reads the address and the name from one stored lock script, so a party with no
+  // address has no name either: its lock is not indexed.
+  it('names a party’s lock by the lock decision: a Default Lock code by data is its code hash and "by data"', () => {
+    const net = structuredClone(mainnet) as FiberNetwork;
+    const byData = ckbAddress({
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data',
+      args: '0x' + 'ab'.repeat(20),
+    });
+    const party = net.parties.find((p) => p.address?.endsWith('ppedrr'))!;
+    expect(party.lockScriptName).toBe('Default Lock');
+    party.address = byData;
+    render(<Graph network={net} />);
+    fireEvent.mouseEnter(node(byData.slice(-6)));
+    expect(
+      within(panel()).getByText(/^lock 0x9bd7e06f…a3cce8 by data · lock hash/)
+    ).toBeInTheDocument();
+    expect(panel()).not.toHaveTextContent(/Default Lock/);
+  });
+
+  it('says a party’s lock is not indexed where the route holds no lock script for it', () => {
+    const net = structuredClone(mainnet) as FiberNetwork;
+    const party = net.parties.find((p) => p.address?.endsWith('ppedrr'))!;
+    party.address = null;
+    party.lockScriptName = null;
+    render(<Graph network={net} />);
+    fireEvent.mouseEnter(node(party.lockScriptHash.slice(-6)));
+    expect(within(panel()).getByText(/^not indexed · lock hash/)).toBeInTheDocument();
   });
 
   it('a pair shows open CKB with its unit, lifetime, and block range with separators (FF-F3, FF-F7)', () => {
