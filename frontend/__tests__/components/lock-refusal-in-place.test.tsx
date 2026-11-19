@@ -128,10 +128,13 @@ describe('a refused lock fails its part, in its place', () => {
           lockKind: 'Default Lock',
         },
       ],
-      total: 1,
+      // re-pinned on purpose (lane p-assets): more holders than the top ten show, so the short
+      // list's "all 11 holders ↓" is drawn (the way to all is drawn only where there are more;
+      // it was one holder of one, and the heading row's button always stood)
+      total: 11,
       limit: 10,
-      hasMore: false,
-      nextCursor: null,
+      hasMore: true,
+      nextCursor: 'more',
       totalSupply: '100',
       anchor: null,
     });
@@ -167,7 +170,8 @@ describe('a refused lock fails its part, in its place', () => {
       totalSupply: '100',
       anchor: null,
     });
-    fireEvent.click(screen.getByRole('button', { name: /^All .*→$/ }));
+    // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
+    fireEvent.click(screen.getByRole('button', { name: /^all .*holders ↓$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
     expect(screen.queryByText(/^Could not draw the holders/)).toBeNull();
   });

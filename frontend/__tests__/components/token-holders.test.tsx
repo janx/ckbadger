@@ -348,7 +348,8 @@ describe('Token holders (board L5)', () => {
   // widest tick its head writes, "0.75%" (it was measured from "100%", 48), and the column rounds
   // once, track, gap and figure together (the figure's box was rounded to 55 first, which would
   // have made it 116 and the table 555): 115, 554 px (renamed: "552 px").
-  it('budgets every holder column from what it holds: 554 px, a table from it (F3-e)', async () => {
+  // re-pinned on purpose (lane p-assets; renamed, it was "… 554 px, …"): the lock is its words
+  it('budgets every holder column from what it holds: 549 px, a table from it (F3-e)', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -356,23 +357,24 @@ describe('Token holders (board L5)', () => {
       ceil(at('99999', 13) + 16),
       // a holder with no address, its lock hash at the row size (an address is 13 characters)
       ceil(at('0x11111111…111111', 14) + 16),
-      // the lock's tag: 12 characters at 12 px, 5 px sides and a 1 px border
-      ceil(at('x'.repeat(12), 12) + 12 + 16),
+      // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
+      // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
+      ceil(at('x'.repeat(12), 13) + 16),
       // 12 characters of the balance; a longer one ends in the ellipsis, exact in its title
       ceil(at('x'.repeat(12), 13) + 16),
       // the track (its widest tick row, "0 0.75%", 7 glyphs at 12 px), the 10 px gap, "100.00%";
       // the last column
       ceil(at('0 0.75%', 12) + 10 + at('100.00%', 13)),
     ];
-    expect(budgets).toEqual([55, 159, 115, 110, 115]);
-    expect(budgets.reduce((s, w) => s + w, 0)).toBe(554);
-    atContainerWidth(554);
+    expect(budgets).toEqual([55, 159, 110, 110, 115]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(549);
+    atContainerWidth(549);
     mount();
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[2].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(554);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(549);
   });
 
   // Readability B5: the Share head stands over the share, not over its bar.
@@ -406,7 +408,10 @@ describe('Token holders (board L5)', () => {
     // in the row's hover) — and a lock not indexed is said so in the row's hover, not "lock kind
     // unavailable".
     expect(within(first).getByText('JoyID')).toHaveAttribute('data-lock-kind');
-    expect(within(first).getByText('JoyID')).toHaveClass('text-meta', 'border');
+    // re-pinned on purpose (lane p-assets): a lock is plain words, no chip, the column's value in
+    // the reading ink at the cells' step (it was the row tag's 12 px and border)
+    expect(within(first).getByText('JoyID')).toHaveClass('text-small', 'text-text');
+    expect(within(first).getByText('JoyID')).not.toHaveClass('border');
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
     expect(within(first).getByText('JoyID')).toHaveAttribute('title', JOYID_CODE_HASH);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
