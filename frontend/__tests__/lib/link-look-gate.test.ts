@@ -294,8 +294,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/identity/identity-overview.tsx': {
     lane: 'p-assets',
-    sites: { look: 6 },
-    reason: '6 without a look',
+    // look 6 → 5 (lane D2, PB-22): the owner line, one form on the four identity pages, states
+    // its look (the Owner fact's address; a .cell party's is the same Address now)
+    sites: { look: 5 },
+    reason: '5 without a look',
   },
   'components/identity/identity-records.tsx': {
     lane: 'p-assets',
@@ -528,11 +530,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-// 610 → 600 (lane D2): the transaction page's facts rail and its block link went (1), the block
+// 610 → 599 (lane D2): the transaction page's facts rail and its block link went (1), the block
 // page's facts aside and its two links (2), the cell page's Created block link (2: look, ink), the
 // address page's kind-line lock link and its Lock metric's (4: two looks, two inks), the uncle
-// page's canonical-hash link (1)
-const TOLERATED_TOTAL = 600;
+// page's canonical-hash link (1), the identity owner line's address (1)
+const TOLERATED_TOTAL = 599;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

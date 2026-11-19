@@ -117,7 +117,7 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
   return {
     label: 'Owner',
     size: 'body',
-    value: <Address address={cell.ownerAddress} size="row" className="text-body" />,
+    value: <Address address={cell.ownerAddress} size="row" look="key" className="text-body" />,
     note: `${cell.lockName ?? 'lock not named'}${note}`,
   };
 }
@@ -157,19 +157,21 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
 }
 
 /** A `.cell` named party as a metric: the resolved address, else the 20-byte prefix (C7). */
+/**
+ * A `.cell` party's fact. Its owner line is drawn as every identity page's owner line is (lane D2,
+ * PB-22: one owner line on the four pages): an address is the `Address` at the row size in the
+ * body step, its lock named in the note (`ownerFact`); a lock the API resolved to no address is
+ * its hash, linked; a bare prefix is the prefix, unlinked.
+ */
 function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
   return {
     label,
     size: 'body',
-    value: party.lockHash ? (
-      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-        <Hash
-          hash={party.address ?? party.lockHash}
-          kind={party.address ? 'address' : 'hash'}
-          size="row"
-          copyable={false}
-          className="text-body"
-        />
+    value: party.address ? (
+      <Address address={party.address} size="row" look="key" className="text-body" />
+    ) : party.lockHash ? (
+      <AppLink href={`/address/${party.lockHash}`}>
+        <Hash hash={party.lockHash} kind="hash" size="row" copyable={false} className="text-body" />
       </AppLink>
     ) : (
       <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
