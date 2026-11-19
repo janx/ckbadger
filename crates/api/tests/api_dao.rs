@@ -569,7 +569,9 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         tip_block_hash: [0xAA; 32],
         total_deposited: 123_00000000,
         total_depositors: 7,
-        active_deposits: 9,
+        // re-pinned for lane exactness, part A2 (S2): the legacy count of live DAO cells is the
+        // deposits and the requests, 9 + 4 (it was 9 beside a total of 13)
+        active_deposits: 13,
         deposit_cells_count: 9,
         // re-pinned for lane exactness, part A: a request cell too, so the live total is not
         // the deposits alone (was 0)
@@ -615,7 +617,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["totalDeposited"], "12300000000");
     assert_eq!(json["totalDepositors"], 7);
-    assert_eq!(json["activeDeposits"], 9);
+    assert_eq!(json["activeDeposits"], 13);
     assert_eq!(json["depositCellsCount"], 9);
     assert_eq!(json["withdrawalRequestCellsCount"], 4);
     // lane exactness, part A, A5 (ii): the live DAO cells, deposits and withdrawal requests, the route's count
@@ -2290,4 +2292,106 @@ async fn by_pair_dao_depositors_name_a_lock_by_its_pair() {
         owners[1]["lockKind"].is_null(),
         "the default lock's name does not reach the lock by data: {evidence}"
     );
+}
+
+/// lane exactness, part A2 (S2): `/dao/statistics` states the live DAO cells once. The singleton's legacy
+/// `active_deposits` counts the same cells (deposits and withdrawal requests); a row where it is
+/// not their sum is refused, naming the block and the three counts.
+#[tokio::test]
+async fn dao_stats_refuse_a_live_cell_count_that_disagrees_with_its_parts() {
+    let store = test_store();
+    store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 123_456_789_000_000_001,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+
+    let mut dao = vec![0u8; 32];
+    dao[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xAA; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+        })
+        .unwrap();
+
+    let latest = ckbadger_store::DaoLatestStatistics {
+        tip_block_number: 10,
+        tip_block_hash: [0xAA; 32],
+        total_deposited: 123_00000000,
+        total_depositors: 7,
+        // re-pinned for lane exactness, part A2 (S2): the legacy count of live DAO cells is the
+        // deposits and the requests, 9 + 4 (it was 9 beside a total of 13)
+        active_deposits: 12,
+        deposit_cells_count: 9,
+        // re-pinned for lane exactness, part A: a request cell too, so the live total is not
+        // the deposits alone (was 0)
+        withdrawal_request_cells_count: 4,
+        total_compensation_paid: 11_00000000,
+        unclaimed_compensation: 13_00000000,
+        average_deposit_days: Some("950 days".to_string()),
+        estimated_apc: "2.74".to_string(),
+        mining_reward: 17_00000000,
+        deposit_compensation: 19_00000000,
+        burnt: 23_00000000,
+        pending_withdrawal_capacity: 5_00000000,
+        dao_capacity: 128_00000000,
+        dao_free_capacity: 26_00000000,
+        depositor_allocation_weight: 0,
+        tip_total_issuance: 0,
+        tip_secondary_pool: 0,
+        tip_occupied_capacity: 0,
+        rolling_24h: Some(ckbadger_store::types::DaoRolling24h {
+            baseline_block_number: 9,
+            cutoff_chain_time_ms: 1_699_913_600_000,
+            deposited_change: -3_00000000,
+            depositors_change: 2,
+            claimed_compensation_change: 5_00000000,
+            unclaimed_compensation_change: -7_00000000,
+        }),
+    };
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+        b"latest",
+    );
+    let value = bincode::serialize(&latest).unwrap();
+    store.put_stats_key(&key, &value).unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    // lane exactness, part A2 (S2): activeDeposits is the live DAO cells under a legacy name; the route states
+    // them once, liveCellsCount, and refuses a row whose legacy count disagrees with its parts
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"].as_str().unwrap_or_default();
+    for part in ["block 10", "12", "9 deposits", "4 withdrawal requests"] {
+        assert!(message.contains(part), "{part}: {json}");
+    }
 }

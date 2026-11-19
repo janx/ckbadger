@@ -22,6 +22,7 @@ import {
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -111,11 +112,13 @@ it('keeps live, created and burned counts separate and never adds the cluster ce
   expect(hero).toHaveTextContent('4,000 CKB held in their cells');
 });
 it('applies exact whole-collection trait filtering before pagination and resets the cursor', async () => {
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...collectionGalleryFilteredProducer,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...collectionGalleryFilteredProducer,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const { container } = render(<ClusterPage clusterId={id} />);
   const objects = await screen.findByRole('region', { name: 'Objects' });
   // re-pinned (lane c2-assets): the objects are newest first, so the controls board's pager goes
@@ -261,4 +264,19 @@ it('says nothing of an activity count the indexer has not derived (L2)', async (
   expect(facts).not.toHaveTextContent('Transactions');
   expect(screen.queryByText('Activities', { selector: 'dt' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
+  // Lane P2's third round (item 9): the newest rows still fold into the whole feed, by name with
+  // no number ("all activity ↓"), on its activities, and fold back by the same button
+  const recent = screen.getByRole('region', { name: 'Recent activity' });
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  const fold = screen.getByRole('button', { name: 'all activity ↓' });
+  fold.focus();
+  fireEvent.click(fold);
+  expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  expect(fold).toHaveAccessibleName('fewer ↑');
+  expect(document.activeElement).toBe(fold);
+  fireEvent.click(fold);
+  expect(await screen.findByRole('region', { name: 'Recent activity' })).toBeInTheDocument();
 });

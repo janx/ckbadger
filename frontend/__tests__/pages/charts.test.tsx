@@ -252,6 +252,8 @@ describe('ChartsPage', () => {
       epochs: 42,
       intervals: 100,
       beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: [100],
     });
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);

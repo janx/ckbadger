@@ -457,6 +457,8 @@ describe('move 5 on the activity row', () => {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [sender, receiver],
   };
   const lines = (c: HTMLElement) => [

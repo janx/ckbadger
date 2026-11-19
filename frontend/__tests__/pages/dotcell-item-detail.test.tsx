@@ -5,7 +5,9 @@ import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-re
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
-import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { itemActivityFeedProducer } from '@/__tests__/msw/fixtures/item-producer';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -39,7 +41,7 @@ it('draws its Owner fact as every identity page’s owner line: an Address at th
       hashPrefix: '0x' + 'ab'.repeat(20),
       lockHash: '0x' + 'cd'.repeat(32),
       address,
-      scriptName: 'Default Lock',
+      lockScriptName: 'Default Lock',
     },
   });
   render(<Page identityId={evidence.itemId} />);
@@ -91,18 +93,22 @@ it('shows current name state, exact protocol, physical cell history and both fee
 });
 it('links a uniquely resolved protocol owner and retains unresolved manager bytes', async () => {
   const protocol: ItemProtocol = structuredClone(evidence);
+  // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address
+  // by the one decision, so the owner's address is a real one on JoyID's code hash (it was
+  // 'ckb1owner', a made-up string)
+  const owner = seededAddress('owner', JOYID_CODE_HASH);
   protocol.versions[0].decoded.owner = {
     ...protocol.versions[0].decoded.owner,
     lockHash: '0x' + '22'.repeat(32),
-    address: 'ckb1owner',
-    scriptName: 'JoyID',
+    address: owner,
+    lockScriptName: 'JoyID',
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);
   const rights = await screen.findByRole('region', { name: 'Owner and manager' });
   expect(
     within(within(rights).getByLabelText('Owner · holds the name')).getByRole('link')
-  ).toHaveAttribute('href', '/mainnet/address/ckb1owner');
+  ).toHaveAttribute('href', `/mainnet/address/${owner}`);
   expect(rights).toHaveTextContent(evidence.versions[0].decoded.manager.hashPrefix);
   expect(rights.querySelector('a[href*="626262"]')).toBeNull();
 });
@@ -215,11 +221,18 @@ it('appends every sub-name page and only reports the full child count after comp
   item.childrenNextCursor = 'first';
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren)
-    .mockResolvedValueOnce({
-      ...emptyPage([{ identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' }]),
-      hasMore: true,
-      nextCursor: 'second',
-    })
+    .mockResolvedValueOnce(
+      pagedRead({
+        ...emptyPage([
+          { identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' },
+        ]),
+        // a full page of one with more after it (lane cd-fixes-controls, SHOULD-5: one sub-name on
+        // a page of fifty that said more followed)
+        limit: 1,
+        hasMore: true,
+        nextCursor: 'second',
+      })
+    )
     .mockResolvedValueOnce(
       emptyPage([{ identityId: '0x' + '83'.repeat(20), name: 'three.alice.cell', label: 'three' }])
     );
@@ -296,12 +309,16 @@ it('retains recycled name protocol history without a live cell or sale', async (
   expect(await screen.findByLabelText('Raw item evidence')).toBeInTheDocument();
 });
 it('resets item paging on name navigation and reports an unknown name', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender, unmount } = render(<Page identityId="alice" />);
   fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>

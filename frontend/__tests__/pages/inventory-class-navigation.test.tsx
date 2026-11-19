@@ -6,6 +6,7 @@ import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
 import { api, type InventorySummary } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 /**
  * The inventory's three classes are three addresses (`/inventory/tokens`, `/objects`,
@@ -36,14 +37,16 @@ const summary: InventorySummary = {
 
 function renderAt(url: string) {
   vi.mocked(api.getInventorySummary).mockResolvedValue(summary);
-  vi.mocked(api.getAssets).mockResolvedValue({
-    data: [],
-    total: 0,
-    limit: 50,
-    hasMore: false,
-    nextCursor: null,
-    anchor: null,
-  });
+  vi.mocked(api.getAssets).mockResolvedValue(
+    pagedRead({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      anchor: null,
+    })
+  );
   const router = createMemoryRouter(
     [
       { path: '/:network/inventory/tokens', element: <TokensPage /> },

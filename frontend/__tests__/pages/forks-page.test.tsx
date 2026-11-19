@@ -108,13 +108,15 @@ describe('ForksPage', () => {
   });
 
   it('claims nothing about orphans before the node has switched at all (visual pass, live empty store)', async () => {
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: [],
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: [],
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const record = overview().nodeRecord;
     const fates = record.orphanFates!;
     vi.mocked(api.getForkOverview).mockResolvedValue({
@@ -337,8 +339,22 @@ describe('ForksPage', () => {
     const second = Array.from({ length: 7 }, (_, i) => ({ ...event, id: 9 + i }));
     vi.mocked(api.getForks).mockImplementation(async (params) =>
       params?.cursor === 'after-eight'
-        ? { ...list(), data: second, total: 15, limit: 8, hasMore: false, nextCursor: null }
-        : { ...list(), data: first, total: 15, limit: 8, hasMore: true, nextCursor: 'after-eight' }
+        ? pagedRead({
+            ...list(),
+            data: second,
+            total: 15,
+            limit: 8,
+            hasMore: false,
+            nextCursor: null,
+          })
+        : pagedRead({
+            ...list(),
+            data: first,
+            total: 15,
+            limit: 8,
+            hasMore: true,
+            nextCursor: 'after-eight',
+          })
     );
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     // re-pinned (lane C2 topics): the controls board's cursor in time, newest first, and its
@@ -377,14 +393,16 @@ describe('ForksPage', () => {
     const rows = (n: number, from = 1) =>
       Array.from({ length: n }, (_, i) => ({ ...event, id: from + i }));
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: rows(18),
-      total: 18,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: rows(18),
+        total: 18,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const { unmount } = render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(
@@ -393,14 +411,16 @@ describe('ForksPage', () => {
     expect(screen.queryByRole('button', { name: /^next \d/ })).toBeNull();
     unmount();
     // ten a page of 27: the click adds the five rows the first page holds past the five shown
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: rows(10),
-      total: 27,
-      limit: 10,
-      hasMore: true,
-      nextCursor: 'after-ten',
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: rows(10),
+        total: 27,
+        limit: 10,
+        hasMore: true,
+        nextCursor: 'after-ten',
+      })
+    );
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     const bodyRows = () => table().querySelectorAll('tbody tr');
@@ -510,13 +530,15 @@ describe('ForksPage', () => {
   });
 
   it('distinguishes no node switches from an overview load failure', async () => {
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: [],
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: [],
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getForkOverview).mockRejectedValue(new Error('missing daily block stats'));
     render(<ForksPage />);
     await waitFor(() =>

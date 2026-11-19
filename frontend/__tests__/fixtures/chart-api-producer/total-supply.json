@@ -6,6 +6,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -17,6 +18,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -28,6 +30,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -39,6 +42,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -50,6 +54,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -61,6 +66,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -72,6 +78,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -83,6 +90,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -94,6 +102,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -105,6 +114,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "123.00000001",
+        "daoWithdrawing": "0",
         "outsideDao": "876.99999999",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -116,6 +126,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "120.00000002",
+        "daoWithdrawing": "0",
         "outsideDao": "879.99999998",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -127,6 +138,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "120.00000002",
+        "daoWithdrawing": "0",
         "outsideDao": "879.99999998",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -138,6 +150,7 @@
         "burnt": "8400000000",
         "circulating": "1000",
         "daoDeposited": "120.00000002",
+        "daoWithdrawing": "0",
         "outsideDao": "879.99999998",
         "totalIssuance": "8400001000",
         "unclaimedCompensation": "0"
@@ -153,6 +166,10 @@
       "date": "2020-05-12",
       "value": "123.00000001"
     },
+    "daoWithdrawing": {
+      "date": "2020-05-12",
+      "value": "0"
+    },
     "outsideDao": {
       "date": "2020-05-22",
       "value": "879.99999998"
@@ -166,12 +183,17 @@
     {
       "color": "#00c389",
       "key": "outsideDao",
-      "label": "Outside the DAO"
+      "label": "Outside the Nervos DAO"
     },
     {
       "color": "#3b82f6",
       "key": "daoDeposited",
-      "label": "In the Nervos DAO"
+      "label": "Deposited in the Nervos DAO"
+    },
+    {
+      "color": "#786540",
+      "key": "daoWithdrawing",
+      "label": "Withdrawing from the Nervos DAO"
     },
     {
       "color": "#a68b57",

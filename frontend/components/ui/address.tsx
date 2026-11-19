@@ -10,16 +10,13 @@ type AddressProps = IdShortening & {
   address: string;
   /**
    * Where it stands, which its caller says (components/ui/link.tsx): a row's key (`key`) or a name
-   * inside a line (`inline`). Optional only while the link-look gate's TOLERATED list holds call
-   * sites that state none; such an address draws the look it had before the looks had one owner
-   * (the bright ink over a faint indigo underline), and that look goes with the last of them.
+   * inside a line (`inline`). Required (lane cd-fixes-controls, review-p-tests SHOULD-4): the look
+   * it had before the looks had one owner, drawn for a caller that stated none, went with the last
+   * of them.
    */
-  look?: Extract<LinkLook, 'key' | 'inline'>;
+  look: Extract<LinkLook, 'key' | 'inline'>;
   className?: string;
 };
-
-/** The look of an address whose caller states none (see `look`). */
-const LOOK_BEFORE = 'text-text-bright decoration-aqua/35 underline underline-offset-[3px]';
 
 export function Address({ address, look, className, ...shortening }: AddressProps) {
   const truncate = shortening.truncate !== false;
@@ -32,7 +29,6 @@ export function Address({ address, look, className, ...shortening }: AddressProp
       href={`/address/${address}`}
       look={look}
       className={cn(
-        look === undefined && LOOK_BEFORE,
         'text-body font-mono transition-colors',
         !truncate && 'inline-block max-w-full break-all',
         className

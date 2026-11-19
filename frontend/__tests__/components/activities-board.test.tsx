@@ -8,18 +8,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { api, type GlobalActivity } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
   api: { getGlobalActivities: vi.fn() },
 }));
 
-const page = (data: GlobalActivity[]) => ({
-  data,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-});
+const page = (data: GlobalActivity[]) =>
+  pagedRead({
+    data,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
 const activity = (
   txHash: string,
   at: string,
@@ -33,6 +35,8 @@ const activity = (
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [],
+  itemTypesUnread: null,
   participants: [
     {
       address: seededAddress('wlng7r'),

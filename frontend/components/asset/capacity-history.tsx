@@ -14,8 +14,9 @@ export interface CapacityHistoryProps {
 export function CapacityHistory({ history, subject, weekly, assetClass }: CapacityHistoryProps) {
   if (history.source !== 'indexedChainTimeUtc8')
     throw new Error(`${subject}: unsupported capacity calendar ${history.source}`);
-  // the route states the whole each day's cells hold beside its parts (`capacity`): the page
-  // reads it and sums nothing (it was occupied + free, added here)
+  // the route states the whole each day's cells hold beside its parts (`capacity`, `used`,
+  // `unused`): the page reads all three and sums and subtracts nothing (it was occupied + free,
+  // added here; then free was capacity − occupied, in AssetHistory: lane P2's third round, item 13)
   const daily = history.data.map((point) => ({
     date: point.date,
     capacity: exactUnsignedInteger(
@@ -25,6 +26,10 @@ export function CapacityHistory({ history, subject, weekly, assetClass }: Capaci
     occupiedCapacity: exactUnsignedInteger(
       point.values.used,
       `${subject} ${point.date}: occupied`
+    ).toString(),
+    freeCapacity: exactUnsignedInteger(
+      point.values.unused,
+      `${subject} ${point.date}: free`
     ).toString(),
   }));
   return (

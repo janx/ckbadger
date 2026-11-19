@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ExternalLink } from '@/components/ui/external-link';
@@ -130,7 +131,11 @@ function AlsoGuardedBy({ cell, size }: { cell: Cell; size: ShortSize }) {
     throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} row has no typeScriptName (R6)`);
   return (
     <Link href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`} look="inline">
-      {cell.typeScriptName ?? <ShortId value={cell.typeCodeHash} kind="hash" size={size} />}
+      {cell.typeScriptName ? (
+        withNameBy(cell.typeScriptName, cell.typeScriptNameBy)
+      ) : (
+        <ShortId value={cell.typeCodeHash} kind="hash" size={size} />
+      )}
     </Link>
   );
 }

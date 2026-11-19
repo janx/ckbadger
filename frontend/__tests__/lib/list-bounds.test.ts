@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { ckbAmountText } from '@/lib/amount-form';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +18,8 @@ import {
   MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
+  WIDEST_CELL_AMOUNT_LINE,
+  WIDEST_CKB_HELD_COMPACT,
   WIDEST_COLLECTION_HOLDER_RANK,
   WIDEST_COLLECTION_HOLDERS,
   WIDEST_TOKEN_HOLDER_RANK,
@@ -35,6 +38,7 @@ import {
   WIDEST_POOL_VALUE_LINE,
   WIDEST_PROPOSALS,
   WIDEST_RANK,
+  WIDEST_DAO_DEPOSITS,
   WIDEST_ROW_COUNT,
   WIDEST_TX_FEE,
   WIDEST_TX_OUTPUT,
@@ -52,6 +56,9 @@ describe('the widest values a list column holds (lib/list-bounds)', () => {
     expect(WIDEST_COUNT_DIGITS).toBe('9999');
     expect(WIDEST_ROW_COUNT).toBe('99,999,999');
     expect(WIDEST_RANK).toBe('999,999');
+    // the P3 follow-up's 2f: a depositor's deposits, its own bound (it borrowed WIDEST_COUNT, a
+    // block's transactions, which bounds nothing a depositor holds)
+    expect(WIDEST_DAO_DEPOSITS).toBe('999,999');
     expect(WIDEST_FEE_RATE).toBe('1,000,000,000');
     // the column form, every decimal
     expect(WIDEST_BLOCK_REWARD).toBe('9,999.99999999');
@@ -173,6 +180,8 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_DAO_DEPOSIT',
         'WIDEST_DAO_DEPOSIT_SUMMARY',
         'WIDEST_RANK',
+        // the P3 follow-up's 2f: a depositor's deposits
+        'WIDEST_DAO_DEPOSITS',
         'WIDEST_CKB_HELD',
         'WIDEST_ROW_COUNT',
         // lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): occupied bytes
@@ -193,6 +202,9 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_CELL_CAPACITY',
         'WIDEST_CELL_CAPACITY_SUMMARY',
         'WIDEST_CELL_OCCUPIED',
+        // lane P2's third round (item 11): the code-hash page's amount line and compact CKB
+        'WIDEST_CELL_AMOUNT_LINE',
+        'WIDEST_CKB_HELD_COMPACT',
       ].sort(),
     });
   });
@@ -328,5 +340,21 @@ describe('the holders’ bounds hold their record and a digit of room', () => {
     expect(figure(WIDEST_COLLECTION_HOLDER_RANK)).toBe(figure(WIDEST_COLLECTION_HOLDERS));
     // as a rank is written, without grouping
     expect([WIDEST_TOKEN_HOLDER_RANK, WIDEST_COLLECTION_HOLDER_RANK]).toEqual(['999999', '99999']);
+  });
+});
+
+// Lane P2's third round (item 11): the code-hash page's two bounds, out of its module. The compact
+// form writes two decimals of the largest unit reached, so under the issuance's bound (under 100
+// billion CKB) its widest is three whole digits of a unit, "999.99M": every amount in billions is
+// two digits at most, "99.99B".
+describe('the code-hash page’s amount bounds', () => {
+  it('holds an amount line under a million CKB and the widest compact CKB under the issuance', () => {
+    expect(WIDEST_CELL_AMOUNT_LINE).toBe('999,999.99999999');
+    expect(WIDEST_CKB_HELD_COMPACT).toBe('999.99M');
+    const SHANNONS = BigInt(100_000_000);
+    for (const ckb of ['999', '999999', '999999999', '1000000000', '99999999999'])
+      expect(
+        ckbAmountText(BigInt(ckb) * SHANNONS + BigInt(99_999_999), 'compact').length
+      ).toBeLessThanOrEqual(WIDEST_CKB_HELD_COMPACT.length);
   });
 });

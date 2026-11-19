@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
 import { ShortId } from '@/components/ui/short-id';
-import { Pager } from '@/components/ui/pager';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -13,6 +13,7 @@ const FIRST_OBSERVATIONS = 10;
 /** The arrows are Discovery address-book reports, never observed p2p connections. */
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
+  const listId = useId();
   const queryClient = useQueryClient();
   const read = useQuery({
     queryKey: ['network', 'advertisements', roundId],
@@ -53,7 +54,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
       {visible.length === 0 ? (
         <p className="text-text text-small">No retained advertisement edges for this round.</p>
       ) : (
-        <div role="list" aria-label="Directed advertiser to advertised endpoint graph">
+        <div id={listId} role="list" aria-label="Directed advertiser to advertised endpoint graph">
           {visible.map((edge) => (
             <div
               role="listitem"
@@ -84,31 +85,18 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
           ))}
         </div>
       )}
-      {/* The fold both ways, in the form gate B passed for the rows' fold: the controls library's
-          short-list form, "all 25 observations ↓", then "fewer ↑" back to the first ten. The
-          Pager has no "fewer" form, so the way back is written here in its part's box: celadon
-          words in a target 32 px high below 640 and 28 from it. */}
+      {/* The fold both ways, in the form gate B passed for the rows' fold: FoldToggle's box, "all
+          25 observations ↓" then "fewer ↑" back to the first ten, one button that keeps its
+          focus (the lead's final round, item 3: the Pager's part and a second button swapped). */}
       {data.edges.length > FIRST_OBSERVATIONS && (
         <div className="mt-3">
-          {showAll ? (
-            <button
-              type="button"
-              aria-expanded
-              onClick={() => setShowAll(false)}
-              className="text-jade text-small inline-flex h-8 items-center whitespace-nowrap underline-offset-4 hover:underline sm:h-7"
-            >
-              fewer ↑
-            </button>
-          ) : (
-            <Pager
-              mode="more"
-              all={{
-                count: data.edges.length,
-                singular: 'observation',
-                onShow: () => setShowAll(true),
-              }}
-            />
-          )}
+          <FoldToggle
+            open={showAll}
+            count={data.edges.length}
+            singular="observation"
+            controls={listId}
+            onToggle={setShowAll}
+          />
         </div>
       )}
     </div>

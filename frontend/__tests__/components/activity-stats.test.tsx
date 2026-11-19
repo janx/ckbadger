@@ -11,11 +11,7 @@ import {
 } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import {
-  dailyActivities,
-  activitySummary24h,
-  dailyTransactionCountChart,
-} from '@/__tests__/msw/fixtures/home';
+import { dailyActivities, activitySummary24h } from '@/__tests__/msw/fixtures/home';
 import { ActivityStats, dailyActivityView } from '@/components/home/activity-stats';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 
@@ -145,6 +141,9 @@ describe('ActivityStats', () => {
             { codeHash, hashType: 'data', name: null, count: 30 },
             { codeHash, hashType: 'data1', name: 'Default Lock', nameBy: 'data1', count: 20 },
           ],
+          // the route's whole since the merge of fix/readability: its total and its rest
+          scriptCalls: 50,
+          scriptRest: null,
         })
       )
     );
@@ -184,24 +183,20 @@ describe('ActivityStats', () => {
   });
 });
 
+// Re-pinned on purpose (the P3 follow-up's 2b): a day's bar is the route's count of its user
+// transactions (userTransactionCount); it was the transaction-count chart's day less the day's
+// cellbases, joined and subtracted here.
 describe('dailyActivityView', () => {
-  it('counts each daily non-cellbase transaction once despite overlapping kinds', () => {
-    const view = dailyActivityView([dailyActivities[0]], {
-      title: 'Transactions',
-      yAxisLabel: 'Transactions',
-      data: [{ date: '2026-09-25', value: '9807' }],
-    });
+  it('draws each day the route’s user transactions, not its overlapping kinds', () => {
+    const view = dailyActivityView([{ ...dailyActivities[0], userTransactionCount: 7 }]);
     expect(view?.last.value).toBe(7);
-    expect(() =>
-      dailyActivityView([dailyActivities[0]], { ...dailyTransactionCountChart, data: [] })
-    ).toThrow('Missing daily transaction count for 20260925');
   });
-  it('counts canonical non-cellbase transactions per day and rejects days out of order', () => {
-    const view = dailyActivityView(dailyActivities, dailyTransactionCountChart);
+  it('draws the days oldest first and rejects days out of order', () => {
+    const view = dailyActivityView(dailyActivities);
     expect(view?.last).toEqual({ label: '10/23', value: 6691 });
-    expect(() =>
-      dailyActivityView([dailyActivities[1], dailyActivities[0]], dailyTransactionCountChart)
-    ).toThrow(/out of order/);
-    expect(dailyActivityView([], dailyTransactionCountChart)).toBeNull();
+    expect(() => dailyActivityView([dailyActivities[1], dailyActivities[0]])).toThrow(
+      /out of order/
+    );
+    expect(dailyActivityView([])).toBeNull();
   });
 });

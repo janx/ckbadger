@@ -8,6 +8,7 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -68,12 +69,14 @@ it('keeps recycled identity history while showing no live capacity', async () =>
 });
 it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
   query = 'activity_cursor=100:0';
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...itemActivityFeedProducer,
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   render(<Page identityId={evidence.itemId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
@@ -118,12 +121,16 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
   });
 });
 it('starts a new identity on its own first cursor page', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender } = render(<Page identityId={evidence.itemId} />);
   fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
@@ -195,9 +202,11 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   await waitFor(() =>
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.test')
   );
-  expect(
-    screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
-  ).toHaveTextContent('.test');
+  // re-pinned on purpose (lane P2's third round, item 6): the handle is the title whole, in the
+  // title's ink; its personal data server's domain is no standard's suffix and is not drawn in the
+  // rose a .bit's or a .cell's suffix takes (the review: it read as a top-level domain)
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^alice\.test$/);
+  expect(screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')).toBeNull();
   // The DID string is the identity line under the title (with copy), not the title.
   expect(screen.getByRole('heading', { level: 1 }).closest('header')).toHaveTextContent(
     'did:ckb:ceirceirceirceirceirceirceirceir'

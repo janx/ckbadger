@@ -93,6 +93,7 @@ const daily = (values: readonly [string, number][]) =>
     date,
     capacity: (BigInt(ckb) * CKB).toString(),
     occupiedCapacity: (BigInt(ckb) * CKB).toString(),
+    freeCapacity: '0',
   }));
 
 function sentence(): HTMLElement {
@@ -228,8 +229,18 @@ describe('the asset history: 160 px under its sentence', () => {
         assetClass="objects"
         weeklyNoun="transfers"
         daily={[
-          { date: '2025-01-07', capacity: '109067250000001', occupiedCapacity: '0' },
-          { date: '2025-01-08', capacity: '109067250000001', occupiedCapacity: '0' },
+          {
+            date: '2025-01-07',
+            capacity: '109067250000001',
+            occupiedCapacity: '0',
+            freeCapacity: '109067250000001',
+          },
+          {
+            date: '2025-01-08',
+            capacity: '109067250000001',
+            occupiedCapacity: '0',
+            freeCapacity: '109067250000001',
+          },
         ]}
         weekly={[]}
         completeThrough="2025-01-08"

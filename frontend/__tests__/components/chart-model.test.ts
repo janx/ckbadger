@@ -139,10 +139,10 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'hodl-wave')
     return banded(keyed(HODL_KEYS, { holderCount: '123' }), { '1m6m': '9', lt1m: '21' });
   // re-pinned for the four bands (lane D1, second follow-up, item 1): four bands that make C,
-  // and the protocol circulation beside them
+  // and the protocol circulation beside them; re-keyed for lane exactness, part A2 (M1)
   if (definition.slug === 'total-supply') {
     const bands = withWhole(
-      keyed(['outsideDao', 'daoDeposited', 'unclaimedCompensation', 'burnt']),
+      keyed(['outsideDao', 'daoDeposited', 'daoWithdrawing', 'unclaimedCompensation', 'burnt']),
       'totalIssuance'
     );
     return {
@@ -151,7 +151,12 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
         ...point,
         values: {
           ...point.values,
-          circulating: String(Number(point.values.outsideDao) + Number(point.values.daoDeposited)),
+          // what circulates is outside the DAO, deposited or withdrawing (lane exactness, part B1)
+          circulating: String(
+            Number(point.values.outsideDao) +
+              Number(point.values.daoDeposited) +
+              Number(point.values.daoWithdrawing)
+          ),
         },
       })),
     };
@@ -209,6 +214,8 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
       epochs: 42,
       intervals: 100,
       beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: [1, 3],
     };
   if (definition.slug === 'epoch-time-distribution')
     return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['4.00', '4.02'][i] })) };
@@ -523,8 +530,12 @@ describe('29 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('total-supply')!, {
       title: 'Supply',
       series: [
-        { key: 'outsideDao', label: 'Outside the DAO', color: '#a' },
-        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#b' },
+        // re-pinned for lane exactness, part B1: the five bands, every one sent
+        { key: 'outsideDao', label: 'Outside the Nervos DAO', color: '#a' },
+        { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#b' },
+        { key: 'daoWithdrawing', label: 'Withdrawing from the Nervos DAO', color: '#c' },
+        { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#d' },
+        { key: 'burnt', label: 'Burnt', color: '#e' },
       ],
       data: [
         {
@@ -532,6 +543,9 @@ describe('29 chart variants', () => {
           values: {
             outsideDao: '1.123456789',
             daoDeposited: '2.000000001',
+            daoWithdrawing: '0',
+            unclaimedCompensation: '0',
+            burnt: '7',
             totalIssuance: '10.123456790000000001',
             circulating: '3.12345679',
           },

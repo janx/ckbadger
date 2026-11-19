@@ -5,11 +5,32 @@ import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import type { ParticipantRef } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
-import { addressScript, isDefaultLock } from '@/lib/lock-script';
+import { addressScript } from '@/lib/lock-script';
 import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import type { ShortSize } from '@/lib/shorten';
 import { PartReadError, readPart } from '@/components/read-failure';
 import type { ReactNode } from 'react';
+import {
+  lockPhrase,
+  lockWords,
+  nameByOf,
+  namedLockWords,
+  namedPartyLockFacts,
+  type LockFacts,
+  type LockPlace,
+  type LockWords,
+} from '@/lib/lock-words';
+
+/** The decision's text half, said where the page draws it too (lib/lock-words.ts). */
+export {
+  lockNoun,
+  lockWords,
+  lockWordsText,
+  namedLockWords,
+  partyLockSentence,
+  partyLockWordsText,
+} from '@/lib/lock-words';
+export type { LockWords } from '@/lib/lock-words';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
 const LOCK_WORDS = 'text-text-dim';
@@ -19,104 +40,6 @@ const LOCK_WORDS = 'text-text-dim';
  * badge's weight for the common case), ending in the one ellipsis where the column is narrower.
  */
 const COLUMN_WORDS = cn(LOCK_WORDS, 'text-meta min-w-0 truncate leading-4');
-
-/**
- * Where a lock is written: beside a party, in a table column headed "Lock", or in a sentence (a
- * lede, a story, a note that says the lock in words: "Minted to a JoyID lock").
- */
-export type LockPlace = 'inline' | 'column' | 'sentence';
-
-/**
- * What a place knows of a lock: the registry's name the API sends, and the lock's code hash and
- * hash type where it knows them. A place that has the lock's script (an address, which spells it,
- * or a cell's lock) knows both; a place that has only the API's bare `lockCodeHash` knows no hash
- * type, and cannot tell the default lock from another lock on its code hash.
- */
-export interface LockFacts {
-  name: string | null;
-  codeHash: string | null;
-  hashType: ScriptRefHashType | null;
-  /**
-   * The hash type the API writes beside a name (lane rd/api-lock-names, the fix round's ruling):
-   * the named pair runs a registered family's code but is not the registry's reference for it
-   * (`xUDT · by data2`). Null for a registered reference; absent where the place has no API name.
-   */
-  nameBy?: ScriptRefHashType | null;
-}
-
-/** What a lock is called where it stands, or null where nothing is written (see `lockWords`). */
-export type LockWords =
-  /** the default lock in a column (its name in quiet words) or in a sentence (its name in the line) */
-  | { form: 'default'; name: string | null; codeHash: string; place: 'column' | 'sentence' }
-  /** any other lock: the registry's name, else its code hash ("lock 0x…"), with a hash type the name does not cover */
-  | {
-      form: 'lock';
-      name: string | null;
-      codeHash: string | null;
-      /** its hash type where the place knows it (its link opens that lock) */
-      hashType: ScriptRefHashType | null;
-      /** the hash type written after it, where its name does not cover it */
-      byHashType: ScriptRefHashType | null;
-    }
-  /** a lock that is not indexed, in a column or a sentence: "not indexed" in quiet words */
-  | { form: 'not-indexed' };
-
-/**
- * The one decision (readability R9, lane B4 and its fix round): is this lock named here, and by
- * what words. Every place that writes a lock reads it, and a place that is a part of a list leaves
- * the part out when the answer is null.
- *
- * - The default lock is the pair (its code hash, `type`). Beside a party it is silent: a shortened
- *   address is `ckb1…` and its tail, so no name beside an address means the default lock. In a
- *   column headed "Lock" a cell is never empty: the default lock is its name in quiet words.
- * - A name is the API's: the name of the code the lock's pair runs (lane rd/api-lock-names, the
- *   fix round's ruling). Where that pair is not the registry's reference for the code, the hash
- *   type the API sends (`nameBy`) stands beside the name ("xUDT · by data2").
- * - A lock without a name is its code hash, and its hash type where that is not `type`: a lock on
- *   the default lock's code hash by `data`, `data1` or `data2` runs no code (no cell's data hashes
- *   to a type hash), so the API names it nothing, and it is "lock 0x9bd7…cce8 by data".
- * - A place that knows only a bare code hash cannot tell; it names the lock as the API does, never
- *   silent, since silence says "the default lock".
- * - A lock that is not indexed (no code hash, no name) is silent beside a party and "not indexed"
- *   in a column.
- * - In a sentence (lane P2's follow-up, item 6) silence says nothing: a sentence has no party to be
- *   silent beside, so it takes the column's answer (`namedLockWords`), never null, the default lock
- *   by its name and a lock not indexed in words. `lockPhrase` says it as a noun phrase.
- */
-export function lockWords(facts: LockFacts, place: LockPlace): LockWords | null {
-  if (place === 'inline' && silentBesideAParty(facts)) return null;
-  return namedLockWords(facts, place === 'sentence' ? 'sentence' : 'column');
-}
-
-/** The default lock, and a lock not indexed: what a party's place leaves unsaid. */
-function silentBesideAParty({ name, codeHash, hashType }: LockFacts): boolean {
-  return (
-    (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType)) ||
-    (codeHash === null && name === null)
-  );
-}
-
-/**
- * The decision where a lock is never silent (`lockWords`): a column headed "Lock", and a sentence
- * (lane P2's follow-up, item 6: the decision's sentence form, said by `lockPhrase`). The default
- * lock is its name, in a column's quiet words or in the line of a sentence; a lock not indexed is
- * "not indexed"; any other lock as beside a party.
- */
-export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): LockWords {
-  const { name, codeHash, hashType } = facts;
-  if (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType))
-    return { form: 'default', name, codeHash, place };
-  if (codeHash === null && name === null) return { form: 'not-indexed' };
-  if (name !== null)
-    return { form: 'lock', name, codeHash, hashType, byHashType: facts.nameBy ?? null };
-  return {
-    form: 'lock',
-    name: null,
-    codeHash,
-    hashType,
-    byHashType: hashType !== null && hashType !== 'type' ? hashType : null,
-  };
-}
 
 /**
  * The lock of an API row (a holder, an owner, a token's issuer, a supply event): the registry's name
@@ -146,10 +69,7 @@ export function rowLockFacts({
     lockHashType === undefined || lockHashType === null
       ? null
       : hashTypeOf(lockHashType, `lock ${lockCodeHash}`);
-  const nameBy =
-    lockKindBy === undefined || lockKindBy === null
-      ? null
-      : hashTypeOf(lockKindBy, `lock ${lockCodeHash} name`);
+  const nameBy = nameByOf(lockKindBy, `lock ${lockCodeHash}`);
   if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType, nameBy };
   const script = addressScript(address);
   if (lockCodeHash !== null && lockCodeHash.toLowerCase() !== script.codeHash)
@@ -188,10 +108,7 @@ export function cellLockFacts(
   where: string
 ): LockFacts {
   const { lock, name, address } = cell;
-  const nameBy =
-    cell.nameBy === undefined || cell.nameBy === null
-      ? null
-      : hashTypeOf(cell.nameBy, `${where} lock name`);
+  const nameBy = nameByOf(cell.nameBy, where);
   const hashType = hashTypeOf(lock.hashType, where);
   if (address !== null) {
     const spelled = addressScript(address);
@@ -214,14 +131,11 @@ export function cellLockFacts(
  * the name alone.
  */
 export function partyLockFacts(party: ParticipantRef): LockFacts {
-  const name = party.lockKind ?? null;
-  const nameBy =
-    party.lockKindBy === undefined || party.lockKindBy === null
-      ? null
-      : hashTypeOf(party.lockKindBy, `party ${party.lockHash} lock name`);
-  if (party.address === null) return { name, codeHash: null, hashType: null, nameBy };
-  const { codeHash, hashType } = addressScript(party.address);
-  return { name, codeHash, hashType, nameBy };
+  return namedPartyLockFacts({
+    lockScriptName: party.lockKind ?? null,
+    lockScriptNameBy: party.lockKindBy,
+    address: party.address,
+  });
 }
 
 /**
@@ -236,6 +150,8 @@ export function cellOwnerLock(cell: ItemCellLock): LockWords | null {
 interface ItemCellLock {
   lock: { codeHash: string; hashType: string; args: string };
   lockName: string | null;
+  /** The hash type the API writes beside the lock's name (`LockFacts.nameBy`). */
+  lockNameBy?: string | null;
   ownerAddress: string;
   txHash: string;
   outputIndex: number;
@@ -244,7 +160,12 @@ interface ItemCellLock {
 /** A version of an item's cell's lock facts (`cellLockFacts`), refused with the cell named. */
 function itemCellLockFacts(cell: ItemCellLock): LockFacts {
   return cellLockFacts(
-    { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
+    {
+      lock: cell.lock,
+      name: cell.lockName,
+      nameBy: cell.lockNameBy,
+      address: cell.ownerAddress,
+    },
     `cell ${cell.txHash}:${cell.outputIndex}`
   );
 }
@@ -265,27 +186,6 @@ export function cellOwnerLockPart(cell: ItemCellLock, className?: string): React
       />
     );
   return read.value && <LockWordsView words={read.value} size="row" className={className} />;
-}
-
-/**
- * The decision's sentence form said (lane P2's follow-up, item 6): a lock as a noun phrase with its
- * article, for a sentence that names the lock a cell sits under. The words are `lockWordsText`'s:
- * a name that ends in "lock" stands as it is ("a Default Lock", "an Omnilock"), any other takes the
- * word ("a JoyID lock"); a lock the registry does not name is its code hash at `size` ("a lock
- * 0x9b9b9b9b…9b9b9b"), with its hash type where the name does not cover it ("a lock 0x9bd7e06f…a3cce8
- * by data"); a lock not indexed, "a lock not indexed". "an" before a vowel's letter but "u" ("a
- * UniPass lock": a leading U usually sounds like "you").
- */
-export function lockPhrase(words: LockWords, size: ShortSize): string {
-  if (words.form === 'not-indexed') return 'a lock not indexed';
-  // a lock without a name is "lock 0x…", its hash type after it where it has one
-  if (words.name === null) return `a ${lockWordsText(words, size)}`;
-  // a named lock by another reference than the registry's carries its hash type after the noun
-  const by = words.form === 'lock' && words.byHashType ? ` · by ${words.byHashType}` : '';
-  const article = /^[aeio]/i.test(words.name) ? 'an' : 'a';
-  return /lock$/i.test(words.name)
-    ? `${article} ${words.name}${by}`
-    : `${article} ${words.name} lock${by}`;
 }
 
 /**
@@ -316,20 +216,6 @@ export function rowLock(
 /** A party's lock beside it (`lockWords` inline), or null where the row writes none. */
 export function partyLock(party: ParticipantRef): LockWords | null {
   return lockWords(partyLockFacts(party), 'inline');
-}
-
-/**
- * The words as text, for a place that writes a string (a tile's lock beside its owner): the name,
- * else "lock <code hash>" at the place's size, "by <hash type>" after it where the name does not
- * cover it; "not indexed".
- */
-export function lockWordsText(words: LockWords, size: ShortSize): string {
-  if (words.form === 'not-indexed') return 'not indexed';
-  const by = words.form === 'lock' && words.byHashType ? ` by ${words.byHashType}` : '';
-  // a name by another reference than the registry's: "xUDT · by data2"
-  if (words.name !== null) return `${words.name}${by && ` ·${by}`}`;
-  if (words.codeHash === null) throw new Error('a lock with neither a name nor a code hash');
-  return `lock ${shortenHash(words.codeHash, size)}${by}`;
 }
 
 /**
@@ -371,6 +257,7 @@ export function LockWordsView({
       {name !== null ? (
         <>
           {name}
+          {/* a name by another reference than the registry's: "xUDT · by data2" */}
           {by && <span className="whitespace-normal"> ·{by}</span>}
         </>
       ) : (

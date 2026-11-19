@@ -100,6 +100,42 @@ function largestPoint(points: readonly ChartPoint[], key: string, context: strin
   });
 }
 
+/**
+ * A histogram's most common bucket and every bucket tied with it (S5). Block intervals read their
+ * buckets by the route's counts (lane exactness, part A2, N5: two shares cut at three places are equal where two
+ * counts are not, past 100,000 intervals); a histogram without counts by its values, exactly. A most
+ * common bucket of none is no reading (lane exactness, part A2, S4: a window whose every interval was past 50 s named
+ * 0.0 s the most common, tied with 500 others).
+ */
+function leadingBuckets(
+  slug: string,
+  points: readonly ChartPoint[],
+  counts: readonly { label: string; count: number }[] | undefined
+): { leading: ChartPoint | null; ties: ChartPoint[] } {
+  if (!points.length) return { leading: null, ties: [] };
+  if (counts) {
+    const most = counts.reduce((max, { count }) => (count > max ? count : max), 0);
+    if (most === 0) return { leading: null, ties: [] };
+    const top = counts
+      .filter(({ count }) => count === most)
+      .map(({ label }) => {
+        const point = points.find((entry) => entry.label === label);
+        if (!point) throw new Error(`${slug}: no point at bucket ${label}`);
+        return point;
+      });
+    return { leading: top[0], ties: top.slice(1) };
+  }
+  const leading = largestPoint(points, 'primary', `${slug} bucket`);
+  if (compareExact(leading.values.primary, '0') === 0) return { leading: null, ties: [] };
+  return {
+    leading,
+    ties: points.filter(
+      (point) =>
+        point !== leading && compareExact(point.values.primary, leading.values.primary) === 0
+    ),
+  };
+}
+
 /** A sub-chart's figure at the point labelled `label`, written as the head writes it (CH-05). */
 function readingAt(
   sub: SubChart,
@@ -236,6 +272,17 @@ function multiplyDecimal(value: string, factor: bigint, context: string): string
   return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
+/**
+ * A duration the route sends in whole ms; an older API sent seconds or hours, a decimal, and is
+ * named as older than this page (lane exactness, part A2, N2: the page said "expected a non-negative decimal integer").
+ * Anything else that is not an integer fails as one.
+ */
+function wholeMs(value: string, context: string): string {
+  if (/^\d+\.\d+$/.test(value))
+    throw new Error(`${context}: ${value} is not whole ms: the API is older than this page`);
+  return value;
+}
+
 export function chartUnitValue(value: string, scale: ChartScale, context: string): string {
   switch (scale) {
     case 'raw':
@@ -250,13 +297,17 @@ export function chartUnitValue(value: string, scale: ChartScale, context: string
       return multiplyDecimal(value, BigInt(100), context);
     // a duration the route sends in whole ms (lane D1's third round, M1)
     case 'ms-seconds':
-      return decimalByPower(value, 3, context);
+      return decimalByPower(wholeMs(value, context), 3, context);
     // hours need not end in a decimal (ms ÷ 3,600,000; 14,417,000 ms is 4.0047222… h): the value
     // is cut at nine places, its trailing zeros dropped (4 h reads "4", exactly), a carrier for the
     // plot and every two-place figure (a cut of a finer cut is the cut), while the exact ms stays
     // on the point (`values.ms`) for what compares and for the figure's title
     case 'ms-hours':
-      return cutScaledInteger(exactUnsignedInteger(value, context), BigInt(3_600_000), 9)
+      return cutScaledInteger(
+        exactUnsignedInteger(wholeMs(value, context), context),
+        BigInt(3_600_000),
+        9
+      )
         .replace(/(\.\d*?)0+$/, '$1')
         .replace(/\.$/, '');
   }
@@ -374,6 +425,8 @@ function singleChart(
     epochs?: number;
     intervals?: number;
     beyondRange?: number;
+    /** Block intervals' count per bucket, one per point, the route's (lane exactness, part A2, N5). */
+    bucketCounts?: number[];
     /** Cell size's wholes, counted by the route from its snapshot (the D1 hand-back, item 2). */
     liveCells?: string;
     occupiedCapacity?: string;
@@ -402,6 +455,23 @@ function singleChart(
     throw new Error(
       `${definition.slug}: ${counts.length} days of counts for ${payload.data.length} points`
     );
+  // block intervals' buckets are read by their counts, the route's (lane exactness, part A2, N5)
+  const bucketCounts =
+    definition.slug === 'block-time-distribution' ? payload.bucketCounts : undefined;
+  if (definition.slug === 'block-time-distribution') {
+    if (bucketCounts === undefined)
+      throw new Error(
+        `${definition.slug}: the API sends no bucketCounts: it is older than this page`
+      );
+    if (bucketCounts.length !== payload.data.length)
+      throw new Error(
+        `${definition.slug}: ${bucketCounts.length} bucket counts for ${payload.data.length} points`
+      );
+    bucketCounts.forEach((n, i) => {
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw new Error(`${definition.slug}: invalid count ${n} at ${payload.data[i].date}`);
+    });
+  }
   const returned: ChartPoint[] = payload.data.map((point, index) => {
     const primary = point[primaryField];
     if (primary === undefined || primary === null)
@@ -485,18 +555,15 @@ function singleChart(
   const bucketDistribution = BUCKET_DISTRIBUTIONS.includes(definition.slug);
   // Cohorts are ordered by first-seen month: the card reads the newest one, not the largest (CH-09).
   const cohorts = definition.slug === 'address-cohort-retention';
-  const leadingBucket =
-    bucketDistribution && points.length
-      ? largestPoint(points, 'primary', `${definition.slug} bucket`)
-      : null;
-  // the buckets tied with the most common one, every one of them (S5)
-  const ties = leadingBucket
-    ? points.filter(
-        (point) =>
-          point !== leadingBucket &&
-          compareExact(point.values.primary, leadingBucket.values.primary) === 0
+  // the most common bucket and every bucket tied with it (S5)
+  const { leading: leadingBucket, ties } = bucketDistribution
+    ? leadingBuckets(
+        definition.slug,
+        points,
+        bucketCounts &&
+          payload.data.map((point, i) => ({ label: point.date, count: bucketCounts[i] }))
       )
-    : [];
+    : { leading: null, ties: [] };
   // A model timeline is summarised at its "today" sample; any other series at its last point.
   const todayPoint = currentIndex === null ? null : points[currentIndex];
   // The newest cohort is the month the snapshot falls in, still filling; any older cohort is
@@ -619,17 +686,26 @@ function singleChart(
       raw: today.values.primary,
       display: summary(today.values.primary, definition.unit),
     };
-  // The consensus epoch-duration target, from the API (CH-12, R2b-b), exactly (lane D1).
+  // The consensus epoch-duration target, from the API (CH-12, R2b-b), exactly (lane D1), read from
+  // its seconds (lane exactness, part A2, N3: the line was drawn at the route's hours, cut at two places, so a devnet's
+  // 100 s target stood at 0.02 h, and a target under 36 s cut to 0.00 h refused the page). It is
+  // stated in hours where it is a whole hundredth of one (14,400 s, 4.00 h), else in seconds: no
+  // cut of 100 s in hours states it.
   if (payload.target) {
-    const hours = Number(payload.target.hours);
-    if (!Number.isFinite(hours) || hours <= 0)
-      throw new Error(`${definition.slug}: invalid epoch duration target ${payload.target.hours}`);
-    model.referenceLines = [{ value: hours, label: `target ${payload.target.hours} h` }];
+    const { seconds } = payload.target;
+    if (!Number.isSafeInteger(seconds) || seconds <= 0)
+      throw new Error(`${definition.slug}: invalid epoch duration target ${seconds} s`);
+    const text =
+      seconds % 36 === 0
+        ? `${cutScaledInteger(BigInt(seconds), BigInt(3600), 2)} h`
+        : `${seconds.toLocaleString('en-US')} s`;
+    // the line's place on the plot, hours as a float: a drawing, not a figure
+    model.referenceLines = [{ value: seconds / 3600, label: `target ${text}` }];
     model.target = {
-      ratio: exactDecimalRatio(payload.target.hours, `${definition.slug} target`),
-      text: `${payload.target.hours} h`,
+      ratio: [BigInt(seconds), BigInt(3600)],
+      text,
       // the target in the ms each epoch is compared in, exactly (M1)
-      ms: BigInt(payload.target.seconds) * BigInt(1000),
+      ms: BigInt(seconds) * BigInt(1000),
     };
   }
   // The weekly share alone on the card; the daily share stays on the detail (CH-12).
@@ -1437,12 +1513,16 @@ const CLASSED_SERIES: Readonly<
     nftSpore: { label: 'Objects', color: CLASS_COLORS.objects },
     otherContracts: { label: 'Other scripts', color: CLASS_COLORS.other },
   },
-  // C in four bands that partition it (lane D1, second follow-up): the circulating CKB outside the
-  // DAO in the data's celadon, the DAO's deposits gold, its compensation not yet claimed the gold a
-  // step down (its neighbour, not a class of its own), the burnt the neutral slate
+  // C in five bands that make it (lane exactness, part B1; four in lane D1's second follow-up), each named and keyed
+  // for what it holds: the CKB outside every DAO cell in the data's celadon; then the DAO's cells,
+  // in its gold family: the deposits (status 0) the DAO's gold, the amount the DAO page calls
+  // deposited; the withdrawal requests' principal, still in a DAO cell, the gold mixed to the
+  // middle; the compensation not yet claimed the gold a step from the ground (its neighbour, not a
+  // class of its own); the burnt the neutral slate
   'total-supply': {
-    outsideDao: { label: 'Outside the DAO', color: DATA_COLOR },
-    daoDeposited: { label: 'In the Nervos DAO', color: CLASS_COLORS.dao },
+    outsideDao: { label: 'Outside the Nervos DAO', color: DATA_COLOR },
+    daoDeposited: { label: 'Deposited in the Nervos DAO', color: CLASS_COLORS.dao },
+    daoWithdrawing: { label: 'Withdrawing from the Nervos DAO', color: color('gold-mid') },
     unclaimedCompensation: { label: 'Unclaimed DAO compensation', color: color('gold-ramp') },
     burnt: { label: 'Burnt', color: CLASS_COLORS.ckb },
   },
@@ -1462,14 +1542,37 @@ const CLASSED_SERIES: Readonly<
   },
 };
 
+/**
+ * The bands an API older than this page sends, by chart: named as older, not as unknown (lane
+ * exactness, part A2, N2). Supply's were `nervosdao` and `circulating` before its four bands, and
+ * `circulatingNotDeposited` in part A2's four (lane exactness, part B1).
+ */
+const OLDER_SERIES: Readonly<Record<string, readonly string[]>> = {
+  'total-supply': ['circulatingNotDeposited', 'nervosdao', 'circulating'],
+};
+
+/**
+ * The charts whose every band is due: Supply's five make C, so one missing is an API older than
+ * this page (lane exactness, part B1: lane D1's four bands sent `outsideDao`, which held the withdrawal requests' CKB
+ * then, and no `daoWithdrawing`).
+ */
+const EVERY_BAND_DUE: readonly string[] = ['total-supply'];
+
 /** The returned series of a classed chart, every key known, in board order (CH-06). */
 function classedSeries(
   slug: string,
   classes: Readonly<Record<string, { label: string; color: string }>>,
   payload: StackedPayload
 ): StackedPayload['series'] {
-  for (const entry of payload.series)
+  for (const entry of payload.series) {
+    if (OLDER_SERIES[slug]?.includes(entry.key))
+      throw new Error(`${slug}: the API sends the band ${entry.key}: it is older than this page`);
     if (!classes[entry.key]) throw new Error(`${slug}: unknown series ${entry.key}`);
+  }
+  if (EVERY_BAND_DUE.includes(slug))
+    for (const key of Object.keys(classes))
+      if (!payload.series.some((entry) => entry.key === key))
+        throw new Error(`${slug}: the API sends no band ${key}: it is older than this page`);
   const order = Object.keys(classes).filter((key) =>
     payload.series.some((entry) => entry.key === key)
   );

@@ -230,15 +230,8 @@ async fn list_identity_collection_holders(
     )?;
 
     let total = agg.holders_count;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        holders
-            .iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid identity collection holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this view's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&holders, cursor.as_ref());
 
     let page: Vec<_> = holders.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;
@@ -874,10 +867,14 @@ pub struct PartyRef {
     pub hash_prefix: String,
     pub lock_hash: Option<String>,
     pub address: Option<String>,
-    pub script_name: Option<String>,
+    /// The name of the code the party's lock pair runs (`utils::ScriptNamer`,
+    /// the one rule; lane rd/api-lock-names): `lockScriptName`, the one name
+    /// every route gives a lock's name (lane P2's third round, item 12; it was
+    /// `scriptName`).
+    pub lock_script_name: Option<String>,
     /// The lock's hash type where its named pair is not the registry's
     /// reference for its code, written beside the name; `None` otherwise.
-    pub script_name_by: Option<String>,
+    pub lock_script_name_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1089,8 +1086,8 @@ impl DotCellPartyResolver<'_> {
                     hash_prefix,
                     lock_hash: None,
                     address: None,
-                    script_name: None,
-                    script_name_by: None,
+                    lock_script_name: None,
+                    lock_script_name_by: None,
                 },
                 None,
             ));
@@ -1115,8 +1112,8 @@ impl DotCellPartyResolver<'_> {
                 hash_prefix,
                 lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
                 address,
-                script_name_by: lock_name.as_ref().and_then(|name| name.by()),
-                script_name: lock_name.map(|name| name.name),
+                lock_script_name_by: lock_name.as_ref().and_then(|name| name.by()),
+                lock_script_name: lock_name.map(|name| name.name),
             },
             Some(ResolvedLock {
                 lock_hash: lock_hash.to_vec(),
@@ -1143,8 +1140,8 @@ impl DotCellPartyResolver<'_> {
             hash_prefix: format!("0x{}", hex::encode(&lock_hash[..20])),
             lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
             address,
-            script_name_by: lock_name.as_ref().and_then(|name| name.by()),
-            script_name: lock_name.map(|name| name.name),
+            lock_script_name_by: lock_name.as_ref().and_then(|name| name.by()),
+            lock_script_name: lock_name.map(|name| name.name),
         })
     }
 }

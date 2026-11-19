@@ -103,7 +103,9 @@ describe('Cell page against the Cell board', () => {
     // the rest stay in the facts section
     const rest = screen.getByRole('region', { name: 'Cell facts' });
     expect(rest).not.toHaveTextContent('Capacity');
-    expect(rest).toHaveTextContent('Occupied320 B · 0 free');
+    // re-pinned (lane P1, third round; review p-logic-chain NOTE 5): no free CKB has its unit, as
+    // "12.34 CKB free" does (it read "0 free")
+    expect(rest).toHaveTextContent('Occupied320 B · 0 CKB free');
     expect(rest).toHaveTextContent('Epoch15,157 · 112/1800');
     expect(rest).toHaveTextContent('Unspent for3d 10h');
   });
@@ -543,7 +545,7 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
       /^Epoch15,157 · 112\/1800$/
     );
     expect(facts).not.toHaveTextContent('2026-10-22 22:43:55 UTC+8');
-    expect(facts).toHaveTextContent('Occupied320 B · 0 free');
+    expect(facts).toHaveTextContent('Occupied320 B · 0 CKB free');
     expect(within(facts).queryByText('Owner')).toBeNull();
   });
 

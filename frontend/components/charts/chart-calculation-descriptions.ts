@@ -174,9 +174,9 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-total-supply': () => ({
     overview:
-      'Shows where the issued CKB, C, is at the end of each complete UTC+8 day, in four parts that make it: circulating outside the Nervos DAO, deposited in it, DAO compensation not yet claimed, and burnt. Circulating CKB is the first two.',
+      'Shows where the issued CKB, C, is at the end of each complete UTC+8 day, in five parts that make it: outside the Nervos DAO, deposited in it, withdrawing from it, DAO compensation not yet claimed, and burnt. Circulating CKB, C − genesis burnt − S, is the first three.',
     formula:
-      'outsideDao = C − genesis burnt − S − total_deposited; daoDeposited = total_deposited; unclaimedCompensation = DAO compensation not yet claimed, in S; burnt = genesis burnt + the rest of S; the four make C; circulating = C − genesis burnt − S.',
+      'outsideDao = C − genesis burnt − S − protocol_deposited; daoDeposited = total_deposited; daoWithdrawing = protocol_deposited − total_deposited; unclaimedCompensation = unclaimed compensation, in S; burnt = genesis burnt + rest of S; the five make C.',
     legendItems: [],
   }),
   'chart-nominal-apc': () => ({

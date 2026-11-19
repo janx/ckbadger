@@ -5,6 +5,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
@@ -37,6 +38,15 @@ const activity = {
   ],
   typeCalls: [],
   lockCalls: [],
+  // the Nervos DAO's type script, the code a DAO step carries (the P3 follow-up's itemTypes)
+  itemTypes: [
+    {
+      typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
+      typeHashType: 'type',
+      scriptName: 'Nervos DAO',
+    },
+  ],
+  itemTypesUnread: null,
   protocolActions: [
     {
       protocol: 'dao',
@@ -72,13 +82,15 @@ const three = [request(0), deposit(1), request(2)];
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: three,
-      limit: 3,
-      total: null,
-      hasMore: true,
-      nextCursor: 'next',
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: three,
+        limit: 3,
+        total: null,
+        hasMore: true,
+        nextCursor: 'next',
+      }) as any
+    );
   });
 
   it('loads the three newest DAO activities under one heading, with no tabs, no pager and no note (R15)', async () => {
@@ -120,13 +132,15 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   });
 
   it('folds three requests running into one run, whoever made them (Gate B)', async () => {
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [request(0), request(1), request(2)],
-      limit: 3,
-      total: null,
-      hasMore: true,
-      nextCursor: 'next',
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [request(0), request(1), request(2)],
+        limit: 3,
+        total: null,
+        hasMore: true,
+        nextCursor: 'next',
+      }) as any
+    );
     render(<DaoSources />);
     const section = screen.getByRole('region', { name: 'Recent DAO activity' });
     await waitFor(() =>
@@ -158,13 +172,15 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   });
 
   it('draws each row with the shared activity row, every participant shown (DAO-13)', async () => {
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [activity],
-      limit: 3,
-      total: null,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [activity],
+        limit: 3,
+        total: null,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
     render(<DaoSources />);
     const row = await screen.findByText(/withdraw request/i);
     const article = row.closest('article[data-feed-row]')!;

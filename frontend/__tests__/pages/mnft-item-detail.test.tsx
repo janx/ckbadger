@@ -26,6 +26,7 @@ import {
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -169,10 +170,10 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    // re-pinned on purpose (lane P2's follow-up, item 6): the Issued fact's note says the lock the
-    // token was issued to through the same decision, so it fails in its place too (one alert was
-    // the owner's note); each says the refusal, and the page is drawn
-    await waitFor(() => expect(within(metrics).getAllByRole('alert')).toHaveLength(2));
+    // re-pinned on purpose (lane P2's third round, item 1): the Issued fact's note no longer says
+    // the lock the token was issued to (the lede says it, once), so the one alert in Metrics is the
+    // owner's note again (it was two, the owner's and the Issued note's)
+    await waitFor(() => expect(within(metrics).getAllByRole('alert')).toHaveLength(1));
     for (const alert of within(metrics).getAllByRole('alert'))
       expect(alert).toHaveTextContent(new RegExp(`address ${joy} spells the lock`));
   });
@@ -261,11 +262,13 @@ describe('MnftItemDetailPage', () => {
   });
 
   it('starts a newly navigated-to token on its first activity page', async () => {
-    vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-      ...itemActivityFeedProducer,
-      hasMore: true,
-      nextCursor: '100:2',
-    });
+    vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+      pagedRead({
+        ...itemActivityFeedProducer,
+        hasMore: true,
+        nextCursor: '100:2',
+      })
+    );
     const { rerender } = render(<MnftItemDetailPage objectId={id} />);
     fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
     await waitFor(() =>

@@ -77,6 +77,8 @@ describe('the fact row under the lede (CH-18)', () => {
       epochs: 42,
       intervals: 75_000,
       beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: [675, 780],
     });
     const view = render(<ChartDetail slug="block-time-distribution" />);
     await screen.findByTestId('figure-value');

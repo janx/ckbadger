@@ -5,7 +5,13 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { useFromSm } from '@/hooks/useFromMd';
 import { rovingTarget } from '@/lib/roving-focus';
 import { groupCount } from '@/lib/format-count';
-import { tabRowShowsCounts, type TabRowItem, type TabRowStep } from '@/lib/control-row-fit';
+import {
+  tabRowForm,
+  tabRowShowsCounts,
+  type TabRowItem,
+  type TabRowStep,
+} from '@/lib/control-row-fit';
+import { Select } from '@/components/ui/select';
 import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 
@@ -86,9 +92,11 @@ function TabCount({ count }: { count: TabRowItem['count'] }) {
  * Home and End the first and the last.
  *
  * The phone rule the owner passed: when the row is wider than its line the counts leave it (the
- * list's own count line keeps them); a name is never cut and the row never scrolls or wraps. The
- * row measures its line and lib/control-row-fit.ts decides, the one function, which throws for a row
- * whose names alone do not hold a 360 px window's line.
+ * list's own count line keeps them); a name is never cut and the row never scrolls or wraps. Where
+ * the line cannot hold its names either (the transactions and address rows, 316.8 px, in a 320 px
+ * window's 288), the row takes its narrow form, the library's Select after "showing", its options
+ * the tabs (the lead's final round, item 4). The row measures its line (its own box, the same in
+ * either form) and lib/control-row-fit.ts `tabRowForm` decides from its labels, the one function.
  */
 export function Tabs<K extends string>({
   label,
@@ -105,7 +113,8 @@ export function Tabs<K extends string>({
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const index = tabs.findIndex((tab) => tab.key === value);
   if (index < 0) throw new Error(`Tabs "${label}": no tab ${value}`);
-  const counts = tabRowShowsCounts(tabs, rowStep(command, fromSm), command, linePx);
+  const form = tabRowForm(tabs, rowStep(command, fromSm), command, linePx);
+  const counts = form === 'counts';
   const tabId = (key: K) => `${id}-tab-${key}`;
   const panelId = `${id}-panel`;
 
@@ -117,10 +126,27 @@ export function Tabs<K extends string>({
     refs.current[to]?.focus();
   };
 
+  if (form === 'select')
+    return (
+      <div ref={lineRef} className={className}>
+        {/* the narrow form: the row's line under its rule, the Select after "showing" */}
+        <div className="border-row-rule flex min-w-0 items-center gap-4 border-b pb-1.5">
+          {command && <span aria-hidden="true" className={TAB_SQUARE} />}
+          <Select
+            label="showing"
+            value={value}
+            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+            onChange={onChange}
+          />
+        </div>
+        <div id={panelId} aria-label={tabs[index].label}>
+          {children}
+        </div>
+      </div>
+    );
   return (
-    <div className={className}>
+    <div ref={lineRef} className={className}>
       <div
-        ref={lineRef}
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}

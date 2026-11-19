@@ -1,10 +1,15 @@
+import { poolRowsOf } from '@/lib/pagination';
+
 /**
  * A page of a cursor-paged list as a test serves it, checked to agree with itself (lane
  * cd-fixes-controls, item 1): a fixture that contradicts itself hid a crash (14 rows on a page of
  * 20 that said more rows followed, with a count of 40, could not show what a real last page
  * does). A page holds no more rows than its page size; a page shorter than its size is the last,
  * with no more after it; a page with more after it names its next cursor; and a count holds at
- * least the rows shown up to this page (`shownBefore`, the rows of the pages before it).
+ * least the rows shown up to this page (`shownBefore`, the rows of the pages before it). Page one
+ * of an address's list carries the tx pool's rows above its committed rows, as the API sends it
+ * (lane cd-fixes-controls, the second read's MUST 1): they are read by the helper's one rule
+ * (lib/pagination.ts `poolRowsOf`), counted apart, and refused past page one.
  */
 export function pagedRead<
   P extends {
@@ -15,8 +20,10 @@ export function pagedRead<
     total?: number | null;
   },
 >(page: P, shownBefore = 0): P {
-  const n = page.data.length;
-  const where = `a page of ${n} rows at ${page.limit} a page`;
+  const pooled = poolRowsOf('pagedRead', page.data);
+  if (pooled > 0 && shownBefore > 0) throw new Error('pagedRead: the pool’s rows past page one');
+  const n = page.data.length - pooled;
+  const where = `a page of ${n} rows at ${page.limit} a page${pooled ? ` (besides the pool’s ${pooled})` : ''}`;
   if (n > page.limit) throw new Error(`pagedRead: ${where} holds more rows than a page`);
   if (n < page.limit && page.hasMore)
     throw new Error(`pagedRead: ${where} is short and says more rows follow`);

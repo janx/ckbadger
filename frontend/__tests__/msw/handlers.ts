@@ -18,6 +18,7 @@ import {
   txStats,
   uncleRateChart,
 } from '@/__tests__/msw/fixtures/home';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // API calls are now same-origin and network-scoped (`/api/<network>/v1/*`), served by the
 // Rust proxy in production. A relative handler base with a `:network` path param matches the
@@ -38,62 +39,64 @@ export const handlers = [
     const url = new URL(request.url);
     const limit = parseInt(url.searchParams.get('limit') || '20');
 
-    return HttpResponse.json({
-      data: [
-        {
-          number: 1000000,
-          hash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
-          parentHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-          timestamp: '2024-01-15T10:30:00Z',
-          transactionsCount: 5,
-          proposalsCount: 0,
-          unclesCount: 0,
-          difficulty: '0x1000000',
-          epoch: '0x1',
-          epochNumber: 100,
-          epochIndex: 50,
-          epochLength: 1000,
-          nonce: '0x0',
-          transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
-          minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-          // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
-          minerPool: null,
-          minerMessage: null,
-          miningReward: '1000000000',
-          miningRewardTxHash: '0x123...',
-          compactTarget: '0x1a000000',
-          version: 0,
-        },
-        {
-          number: 999999,
-          hash: '0xdef456789012345678901234567890123456789012345678901234567890efgh',
-          parentHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
-          timestamp: '2024-01-15T10:29:50Z',
-          transactionsCount: 3,
-          proposalsCount: 0,
-          unclesCount: 0,
-          difficulty: '0x1000000',
-          epoch: '0x1',
-          epochNumber: 100,
-          epochIndex: 49,
-          epochLength: 1000,
-          nonce: '0x0',
-          transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
-          minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-          // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
-          minerPool: null,
-          minerMessage: null,
-          miningReward: '1000000000',
-          miningRewardTxHash: '0x456...',
-          compactTarget: '0x1a000000',
-          version: 0,
-        },
-      ],
-      total: 1000000,
-      limit,
-      hasMore: true,
-      nextCursor: '999998',
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [
+          {
+            number: 1000000,
+            hash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
+            parentHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+            timestamp: '2024-01-15T10:30:00Z',
+            transactionsCount: 5,
+            proposalsCount: 0,
+            unclesCount: 0,
+            difficulty: '0x1000000',
+            epoch: '0x1',
+            epochNumber: 100,
+            epochIndex: 50,
+            epochLength: 1000,
+            nonce: '0x0',
+            transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
+            minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
+            // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
+            minerPool: null,
+            minerMessage: null,
+            miningReward: '1000000000',
+            miningRewardTxHash: '0x123...',
+            compactTarget: '0x1a000000',
+            version: 0,
+          },
+          {
+            number: 999999,
+            hash: '0xdef456789012345678901234567890123456789012345678901234567890efgh',
+            parentHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
+            timestamp: '2024-01-15T10:29:50Z',
+            transactionsCount: 3,
+            proposalsCount: 0,
+            unclesCount: 0,
+            difficulty: '0x1000000',
+            epoch: '0x1',
+            epochNumber: 100,
+            epochIndex: 49,
+            epochLength: 1000,
+            nonce: '0x0',
+            transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
+            minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
+            // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
+            minerPool: null,
+            minerMessage: null,
+            miningReward: '1000000000',
+            miningRewardTxHash: '0x456...',
+            compactTarget: '0x1a000000',
+            version: 0,
+          },
+        ],
+        total: 1000000,
+        limit,
+        hasMore: true,
+        nextCursor: '999998',
+      })
+    );
   }),
 
   // Round 3 (contracts R-B · R-10): the blocks of one UTC+8 day; 404 outside the indexed range.
@@ -154,27 +157,29 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/transactions`, () => {
-    return HttpResponse.json({
-      data: [
-        {
-          hash: '0xtx123456789012345678901234567890123456789012345678901234567890ab',
-          blockNumber: 1000000,
-          blockHash: '0xabc123...',
-          index: 0,
-          inputsCount: 2,
-          outputsCount: 3,
-          fee: '100000',
-          isCellbase: false,
-          timestamp: '2024-01-15T10:30:00Z',
-          // Round 3 (contracts R-B · R-6a): only a cellbase pays a block.
-          pays: null,
-        },
-      ],
-      total: 5000000,
-      limit: 20,
-      hasMore: true,
-      nextCursor: '999999',
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [
+          {
+            hash: '0xtx123456789012345678901234567890123456789012345678901234567890ab',
+            blockNumber: 1000000,
+            blockHash: '0xabc123...',
+            index: 0,
+            inputsCount: 2,
+            outputsCount: 3,
+            fee: '100000',
+            isCellbase: false,
+            timestamp: '2024-01-15T10:30:00Z',
+            // Round 3 (contracts R-B · R-6a): only a cellbase pays a block.
+            pays: null,
+          },
+        ],
+        total: 5000000,
+        limit: 20,
+        hasMore: true,
+        nextCursor: '999999',
+      })
+    );
   }),
 
   http.get(`${API_BASE}/statistics/network`, () => {
@@ -283,32 +288,34 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/forks`, () => {
-    return HttpResponse.json({
-      data: [
-        {
-          id: 1,
-          eventType: 'auto',
-          depth: 3,
-          forkPointNumber: 1000,
-          forkPointHash: '0xabc123',
-          oldTipNumber: 1003,
-          oldTipHash: '0xdef456',
-          newTipNumber: 1004,
-          newTipHash: '0x789abc',
-          orphanedBlocksCount: 3,
-          orphanedTxsCount: 15,
-          detectedAt: '2024-01-15T10:30:00Z',
-          resolvedAt: null,
-          resolvedBy: null,
-          resolutionAction: null,
-          resolutionNotes: null,
-        },
-      ],
-      total: 1,
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [
+          {
+            id: 1,
+            eventType: 'auto',
+            depth: 3,
+            forkPointNumber: 1000,
+            forkPointHash: '0xabc123',
+            oldTipNumber: 1003,
+            oldTipHash: '0xdef456',
+            newTipNumber: 1004,
+            newTipHash: '0x789abc',
+            orphanedBlocksCount: 3,
+            orphanedTxsCount: 15,
+            detectedAt: '2024-01-15T10:30:00Z',
+            resolvedAt: null,
+            resolvedBy: null,
+            resolutionAction: null,
+            resolutionNotes: null,
+          },
+        ],
+        total: 1,
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
   }),
 
   http.get(`${API_BASE}/forks/recent`, () => {
@@ -351,58 +358,62 @@ export const handlers = [
       tags: 0,
     };
     if (cursor) {
-      return HttpResponse.json({
-        data: [committed],
+      return HttpResponse.json(
+        pagedRead({
+          data: [committed],
+          ...total,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })
+      );
+    }
+    return HttpResponse.json(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'f1'.repeat(32)}`,
+            blockNumber: null,
+            txIndex: null,
+            timestamp: null,
+            poolStatus: 'pending',
+            timeAddedToPool: '2026-09-23T12:00:00+00:00',
+            interpretation: {
+              status: 'partial',
+              reasons: [
+                {
+                  code: 'unresolved_input',
+                  detail: '0xabababababababababababababababababababababababababababababababab:0',
+                },
+              ],
+            },
+            ckbDelta: '-50000000000',
+            usedDelta: '0',
+            isCellbase: false,
+            itemDeltas: [],
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [],
+            participants: [],
+            roles: [],
+            tags: 0,
+          },
+          committed,
+        ],
         ...total,
         limit: 50,
         hasMore: false,
         nextCursor: null,
-      });
-    }
-    return HttpResponse.json({
-      data: [
-        {
-          txHash: `0x${'f1'.repeat(32)}`,
-          blockNumber: null,
-          txIndex: null,
-          timestamp: null,
-          poolStatus: 'pending',
-          timeAddedToPool: '2026-09-23T12:00:00+00:00',
-          interpretation: {
-            status: 'partial',
-            reasons: [
-              {
-                code: 'unresolved_input',
-                detail: '0xabababababababababababababababababababababababababababababababab:0',
-              },
-            ],
-          },
-          ckbDelta: '-50000000000',
-          usedDelta: '0',
-          isCellbase: false,
-          itemDeltas: [],
-          typeCalls: [],
-          lockCalls: [],
-          protocolActions: [],
-          participants: [],
-          roles: [],
-          tags: 0,
+        pool: {
+          enabled: true,
+          healthy: true,
+          lastPolledAt: '2026-09-23T12:00:05+00:00',
+          count: 1,
+          pendingCkbDelta: '-50000000000',
+          truncated: false,
         },
-        committed,
-      ],
-      ...total,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-      pool: {
-        enabled: true,
-        healthy: true,
-        lastPolledAt: '2026-09-23T12:00:05+00:00',
-        count: 1,
-        pendingCkbDelta: '-50000000000',
-        truncated: false,
-      },
-    });
+      })
+    );
   }),
 
   http.get(`${API_BASE}/dao/summary/:lockHash`, () => {
@@ -422,13 +433,15 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/dao/deposits/:lockHash`, () => {
-    return HttpResponse.json({
-      data: [],
-      total: 0,
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [],
+        total: 0,
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
   }),
 
   http.get(`${API_BASE}/charts/hodl-wave`, () => {
@@ -668,13 +681,13 @@ export const handlers = [
         hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
         lockHash: null,
         address: null,
-        scriptName: null,
+        lockScriptName: null,
       },
       manager: {
         hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
         lockHash: null,
         address: null,
-        scriptName: null,
+        lockScriptName: null,
       },
       // Round 3 (contracts R-A · R-5): live names this owner prefix holds, this one included.
       ownerNameCount: 1,
@@ -691,21 +704,25 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/assets/identities/dotcell/items/:idOrName/children`, () => {
-    return HttpResponse.json({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
   }),
 
   http.get(`${API_BASE}/addresses/:addr/dotcell-names`, () => {
-    return HttpResponse.json({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    return HttpResponse.json(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
   }),
 
   // --- Network peer crawler mock handlers ---

@@ -1,4 +1,6 @@
 'use client';
+import { partyLockWordsText } from '@/components/ui/lock-kind';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { HeadId } from '@/components/ui/head-id';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import type { MnftProtocol, DotCellPartyRef } from '@/lib/api';
@@ -29,8 +31,9 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
             </span>
           </>
         )}
-        {party.scriptName && (
-          <span className="text-text-dim text-meta block">{party.scriptName}</span>
+        {/* the party's lock by the one decision (lane P2's third round, item 12) */}
+        {party.lockHash && (
+          <span className="text-text-dim text-meta block">{partyLockWordsText(party, 'row')}</span>
         )}
       </dd>
     </div>
@@ -67,7 +70,18 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
       </p>
       <dl className="grid gap-3 sm:grid-cols-2">
         {Object.entries(labels).map(([key, label]) => (
-          <div key={key} className="border-row-rule flex justify-between gap-3 border-b py-2">
+          // lane P2's third round (item 4): the word at one gap (12 px) after its name, left-aligned,
+          // the name column the longest name's at the meta step ("Update characteristic", 21
+          // characters, 151.2 px: 152)
+          <div
+            key={key}
+            className="border-row-rule grid min-w-0 items-baseline gap-x-3 border-b py-2"
+            style={{
+              gridTemplateColumns: `${columnPx(
+                textPx(Math.max(...Object.values(labels).map((l) => l.length)), fontPx('meta'))
+              )}px minmax(0, 1fr)`,
+            }}
+          >
             <dt className="text-meta">{label}</dt>
             <dd
               className={

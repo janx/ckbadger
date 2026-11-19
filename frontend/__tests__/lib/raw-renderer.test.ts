@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseRawSourcePath } from '@/lib/ai/raw-route';
 import { RawRenderError, renderRawPage } from '@/lib/ai/raw-renderer';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -430,20 +431,22 @@ describe('renderRawPage', () => {
       outputIndex: 0,
       expiredAt: null,
     });
-    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xact',
-          blockNumber: 124,
-          txIndex: 0,
-          timestamp: '2026-02-23T00:00:00Z',
-          actions: ['transfer'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xact',
+            blockNumber: 124,
+            txIndex: 0,
+            timestamp: '2026-02-23T00:00:00Z',
+            actions: ['transfer'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderRawPage({
       page: parseRawSourcePath('/identities/did/0xdid'),
@@ -477,20 +480,22 @@ describe('renderRawPage', () => {
       outputIndex: 1,
       expiredAt: 1_800_000_000,
     });
-    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xactdot',
-          blockNumber: 322,
-          txIndex: 0,
-          timestamp: '2026-02-23T00:00:00Z',
-          actions: ['mint'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getDotbitItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xactdot',
+            blockNumber: 322,
+            txIndex: 0,
+            timestamp: '2026-02-23T00:00:00Z',
+            actions: ['mint'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderRawPage({
       page: parseRawSourcePath('/identities/dotbit/0xdotbit'),
@@ -523,20 +528,22 @@ describe('renderRawPage', () => {
       outputIndex: 3,
       expiredAt: 1_800_000_000,
     });
-    vi.mocked(api.getBitCellItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xactbitcell',
-          blockNumber: 457,
-          txIndex: 0,
-          timestamp: '2026-02-23T00:00:00Z',
-          actions: ['mint'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getBitCellItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xactbitcell',
+            blockNumber: 457,
+            txIndex: 0,
+            timestamp: '2026-02-23T00:00:00Z',
+            actions: ['mint'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderRawPage({
       page: parseRawSourcePath('/identities/bit-cell/0xbitcell'),
@@ -572,13 +579,13 @@ describe('renderRawPage', () => {
         hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
         lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
         address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-        scriptName: 'SECP256K1_BLAKE160',
+        lockScriptName: 'SECP256K1_BLAKE160',
       },
       manager: {
         hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
         lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
         address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-        scriptName: 'SECP256K1_BLAKE160',
+        lockScriptName: 'SECP256K1_BLAKE160',
       },
       sale: null,
       ownerNameCount: 1,
@@ -591,20 +598,22 @@ describe('renderRawPage', () => {
       childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     });
-    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xactdotcell',
-          blockNumber: 18_000_001,
-          txIndex: 0,
-          timestamp: '2026-02-23T00:00:00Z',
-          actions: ['mint'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xactdotcell',
+            blockNumber: 18_000_001,
+            txIndex: 0,
+            timestamp: '2026-02-23T00:00:00Z',
+            actions: ['mint'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderRawPage({
       page: parseRawSourcePath('/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'),
@@ -685,20 +694,22 @@ describe('renderRawPage', () => {
       },
       lifecycle: [],
     });
-    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xactmnft',
-          blockNumber: 501,
-          txIndex: 1,
-          timestamp: '2026-02-23T00:00:00Z',
-          actions: ['transfer'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getMnftItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xactmnft',
+            blockNumber: 501,
+            txIndex: 1,
+            timestamp: '2026-02-23T00:00:00Z',
+            actions: ['transfer'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderRawPage({
       page: parseRawSourcePath('/objects/mnft/0xmnft'),

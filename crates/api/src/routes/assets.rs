@@ -1966,10 +1966,9 @@ fn latest_capacity_from_chart(
         Ok(value)
     };
     let used = read("used")?;
-    let unused = read("unused")?;
-    let total = used.checked_add(unused).ok_or_else(|| {
-        anyhow::anyhow!("collection capacity chart {} total exceeds i128", last.date)
-    })?;
+    // the day's capacity, which the point states (lane exactness, part A2, N6: the total was
+    // used + unused here)
+    let total = read("capacity")?;
     Ok(Some((total.to_string(), used.to_string())))
 }
 
@@ -4088,15 +4087,8 @@ async fn list_object_collection_holders(
     )?;
 
     let total = agg.holders_count;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        holders
-            .iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid object collection holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this view's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&holders, cursor.as_ref());
 
     let page: Vec<_> = holders.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;

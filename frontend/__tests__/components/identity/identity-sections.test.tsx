@@ -1,4 +1,6 @@
 import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { shortenAddress } from '@/lib/shorten';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { IdentityRecords } from '@/components/identity/identity-records';
 import { DotcellRoles } from '@/components/identity/dotcell-roles';
 import { DidDocumentReadout, AmongDidCkb } from '@/components/identity/did-readout';
@@ -16,6 +18,13 @@ const rec = (key: string, valueUtf8: string | null, valueHex = '0x00') => ({
   ttl: 300,
   address: null as string | null,
 });
+
+/** Real addresses of the parties (the decision reads a party's lock off its address). */
+const MGR = seededAddress('mgr', JOYID_CODE_HASH);
+const REGISTRAR = seededAddress('registrar');
+const MANAGER = seededAddress('manager', JOYID_CODE_HASH);
+const JOY = seededAddress('joyid', JOYID_CODE_HASH);
+const REGISTRAR_SHORT = shortenAddress(REGISTRAR, 'row');
 
 describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
   it('names addresses by coin, lays out the profile and gives the accent a swatch', () => {
@@ -59,19 +68,23 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
       <IdentityRecords
         subject="apt.cell"
         records={[
-          { ...rec('address.309', 'ckb1mgr'), address: 'ckb1mgr', addressLockHash: '0x1e' },
+          // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+          { ...rec('address.309', MGR), address: MGR, addressLockHash: '0x1e' },
           { ...rec('address.0', 'bc1q'), addressLockHash: null },
         ]}
         parties={{
-          owner: { lockHash: '0x69', scriptName: 'Quantum-Resistant Lock' },
-          manager: { lockHash: '0x1e', scriptName: 'JoyID' },
+          owner: { lockHash: '0x69', lockScriptName: 'Quantum-Resistant Lock' },
+          manager: { lockHash: '0x1e', lockScriptName: 'JoyID' },
         }}
       />
     );
-    // Each address row is its own grid row: the note belongs to the CKB row only.
+    // Each address row is its own grid row: the note belongs to the CKB row only. Re-pinned on
+    // purpose (lane P2's third round, item 12): the lock in the decision's sentence form, off the
+    // record's address; it was "the manager's own JoyID wallet", the API's name written by hand
     expect(screen.getByText('CKB').closest('div')).toHaveTextContent(
-      "the manager's own JoyID wallet"
+      "the manager's own address, under a JoyID lock"
     );
+    expect(screen.getByText('CKB').closest('div')).not.toHaveTextContent('wallet');
     expect(screen.getByText('Bitcoin').closest('div')).not.toHaveTextContent('own');
   });
 
@@ -87,11 +100,11 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
 function dotcellHistory(): Extract<ItemProtocol, { kind: 'dotcell' }> {
   const p = structuredClone(dotcellProtocolProducer) as Extract<ItemProtocol, { kind: 'dotcell' }>;
   const v0 = p.versions[0];
-  const party = (prefix: string, address: string | null, scriptName: string | null) => ({
+  const party = (prefix: string, address: string | null, lockScriptName: string | null) => ({
     hashPrefix: '0x' + prefix.repeat(20),
     lockHash: address ? '0x' + prefix.repeat(32) : null,
     address,
-    scriptName,
+    lockScriptName,
   });
   const at = (ts: string, owner: ReturnType<typeof party>, manager: ReturnType<typeof party>) => {
     const v = structuredClone(v0);
@@ -101,10 +114,11 @@ function dotcellHistory(): Extract<ItemProtocol, { kind: 'dotcell' }> {
     v.decoded.manager = manager;
     return v;
   };
-  const registrar = party('57', 'ckb1registrar', 'secp256k1');
-  const joy = party('ac', 'ckb1joyid', 'JoyID');
+  // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+  const registrar = party('57', REGISTRAR, 'secp256k1');
+  const joy = party('ac', JOY, 'JoyID');
   const qr = party('69', null, null);
-  const manager = party('1e', 'ckb1manager', 'JoyID');
+  const manager = party('1e', MANAGER, 'JoyID');
   p.versions = [
     at('2026-09-20T05:05:00Z', registrar, registrar),
     at('2026-09-21T05:05:00Z', joy, joy),
@@ -154,7 +168,7 @@ describe('DotcellRoles (ID-DC4)', () => {
     const manager = within(section).getByLabelText('Manager · edits its records');
     expect(within(manager).getByRole('link')).toHaveAttribute(
       'href',
-      '/mainnet/address/ckb1manager'
+      `/mainnet/address/${MANAGER}`
     );
     expect(manager).toHaveTextContent('JoyID');
     const steps = within(section).getAllByRole('listitem');
@@ -163,13 +177,12 @@ describe('DotcellRoles (ID-DC4)', () => {
     expect(steps[0]).toHaveTextContent('secp256k1');
     // Lane L: an owner with an address links to it (full address in the title); an unresolved
     // prefix stays text.
-    const registrarLink = within(steps[0]).getByRole('link', { name: 'ckb1registrar' });
-    expect(registrarLink).toHaveAttribute('href', '/mainnet/address/ckb1registrar');
-    expect(registrarLink).toHaveAttribute('title', 'ckb1registrar');
-    expect(within(steps[1]).getByRole('link', { name: 'ckb1joyid' })).toHaveAttribute(
-      'href',
-      '/mainnet/address/ckb1joyid'
-    );
+    const registrarLink = within(steps[0]).getByRole('link', { name: REGISTRAR_SHORT });
+    expect(registrarLink).toHaveAttribute('href', `/mainnet/address/${REGISTRAR}`);
+    expect(registrarLink).toHaveAttribute('title', REGISTRAR);
+    expect(
+      within(steps[1]).getByRole('link', { name: shortenAddress(JOY, 'row') })
+    ).toHaveAttribute('href', `/mainnet/address/${JOY}`);
     expect(within(steps[2]).queryByRole('link')).toBeNull();
   });
 });
@@ -179,8 +192,8 @@ describe('DotcellRoles sub-lines (R-5)', () => {
   const managerParty = {
     hashPrefix: '0x' + '1e'.repeat(20),
     lockHash: '0x' + '1e'.repeat(32),
-    address: 'ckb1manager',
-    scriptName: 'JoyID',
+    address: MANAGER,
+    lockScriptName: 'JoyID',
   };
   const withEdits = (last: unknown) => ({
     ...dotcellHistory(),

@@ -16,6 +16,7 @@ import type {
   ClusterProtocol,
   AssetCapacityHistory,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 /**
  * The producer's owners, each the real address of the lock its rows carry (B4 second fix round,
  * review-rules-fixes-tests SHOULD-4; `__tests__/lib/producer-owners.test.ts` holds them to it).
@@ -281,7 +282,7 @@ export const collectionInsightsPendingProducer = {
   ],
   weeklyActivity: [],
 } satisfies CollectionInsights;
-export const collectionGalleryFilteredProducer = {
+export const collectionGalleryFilteredProducer = pagedRead({
   data: [
     {
       clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
@@ -318,7 +319,7 @@ export const collectionGalleryFilteredProducer = {
   limit: 1,
   nextCursor: '100:0x0202020202020202020202020202020202020202020202020202020202020202',
   total: 4,
-} satisfies CursorPaginatedResponse<GalleryObject>;
+}) satisfies CursorPaginatedResponse<GalleryObject>;
 export const didCellVersionsProducer = {
   data: [
     {
@@ -401,7 +402,7 @@ export const didPdsProducer = {
   totalLiveIdentities: 1,
   withoutPds: 0,
 } satisfies DidPdsDistribution;
-export const itemActivityFeedProducer = {
+export const itemActivityFeedProducer = pagedRead({
   data: [
     {
       blockNumber: 100,
@@ -481,6 +482,8 @@ export const itemActivityFeedProducer = {
         itemId: '0x4444444444444444444444444444444444444444',
       },
       lockCalls: [],
+      itemTypes: [],
+      itemTypesUnread: null,
       participants: [
         {
           address: null,
@@ -505,14 +508,16 @@ export const itemActivityFeedProducer = {
   limit: 1,
   nextCursor: '100:2',
   total: 2,
-} satisfies CursorPaginatedResponse<ItemActivity>;
-export const itemTransactionsProducer = {
+}) satisfies CursorPaginatedResponse<ItemActivity>;
+export const itemTransactionsProducer = pagedRead({
   data: [
     {
       activity: {
         blockNumber: 100,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -594,7 +599,7 @@ export const itemTransactionsProducer = {
   limit: 1,
   nextCursor: null,
   total: 2,
-} satisfies CursorPaginatedResponse<ItemTransaction>;
+}) satisfies CursorPaginatedResponse<ItemTransaction>;
 export const sporeDetailProducer = {
   clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
   contentSize: 38,
@@ -767,7 +772,7 @@ export const clusterProtocolProducer = {
   kind: 'spore_cluster',
   source: 'canonicalLiveTypeIndex',
 } satisfies ClusterProtocol;
-export const collectionGalleryProducer = {
+export const collectionGalleryProducer = pagedRead({
   data: [
     {
       clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
@@ -1014,7 +1019,7 @@ export const collectionGalleryProducer = {
   limit: 100,
   nextCursor: null,
   total: 8,
-} satisfies CursorPaginatedResponse<GalleryObject>;
+}) satisfies CursorPaginatedResponse<GalleryObject>;
 export const clusterCapacityHistoryProducer = {
   anchor: {
     blockHash: '0x0202020202020202020202020202020202020202020202020202020202020202',
@@ -1522,7 +1527,7 @@ export const dotcellProtocolProducer = {
           address: null,
           hashPrefix: '0x6262626262626262626262626262626262626262',
           lockHash: null,
-          scriptName: null,
+          lockScriptName: null,
         },
         name: 'alice.cell',
         nextId: '0x0000000000000000000000000000000000000000',
@@ -1530,7 +1535,7 @@ export const dotcellProtocolProducer = {
           address: null,
           hashPrefix: '0x6161616161616161616161616161616161616161',
           lockHash: null,
-          scriptName: null,
+          lockScriptName: null,
         },
         records: [],
         recordsHash: '0x72ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e2',

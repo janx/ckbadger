@@ -2,7 +2,9 @@
  * Captured 2026-10-27. Synthetic persisted fixtures establish producer-consumer shape;
  * these are not observations of a running mainnet store. U-15 (lane A4b): the issuer, holder and
  * supply-event rows gain `lockCodeHash` as the producer now writes it (null: the fixture indexes
- * no lock script, so its addresses are null too). */
+ * no lock script, so its addresses are null too). Lane P2's third round (item 13): the history's
+ * days gain `freeCapacity` as the producer now writes it (capacity − occupied, stated by the
+ * route). */
 import type {
   Token,
   TokenHistory,
@@ -15,13 +17,16 @@ import type {
   Asset,
   CursorPaginatedResponse,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 export const tokenProducer = {
-  activityFeed: {
+  activityFeed: pagedRead({
     data: [
       {
         blockNumber: 2,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -65,6 +70,8 @@ export const tokenProducer = {
         blockNumber: 1,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -108,6 +115,8 @@ export const tokenProducer = {
         blockNumber: 0,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -152,7 +161,7 @@ export const tokenProducer = {
     limit: 50,
     nextCursor: null,
     total: 3,
-  },
+  }),
   distribution: {
     buckets: [
       {
@@ -217,66 +226,77 @@ export const tokenProducer = {
       {
         capacity: '1000',
         date: '2026-10-01',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-02',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-03',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-04',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-05',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-06',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-07',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-08',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-09',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-10',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-11',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
@@ -296,7 +316,7 @@ export const tokenProducer = {
     ],
   },
   // `/tokens/{hash}/supply-events` for the same fixture: newest first.
-  supplyEvents: {
+  supplyEvents: pagedRead({
     data: [
       {
         address: null,
@@ -331,8 +351,8 @@ export const tokenProducer = {
     limit: 100,
     nextCursor: null,
     total: 2,
-  },
-  holders: {
+  }),
+  holders: pagedRead({
     anchor: {
       blockHash: '0x0303030303030303030303030303030303030303030303030303030303030303',
       blockNumber: 3,
@@ -351,7 +371,7 @@ export const tokenProducer = {
     nextCursor: null,
     total: 1,
     totalSupply: '90',
-  },
+  }),
   token: {
     cellsCount: 1,
     decimals: 0,
@@ -397,13 +417,15 @@ export const tokenProducer = {
     typeScriptHash: '0x7171717171717171717171717171717171717171717171717171717171717171',
     udtType: null,
   },
-  transactions: {
+  transactions: pagedRead({
     data: [
       {
         activity: {
           blockNumber: 2,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -463,6 +485,8 @@ export const tokenProducer = {
           blockNumber: 1,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -522,6 +546,8 @@ export const tokenProducer = {
           blockNumber: 0,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -581,7 +607,7 @@ export const tokenProducer = {
     limit: 50,
     nextCursor: null,
     total: 3,
-  },
+  }),
 } satisfies {
   token: Token;
   history: TokenHistory;
@@ -592,7 +618,7 @@ export const tokenProducer = {
   transactions: CursorPaginatedResponse<Transaction>;
 };
 export const inventoryProducer = {
-  pendingPage: {
+  pendingPage: pagedRead({
     data: [
       {
         activitiesCount: 0,
@@ -626,7 +652,7 @@ export const inventoryProducer = {
     limit: 1,
     nextCursor: null,
     total: 1,
-  },
+  }),
   summary: {
     anchor: null,
     counts: {

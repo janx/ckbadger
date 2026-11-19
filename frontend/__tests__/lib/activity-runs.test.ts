@@ -23,6 +23,10 @@ const lockCall = (code: string, hashType = 'type') => ({
   lockCodeHash: `0x${code.padStart(64, '0')}`,
   lockHashType: hashType,
 });
+const itemType = (code: string, hashType = 'type') => ({
+  typeCodeHash: `0x${code.padStart(64, '0')}`,
+  typeHashType: hashType,
+});
 
 /** A .bit time oracle's update: one script call by one party, the shape that fills a day's feed. */
 function oracle(over: Partial<RunSubject> = {}): RunSubject {
@@ -33,6 +37,7 @@ function oracle(over: Partial<RunSubject> = {}): RunSubject {
     protocolActions: [],
     typeCalls: [typeCall('3a'), typeCall('9e')],
     lockCalls: [],
+    itemTypes: [],
     parties: [party('01')],
     ...over,
   };
@@ -64,15 +69,26 @@ describe('runKey: what makes two rows the same', () => {
     expect(dao([request, deposit])).toBe(dao([deposit, request]));
   });
 
-  it('compares the script code (code hash and hash type), counted, in any order, never the args', () => {
+  // re-pinned on purpose (the lead's final round, item 1): the code is a SET. The owner's rule is
+  // "what was done plus the script code": the code that was called, not how many cells carried it
+  // (it was a multiset, which cut the live token feed where only the count of one lock's outputs
+  // changed)
+  it('compares the set of script codes (code hash and hash type), in any order, never the args or the count', () => {
     // the subject carries no args at all: the three oracles' 0x00 / 0x01 / 0x02 are one call
     expect(runKey(oracle({ typeCalls: [typeCall('9e'), typeCall('3a')] }))).toBe(runKey(oracle()));
     expect(runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('5c')] }))).not.toBe(
       runKey(oracle())
     );
-    expect(
-      runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('3a'), typeCall('9e')] }))
-    ).not.toBe(runKey(oracle()));
+    // one code twice is the code: the same set
+    expect(runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('3a'), typeCall('9e')] }))).toBe(
+      runKey(oracle())
+    );
+    expect(runKey(oracle({ lockCalls: [lockCall('c1'), lockCall('c1'), lockCall('c1')] }))).toBe(
+      runKey(oracle({ lockCalls: [lockCall('c1')] }))
+    );
+    expect(runKey(oracle({ itemTypes: [itemType('5e'), itemType('5e')] }))).toBe(
+      runKey(oracle({ itemTypes: [itemType('5e')] }))
+    );
     // a script is the pair: one code hash referenced by data is another script
     expect(runKey(oracle({ typeCalls: [typeCall('3a', 'data1'), typeCall('9e')] }))).not.toBe(
       runKey(oracle())
@@ -96,6 +112,75 @@ describe('runKey: what makes two rows the same', () => {
     expect(runKey(pending)).not.toBe(runKey(oracle()));
     expect(runKey(pending)).not.toBe(
       runKey(oracle({ blockNumber: null, txHash: `0x${'cc'.repeat(32)}` }))
+    );
+  });
+});
+
+// The page-phase review's MUST-1 (the P3 follow-up): the fold compared no code for a token, object
+// or identity row (an item's type is never a `typeCall`), so rows that ran different code folded.
+// The API states each row's item types (`itemTypes`, the type script of every item and the DAO's,
+// as the indexer classified it), and the key compares them as it compares the calls.
+describe('runKey: the code an item carries', () => {
+  // mainnet's sUDT and xUDT, Spore and m-NFT, .bit Cell and did:ckb codes (docs/metadata/scripts)
+  const SUDT = itemType('5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5');
+  const XUDT = itemType(
+    '50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
+    'data1'
+  );
+  const SPORE = itemType(
+    '4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
+    'data1'
+  );
+  const MNFT = itemType('2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9');
+  const BIT_CELL = itemType('cfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33');
+  const DID = itemType('4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a');
+  const row = (title: string, types: RunSubject['itemTypes'], n: number) =>
+    oracle({
+      title,
+      typeCalls: [],
+      itemTypes: types,
+      txHash: `0x${String(n).padStart(2, '0').repeat(32)}`,
+    });
+  const runsOf = (rows: RunSubject[]) => foldRuns(rows, runKey).map((r) => r.length);
+
+  it('makes two token standards side by side two runs', () => {
+    expect(
+      runsOf([row('tokens: Token transfer', [SUDT], 1), row('tokens: Token transfer', [XUDT], 2)])
+    ).toEqual([1, 1]);
+  });
+
+  it('makes a Spore and an m-NFT transfer two runs', () => {
+    expect(
+      runsOf([
+        row('objects: Object transfer', [SPORE], 1),
+        row('objects: Object transfer', [MNFT], 2),
+      ])
+    ).toEqual([1, 1]);
+  });
+
+  it('makes a .bit Cell and a did:ckb transfer two runs', () => {
+    expect(
+      runsOf([
+        row('identities: Identity transfer', [BIT_CELL], 1),
+        row('identities: Identity transfer', [DID], 2),
+      ])
+    ).toEqual([1, 1]);
+  });
+
+  it('makes one standard with two tokens one run: the token is the script’s args, not compared', () => {
+    // two transfers of two sUDT tokens: their rows differ only in the items they moved, which
+    // the key does not hold (the expanded rows name each token)
+    expect(
+      runsOf([row('tokens: Token transfer', [SUDT], 1), row('tokens: Token transfer', [SUDT], 2)])
+    ).toEqual([2]);
+    // a code by its pair, in any order, each once
+    expect(runKey(row('t', [SUDT, SPORE], 1))).toBe(runKey(row('t', [SPORE, SUDT], 2)));
+    expect(runKey(row('t', [itemType('5e', 'data1')], 1))).not.toBe(
+      runKey(row('t', [itemType('5e')], 2))
+    );
+    // an item's type is not a call: the same code as a type call is another key
+    expect(runKey(row('t', [itemType('3a')], 1))).not.toBe(
+      runKey(oracle({ title: 't', typeCalls: [typeCall('3a')], itemTypes: [] }))
     );
   });
 });
@@ -154,54 +239,79 @@ describe('foldRuns: consecutive rows with one key', () => {
   });
 });
 
-// The live feed (mainnet, the first page of /activities read from the API on 2026-11-19, blocks
-// #21,054,083 to #21,054,163): the three .bit time oracles take turns (args 0x00, 0x01, 0x02, each
-// its own party), a Bitcoin SPV client's update now and then, and one address's run of plain
-// transfers. By the rule, the oracles' turns fold; a row that called other code ends a run.
-describe('the rule on the live feed', () => {
-  const rows = live as unknown as GlobalActivity[];
+// The live feeds (re-captured for the P3 follow-up, its capture said in the fixture: the first page
+// of /activities and of its token, object, identity and DAO filters, read through this lane's API
+// build over the live mainnet stores on 2026-11-19 at 12:33 UTC, with itemTypes; the token feed
+// from its 22nd row, its first 21 being Force Bridge transactions of up to 774 parties). By the
+// rule a run is what was done and the code its rows carry; a row that carries other code ends it.
+// What the rule makes of them, read row by row: the whole feed's 50 rows in 14; the token feed's
+// 29 sUDT transfers in one run, every row calling the same codes (re-pinned on purpose, the lead's
+// final round, item 1: the codes are a set; as a multiset they were 4 runs, [11, 11, 3, 4], cut
+// only where the number of Godwoken Withdrawal Lock outputs changed, 2 to 5); the run, #21,016,902
+// to #21,016,521, holds transactions that moved six sets of five tokens of the one standard.
+const LIVE_ALL_RUNS = [2, 1, 10, 1, 6, 1, 2, 1, 1, 5, 1, 3, 2, 14];
+const LIVE_TOKEN_RUNS = [29];
+const LIVE_TOKEN_MIXED = new Set([
+  'USDC',
+  'USDC,USDC|bsc',
+  'USDC,USDC|bsc,dCKB',
+  'USDC,WBTC,dCKB',
+  'BTCB|bsc,USDC,USDC|bsc,dCKB',
+  'USDC,dCKB',
+]);
+
+describe('the rule on the live feeds', () => {
+  const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
   // the title as the row draws it, in words (the one the stream hands over)
-  const subject = (a: GlobalActivity): RunSubject => ({
-    title: activityTitleText(a),
-    txHash: a.txHash,
-    blockNumber: a.blockNumber,
-    protocolActions: a.protocolActions,
-    typeCalls: a.typeCalls,
-    lockCalls: a.lockCalls,
-    parties: a.participants,
+  const subject = (a: GlobalActivity): RunSubject => {
+    if (a.itemTypes === null) throw new Error(`${a.txHash}: no item types in the live capture`);
+    return {
+      title: activityTitleText(a),
+      txHash: a.txHash,
+      blockNumber: a.blockNumber,
+      protocolActions: a.protocolActions,
+      typeCalls: a.typeCalls,
+      lockCalls: a.lockCalls,
+      itemTypes: a.itemTypes,
+      parties: a.participants,
+    };
+  };
+  const runsOf = (rows: GlobalActivity[]) => foldRuns(rows, (a) => runKey(subject(a)));
+  const tokensOf = (a: GlobalActivity) =>
+    [
+      ...new Set(
+        a.participants.flatMap((p) =>
+          p.itemDeltas.flatMap((i) => (i.kind === 'token' ? [i.symbol ?? i.typeScriptHash] : []))
+        )
+      ),
+    ].sort();
+
+  it('folds the first page of the whole feed', () => {
+    expect(feeds.all).toHaveLength(50);
+    const runs = runsOf(feeds.all);
+    expect(runs.map((r) => r.length)).toEqual(LIVE_ALL_RUNS);
   });
-  it('folds 50 activities into 9 rows, the oracles’ turns among them', () => {
-    expect(rows).toHaveLength(50);
-    const runs = foldRuns(rows, (a) => runKey(subject(a)));
-    expect(runs.map((r) => r.length)).toEqual([7, 1, 2, 1, 9, 1, 21, 1, 7]);
-    const named = (a: GlobalActivity) => a.typeCalls.map((c) => c.scriptName).join(' · ');
-    expect(runs.map((r) => named(r[0]))).toEqual([
-      '.bit Time Index State · .bit Time Info',
-      'Bitcoin SPV Type Lock',
-      '.bit Time Index State · .bit Time Info',
-      'Bitcoin SPV Type Lock',
-      '.bit Time Index State · .bit Time Info',
-      '.bit Income Cell',
-      '.bit Time Index State · .bit Time Info',
-      '',
-      '.bit Time Index State · .bit Time Info',
-    ]);
-    expect(runs.map((r) => activityTitleText(r[0]))).toEqual([
-      'Script call',
-      'Script call',
-      'Script call',
-      'Script call',
-      'Script call',
-      '.bit · recycle expired account',
-      'Script call',
-      'CKB Transfer',
-      'Script call',
-    ]);
-    // the longest run: three oracles, each with its own args and its own party
-    const longest = runs[6];
-    expect(new Set(longest.map((a) => a.typeCalls[0].typeArgs))).toEqual(
-      new Set(['0x00', '0x01', '0x02'])
-    );
-    expect(runParties(longest.map(subject))).toBe(3);
+
+  it('folds transfers of different tokens of one standard into one run, naming the standard', () => {
+    const runs = runsOf(feeds.token);
+    expect(runs.map((r) => r.length)).toEqual(LIVE_TOKEN_RUNS);
+    // every row carries one code, Simple UDT (sUDT): the run's rows move different tokens
+    for (const r of runs)
+      expect(new Set(r.map((a) => a.itemTypes!.map((t) => t.scriptName).join(' · ')))).toEqual(
+        new Set(['Simple UDT'])
+      );
+    const mixed = runs.find((r) => new Set(r.map((a) => tokensOf(a).join(','))).size > 1)!;
+    expect(new Set(mixed.map((a) => tokensOf(a).join(',')))).toEqual(LIVE_TOKEN_MIXED);
+  });
+
+  it('names each object, identity and DAO row by the code the indexer classified', () => {
+    for (const [feed, name] of [
+      ['object', 'Spore'],
+      ['identity', '.bit Account'],
+      ['dao', 'Nervos DAO'],
+    ] as const) {
+      expect(feeds[feed]).toHaveLength(50);
+      for (const a of feeds[feed]) expect(a.itemTypes!.map((t) => t.scriptName)).toEqual([name]);
+    }
   });
 });

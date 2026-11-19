@@ -83,24 +83,25 @@ impl CapacityCalendar {
     }
 }
 
-/// One day of a "CKB held" history (a collection's, an object's, a script's): its occupied part
-/// (`used`), its free part (`unused`) and the whole its cells hold (`capacity`), all three stated
-/// by the route so a page sums nothing. `unused` is the capacity less the occupied; the three
-/// agree or the day fails, named with its date and its operands.
+/// One day of a "CKB held" history (a collection's, a cluster's, an object's, a script's, a
+/// token's): its occupied part (`used`), its free part (`unused`) and the whole its cells hold
+/// (`capacity`), all three stated by the route so a page sums nothing. `capacity` and `used` are
+/// the route's two running sums of the day's deltas (one source each); `unused` is defined as their
+/// difference, so the only thing to check is that the occupied lies within the held:
+/// `0 ≤ used ≤ capacity`, else the day fails with its date and its operands (lane exactness, part A2, the test
+/// review's SHOULD-1: it also checked `used + unused == capacity`, true by the definition).
 pub(crate) fn held_point(
     date: String,
     capacity: i128,
     used: i128,
     what: &str,
 ) -> Result<StackedAreaDataPoint, String> {
-    let unused = capacity.checked_sub(used).ok_or_else(|| {
-        format!("{what} at {date}: capacity {capacity} less occupied {used} overflows")
-    })?;
-    if used < 0 || unused < 0 || used.checked_add(unused) != Some(capacity) {
+    if used < 0 || used > capacity {
         return Err(format!(
-            "{what} at {date}: occupied {used} and free {unused} do not make the capacity {capacity}"
+            "{what} at {date}: occupied {used} is not within the capacity {capacity}"
         ));
     }
+    let unused = capacity - used;
     Ok(StackedAreaDataPoint {
         date,
         values: std::collections::HashMap::from([
@@ -124,11 +125,20 @@ mod tests {
         assert_eq!(point.values["capacity"], "1000");
     }
 
+    // re-pinned for lane exactness, part A2 (the test review's SHOULD-1): named for the branch it reaches, an
+    // occupied over its capacity (it was named for parts that do not make the capacity, which
+    // cannot happen: unused is their difference)
     #[test]
-    fn a_held_day_whose_parts_do_not_make_its_capacity_fails_with_its_date_and_operands() {
+    fn a_held_day_whose_occupied_is_over_its_capacity_fails_with_its_date_and_operands() {
         let error = held_point("2024-01-16".into(), 100, 150, "test history").unwrap_err();
         assert!(error.contains("2024-01-16"), "{error}");
         assert!(error.contains("150"), "{error}");
         assert!(error.contains("100"), "{error}");
+    }
+
+    #[test]
+    fn a_held_day_with_a_negative_occupied_fails() {
+        let error = held_point("2024-01-17".into(), 100, -1, "test history").unwrap_err();
+        assert!(error.contains("-1"), "{error}");
     }
 }

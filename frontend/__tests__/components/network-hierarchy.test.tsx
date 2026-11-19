@@ -553,7 +553,8 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     const caption = section.lastElementChild as HTMLElement;
     expect(caption).toHaveAttribute('data-role', 'caption');
     expect(caption).toHaveTextContent(
-      /^36 of the 66 verified nodes run on Amazon\.com, across 2 countries\.$/
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      /^36 of the 66 verified nodes run on Amazon\.com\.$/
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
@@ -854,6 +855,12 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     const fewer = screen.getByRole('button', { name: 'fewer ↑' });
     expect(fewer).toHaveClass('h-8', 'sm:h-7', 'text-jade', 'text-small');
     expect(fewer).toHaveAttribute('aria-expanded', 'true');
+    // the lead's final round, item 3: FoldToggle, one button both ways that names the list it
+    // opens (it was the Pager's part, then a second button: focus fell to the page between them)
+    expect(fewer).toBe(all);
+    expect(document.getElementById(all.getAttribute('aria-controls')!)).toBe(
+      screen.getByRole('list', { name: /advertiser to advertised/ })
+    );
     fireEvent.click(fewer);
     expect(screen.getAllByRole('listitem')).toHaveLength(10);
   });

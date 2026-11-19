@@ -2648,7 +2648,7 @@ impl Check for ChartCellCountConsistency {
     }
 }
 
-/// S6: GET /charts/total-supply → its four bands, which partition C, never decrease across dates.
+/// S6: GET /charts/total-supply → its five bands, which make C, never decrease across dates.
 pub struct ChartTotalSupplyMonotonic;
 
 impl Check for ChartTotalSupplyMonotonic {
@@ -2656,7 +2656,7 @@ impl Check for ChartTotalSupplyMonotonic {
         "chart_total_supply_monotonic"
     }
     fn description(&self) -> &'static str {
-        "Total supply chart: its four bands (C) never decrease"
+        "Total supply chart: its five bands (C) never decrease"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2674,9 +2674,11 @@ impl Check for ChartTotalSupplyMonotonic {
         for point in &chart.data {
             let mut total = 0i128;
             let mut valid = true;
+            // the five bands that make C (lane exactness, part B1)
             for key in [
                 "outsideDao",
                 "daoDeposited",
+                "daoWithdrawing",
                 "unclaimedCompensation",
                 "burnt",
             ] {

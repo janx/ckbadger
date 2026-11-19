@@ -283,8 +283,9 @@ impl CachedAssetEntry {
     pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
         let h_multiplier = self
             .h_multiplier_ratio()?
+            // cut at the two places the inventory shows, never rounded (lane exactness, part A2, S5)
             .map(|(cap, used)| {
-                crate::utils::exact_ratio::format_ratio(cap as i128, used as i128, 2)
+                crate::utils::exact_ratio::format_ratio_cut(cap as i128, used as i128, 2)
                     .map_err(anyhow::Error::msg)
             })
             .transpose()?;
@@ -1488,6 +1489,15 @@ mod tests {
         broken.owned_capacity = Some("0".to_string());
         broken.owned_knowledge = Some("0".to_string());
         assert!(broken.to_asset_response().unwrap().h_multiplier.is_none());
+        // lane exactness, part A2, S5: the multiplier is cut at the two places the inventory shows: 401 / 200 is
+        // 2.005, ×2.00 (half up it read ×2.01)
+        let mut cut = asset.clone();
+        cut.owned_capacity = Some("401".to_string());
+        cut.owned_knowledge = Some("200".to_string());
+        assert_eq!(
+            cut.to_asset_response().unwrap().h_multiplier.as_deref(),
+            Some("2.00")
+        );
     }
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
     use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskKind};

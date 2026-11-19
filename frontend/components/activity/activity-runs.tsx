@@ -39,10 +39,13 @@ export interface FeedRow {
 
 /**
  * What a row is compared on (`lib/activity-runs.ts`): the title in words (`activityTitleText`), its
- * protocol actions and the code of the scripts it called; and its parties, which a run counts (the
- * row's own, unless the feed knows more of them: the address page's other parties). Null for a row
- * that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its place,
- * so it is never folded (lane B4 fix round, review NOTE 1).
+ * protocol actions and the code its items carry and its scripts called; and its parties, which a
+ * run counts (the row's own, unless the feed knows more of them: the address page's other
+ * parties). Null for a row that cannot read one of its protocol actions (`rowReadFails`): it
+ * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1); and for
+ * a committed row whose item types the API could not state (`itemTypesUnread`): its code is not
+ * known, so it stands alone (the lead's ruling on the item types' security read). A pending row
+ * carries none and folds with nothing anyway.
  */
 export function runSubject(
   activity: ActivityRowData,
@@ -50,6 +53,17 @@ export function runSubject(
   parties: readonly ParticipantRef[] = activity.participants
 ): RunSubject | null {
   if (rowReadFails(activity)) return null;
+  const pending = activity.blockNumber === null;
+  // the API states the field on every row (null where it has none): one without it is not this API
+  if (activity.itemTypes === undefined)
+    throw new Error(`transaction ${activity.txHash}: the row states no itemTypes field`);
+  if (!pending && activity.itemTypes === null) {
+    if (activity.itemTypesUnread === null)
+      throw new Error(
+        `transaction ${activity.txHash}: a committed row with no item types says no why`
+      );
+    return null;
+  }
   return {
     title,
     txHash: activity.txHash,
@@ -57,6 +71,7 @@ export function runSubject(
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
+    itemTypes: activity.itemTypes ?? [],
     parties,
   };
 }

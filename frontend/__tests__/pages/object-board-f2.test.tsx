@@ -184,7 +184,8 @@ it('opens with one hero section — name, status, id, its life and the compositi
 
 it('keeps tier 1 within the prose budget: one lede and captions under the evidence (F4, §0)', async () => {
   const { container } = await page();
-  await screen.findByRole('region', { name: 'CKB held in its cell' });
+  // re-pinned on purpose (lane P2's third round, item 1): the section is "History"
+  await screen.findByRole('region', { name: 'History' });
   await screen.findByRole('region', { name: 'In Nervape 3x' });
   expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
 });
@@ -246,6 +247,24 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   }
 });
 
+// Lane P2's fourth round (item 1, MUST): at a 320 px window the page was the crash page, "Nervape
+// 3x: a 244 px DNA map cannot hold 16 lanes of 14 px (38 px ruler)". Its gels measure 244 px there
+// (the copper plate's box: 320 − 32 − 12 − 32): the DNA map wraps its lanes 8 a row and the
+// collection's allele gel takes its rows, and the page stands.
+it('stands at a 320 px window: its gels drawn in the 244 px box the copper plate gives them', async () => {
+  vi.unstubAllGlobals();
+  stubChartWidth(244);
+  const { container } = await page();
+  const evidence = screen.getByRole('region', { name: 'DNA evidence' });
+  expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
+  expect(evidence.querySelectorAll('[data-gel-row]')).toHaveLength(2);
+  const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+  expect(
+    [...among.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  expect(screen.queryByText(/cannot hold/)).toBeNull();
+});
+
 it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async () => {
   const { container } = await page();
   const color = screen.getByLabelText('Traits').querySelector('[data-trait="Color"]')!;
@@ -272,18 +291,25 @@ it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async ()
 
 it('shows its cell at minting and now, to scale, with what changed (OB-9)', async () => {
   await page();
-  const cell = await screen.findByRole('region', { name: 'CKB held in its cell' });
-  expect(cell).toHaveTextContent('1 CKB per byte · all occupied, none free');
-  // R11: no coloured words in tier 1; the bars keep the occupied colour
-  expect(within(cell).getByText('all occupied')).not.toHaveClass('text-jade');
-  // the cell sentence is the caption under the evidence (F4); the lock note is tier 2
-  const caption = cell.querySelector('p[data-role="caption"]')!;
+  // re-pinned on purpose (lane P2's third round, item 1): the asset pages' one pattern, the
+  // section headed "History" with the sentence its versions give first and the versions after it,
+  // no figure of its own: "all occupied, none free" and the capacity partition said the metric
+  // again (CKB held and its split are the metric "CKB held in its cell")
+  const cell = await screen.findByRole('region', { name: 'History' });
+  const heading = within(cell).getByRole('heading', { name: 'History' });
+  expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
+  expect(cell).not.toHaveTextContent(/all occupied|none free/);
+  // the lock note is tier 2
+  const caption = cell.querySelector('p[data-role="history-sentence"]')!;
   expect(caption).toHaveTextContent(
     'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
   );
   // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
   expect(caption).toHaveClass('text-body', 'max-w-measure');
-  expect(caption).toBe(cell.lastElementChild);
+  expect(
+    caption.compareDocumentPosition(within(cell).getAllByRole('article')[0]) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
   expect(cell.textContent).not.toMatch(/Lock: secp256k1/);
   expect(document.querySelector('[data-tier="2"]')).toHaveTextContent(
     'Lock: secp256k1 throughout. Type and data never changed.'

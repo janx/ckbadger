@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { chooseView } from '@/__tests__/utils/tab-row';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
@@ -107,8 +108,9 @@ const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
   balance: '0',
   occupiedCapacity: '0',
-  freeCapacity: '0',
-  daoFreeCapacity: '0',
+  daoCellsCapacity: '0',
+  otherCellsOccupiedCapacity: '0',
+  otherCellsFreeCapacity: '0',
   liveCellsCount: 0,
   depositCellsCount: 0,
   withdrawalRequestCellsCount: 0,
@@ -128,9 +130,10 @@ const namedRight = {
   name: 'support.cell',
   expiredAt: 1821507678,
 };
-// re-pinned (lane c2-chain): the history's views are the library's tab row (were pressed buttons)
-const tab = async (name: string) =>
-  fireEvent.click(await screen.findByRole('tab', { name: new RegExp(`^${name}`, 'i') }));
+// re-pinned (lane c2-chain): the history's views are the library's tab row (were pressed buttons);
+// re-pinned on purpose (the lead's final round, item 4): through the row's form on its line, a tab
+// or, on a stubbed line that cannot hold the names, the row's Select
+const tab = async (name: string) => chooseView(new RegExp(`^${name}`, 'i'));
 // Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
 // and its noun are one unit, a no-break space between them).
 const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });
@@ -402,18 +405,21 @@ describe('Address v3', () => {
     // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
     // purpose: was every decimal)
     expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
-    // re-pinned on purpose (lane P1): what it can spend stands beside the balance
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on review p-logic-chain MUST
+    // 3): beside the balance its unclaimed compensation alone; its free part is one of the three
+    // parts under the bar (it stood beside the balance as "spendable")
     expect(
       screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
-    ).toHaveTextContent('54,571.35338057');
+    ).not.toHaveTextContent('spendable');
     // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
     // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
     expect(
       factsOf(
         within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
       )
-      // re-pinned on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
-    ).toContainEqual(['in the DAO', '9,589,480 CKB, free part of 5 deposits']);
+      // re-pinned on purpose (lane P1, third round; SHOULD 3): its DAO cells whole (it was "in the
+      // DAO 9,589,480 CKB, free part of 5 deposits", their free part alone)
+    ).toContainEqual(['in Nervos DAO cells', '9,590,000 CKB in 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
@@ -467,11 +473,14 @@ describe('Address v3', () => {
         ? pageFixture(addressIdentitiesFixture)
         : p?.class === 'dao'
           ? pageFixture(addressDaoCellsFixture)
-          : {
+          : // a full page of two with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5: two on a page of
+            // twenty that said more followed)
+            pagedRead({
               ...pageFixture(addressObjectsFixture.slice(0, 2)),
+              limit: 2,
               hasMore: true,
               nextCursor: 'objects-next',
-            }
+            })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -548,7 +557,14 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressTokens).mockImplementation(async (_a, p) =>
       p?.cursor
         ? pageFixture([{ ...addressTokensFixture[0], name: 'Last token' }])
-        : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
+        : // a full page of the nine kinds with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5: nine on a page
+          // of twenty that said more followed)
+          pagedRead({
+            ...pageFixture(addressTokensFixture),
+            limit: addressTokensFixture.length,
+            hasMore: true,
+            nextCursor: 'next-token',
+          })
     );
     render(<AddressDetailPage />);
     // re-pinned (lane c2-chain): the library's pager, its range as the board writes it (was
@@ -557,7 +573,8 @@ describe('Address v3', () => {
     // response counts no rows, so the pager draws its rows and its page, the next by its "more",
     // and the 101 stands where the page states it, the holdings' count of token kinds.
     const pages = await screen.findByRole('navigation', { name: 'token kinds' });
-    expect(pages).toHaveTextContent(/^1–9 · 20 a page/);
+    // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): the page is a full page of nine (it said 20 a page)
+    expect(pages).toHaveTextContent(/^1–9 · 9 a page/);
     expect(within(pages).getByText('page 1')).toBeInTheDocument();
     expect(pages).not.toHaveTextContent(/of 101|page 1 of/);
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
@@ -715,7 +732,13 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressDotCellNames).mockImplementation(async (_a, p) =>
       p?.cursor
         ? pageFixture([{ ...namedRight, name: 'next.cell' }])
-        : { ...pageFixture([namedRight]), hasMore: true, nextCursor: 'next-name' }
+        : // a full page of one with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5)
+          pagedRead({
+            ...pageFixture([namedRight]),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'next-name',
+          })
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
@@ -745,6 +768,124 @@ describe('Address v3', () => {
   // 2, rows 21–40 of 25, threw, and the address page was the crash page. The page a response was
   // asked for travels with it: while page 2 loads the pager says page 1's figures and offers no
   // next; when page 2 arrives, its own.
+  // Lane cd-fixes-controls, the second read's MUST 1: an address with a pending transaction opens
+  // its own page. Page one of its activities and of its transactions is the pool's rows above up
+  // to 20 committed rows, the page size stated as asked; the pager counted every row against it
+  // and threw ("activities: 21 rows on a page of 20"), and the address page was the error page.
+  // The pool's rows are page one's own part: 1 pool row over 20 committed rows is page one of
+  // more, 2 pool rows over 19 committed rows one page with no pager.
+  describe('page one with the pool’s rows above its committed rows', () => {
+    const pooled = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ ...poolActivity(), txHash: fixtureHash(900 + i) }));
+    const pooledTxs = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...addressTransactionsFixture[0],
+        txHash: fixtureHash(950 + i),
+        blockNumber: null,
+        timestamp: null,
+        poolStatus: 'pending' as const,
+        timeAddedToPool: new Date(Date.now() - 60000).toISOString(),
+      }));
+    const committedTxs = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...addressTransactionsFixture[i % addressTransactionsFixture.length],
+        txHash: `0x${(8192 + i).toString(16).padStart(64, '0')}`,
+      }));
+    const pageOne = <T,>(pool: T[], rows: T[], more: boolean) =>
+      pagedRead({
+        ...pageFixture([...pool, ...rows]),
+        hasMore: more,
+        nextCursor: more ? 'older-1' : null,
+      });
+
+    it.each([
+      [1, 20, true],
+      [2, 19, false],
+    ] as const)(
+      'opens its activities with %i pool rows above %i committed rows',
+      async (pooledCount, rows, more) => {
+        vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+          p?.filter !== 'all' || p.cursor
+            ? pagedRead(pageFixture([]))
+            : { ...pageOne(pooled(pooledCount), activitiesPage(rows), more), pool }
+        );
+        render(<AddressDetailPage />);
+        await loaded();
+        const history = screen.getByRole('region', { name: 'History' });
+        // the pool's rows stand above the committed ones, each with its status
+        expect((await within(history).findAllByText('Proposed')).length).toBeGreaterThanOrEqual(
+          pooledCount
+        );
+        if (more)
+          expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+        else expect(within(history).queryByRole('navigation', { name: 'activities' })).toBeNull();
+      }
+    );
+
+    it.each([
+      [1, 20, true],
+      [2, 19, false],
+    ] as const)(
+      'opens its transactions with %i pool rows above %i committed rows',
+      async (pooledCount, rows, more) => {
+        vi.mocked(api.getAddressTransactions).mockImplementation(async (_l, p) =>
+          p?.cursor
+            ? pagedRead(pageFixture([]))
+            : { ...pageOne(pooledTxs(pooledCount), committedTxs(rows), more), pool }
+        );
+        render(<AddressDetailPage />);
+        await loaded();
+        await tab('Transactions');
+        const table = await screen.findByRole('table', { name: 'Address transactions' });
+        expect(within(table).getAllByRole('row').length).toBeGreaterThan(rows);
+        expect(within(table).getAllByText('Pending').length).toBeGreaterThanOrEqual(pooledCount);
+        const history = screen.getByRole('region', { name: 'History' });
+        if (more)
+          expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+        else expect(within(history).queryByRole('navigation', { name: 'transactions' })).toBeNull();
+      }
+    );
+  });
+
+  // Lane cd-fixes-controls, the second read's SHOULD 1: Activities on "all", the reader picks
+  // "dao" and, before dao's page arrives, presses `older →`. The page still held "all"'s page one,
+  // whose stamp matched the reset walk, so `older →` walked dao from "all"'s 20th row as "page 2".
+  // The walk knows its list: "all"'s page, still shown, is another list's, with no way on.
+  it('offers no way on from the old kind’s page while the new kind’s page loads', async () => {
+    let arrive: () => void = () => {};
+    const dao = new Promise<void>((resolve) => (arrive = resolve));
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) => {
+      if (p?.limit !== 20) return pagedRead(pageFixture([]));
+      if (p.filter === 'dao') {
+        await dao;
+        return pagedRead(pageFixture(activitiesPage(5, 40)));
+      }
+      return pagedRead({ ...pageFixture(activitiesPage(20)), hasMore: true, nextCursor: 'all-20' });
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
+    await waitFor(() =>
+      expect(api.getAddressActivities).toHaveBeenLastCalledWith(
+        addressHash,
+        expect.objectContaining({ filter: 'dao', limit: 20, cursor: undefined })
+      )
+    );
+    // "all"'s page one stands while dao's loads: drawn as its own, with no way on and no way back
+    expect(within(history).queryByRole('button', { name: 'older →' })).toBeNull();
+    expect(within(history).queryByRole('button', { name: /newer/ })).toBeNull();
+    await act(async () => arrive());
+    await waitFor(() =>
+      expect(within(history).queryByRole('navigation', { name: 'activities' })).toBeNull()
+    );
+    expect(api.getAddressActivities).not.toHaveBeenCalledWith(
+      addressHash,
+      expect.objectContaining({ filter: 'dao', cursor: 'all-20' })
+    );
+  });
+
   it('steps into the last page of 25 live cells while page 2 is still on its way', async () => {
     let arrive: () => void = () => {};
     const second = new Promise<void>((resolve) => (arrive = resolve));
@@ -863,9 +1004,22 @@ describe('Address v3', () => {
   it('counts the Activities tab from the unfiltered activity total, never the transaction count', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.filter === 'all'
-        ? { ...pageFixture(addressActivitiesFixture, 1682), hasMore: true, nextCursor: 'next' }
-        : // a filtered page with an older one after it, so its pager and its range are drawn
-          { ...pageFixture([]), hasMore: true, nextCursor: 'next' }
+        ? // a full page of 20 of the 1,682 (lane cd-fixes-controls, review-p-tests SHOULD-5: the address's few
+          // activities said more followed on a page of twenty)
+          pagedRead({
+            ...pageFixture(activitiesPage(20), 1682),
+            hasMore: true,
+            nextCursor: 'next',
+          })
+        : // a filtered page with an older one after it, so its pager and its range are drawn: a
+          // full page of one activity of another kind, as the API reads one past the page to say
+          // more follow (it was an empty page that said more followed, which the API cannot send)
+          pagedRead({
+            ...pageFixture(activitiesPage(1, 40)),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'next',
+          })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -881,12 +1035,19 @@ describe('Address v3', () => {
     expect(within(pages).getByText('page 1 of 85')).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the pager has none.
     fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
-    expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
     // Restored (review of main..fix/readability, test finding 3): readability B5 drew no pager for
     // one page, and the re-pin of this test dropped the range check with it; the filtered mock now
     // has an older page, so the pager is drawn and must carry no unfiltered total ("of 85").
-    const filtered = screen.getByRole('navigation', { name: 'activities' });
-    expect(within(filtered).getByText('page 1')).toBeInTheDocument();
+    // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): the filtered page
+    // holds one activity, a full page of one with more after it; it was an empty page that said
+    // more followed, which the API cannot send (it reads one row past a page to say more follow),
+    // and the page said "No DAO activities on this page." of it. The filtered page's own pager is
+    // waited for: the unfiltered page stands, kept, while the filtered one loads.
+    const filtered = await waitFor(() => {
+      const nav = screen.getByRole('navigation', { name: 'activities' });
+      expect(within(nav).getByText('page 1')).toBeInTheDocument();
+      return nav;
+    });
     expect(filtered).not.toHaveTextContent(/ of /);
     expect(activitiesTab()).toHaveTextContent(/^activities 1,682$/);
     await tab('Transactions');
@@ -1127,12 +1288,19 @@ describe('Address v3', () => {
   it('counts no unconfirmed row in the pager: a list in time states its order and its page', async () => {
     // Re-pinned on purpose (readability B5): one page draws no pager, so the fixture has an older
     // page.
-    vi.mocked(api.getAddressActivities).mockResolvedValue({
-      ...pageFixture([poolActivity(), ...addressActivitiesFixture]),
-      hasMore: true,
-      nextCursor: 'next',
-      pool,
-    });
+    // a full page of 20 committed rows under the pool's row (lane cd-fixes-controls, SHOULD-5:
+    // the address's few activities said more followed on a page of twenty); the filter chips'
+    // one-row pages are empty
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+      p?.limit === 1
+        ? pagedRead(pageFixture([]))
+        : pagedRead({
+            ...pageFixture([poolActivity(), ...activitiesPage(20)]),
+            hasMore: true,
+            nextCursor: 'next',
+            pool,
+          })
+    );
     render(<AddressDetailPage />);
     await loaded();
     const pages = await screen.findByRole('navigation', { name: 'activities' });
@@ -1158,8 +1326,8 @@ describe('Address v3', () => {
       p?.limit === 1
         ? pageFixture([])
         : p?.cursor
-          ? { ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' }
-          : { ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' }
+          ? pagedRead({ ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' })
+          : pagedRead({ ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -1194,11 +1362,15 @@ describe('Address v3', () => {
       ...addressFixture,
       pendingSummary: { txCount: 2, capacityDelta: '1' },
     });
-    vi.mocked(api.getAddressActivities).mockResolvedValue({
-      ...pageFixture(addressActivitiesFixture),
-      hasMore: true,
-      nextCursor: 'next',
-    });
+    // two pages that agree with themselves (lane cd-fixes-controls, SHOULD-5: the address's few
+    // activities said more followed on a page of twenty, at every cursor)
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+      p?.limit === 1
+        ? pagedRead(pageFixture([]))
+        : p?.cursor
+          ? pagedRead(pageFixture(activitiesPage(5, 20)), 20)
+          : pagedRead({ ...pageFixture(activitiesPage(20)), hasMore: true, nextCursor: 'next' })
+    );
     render(<AddressDetailPage />);
     await loaded();
     // re-pinned (lane c2-chain): `older →` of the library's pager (was Next), the dao chip a radio
@@ -1411,11 +1583,12 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
-    // re-pinned on purpose (lane P1): the parts are named occupied, spendable and in the DAO
-    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'spendable', 'in the DAO']);
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on MUST 3 and SHOULD 3): the
+    // route's three parts, each true by its name (they were occupied, spendable and in the DAO)
+    expect(parts.map((p) => p.dataset.part)).toEqual(['in Nervos DAO cells', 'occupied', 'free']);
     for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
     expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
-    expect(balance).toHaveTextContent('free part of 5 deposits');
+    expect(balance).toHaveTextContent('9,590,000 CKB in 5 deposits');
   });
 
   it('shows a token type hash only beside names that occur twice (BA-32)', async () => {
@@ -1906,8 +2079,9 @@ describe('Address · space legend (lane A follow-up)', () => {
     ...holdingsFixture,
     balance: '3844275078856',
     occupiedCapacity: '388700000000',
-    freeCapacity: '3455575078856',
-    daoFreeCapacity: '0',
+    daoCellsCapacity: '0',
+    otherCellsOccupiedCapacity: '388700000000',
+    otherCellsFreeCapacity: '3455575078856',
     liveCellsCount: 16,
     depositCellsCount: 0,
     withdrawalRequestCellsCount: 0,

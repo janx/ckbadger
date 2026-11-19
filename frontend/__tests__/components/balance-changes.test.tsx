@@ -266,4 +266,29 @@ describe('BalanceChanges, the order a reader needs', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  // Lane P1, third round (review p-logic-chain NOTE 4: the table ordered parties by CKB alone, so a
+  // party that gave only a token stood last, after the receivers): a party gave if its CKB or any
+  // item left it, and it stands among the givers.
+  it('counts a party that gave only an item among the givers', () => {
+    stubChartWidth(912);
+    const a = activity();
+    const [from, to, third] = a.participants;
+    // the fee's payer gave CKB alone; the object's giver and receiver kept their CKB
+    const payer = { ...third, ckbDelta: '-64119', itemDeltas: [] };
+    const giver = { ...from, ckbDelta: '0' };
+    const receiver = { ...to, ckbDelta: '0' };
+    render(
+      <BalanceChanges
+        activity={{ ...a, participants: [receiver, payer, giver] }}
+        fee="64119"
+        compensation={null}
+      />
+    );
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    const tails = [payer, giver, receiver].map((p) => p.address!.slice(-6));
+    expect(rows.map((row) => tails.findIndex((tail) => row.textContent!.includes(tail)))).toEqual([
+      0, 1, 2, -1,
+    ]);
+  });
 });

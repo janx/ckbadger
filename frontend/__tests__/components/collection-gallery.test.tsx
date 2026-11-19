@@ -7,6 +7,7 @@ import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { atContainerWidth, phoneLines, statedHeadPx } from '@/__tests__/utils/phone-row';
 import { shortenAddress } from '@/lib/shorten';
 import { PHONE_LINE_PX } from '@/lib/type-metrics';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 beforeEach(mockItemReads);
 // F2 objects (round 2): the 24-card CollectionGallery was replaced by the Newest list; its two
 // tests moved to __tests__/components/collection-objects.test.tsx.
@@ -17,12 +18,16 @@ beforeEach(mockItemReads);
 // 'Next'); the page counts 75 items (was 1, a count the library's pager refuses beside "more":
 // page 2 of 1).
 it('resets server pagination when search or status changes and preserves item-specific links', async () => {
-  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
-    ...emptyPage([identityItem('bit-cell')]),
-    total: 75,
-    hasMore: true,
-    nextCursor: 'later',
-  });
+  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(
+    pagedRead({
+      ...emptyPage([identityItem('bit-cell')]),
+      // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+      limit: 1,
+      total: 75,
+      hasMore: true,
+      nextCursor: 'later',
+    })
+  );
   render(<CollectionItems id="bit-cell" kind="identity" />);
   const item = identityItem('bit-cell');
   expect(await screen.findByRole('link', { name: item.name! })).toHaveAttribute(
@@ -320,13 +325,15 @@ it('pages counted by its own total, and a search page as a list with no count', 
       const item = identityItem('dotbit');
       return { ...item, nftId: `${item.nftId}${cursor ?? ''}${i}` };
     });
-  vi.mocked(api.getIdentityCollectionItems).mockImplementation(async (_id, params) => ({
-    data: items(params?.cursor),
-    limit: 24,
-    total: params?.search ? undefined : 250,
-    hasMore: true,
-    nextCursor: `${params?.cursor ?? ''}n`,
-  }));
+  vi.mocked(api.getIdentityCollectionItems).mockImplementation(async (_id, params) =>
+    pagedRead({
+      data: items(params?.cursor),
+      limit: 24,
+      total: params?.search ? undefined : 250,
+      hasMore: true,
+      nextCursor: `${params?.cursor ?? ''}n`,
+    })
+  );
   render(<CollectionItems id="dotbit" kind="identity" />);
   const counted = await screen.findByRole('navigation', { name: 'identities' });
   expect(counted).toHaveTextContent(/^1–24 of 250 · 24 a page/);

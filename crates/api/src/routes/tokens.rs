@@ -10,7 +10,7 @@ use std::sync::Arc;
 use ckbadger_common::TokenBalance;
 use ckbadger_store::CkbadgerStore;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
@@ -1149,15 +1149,17 @@ async fn get_token_capacity_chart(
             &format!("building token capacity history chart at date {}", date),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        let unused = cumulative_capacity - cumulative_used;
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values: HashMap::from([
-                ("used".to_string(), cumulative_used.to_string()),
-                ("unused".to_string(), unused.to_string()),
-            ]),
-        });
+        // the day's capacity beside its parts, as every other "CKB held" history states it
+        // (lane exactness, part A2, the routes review's N6)
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                cumulative_capacity,
+                cumulative_used,
+                "token capacity history",
+            )
+            .map_err(ApiError::internal)?,
+        );
     }
 
     let title = token

@@ -51,6 +51,8 @@ function row(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants,
     ...over,
   };
@@ -183,8 +185,10 @@ describe('option A: the headline line', () => {
     const { container } = render(<ActivityRow activity={feedSamples.daoWithdrawRequest} />);
     const line = head(container);
     expect(within(line).getByRole('link', { name: /DAO Withdraw Request$/ })).toBeInTheDocument();
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(line.querySelector('[data-role="detail"]')).toHaveTextContent(
-      '26,050.00000000 CKB · deposited at #19,695,550'
+      '26,050 CKB · deposited at #19,695,550'
     );
   });
 
@@ -194,7 +198,10 @@ describe('option A: the headline line', () => {
       (e) => e.textContent
     );
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
+    // re-pinned on purpose (the tests review, MUST-1's lines: a lock's words are the one
+    // decision's, lockNoun): each name says it is a lock, so the run's "lock " label went (it read
+    // "lock Nervape Shadow Lock"; a lock the registry does not name reads "lock 0x…")
+    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
     expect(
       within(head(container)).getByRole('link', { name: 'Nervape Shadow Lock' })
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
@@ -221,7 +228,8 @@ describe('option A: the headline line', () => {
     );
     const detail = head(container).querySelector('[data-role="detail"]') as HTMLElement;
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(detail).toHaveTextContent(/^· lock \.bit Lock ×2$/);
+    // re-pinned on purpose: the lock decision's words, no "lock " label (it read "lock .bit Lock")
+    expect(detail).toHaveTextContent(/^· \.bit Lock ×2$/);
     expect(within(detail).getAllByRole('link')).toHaveLength(1);
     expect(within(detail).getByRole('link', { name: '.bit Lock' })).toHaveAttribute(
       'title',
@@ -266,16 +274,17 @@ describe('option A: every participant, one line each (D1)', () => {
     // each with its exact value in its title (was every decimal: "+3,052.11026713 CKB").
     expect(joy.querySelector('[data-ckb-amount]')).toHaveTextContent('+3,052 CKB');
     expect(joy.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '+3,052.11026713 CKB');
-    // An asset delta is a signed delta: jade / rouge by sign like the CKB, its symbol dim.
+    // An asset delta is a signed delta: jade / rouge by sign like the CKB. Re-pinned on purpose
+    // (the P3 follow-up's 2c): the amount keeps that ink itself and the symbol is the link's word,
+    // in the line's ink (the link wrote the sign ink, and the symbol was dim on a span inside it).
     const rgbpp = within(joy).getByRole('link', { name: '+13,000 RGB++' });
-    expect(rgbpp).toHaveClass('text-positive');
-    expect(within(rgbpp).getByText('RGB++')).toHaveClass('text-text-dim');
+    expect(rgbpp.querySelector('[data-token-amount]')).toHaveClass('text-positive');
+    expect(rgbpp.className).not.toMatch(/\btext-(positive|negative|text)/);
     expect(joy.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +207');
     // No second line per asset: the intent lock's LP delta is on its own participant line.
     const intent = lineOf(container, intentParty);
     const lp = within(intent).getByRole('link', { name: `${MINUS}5,913 LP-UTXOSwap V1` });
-    expect(lp).toHaveClass('text-negative');
-    expect(within(lp).getByText('LP-UTXOSwap V1')).toHaveClass('text-text-dim');
+    expect(lp.querySelector('[data-token-amount]')).toHaveClass('text-negative');
     expect(intent.querySelector('[data-role="occupied"]')).toHaveTextContent(
       `occupied ${MINUS}231`
     );
@@ -332,11 +341,15 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(box).toHaveClass('flex', 'flex-col');
   });
 
-  it('keeps the over-six fold: the five largest and "+N participants" that opens the rest', () => {
+  // re-pinned on purpose (the lead's final round, item 3): the fold is FoldToggle's box under the
+  // lines, "all 8 participants ↓" and "fewer ↑" on one button (it read "+3 participants")
+  it('keeps the over-six fold: the five largest and "all N participants ↓" that opens the rest', () => {
     const { container } = render(<ActivityRow activity={feedSamples.eightParties} />);
     expect(lines(container)).toHaveLength(5);
-    fireEvent.click(within(container).getByRole('button', { name: '+3 participants' }));
+    const more = within(container).getByRole('button', { name: /^all 8\sparticipants ↓$/ });
+    fireEvent.click(more);
     expect(lines(container)).toHaveLength(8);
+    expect(within(container).getByRole('button', { name: 'fewer ↑' })).toBe(more);
   });
 
   it('pads the row 8 px and keeps the fresh tint', () => {
@@ -376,8 +389,11 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   const listRows = (c: HTMLElement) => [
     ...c.querySelectorAll<HTMLElement>('[data-role="protocol-line"]'),
   ];
+  // re-pinned on purpose (the tests review's SHOULD 6): the list's fold is the one fold control,
+  // FoldToggle ("all 51 deposits ↓", "fewer ↑", aria-controls naming the list); it was a button
+  // written by hand here ("51 deposits ↓")
   const toggle = (c: HTMLElement) =>
-    c.querySelector('[data-role="protocol-list-toggle"]') as HTMLElement | null;
+    c.querySelector('[data-role="protocol-list-toggle"] [data-fold-toggle]') as HTMLElement | null;
 
   it('heads 51 deposits as the action once, its count and exact total; nothing of the list inline', () => {
     const { container } = render(<ActivityRow activity={batch} />);
@@ -396,7 +412,11 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(<ActivityRow activity={batch} />);
     expect(listRows(container)).toHaveLength(0);
     const control = toggle(container)!;
-    expect(control).toHaveTextContent('51 deposits ↓');
+    expect(control).toHaveTextContent('all 51 deposits ↓');
+    expect(control).toHaveAttribute(
+      'aria-controls',
+      container.querySelector('[data-role="protocol-list-lines"]')!.id
+    );
     expect(control).toHaveAttribute('aria-expanded', 'false');
     // The list sits under the head, with the participants, never inside the head line.
     expect(head(container).contains(control)).toBe(false);
@@ -424,7 +444,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     for (const a of amounts) expect(a).toHaveClass('text-right', 'tabular-nums', 'inline-block');
     fireEvent.click(toggle(container)!);
     expect(listRows(container)).toHaveLength(0);
-    expect(toggle(container)).toHaveTextContent('51 deposits ↓');
+    expect(toggle(container)).toHaveTextContent('all 51 deposits ↓');
   });
 
   it('names each action on its line when the run is mixed, and heads the count without a total', () => {
@@ -452,8 +472,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   it('keeps two actions inline while the head stays one line at 1440', () => {
     const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
     const { container } = render(<ActivityRow activity={two} />);
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Deposit · 1,000\.00000000 CKB locked · DAO Deposit · 2,000\.00000000 CKB locked$/
+      /^DAO Deposit · 1,000 CKB locked · DAO Deposit · 2,000 CKB locked$/
     );
     expect(toggle(container)).toBeNull();
     expect(listRows(container)).toHaveLength(0);
@@ -484,16 +506,19 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     // Regression (dCKB 0xfe6f0cd0): a character budget of 130 listed a head that fit one line.
     layOut({});
     const two = row([party('r43nr7')], {
+      // re-pinned on purpose (the P3 follow-up's 2c): the facts are the summary form in a line, so
+      // the head keeps its length past 130 characters with larger deposits (it was 545,000 CKB
+      // at #6,012,189 in the padded column form)
       protocolActions: [
-        { ...withdraw(0), metadata: { capacity: '54500000000000', depositBlock: '6012189' } },
-        { ...withdraw(1), metadata: { capacity: '54512000000000', depositBlock: '6193839' } },
+        { ...withdraw(0), metadata: { capacity: '54500000000000000', depositBlock: '16012189' } },
+        { ...withdraw(1), metadata: { capacity: '54512000000000000', depositBlock: '16193839' } },
       ],
     });
     const { container } = render(<ActivityRow activity={two} />);
     expect(headMain(container).textContent!.length).toBeGreaterThan(130);
     expect(toggle(container)).toBeNull();
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 545,000\.00000000 CKB · deposited at #6,012,189 · DAO Withdraw Request · /
+      /^DAO Withdraw Request · 545,000,000 CKB · deposited at #16,012,189 · DAO Withdraw Request · /
     );
     vi.restoreAllMocks();
   });
@@ -523,7 +548,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(headMain(container)).toHaveTextContent(
       /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB$/
     );
-    expect(toggle(container)).toHaveTextContent('2 deposits ↓');
+    expect(toggle(container)).toHaveTextContent('all 2 deposits ↓');
     vi.restoreAllMocks();
   });
 
@@ -543,8 +568,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(
       <ActivityRow activity={row([party('r43nr7')], { protocolActions: [withdraw(0)] })} />
     );
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 100\.00000000 CKB · deposited at #6,000,000$/
+      /^DAO Withdraw Request · 100 CKB · deposited at #6,000,000$/
     );
     expect(toggle(container)).toBeNull();
   });

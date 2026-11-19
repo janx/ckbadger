@@ -4,8 +4,6 @@ import {
   activityTypeShares,
   activityFilterCounts,
   completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
   previousChainDay,
   formatShare,
   scriptLabel,
@@ -69,8 +67,15 @@ describe('scriptShares', () => {
     { codeHash: '0x2222000000000000', hashType: 'type', name: 'rare', count: 1 },
   ];
 
+  // Re-pinned on purpose (the page-phase review's SHOULD 5): the total and the rest are the
+  // route's (scriptCalls, scriptRest), its ranking its order; the page summed both and ranked again
+  const route = {
+    scriptCounts: entries.filter((e) => e.count > 0),
+    scriptCalls: 9063,
+    scriptRest: { scripts: 2, calls: 4 },
+  };
   it('keeps the top five and folds the rest into one row', () => {
-    const s = scriptShares(entries);
+    const s = scriptShares(route);
     expect(s.total).toBe(9063);
     expect(s.top.map((r) => r.label)).toEqual([
       '.bit Time Info',
@@ -87,10 +92,15 @@ describe('scriptShares', () => {
   // Lane rd/api-lock-names: a count is one script's, by its pair. One code hash by type and by
   // data is two scripts: two rows, each keyed, labelled and linked as itself.
   it('ranks one code hash by type and by data as two scripts', () => {
-    const s = scriptShares([
-      { codeHash: '0x9bd7000000000000', hashType: 'type', name: 'Default Lock', count: 5 },
-      { codeHash: '0x9bd7000000000000', hashType: 'data', name: null, count: 2 },
-    ]);
+    // the route's shape since the merge of fix/readability (its total and rest stated)
+    const s = scriptShares({
+      scriptCounts: [
+        { codeHash: '0x9bd7000000000000', hashType: 'type', name: 'Default Lock', count: 5 },
+        { codeHash: '0x9bd7000000000000', hashType: 'data', name: null, count: 2 },
+      ],
+      scriptCalls: 7,
+      scriptRest: null,
+    });
     expect(s.top.map((r) => [r.key, r.label, r.hashType])).toEqual([
       ['0x9bd7000000000000:type', 'Default Lock', 'type'],
       ['0x9bd7000000000000:data', '0x9bd7…0000 by data', 'data'],
@@ -98,8 +108,21 @@ describe('scriptShares', () => {
   });
 
   it('has no others row when every script fits', () => {
-    expect(scriptShares(entries.slice(0, 2)).others).toBeNull();
-    expect(scriptShares([])).toEqual({ total: 0, top: [], others: null });
+    expect(
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 8790, scriptRest: null })
+        .others
+    ).toBeNull();
+    expect(scriptShares({ scriptCounts: [], scriptCalls: 0, scriptRest: null })).toEqual({
+      total: 0,
+      top: [],
+      others: null,
+    });
+  });
+
+  it('states the route’s whole: a total its rows do not make is refused', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 9000, scriptRest: null })
+    ).toThrow(/script calls/);
   });
 });
 
@@ -153,35 +176,12 @@ describe('exact completed day counts', () => {
       completedYesterdayActivities([{ ...dailyActivities[0], date: '20261025' }], now)?.date
     ).toBe('20261025');
   });
-  it('selects only the exact complete transaction bucket and never a latest-bucket substitute', () => {
-    const base = { currentHour: 0, currentDay: 999, hourlyData: [] };
-    expect(
-      completedYesterdayTransactions(
-        {
-          ...base,
-          dailyData: [
-            { label: '10/24', value: 9, complete: true },
-            { label: '10/25', value: 10, complete: false },
-          ],
-        },
-        now
-      )
-    ).toBeUndefined();
-    expect(
-      completedYesterdayTransactions(
-        { ...base, dailyData: [{ label: '10/25', value: 0, complete: true }] },
-        now
-      )
-    ).toBe(0);
-  });
   it('keeps unique totals separate from overlapping occurrences', () => {
     expect(activityFilterCounts(counts, 10).all).toBe(10);
     expect(activityFilterCounts(counts).all).toBeUndefined();
     // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
     expect(activityFilterCounts({ ...counts, daoCount: 13 }).dao).toBe(13);
-    expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
-    expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
-      'Invalid transaction/cellbase counts'
-    );
+    // the P3 follow-up's 2b: the day's user transactions are the route's figure
+    // (userTransactionCount), so the page's subtraction and its tests went with it
   });
 });

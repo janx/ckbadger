@@ -7,6 +7,7 @@ import type {
   Activity,
   AddressTransaction,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
@@ -71,8 +72,11 @@ export const holdingsFixture: AddressHoldings = {
   lockScriptHash: addressHash,
   balance: addressFixture.balance,
   occupiedCapacity: '712700000000',
-  freeCapacity: '5457135338057',
-  daoFreeCapacity: '958948000000000',
+  // the balance in the route's three parts (lane P1, third round): its five DAO cells whole, the
+  // bytes of its other cells, and the rest of those
+  daoCellsCapacity: '959000000000000',
+  otherCellsOccupiedCapacity: '660700000000',
+  otherCellsFreeCapacity: '5457135338057',
   liveCellsCount: 40,
   holdings: { dao: 5, token: 9, object: 14, identity: 1 },
   classes: {
@@ -216,6 +220,8 @@ export const addressActivitiesFixture: Activity[] = [
     itemDeltas: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     protocolActions: [],
     participants: [],
     roles: [],
@@ -244,13 +250,14 @@ export const addressTransactionsFixture: AddressTransaction[] = [
  * twenty the address page asks for, which the API states back, since the pager reads its page size
  * from the response (lib/pagination.ts); it said 50, a size the page never asks.
  */
-export const pageFixture = <T>(data: T[], total?: number) => ({
-  data,
-  limit: 20,
-  hasMore: false,
-  nextCursor: null,
-  ...(total === undefined ? {} : { total }),
-});
+export const pageFixture = <T>(data: T[], total?: number) =>
+  pagedRead({
+    data,
+    limit: 20,
+    hasMore: false,
+    nextCursor: null,
+    ...(total === undefined ? {} : { total }),
+  });
 
 export const addressDaoCellsFixture: AddressCell[] = addressDaoFixture.map((d) => ({
   txHash: d.txHash,

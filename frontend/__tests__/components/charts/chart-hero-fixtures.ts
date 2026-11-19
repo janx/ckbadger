@@ -197,8 +197,10 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     2,
     (i) => ({
       // four bands that partition C, the day's total issuance (the route checks it per row)
-      outsideDao: i ? '5000' : '4999',
+      // five bands (lane exactness, part B1): outside the Nervos DAO, deposited, withdrawing, unclaimed, burnt
+      outsideDao: i ? '4900' : '4899',
       daoDeposited: '3000',
+      daoWithdrawing: '100',
       unclaimedCompensation: '500',
       burnt: '3500',
       totalIssuance: i ? '12000' : '11999',
@@ -206,8 +208,9 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       circulating: i ? '8000' : '7999',
     }),
     [
-      ['outsideDao', 'CKB circulating outside the DAO'],
+      ['outsideDao', 'CKB outside the Nervos DAO'],
       ['daoDeposited', 'Nervos DAO deposits'],
+      ['daoWithdrawing', 'Nervos DAO withdrawal requests'],
       ['unclaimedCompensation', 'DAO compensation not yet claimed'],
       ['burnt', 'Burnt'],
     ]
@@ -454,6 +457,8 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     epochs: 42,
     intervals: 75_000,
     beyondRange: 12,
+    // each bucket's count, the route's (lane exactness, part A2, N5): 1.03 % of 75,000 is 772.5, cut from 773
+    bucketCounts: Array.from({ length: 60 }, (_, i) => (i === 13 ? 773 : i < 50 ? 675 : 75)),
   },
   getEpochTimeDistributionChart: {
     title: 'Epoch Time Distribution',

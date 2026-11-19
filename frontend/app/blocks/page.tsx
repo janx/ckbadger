@@ -28,6 +28,7 @@ import {
   resourceScale,
 } from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
+import { cn } from '@/lib/utils';
 import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
@@ -117,7 +118,7 @@ export default function BlocksPage() {
       minWidth: columnPx(textPx(WIDEST_AGE.length, fontPx('small')) + CELL_GAP_PX),
       // the age reads the page's one clock (the review's item H), the date-time its hover; an age
       // is one unit (Utc8Age), "this device's clock is behind" words that break in the column
-      render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text-dim" />,
+      render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text" />,
     },
     {
       key: 'contents',
@@ -166,7 +167,7 @@ export default function BlocksPage() {
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
-          <span className="text-text-dim text-meta">
+          <span className="text-text text-meta">
             {block.rewardFinalizesAt === null ? (
               'Genesis'
             ) : (
@@ -267,7 +268,7 @@ export default function BlocksPage() {
             </p>
           )}
           {error && (
-            <p role="alert" className="text-text-dim max-w-measure">
+            <p role="alert" className="text-text max-w-measure">
               Unable to read blocks: {error.message}
             </p>
           )}
@@ -679,11 +680,12 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
       )
     ),
     numeric: true,
-    className: '!whitespace-normal text-text-dim',
+    className: '!whitespace-normal text-text',
     render: (block) => (
       <>
         <span className="block whitespace-nowrap">{block.size.toLocaleString('en-US')} B</span>
-        <span className="block whitespace-nowrap">
+        {/* the cycles, a value; not run yet or a failed replay, an empty value, quiet */}
+        <span className={cn('block whitespace-nowrap', block.cycles === null && 'text-text-dim')}>
           {block.cycles === null
             ? block.cyclesStatus === 'failed'
               ? 'replay failed'

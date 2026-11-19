@@ -86,7 +86,29 @@ const NARROW = {
   /** The lane digits a pixel under the top, the lanes' plate 6 px under them (26 px). */
   TOP: 1 + TICK_LINE + 6 + 4,
   STEP: 7,
+  /** Rows of lanes stand this far apart where the lanes wrap. */
+  ROW_GAP: 16,
 } as const;
+
+/**
+ * The stacked map's lanes a row and their width (lane P2's fourth round, item 1: a page must not
+ * crash because of the window's width). 16 a row where 16 lanes of 14 px stand beside the ruler
+ * (262 px); below that the lanes wrap, 8 a row (from 150 px: 38 + 8 × 14), then 4, 2 and 1, each
+ * row over the whole DNA with its own ruler, each lane up to 20 px. A 320 px window gives the
+ * object page's copper plate 244 px (320 − 2 × 16 − 2 × (1 + 5) − 2 × 16): 8 lanes of 20 px a row.
+ * Only a box that cannot hold one lane of 14 px beside the 38 px ruler is refused: under 52 px, a
+ * window under 128 px with that plate, narrower than any browser lays a page out in.
+ */
+function narrowLanes(width: number, subject: string): { perRow: number; lane: number } {
+  const { RULER, MAX_LANE, MIN_LANE } = NARROW;
+  for (const perRow of [16, 8, 4, 2, 1]) {
+    const lane = Math.min(MAX_LANE, Math.floor((width - RULER) / perRow));
+    if (lane >= MIN_LANE) return { perRow, lane };
+  }
+  throw new Error(
+    `${subject}: a ${width} px DNA map cannot hold one lane of ${MIN_LANE} px beside its ${RULER} px ruler`
+  );
+}
 /**
  * The one-line gene rows under a stacked map: the name's column holds a name at the wide map's cut
  * (11 characters at the small step, 85.8 px) and 2 px (88; a longer name breaks in it, as it did);
@@ -178,19 +200,34 @@ export function SequencingGel({ layout, subject, active, onActive, idle }: Seque
   const lit = active ?? readout.active;
   const gene = lit === null ? undefined : genes.find((g) => g.name === lit);
   const form = width === null ? null : sequencingGelForm(genes, width);
+  const lanes = width !== null && form === 'narrow' ? narrowLanes(width, subject) : null;
   const n = bytes.length * 2;
   return (
     <div ref={box} className="min-w-0 space-y-2">
       {width !== null && form === 'wide' && (
         <WideGel layout={layout} subject={subject} width={width} lit={lit} bind={readout.bind} />
       )}
-      {width !== null && form === 'narrow' && (
-        <NarrowGel layout={layout} subject={subject} width={width} lit={lit} bind={readout.bind} />
+      {width !== null && lanes !== null && (
+        <NarrowGel
+          layout={layout}
+          subject={subject}
+          width={width}
+          lanes={lanes}
+          lit={lit}
+          bind={readout.bind}
+        />
       )}
       <p className="text-text-dim text-meta max-w-measure">
         read top to bottom: each band is one hex digit in the lane of its value · {n} digits ={' '}
         {unitText(formatCount(bytes.length, 'byte'))}
         {form === 'narrow' ? ' · dashed rules mark the gene boundaries' : ''}
+        {lanes !== null && lanes.perRow < 16 && (
+          <>
+            {' '}
+            · the {unitText(formatCount(16, 'lane'))} in{' '}
+            {unitText(formatCount(16 / lanes.perRow, 'row'))} of {lanes.perRow}
+          </>
+        )}
       </p>
       <ReadoutRow
         label="Gene readout"
@@ -429,27 +466,33 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
 
 /**
  * The stacked map (V3 board): lanes of up to 20 px over the whole width, dashed rules where a gene
- * begins, the lit gene's span outlined; the gene readings as rows under the map.
+ * begins, the lit gene's span outlined; the gene readings as rows under the map. Where 16 lanes do
+ * not fit, the lanes wrap (`narrowLanes`): each row draws its lanes over the whole DNA, its ruler
+ * counting the bytes beside it, and a digit's band stands in the row of its value.
  */
-function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
+function NarrowGel({
+  layout,
+  subject,
+  width,
+  lanes: { perRow, lane },
+  lit,
+  bind,
+}: FormProps & { lanes: { perRow: number; lane: number } }) {
   const { bytes, genes, owners } = layout;
-  const { RULER, MAX_LANE, MIN_LANE, TOP, STEP } = NARROW;
-  const lane = Math.min(MAX_LANE, Math.floor((width - RULER) / 16));
-  if (lane < MIN_LANE)
-    throw new Error(
-      `${subject}: a ${width} px DNA map cannot hold 16 lanes of ${MIN_LANE} px (${RULER} px ruler)`
-    );
+  const { RULER, TOP, STEP, ROW_GAP } = NARROW;
   const yOf = (pos: number) => TOP + pos * STEP + STEP / 2;
   const digits = bytes.join('').split('');
   const n = digits.length;
   const bottom = TOP + n * STEP;
   // the ruler's last number and its "byte" under the map, and 4 px
-  const height = bottom + RULER_SHIFT + TICK_LINE + descentPx(SVG_TEXT.tick) + 4;
+  const rowHeight = bottom + RULER_SHIFT + TICK_LINE + descentPx(SVG_TEXT.tick) + 4;
+  const rowCount = 16 / perRow;
+  const height = rowCount * rowHeight + (rowCount - 1) * ROW_GAP;
   const byKey = new Map(genes.map((g) => [g.key, g]));
   const litGenes = genes.filter((g) => g.name === lit);
   const inLit = (byte: number) =>
     litGenes.some((g) => byte >= g.offset && byte < g.offset + g.length);
-  const mapW = 16 * lane;
+  const mapW = perRow * lane;
   // One line a gene (name · bytes · raw → value) while the longest reading fits its column;
   // otherwise the reading takes a line of its own, so the value is the last to lose room. The
   // raw and its arrow are ours; the value is the creator's, by its bound.
@@ -473,113 +516,130 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
         height={height}
         className="block overflow-visible"
       >
-        <rect
-          x={RULER}
-          y={TOP - 4}
-          width={mapW}
-          height={n * STEP + 8}
-          fill={GEL_COLORS.lane}
-          fillOpacity=".025"
-        />
-        {Array.from({ length: 16 }, (_, d) => (
-          <g key={d} aria-hidden>
-            <text
-              x={RULER + d * lane + lane / 2}
-              y={1 + lineAscentPx(SVG_TEXT.tick)}
-              textAnchor="middle"
-              fontSize={SVG_TEXT.tick}
-              fill={GEL_COLORS.label}
-            >
-              {d.toString(16)}
-            </text>
-            {d > 0 && (
-              <line
-                x1={RULER + d * lane}
-                x2={RULER + d * lane}
-                y1={TOP - 4}
-                y2={bottom + 4}
-                stroke={GEL_COLORS.ruler}
-                strokeOpacity=".35"
-              />
-            )}
-          </g>
-        ))}
-        {Array.from({ length: Math.floor(bytes.length / 8) + 1 }, (_, i) => i * 8).map((b) => (
-          <text
-            key={b}
-            data-ruler={b}
-            x={RULER - RULER_GAP.narrow}
-            y={r(yOf(b * 2) + RULER_SHIFT)}
-            textAnchor="end"
-            fontSize={SVG_TEXT.tick}
-            fill={GEL_COLORS.rulerText}
-          >
-            {b}
-          </text>
-        ))}
-        <text
-          data-ruler={bytes.length}
-          x={RULER - RULER_GAP.narrow}
-          y={r(bottom + RULER_SHIFT)}
-          textAnchor="end"
-          fontSize={SVG_TEXT.tick}
-          fill={GEL_COLORS.rulerText}
-        >
-          {bytes.length}
-        </text>
-        <text
-          x={RULER - RULER_GAP.narrow}
-          y={r(bottom + RULER_SHIFT + TICK_LINE)}
-          textAnchor="end"
-          fontSize={SVG_TEXT.tick}
-          fill={GEL_COLORS.rulerText}
-        >
-          byte
-        </text>
-        {genes
-          .filter((g) => g.owns && g.offset > 0)
-          .map((g) => (
-            <line
-              key={g.key}
-              data-boundary={g.name}
-              x1={RULER}
-              x2={RULER + mapW}
-              y1={TOP + g.offset * 2 * STEP}
-              y2={TOP + g.offset * 2 * STEP}
-              stroke={g.color}
-              strokeOpacity=".5"
-              strokeDasharray="2 3"
-            />
-          ))}
-        {litGenes.map((g) => (
-          <rect
-            key={g.key}
-            data-span={g.name}
-            x={RULER + 0.5}
-            y={TOP + g.offset * 2 * STEP + 0.5}
-            width={mapW - 1}
-            height={g.length * 2 * STEP - 1}
-            fill={g.color}
-            fillOpacity=".08"
-            stroke={g.color}
-            strokeOpacity=".7"
-          />
-        ))}
-        {digits.map((digit, pos) => {
-          const byte = Math.floor(pos / 2);
-          const owner = owners[byte] === null ? undefined : byKey.get(owners[byte]!);
+        {Array.from({ length: rowCount }, (_, row) => {
+          const first = row * perRow;
           return (
-            <rect
-              key={pos}
-              data-nibble={pos}
-              x={RULER + parseInt(digit, 16) * lane + 3}
-              y={r(yOf(pos) - 1.5)}
-              width={lane - 6}
-              height="3"
-              fill={owner?.color ?? GEL_COLORS.label}
-              fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
-              opacity={lit && !inLit(byte) ? 0.15 : 1}
-            />
+            <g
+              key={row}
+              data-gel-row={row}
+              transform={`translate(0 ${row * (rowHeight + ROW_GAP)})`}
+            >
+              <rect
+                x={RULER}
+                y={TOP - 4}
+                width={mapW}
+                height={n * STEP + 8}
+                fill={GEL_COLORS.lane}
+                fillOpacity=".025"
+              />
+              {Array.from({ length: perRow }, (_, k) => (
+                <g key={k} aria-hidden>
+                  <text
+                    data-lane-digit
+                    x={RULER + k * lane + lane / 2}
+                    y={1 + lineAscentPx(SVG_TEXT.tick)}
+                    textAnchor="middle"
+                    fontSize={SVG_TEXT.tick}
+                    fill={GEL_COLORS.label}
+                  >
+                    {(first + k).toString(16)}
+                  </text>
+                  {k > 0 && (
+                    <line
+                      x1={RULER + k * lane}
+                      x2={RULER + k * lane}
+                      y1={TOP - 4}
+                      y2={bottom + 4}
+                      stroke={GEL_COLORS.ruler}
+                      strokeOpacity=".35"
+                    />
+                  )}
+                </g>
+              ))}
+              {Array.from({ length: Math.floor(bytes.length / 8) + 1 }, (_, i) => i * 8).map(
+                (b) => (
+                  <text
+                    key={b}
+                    data-ruler={b}
+                    x={RULER - RULER_GAP.narrow}
+                    y={r(yOf(b * 2) + RULER_SHIFT)}
+                    textAnchor="end"
+                    fontSize={SVG_TEXT.tick}
+                    fill={GEL_COLORS.rulerText}
+                  >
+                    {b}
+                  </text>
+                )
+              )}
+              <text
+                data-ruler={bytes.length}
+                x={RULER - RULER_GAP.narrow}
+                y={r(bottom + RULER_SHIFT)}
+                textAnchor="end"
+                fontSize={SVG_TEXT.tick}
+                fill={GEL_COLORS.rulerText}
+              >
+                {bytes.length}
+              </text>
+              <text
+                x={RULER - RULER_GAP.narrow}
+                y={r(bottom + RULER_SHIFT + TICK_LINE)}
+                textAnchor="end"
+                fontSize={SVG_TEXT.tick}
+                fill={GEL_COLORS.rulerText}
+              >
+                byte
+              </text>
+              {genes
+                .filter((g) => g.owns && g.offset > 0)
+                .map((g) => (
+                  <line
+                    key={g.key}
+                    data-boundary={g.name}
+                    x1={RULER}
+                    x2={RULER + mapW}
+                    y1={TOP + g.offset * 2 * STEP}
+                    y2={TOP + g.offset * 2 * STEP}
+                    stroke={g.color}
+                    strokeOpacity=".5"
+                    strokeDasharray="2 3"
+                  />
+                ))}
+              {litGenes.map((g) => (
+                <rect
+                  key={g.key}
+                  data-span={g.name}
+                  x={RULER + 0.5}
+                  y={TOP + g.offset * 2 * STEP + 0.5}
+                  width={mapW - 1}
+                  height={g.length * 2 * STEP - 1}
+                  fill={g.color}
+                  fillOpacity=".08"
+                  stroke={g.color}
+                  strokeOpacity=".7"
+                />
+              ))}
+              {digits.map((digit, pos) => {
+                const value = parseInt(digit, 16);
+                // a digit's band stands in the row of its value
+                if (value < first || value >= first + perRow) return null;
+                const byte = Math.floor(pos / 2);
+                const owner = owners[byte] === null ? undefined : byKey.get(owners[byte]!);
+                return (
+                  <rect
+                    key={pos}
+                    data-nibble={pos}
+                    x={RULER + (value - first) * lane + 3}
+                    y={r(yOf(pos) - 1.5)}
+                    width={lane - 6}
+                    height="3"
+                    fill={owner?.color ?? GEL_COLORS.label}
+                    fillOpacity={bytes[byte] === '00' ? 0.45 : 0.95}
+                    opacity={lit && !inLit(byte) ? 0.15 : 1}
+                  />
+                );
+              })}
+            </g>
           );
         })}
       </svg>

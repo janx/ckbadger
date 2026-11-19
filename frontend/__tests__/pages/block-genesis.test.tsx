@@ -13,6 +13,7 @@ import {
 } from '@/__tests__/msw/fixtures/genesis-block';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -35,7 +36,7 @@ vi.mock('@/src/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-const page = <T,>(data: T[]) => ({ data, limit: 100, hasMore: false, nextCursor: null });
+const page = <T,>(data: T[]) => pagedRead({ data, limit: 100, hasMore: false, nextCursor: null });
 
 beforeEach(() => {
   vi.clearAllMocks();

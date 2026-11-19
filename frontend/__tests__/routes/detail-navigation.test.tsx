@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { api, type KnownScript } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -37,7 +38,7 @@ vi.mock('@/app/identities/dotcell/[identityId]/client-page', () => ({
   default: ({ identityId }: { identityId: string }) => <div>.cell name detail {identityId}</div>,
 }));
 
-const mockScriptsResponse = {
+const mockScriptsResponse = pagedRead({
   data: [
     {
       codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
@@ -65,7 +66,7 @@ const mockScriptsResponse = {
   limit: 20,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('detail navigation', () => {
   function RouterHarness() {

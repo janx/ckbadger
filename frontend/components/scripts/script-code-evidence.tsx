@@ -1,4 +1,5 @@
 import { Fragment, useState } from 'react';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { AppLink } from '@/components/ui/app-link';
@@ -223,11 +224,14 @@ export function ScriptCodeClassLegend({
       aria-label="Who can change the code, in shares"
       className="text-text-dim text-small flex flex-wrap gap-x-6 gap-y-1"
     >
+      {/* Lane P2's fourth round (item 2): a row's label wraps and takes the room that is left, its
+          figure never leaves the line (at 320 the row "Immutable · code cell unspendable 96.47%",
+          334.2 px unbroken, ran 30 px past the window and cut the figure off) */}
       {held.map((row) => (
-        <li key={row.class} className="inline-flex items-center gap-2 whitespace-nowrap">
+        <li key={row.class} className="flex min-w-0 items-baseline gap-2">
           <CodeClassSwatch value={row.class} />
-          <span>{scriptClassLabel(row.class)}</span>{' '}
-          <span className="text-text tabular-nums">
+          <span className="min-w-0">{scriptClassLabel(row.class)}</span>{' '}
+          <span className="text-text shrink-0 whitespace-nowrap tabular-nums">
             {percentOf(BigInt(row.lockOwnedCapacitySum), total)}
           </span>
         </li>
@@ -315,16 +319,38 @@ export function ScriptCodeClassSummary({
   );
 }
 
+/** A code cell the API names as `0x<tx hash>:<output index>`, read into its two parts. */
+function codeCellOutPoint(outpoint: string): { txHash: string; index: number } {
+  const at = outpoint.lastIndexOf(':');
+  const index = Number(outpoint.slice(at + 1));
+  if (at < 1 || at === outpoint.length - 1 || !Number.isSafeInteger(index))
+    throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
+  return { txHash: outpoint.slice(0, at), index };
+}
+
 /** A code cell the API names as `0x<tx hash>:<output index>`, opening its cell page. */
 function CodeCellLink({ outpoint }: { outpoint: string }) {
-  const at = outpoint.lastIndexOf(':');
-  if (at < 1 || at === outpoint.length - 1)
-    throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
+  const cell = codeCellOutPoint(outpoint);
   return (
-    <AppLink look="inline" href={`/cell/${outpoint.slice(0, at)}-${outpoint.slice(at + 1)}`}>
+    <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.index}`}>
       {outpoint}
     </AppLink>
   );
+}
+
+/**
+ * The transaction a holder signed to spend the code cell, opened at that cell (lane P2's third
+ * round, item 16: it linked the transaction bare, and its page folds a sheet after six cells). The
+ * route states the code cell with the transaction; one without the other is refused.
+ */
+function signedSpendHref(custody: ScriptCustodyApi): string | null {
+  const { verifiedByTx: tx, verifiedCodeCell: cell } = custody;
+  if (tx === null && cell === null) return null;
+  if (tx === null || cell === null)
+    throw new Error(
+      `custody ${custody.lockArgs}: a verified spend states its transaction and its code cell (tx ${tx}, cell ${cell})`
+    );
+  return transactionAtCellHref(tx, codeCellOutPoint(cell));
 }
 
 /** A verified multisig's key count: the API states it for every one it verified. */
@@ -336,6 +362,7 @@ function verifiedKeyCount(custody: ScriptCustodyApi): number {
 
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
+  const signedSpend = signedSpendHref(custody);
   return (
     <div className="text-small min-w-0">
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
@@ -373,10 +400,10 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
           </ul>
         </details>
       )}
-      {signer && (
+      {signer && signedSpend && (
         <div className="text-text mt-1 [overflow-wrap:anywhere]">
           This holder signed to spend the code cell in{' '}
-          <AppLink look="inline" href={`/tx/${signer}`}>
+          <AppLink look="inline" href={signedSpend}>
             <ShortId value={signer} kind="hash" size="row" />
           </AppLink>
         </div>

@@ -917,6 +917,9 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
     assert_eq!(data[2]["date"], "2024-01-17");
     assert_eq!(data[2]["values"]["used"], "50");
     assert_eq!(data[2]["values"]["unused"], "30");
+    // lane exactness, part A2 (the routes review's N6): the token's history states the whole its cells hold, as
+    // the other four histories do: 100 − 20 CKB
+    assert_eq!(data[2]["values"]["capacity"], "80", "{json}");
 
     let request = Request::builder()
         .uri(format!(

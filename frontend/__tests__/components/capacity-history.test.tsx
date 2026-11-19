@@ -46,7 +46,11 @@ it('preserves single shannons, complete-day cutoff and shared capacity/transfer 
   const range = screen.getByRole('radiogroup', { name: 'History time range' });
   fireEvent.click(within(range).getByRole('radio', { name: '1 w' }));
   expect(within(range).getByRole('radio', { name: '1 w' })).toHaveAttribute('aria-checked', 'true');
-  expect(screen.getByText('No data in this range.')).toBeInTheDocument();
+  // re-pinned on purpose (lane P2's third round, item 7): a series of one week is said in words and draws no chart, so the one week of the
+  // series draws no chart at any range, and no empty one either (it said "No data in this range."
+  // under a chart of no bar)
+  expect(screen.queryByRole('img', { name: /per week/ })).toBeNull();
+  expect(screen.queryByText('No data in this range.')).toBeNull();
   expect(readout).toHaveTextContent('100.00000013');
 });
 it('rejects an incomplete calendar day and missing exact occupied state', () => {
@@ -88,6 +92,35 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
       />
     )
   ).toThrow('Broken 2023-11-01: capacity');
+  // Lane P2's third round (item 13): the day's free part is the route's `unused`, read beside the
+  // other two (it was capacity − occupied, in the page): a day without it fails, and parts that do
+  // not make the whole are refused
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('Broken 2023-11-01: free');
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', unused: '2', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('2023-11-01: occupied 1 and free 2 do not make the capacity 2');
   log.mockRestore();
 });
 

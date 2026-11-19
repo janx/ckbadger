@@ -7,6 +7,7 @@ import { plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { CollectionHolders } from '@/components/asset/collection-holders';
 import { NetworkTrends } from '@/app/network/trends';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // Lane A5 follow-up (UI review 2026-11-14, U-19): on a phone the history gutter was 104–110 px
 // because every tick repeated its unit ("1.5k transactions"); a tick is the bare value, the unit
@@ -25,6 +26,7 @@ const daily = Array.from({ length: 29 }, (_, i) => ({
   date: date(i),
   capacity: String((1000 + i * 10) * 1e8),
   occupiedCapacity: String(600 * 1e8),
+  freeCapacity: String((400 + i * 10) * 1e8),
   supply: String((19_000_000 + i * 50_000) * 1e6),
 }));
 
@@ -60,9 +62,17 @@ describe('a token history at 358 px', () => {
     expect([...left][0]).toBeLessThanOrEqual(56);
   });
 
+  // Re-pinned on purpose (lane P2's third round, item 7; 7147718c left it red, "Unable to find an
+  // accessible element with the role \"img\" and name `/per week/`"): a series of one week is said
+  // in words and draws no chart, so the ticks are read on a series of two weeks of one transaction
   it('ticks a week of one transaction 0 and 1, never 0.5', () => {
     stubChartWidth(358);
-    render(usdc([{ weekStart: date(7), count: 1 }]));
+    render(
+      usdc([
+        { weekStart: date(7), count: 1 },
+        { weekStart: date(14), count: 1 },
+      ])
+    );
     const weekly = screen.getByRole('img', { name: /per week/ });
     expect(yTickLabels(weekly).map((t) => t.textContent)).toEqual(['0', '1']);
   });
@@ -107,19 +117,21 @@ describe('"over time" at 358 px', () => {
 describe('holder counts', () => {
   it('draws a page whose largest holder has 7 items on a whole-number scale', async () => {
     stubChartWidth(1248);
-    const load = vi.fn().mockResolvedValue({
-      data: [7, 2].map((itemCount, i) => ({
-        lockScriptHash: `0x${String(i + 1).repeat(64)}`,
-        address: null,
-        itemCount,
-        lockCodeHash: null,
-        lockKind: null,
-      })),
-      limit: 10,
-      total: 2,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: [7, 2].map((itemCount, i) => ({
+          lockScriptHash: `0x${String(i + 1).repeat(64)}`,
+          address: null,
+          itemCount,
+          lockCodeHash: null,
+          lockKind: null,
+        })),
+        limit: 10,
+        total: 2,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<CollectionHolders load={load} queryKey="seven" assetClass="objects" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(table.querySelector('[data-scale-ticks]')).toHaveTextContent(/^010$/);

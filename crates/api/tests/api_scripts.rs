@@ -1001,9 +1001,11 @@ async fn test_scripts_list_supports_cursor_pagination() {
         }])
     );
     let page_one_summary = json["classSummary"].clone();
+    // re-pinned on purpose (the page-phase review's SHOULD 3): the role counts say how locks and
+    // types overlap (`both`) and what has neither role, so the parts make the whole
     assert_eq!(
         json["roleCounts"],
-        serde_json::json!({"all":3,"locks":2,"types":1})
+        serde_json::json!({"all":3,"locks":2,"types":1,"both":0,"neither":0})
     );
 
     let request = Request::builder()
@@ -1041,7 +1043,75 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(filtered["classSummary"][0]["referenceCount"], 1);
     assert_eq!(
         filtered["roleCounts"],
-        serde_json::json!({"all":3,"locks":2,"types":1})
+        serde_json::json!({"all":3,"locks":2,"types":1,"both":0,"neither":0})
+    );
+}
+
+/// The page-phase review's SHOULD 3 (the P3 follow-up): the scripts list wrote "70 scripts: 41 locks
+/// and 34 types", a breakdown whose parts (75) do not make its whole, as a family used as both a
+/// lock and a type counts in both and one with no role in neither. The route states those two, so
+/// the sentence says what is counted and does no arithmetic.
+#[tokio::test]
+async fn test_scripts_role_counts_state_the_overlap_and_the_rest() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // (family, lock cells, type cells): a lock, a type, one used as both, one with no role
+    for (i, (family_id, lock_cells, type_cells)) in [
+        ("only-lock", 2, 0),
+        ("only-type", 0, 3),
+        ("lock-and-type", 1, 1),
+        ("no-role", 0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let version = vec![i as u8 + 0x31; 32];
+        let name = family_id.to_uppercase();
+        batch.put_script_family(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: name.clone(),
+                versions_count: 1,
+                lock_cells_count: lock_cells,
+                type_cells_count: type_cells,
+                ..Default::default()
+            },
+        );
+        batch.put_script_family_by_name(&name, family_id);
+        batch.put_script_version_by_family(family_id, &version);
+        batch.put_script_version(
+            &version,
+            &ScriptVersionInfo {
+                version_hash: version.clone(),
+                family_id: Some(family_id.to_string()),
+                registered_references: vec![(version.clone(), 2)],
+                canonical_reference_hash: Some(version.clone()),
+                canonical_hash_type: Some(2),
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_info(
+            2,
+            &version,
+            &ScriptReferenceInfo {
+                reference_hash: version.clone(),
+                hash_type: 2,
+                lock_cells_count: lock_cells,
+                type_cells_count: type_cells,
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_to_version(2, &version, &version);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/scripts?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["roleCounts"],
+        serde_json::json!({"all":4,"locks":2,"types":2,"both":1,"neither":1}),
+        "{json}"
     );
 }
 

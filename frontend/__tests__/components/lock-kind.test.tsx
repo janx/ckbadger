@@ -5,16 +5,20 @@ import {
   cellLockSentence,
   cellOwnerLock,
   LockKind,
-  lockPhrase,
   lockWordsText,
   lockWords,
+  partyLockWordsText,
   LockWordsView,
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
+import { lockPhrase, withNameBy } from '@/lib/lock-words';
+import { addressLockName } from '@/components/address/address-holdings';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** A lock the registry does not name (made up). */
 const CODE = `0x${'9b'.repeat(32)}`;
@@ -368,5 +372,212 @@ describe('the decision’s sentence form', () => {
     expect(words).toHaveAttribute('title', DEFAULT_LOCK_CODE_HASH);
     expect(words).not.toHaveClass('truncate');
     expect(words).not.toHaveClass('text-meta');
+  });
+});
+
+// Lane P2's third round (item 14; review-p-logic-pages NOTE 1): a named lock's article follows the
+// name's first SOUND, not its first letter ("an RGB++ lock", "an M-NFT lock", "an xUDT lock", "a
+// JoyID lock", "a UniPass lock"): one small rule in the decision, read here over every name the
+// registry holds (docs/metadata/scripts/*.toml and protocols.toml). The table is the reading of
+// each name aloud; a name the registry gains fails until it is read here.
+describe('the article follows the name’s first sound', () => {
+  const METADATA = join(__dirname, '..', '..', '..', 'docs', 'metadata');
+  const NAME = /^name\s*=\s*"([^"]+)"/gm;
+  const namesIn = (file: string) => [...readFileSync(file, 'utf8').matchAll(NAME)].map((m) => m[1]);
+  const registry = new Set([
+    ...readdirSync(join(METADATA, 'scripts'))
+      .filter((f) => f.endsWith('.toml'))
+      .flatMap((f) => namesIn(join(METADATA, 'scripts', f))),
+    ...namesIn(join(METADATA, 'protocols.toml')),
+  ]);
+  /** Each name read aloud: "an" before a vowel sound ("ar-G-B", "em", "ex", "eye", "oh"). */
+  const AN = new Set([
+    'AlwaysSuccess',
+    'Anyone-Can-Pay Lock',
+    'EasyToDiscoverType',
+    'iCKB Logic',
+    'InputTypeProxyLock',
+    'M-NFT',
+    'M-NFT Class',
+    'M-NFT Issuer',
+    'OMNI Lock',
+    'OutputTypeProxyLock',
+    'RGB++',
+    'xUDT',
+  ]);
+  /** "a" before a consonant sound: ".bit" ("dot"), "UDT" and "UniPass" ("you"), "wCKB" ("double-u"). */
+  const A = new Set([
+    '.bit',
+    '.bit Account',
+    '.bit Cell',
+    '.bit Income Cell',
+    '.bit Lock',
+    '.bit Reverse Record',
+    '.bit Time Index State',
+    '.bit Time Info',
+    '.cell',
+    'Bitcoin SPV Type Lock',
+    'Btc Time Lock',
+    'ccBTC Asset',
+    'ccBTC Oracle Cell',
+    'Cells Account',
+    'Cells Account Lock',
+    'Cells Price',
+    'Cells Sale Lock',
+    'CHEQUE',
+    'CKBFS',
+    'COTA',
+    'COTA Registry',
+    'Default Lock',
+    'Default Multisig',
+    'did:ckb',
+    'Fiber',
+    'Fiber Commitment Lock',
+    'Fiber Funding Lock',
+    'FlashSigner',
+    'Force Bridge',
+    'Godwoken Challenge Lock',
+    'Godwoken Custodian Lock',
+    'Godwoken Deposit Lock',
+    'Godwoken ETH Account Lock',
+    'Godwoken Stake Lock',
+    'Godwoken State Validator',
+    'Godwoken Withdrawal Lock',
+    'JoyID',
+    'LockProxyLock',
+    'Nervape Shadow Lock',
+    'Nervos DAO',
+    'NexisDAO dCKB Lock',
+    'Nostr',
+    'PW Lock',
+    'Quantum-Resistant Lock',
+    'Simple UDT',
+    'Single Use Lock',
+    'Spore',
+    'Spore Cluster',
+    'Spore Cluster Agent',
+    'Spore Cluster Proxy',
+    'Stable++',
+    'Stable++ Asset',
+    'Stable++ Intent Lock',
+    'Stable++ Pool',
+    'Stable++ Vault Lock',
+    'TimeLock',
+    'Type ID',
+    'TypeBurnLock',
+    'UDT Limit Order',
+    'UniPass',
+    'Unique Cell',
+    'USDI Asset',
+    'UTXOSwap',
+    'UTXOSwap Intent Lock',
+    'UTXOSwap Proxy Lock',
+    'wCKB Asset',
+    'WR Owned-Owner',
+    'Zero Lock',
+  ]);
+  const phrase = (name: string) =>
+    lockPhrase(namedLockWords({ name, codeHash: CODE, hashType: 'type' }, 'sentence'), 'row');
+
+  it('reads every name the registry holds, and only those', () => {
+    // 75 scripts and 7 protocols, two names in both (Nervos DAO, RGB++)
+    expect(registry.size).toBe(80);
+    expect([...registry].filter((n) => !AN.has(n) && !A.has(n))).toEqual([]);
+    expect([...AN, ...A].filter((n) => !registry.has(n))).toEqual([]);
+  });
+
+  it.each([...AN].map((n) => [n]))('says "an %s"', (name) => {
+    expect(phrase(name)).toMatch(new RegExp(`^an ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  });
+
+  it.each([...A].map((n) => [n]))('says "a %s"', (name) => {
+    expect(phrase(name)).toMatch(new RegExp(`^a ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  });
+
+  it('writes the four the review named', () => {
+    expect(phrase('RGB++')).toBe('an RGB++ lock');
+    expect(phrase('Omnilock')).toBe('an Omnilock');
+    expect(phrase('JoyID')).toBe('a JoyID lock');
+    expect(phrase('xUDT')).toBe('an xUDT lock');
+  });
+});
+
+// Lane rd/api-lock-names, at the merge of fix/readability: every place that writes a name writes the
+// hash type the API sends beside it, through the decision: a row's column (LockKind, the holders'
+// tables), a cell version's owner lock, a named party (.cell owner, Fiber party), and the one text
+// rule for a script's name (withNameBy).
+describe('a name by another reference carries its hash type wherever it is written', () => {
+  it('in a row’s column (LockKind with lockKindBy)', () => {
+    render(
+      <LockKind
+        lockKind="Default Lock"
+        lockKindBy="data1"
+        lockCodeHash={`0x${'70'.repeat(32)}`}
+        address={null}
+        size="row"
+        place="column"
+      />
+    );
+    expect(document.body).toHaveTextContent(/^Default Lock · by data1$/);
+  });
+
+  it('beside a cell version’s owner and a named party', () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const code = `0x${'70'.repeat(32)}`;
+    const address = ckbAddress({ codeHash: code, hashType: 'data1', args });
+    expect(
+      cellLockSentence(
+        {
+          lock: { codeHash: code, hashType: 'data1', args },
+          lockName: 'Default Lock',
+          lockNameBy: 'data1',
+          ownerAddress: address,
+          txHash: `0x${'11'.repeat(32)}`,
+          outputIndex: 0,
+        },
+        'row'
+      )
+    ).toBe('a Default Lock · by data1');
+    expect(
+      partyLockWordsText(
+        { lockScriptName: 'Default Lock', lockScriptNameBy: 'data1', address },
+        'row'
+      )
+    ).toBe('Default Lock · by data1');
+  });
+
+  it('as an address’s lock name (its lockScriptInfo.nameBy)', () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const code = `0x${'70'.repeat(32)}`;
+    const lockScript = { codeHash: code, hashType: 'data1', args };
+    expect(
+      addressLockName({
+        lockScriptHash: `0x${'33'.repeat(32)}`,
+        address: ckbAddress({ codeHash: code, hashType: 'data1', args }),
+        lockScript,
+        lockScriptInfo: {
+          codeHash: code,
+          name: 'Default Lock',
+          nameBy: 'data1',
+          scriptKind: 'lock',
+          deprecated: false,
+        },
+      } as never)
+    ).toBe('Default Lock · by data1');
+  });
+
+  it('as a script’s name in text (the one rule)', () => {
+    expect(withNameBy('xUDT', 'data2')).toBe('xUDT · by data2');
+    expect(withNameBy('xUDT', null)).toBe('xUDT');
+    expect(withNameBy('xUDT', undefined)).toBe('xUDT');
+  });
+
+  it('refuses a hash type beside a name that the chain does not have', () => {
+    expect(() =>
+      partyLockWordsText(
+        { lockScriptName: 'JoyID', lockScriptNameBy: 'data3', address: null },
+        'row'
+      )
+    ).toThrow(/not a CKB hash type/);
   });
 });

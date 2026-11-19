@@ -189,6 +189,12 @@ export interface DottedGroup {
   readonly className?: string;
   /** A navigation landmark of the run's links (named by `label`) in place of a plain span. */
   readonly nav?: { label: string };
+  /**
+   * Its first part follows the item before it with no separator, one space's room apart (a head's
+   * "+3 more locks" after its last name, the lead's final round, item 2): a word of that item's
+   * line that wraps as an item of its own.
+   */
+  readonly joined?: boolean;
 }
 
 /**
@@ -198,9 +204,14 @@ export interface DottedGroup {
  */
 export function dottedGroup(
   parts: readonly ReactNode[],
-  { role, className, nav }: { role: string; className?: string; nav?: { label: string } }
+  {
+    role,
+    className,
+    nav,
+    joined,
+  }: { role: string; className?: string; nav?: { label: string }; joined?: boolean }
 ): DottedGroup {
-  return { [GROUP]: true, parts, role, className, nav };
+  return { [GROUP]: true, parts, role, className, nav, joined };
 }
 
 function isGroup(part: ReactNode | DottedGroup): part is DottedGroup {
@@ -257,13 +268,17 @@ export function Dotted({
   if (useContext(InDotted))
     throw new Error('a separated list inside another: pass its parts to the outer list');
   let index = 0;
-  const item = (part: ReactNode) => {
+  // An item is keyed by its place: a loose part by its place in the list, a group's part by its
+  // place in its group, so a group's items stay the same elements while a group before it grows
+  // (a head's names opening behind the fold that stays after them). A joined part draws no
+  // separator: it follows the item before it, one space's room apart (3ch gap less 2ch).
+  const item = (part: ReactNode, key: string, joined = false) => {
     const i = index++;
     if (oneLine)
       return (
-        <span key={i} data-dotted-item="">
+        <span key={key} data-dotted-item="">
           {/* a separator: quiet by rule (R3) */}
-          {i > 0 && (
+          {i > 0 && !joined && (
             <span data-dotted-separator="" aria-hidden="true" className="text-text-dim">
               {' · '}
             </span>
@@ -271,12 +286,19 @@ export function Dotted({
           {unitNode(part)}
         </span>
       );
+    if (i > 0 && joined)
+      return (
+        <span key={key} data-dotted-item="" className="-ml-[2ch] min-w-0">
+          {/* a space for the words read whole (a line drops it where the item starts one) */}{' '}
+          {unitNode(part)}
+        </span>
+      );
     return i === 0 ? (
-      <span key={i} data-dotted-item="" className="min-w-0">
+      <span key={key} data-dotted-item="" className="min-w-0">
         {unitNode(part)}
       </span>
     ) : (
-      <span key={i} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
+      <span key={key} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
         {/* a separator: quiet by rule (R3) */}
         <span
           data-dotted-separator=""
@@ -290,7 +312,7 @@ export function Dotted({
     );
   };
   const nodes = parts.flatMap((part, g) => {
-    if (!isGroup(part)) return shownPart(part) ? [item(part)] : [];
+    if (!isGroup(part)) return shownPart(part) ? [item(part, `${index}`)] : [];
     const shown = part.parts.filter(shownPart);
     if (shown.length === 0) return [];
     const Group = part.nav ? 'nav' : 'span';
@@ -301,7 +323,7 @@ export function Dotted({
         aria-label={part.nav?.label}
         className={cn('contents', part.className)}
       >
-        {shown.map(item)}
+        {shown.map((p, j) => item(p, `g${g}.${j}`, j === 0 && part.joined === true))}
       </Group>,
     ];
   });

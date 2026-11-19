@@ -95,7 +95,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // look 4 → 0 (lane p-assets: each link states its look)
     lane: 'p-assets',
     sites: { ink: 2, raw: 2 },
-    reason: '4 without a look; inks by hand (text-aqua); 2 raw <a>',
+    // the reason corrected (lane cd-fixes-controls, review-p-tests SHOULD-4): it said "4 without a look"
+    reason: 'inks by hand (text-aqua); 2 raw <a> to a file of any scheme',
   },
   // components/asset/identity-document.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
   // components/asset/inventory-summary.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
@@ -106,7 +107,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     lane: 'p-assets',
     // look 8 → 6 (lane p-assets, R8): the issue sentence's two links, moved to the lede, are inline
     sites: { ink: 1, raw: 1 },
-    reason: '6 without a look; inks by hand (text-aqua); 1 raw <a>',
+    // the reason corrected (lane cd-fixes-controls, review-p-tests SHOULD-4): it said "6 without a look"
+    reason: 'inks by hand (text-aqua); 1 raw <a> to a file of any scheme',
   },
   'components/asset/object-media.tsx': {
     lane: 'p-assets',
@@ -119,7 +121,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // look 1 → 0 (lane p-assets: each link states its look)
     lane: 'p-assets',
     sites: { ink: 1, raw: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:underline); 1 raw <a>',
+    // the reason corrected (lane cd-fixes-controls, review-p-tests SHOULD-4): it said "1 without a look"
+    reason: 'inks by hand (text-text-bright, hover:underline); 1 raw <a> to a file of any scheme',
   },
   // components/identity/dotcell-item-detail.tsx left the list (lane p-assets: each link states its look: look 4 → 0, ink 1 → 0)
   // components/identity/dotcell-party.tsx left the list (lane p-assets: each link states its look: look 2 → 0)
@@ -132,12 +135,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // components/scripts/script-family-board.tsx left the list (lane p-assets: each link states its look: look 3 → 0, ink 4 → 0, raw 1 → 0)
   // components/scripts/script-family-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
   // components/scripts/script-newest-cells.tsx left the list (lane p-assets: each link states its look: look 5 → 0, ink 4 → 0)
-  'components/ui/address.tsx': {
-    lane: 'p-assets',
-    sites: { ink: 1 },
-    reason:
-      'the look an Address had before (bright, a faint indigo underline), drawn while a caller states none: it goes with the last such call site (most are p-assets)',
-  },
+  // 'components/ui/address.tsx' left the list (lane cd-fixes-controls, review-p-tests SHOULD-4: every
+  // caller states its look, which is now required; the look it had before went, ink 1 → 0)
   // ---- p-lists ----
   // 'app/activities/page.tsx' left the list (lane P3: look 1, ink 1 → 0; the transactions link a way
   // onward)
@@ -149,12 +148,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // row's key, "How it works" a way onward)
   // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
   // a way onward, the pool's squares blocks, the pool's hash a key whose Hash inherits its ink)
-  'components/activity-event-row.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 6 },
-    reason:
-      '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive), and one on a child (a span’s text-text-dim)',
-  },
+  // 'components/activity-event-row.tsx' left the list (the P3 follow-up's 2c: look 5, ink 6 → 0;
+  // every link of an item fact and a protocol note inline in its line, a token amount in its own
+  // ink by the amount's rule, a dim symbol the line's ink)
   // 'components/activity/activity-row.tsx' left the list (lane P3: look 4, ink 4 → 0; the headline
   // its row's key, the evidence's block and transaction and a call's name inline in their lines)
   // 'components/crash-page.tsx' left the list (lane P3: look 1, ink 1 → 0; the way on a way onward)
@@ -165,11 +161,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // 'components/home/mini-chart.tsx' left the list (lane P3: look 1, ink 1 → 0; a card's title its key)
   // 'components/home/ranked-bars.tsx' left the list (lane P3: look 2, ink 1 → 0; the title its key, a row one block)
   // 'components/not-found-page.tsx' left the list (lane P3: look 5, ink 5 → 0; the ways on and the alternative ways onward)
-  'components/pipeline/pipeline-panel.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (text-aqua, no-underline, text-interactive)',
-  },
+  // 'components/pipeline/pipeline-panel.tsx' left the list for NAMED (the P3 follow-up's 2c: look
+  // 3, ink 2, the owner's accepted pipeline design)
   // ---- p-topics ----
   // the Fiber channel and channels pages left the list (lane P4: look 1, ink 1 and look 3, ink
   // 4, raw 1 → 0)
@@ -189,14 +182,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       'a link drawn as a filled button: its words’ ink, the one its fill calls for, written on a span inside it (style color), which no look carries',
   },
   // the Fiber board, step and graph left the list (lane P4: look 11, ink 11 → 0)
-  'components/forks/miner-link.tsx': {
-    lane: 'p-topics',
-    // look 1 → 0 (lane P4): the look is its caller's (`look={look}`); the former ink stands for
-    // the callers that state none yet, the blocks list (P3), the block page and its reward (P1)
-    sites: { ink: 1 },
-    reason:
-      'inks by hand (text-text-bright, hover:text-jade) for the callers that state no look yet (blocks list, block page, reward breakdown)',
-  },
+  // 'components/forks/miner-link.tsx' left the list (lane cd-fixes-controls, review-p-tests
+  // SHOULD-4: its five callers state their look, which is now required; its former ink went, 1 → 0)
   // ---- shell ----
   'components/stats-bar.tsx': {
     lane: 'shell',
@@ -255,8 +242,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // depositors, 7) → 40 (the merge with lane P1's follow-up, 8: participant-ref.tsx's three links
 // hand their caller's look through, 3; the address's API JSON and the block's hardfork resources
 // are ExternalLinks, 2, the resources' hand ink with them, 1; the block's step arrow mark and a
-// token cell's "no readable amount of" take their link's ink, 2)
-const TOLERATED_TOTAL = 40;
+// token cell's "no readable amount of" take their link's ink, 2) → 24 (the P3 follow-up, 16: the
+// item facts and protocol notes of activity-event-row.tsx, 11, its 2c; the pipeline panel's 5,
+// NAMED: the owner's accepted design) → 22 (the merge with lane cd-fixes-controls,
+// review-p-tests SHOULD-4: Address's and MinerLink's fallback inks, 2, for callers that state no
+// look; every caller states one, and the look is required)
+const TOLERATED_TOTAL = 22;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
@@ -270,6 +261,11 @@ const NAMED: Readonly<Record<string, Named>> = {
     reason:
       'the error page’s bare home link (`plain`): it renders without the router, and its href stays `/` where Link would prefix the network',
   },
+  'components/pipeline/pipeline-panel.tsx': {
+    sites: { look: 3, ink: 2 },
+    reason:
+      'the owner’s accepted pipeline design (homepage pipeline finish, F and G, merged 2026-11-18): the tip’s flaring block link, the pinned tx or block’s aqua "open tx ↗" with its own rule, and the heading’s "all blocks →" in the interactive ink are drawn as the approved board drew them',
+  },
   'components/ui/tabs.tsx': {
     sites: { ink: 1 },
     reason:
@@ -277,8 +273,11 @@ const NAMED: Readonly<Record<string, Named>> = {
   },
 };
 
-/** The pinned total of NAMED's sites: 1, and TabLinks' name since the reader learned a child's ink. */
-const NAMED_TOTAL = 2;
+/**
+ * The pinned total of NAMED's sites: 1, and TabLinks' name since the reader learned a child's ink,
+ * and the pipeline panel's 5 (the P3 follow-up's 2c).
+ */
+const NAMED_TOTAL = 7;
 
 /** The files that draw the one `<a>` of a link (they own it). */
 const LINK_FILES = ['components/ui/link.tsx', 'components/ui/external-link.tsx'];
@@ -295,7 +294,16 @@ interface Scan {
 }
 
 /** The link components: each states its look (the last two hand their caller's look through). */
-const LINK_COMPONENTS = new Set(['Link', 'AppLink', 'ExternalLink', 'BlockLink', 'Address']);
+const LINK_COMPONENTS = new Set([
+  'Link',
+  'AppLink',
+  'ExternalLink',
+  'BlockLink',
+  'Address',
+  // a miner's link, its caller's look handed through (lane cd-fixes-controls, review-p-tests
+  // SHOULD-4: a MinerLink with no look drew a hand ink the gate counted once, in its own file)
+  'MinerLink',
+]);
 
 /** A type step, an alignment or a wrap: a `text-` class that is no ink. */
 const NOT_INK_TEXT =

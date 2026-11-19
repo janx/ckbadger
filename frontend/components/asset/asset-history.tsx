@@ -153,7 +153,17 @@ export function HeldSentence({ days }: { days: readonly HeldDay[] }) {
  */
 export const HELD_PLOT_NAME = 'CKB held · occupied, free';
 export interface AssetHistoryProps {
-  daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
+  /**
+   * Each day's held capacity and its two parts, occupied and free, all three as the route states
+   * them (lane P2's third round, item 13: the page subtracts nothing; it derived free here).
+   */
+  daily: readonly {
+    date: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+    supply?: string;
+  }[];
   /** Completed weekly totals, or why this page has none to draw. */
   weekly: readonly { weekStart: string; count: number }[] | { unavailable: string };
   /** What the weekly totals count. */
@@ -225,11 +235,15 @@ export function AssetHistory({
     const t = time(p.date);
     if (t <= previous || t > end) throw new Error(`History ${p.date}: unordered or incomplete day`);
     previous = t;
-    if (
-      exactUnsignedInteger(p.occupiedCapacity, `${p.date} occupied`) >
-      exactUnsignedInteger(p.capacity, `${p.date} capacity`)
-    )
-      throw new Error(`${p.date}: occupied exceeds held capacity`);
+    const capacity = exactUnsignedInteger(p.capacity, `${p.date} capacity`),
+      occupied = exactUnsignedInteger(p.occupiedCapacity, `${p.date} occupied`),
+      free = exactUnsignedInteger(p.freeCapacity, `${p.date} free`);
+    if (occupied > capacity) throw new Error(`${p.date}: occupied exceeds held capacity`);
+    // the route's parts make its whole, or the day is refused (never repaired here)
+    if (occupied + free !== capacity)
+      throw new Error(
+        `${p.date}: occupied ${occupied} and free ${free} do not make the capacity ${capacity}`
+      );
     if (token && p.supply === undefined) throw new Error(`${p.date}: token supply history missing`);
   }
   const weeklyUnavailable = 'unavailable' in weeklySource ? weeklySource.unavailable : null;
@@ -272,7 +286,7 @@ export function AssetHistory({
     x: time(p.date),
     values: {
       occupied: ckbDecimal(p.occupiedCapacity),
-      free: ckbDecimal((BigInt(p.capacity) - BigInt(p.occupiedCapacity)).toString()),
+      free: ckbDecimal(p.freeCapacity),
     },
   }));
   // The three plots share one time axis, so one gutter: the one their longest tick needs.
@@ -302,8 +316,11 @@ export function AssetHistory({
         bareTicks: true,
       }
     : null;
+  // Lane P2's third round (item 7): a series of one complete week (or none) in the range is said
+  // in words, the readout's week line, and no chart is drawn of one bar: one mark says nothing a
+  // figure does not, and its axis invites a wrong reading
   const weeklyAxis: ChartValueAxisInput | null =
-    weeklyUnavailable === null
+    weeklyUnavailable === null && weeks.length > 1
       ? {
           title: `${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`,
           data: weeks.map((w) => ({
@@ -432,6 +449,7 @@ export function AssetHistory({
           {/* U-15: a lock the registry does not name reads "lock <code hash>". */}
           <LockKind
             lockKind={e.lockKind}
+            lockKindBy={e.lockKindBy}
             lockCodeHash={e.lockCodeHash}
             address={e.address}
             size="row"
@@ -508,7 +526,7 @@ export function AssetHistory({
               <Swatch color={CLASS_COLORS.ckb} />
               <CkbAmount
                 form="exact"
-                shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
+                shannons={BigInt(point.freeCapacity)}
                 signed={false}
                 tone="plain"
               />

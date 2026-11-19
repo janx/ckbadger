@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
-  api: { getDailyActivityStats: vi.fn(), getTxStats: vi.fn() },
+  api: { getDailyActivityStats: vi.fn() },
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 vi.mock('@/components/activities-stream-explorer', () => ({
@@ -18,15 +18,6 @@ vi.mock('@/components/activities-stream-explorer', () => ({
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date('2026-10-26T06:00:00Z'));
-  vi.mocked(api.getTxStats).mockResolvedValue({
-    currentHour: 0,
-    currentDay: 99,
-    hourlyData: [],
-    dailyData: [
-      { label: '10/25', value: 60, complete: true },
-      { label: '10/26', value: 99, complete: false },
-    ],
-  });
 });
 afterEach(() => vi.useRealTimers());
 // Lane L (charts ↔ topics).
@@ -41,11 +32,15 @@ it('links every chart drawn from activities (lane L)', async () => {
   );
 });
 
+// Re-pinned on purpose (the P3 follow-up's 2b): the count is the route's, the day's
+// userTransactionCount; the page read the day's transactions (60) from /stats/tx and subtracted
+// its cellbases (10) itself.
 it('uses the exact non-cellbase count instead of overlapping kind occurrences', async () => {
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: '20261025',
+      userTransactionCount: 50,
       coinbaseCount: 10,
       transferCount: 12,
       daoDepositCount: 1,
@@ -87,7 +82,7 @@ it('does not silently substitute stale statistics for a missing completed day', 
 it('selects UTC+8 yesterday at the UTC date boundary', async () => {
   vi.setSystemTime(new Date('2026-10-25T17:00:00Z'));
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-    { ...dailyActivities[0], date: '20261025', coinbaseCount: 10 },
+    { ...dailyActivities[0], date: '20261025', userTransactionCount: 50 },
   ]);
   render(<ActivitiesPage />);
   expect(await screen.findByText('50')).toBeInTheDocument();

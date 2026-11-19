@@ -7,6 +7,7 @@ import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { ApiRequestError, api } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatShareTick } from '@/components/ui/share-bar';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -27,20 +28,15 @@ const row = (rank: number) => ({
 // `limit` is the page size the API answers with: 2 where three depositors take two pages, so a
 // fixture holds together (the controls lane's pager refuses figures that do not; it was 50 with a
 // second page, which the old pager drew).
-const page = (
-  rows: number[],
-  nextCursor: string | null,
-  tip = 20879205,
-  limit = 50,
-  total = 3
-) => ({
-  anchor: { blockNumber: tip, blockHash: '0x' + 'a'.repeat(64) },
-  total,
-  limit,
-  hasMore: nextCursor !== null,
-  nextCursor,
-  data: rows.map(row),
-});
+const page = (rows: number[], nextCursor: string | null, tip = 20879205, limit = 50, total = 3) =>
+  pagedRead({
+    anchor: { blockNumber: tip, blockHash: '0x' + 'a'.repeat(64) },
+    total,
+    limit,
+    hasMore: nextCursor !== null,
+    nextCursor,
+    data: rows.map(row),
+  });
 
 describe('DAO depositors page (DAO-12)', () => {
   beforeEach(() => {
@@ -144,7 +140,9 @@ describe('DAO depositors page (DAO-12)', () => {
     const depositor = within(table).getByRole('link', { name: 'ckb1…gssd2hqn' });
     expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
-    expect(rank.firstElementChild).toHaveClass('text-text-dim');
+    // re-pinned on purpose (the P3 follow-up's 2d, the ink-role gate): a rank is a value, the
+    // reading ink (it was the quiet ink)
+    expect(rank.firstElementChild).toHaveClass('text-text');
     // R7: the share is a bar on the page's scale with its number beside it, the number dim.
     expect(share.querySelector('[data-aligned-bar]')).not.toBeNull();
     expect(within(share as HTMLElement).getByText('1.00%')).toHaveClass('text-text-dim');

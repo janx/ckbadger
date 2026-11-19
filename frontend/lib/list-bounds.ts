@@ -300,11 +300,35 @@ export const WIDEST_CELL_CAPACITY_SUMMARY = ckbAmountText(ckbNines(10), 'summary
 export const WIDEST_CELL_OCCUPIED = `${nines(7).toLocaleString('en-US')} B`;
 
 /**
+ * Of record: one depositor's live DAO cells, under a million, `999,999`: no depositor holds more
+ * than the whole DAO, 22,284 live DAO cells on 2026-11-19 (20,617 deposits and 1,667 withdrawal
+ * requests), the most of one depositor among the hundred largest 13. Source: mainnet's
+ * /dao/statistics and /dao/depositors.
+ */
+export const WIDEST_DAO_DEPOSITS = nines(6).toLocaleString('en-US');
+
+/**
  * Of record: CKB held in a list row's cells, whole from 1,000 up (the summary form): under 100
  * billion CKB, the whole issuance (about 45 billion today, 1.3 billion more a year) for decades.
  * Source: the issuance.
  */
 export const WIDEST_CKB_HELD = ckbAmountText(ckbNines(11), 'summary');
+
+/**
+ * Of record: CKB held in the compact form (a script version's, on the code-hash page), at its
+ * widest under the issuance's bound: `999.99M`. The compact form writes two decimals of the
+ * largest unit reached, so under 100 billion CKB an amount in billions is two whole digits at most
+ * ("99.99B") and the widest is three of millions. Source: WIDEST_CKB_HELD (the issuance).
+ */
+export const WIDEST_CKB_HELD_COMPACT = ckbAmountText(ckbNines(9), 'compact');
+
+/**
+ * Of record: a cell's CKB in a list cell on one line, under a million CKB, every decimal, the
+ * column form: `999,999.99999999`; a larger one breaks before its decimals (`CkbAmount`'s `wrap`).
+ * The line is the column's choice, not a chain claim: a cell holds up to WIDEST_CELL_CAPACITY.
+ * Source: WIDEST_CELL_CAPACITY.
+ */
+export const WIDEST_CELL_AMOUNT_LINE = ckbAmountText(ckbNines(6), 'column');
 
 /**
  * Of record: a count an inventory or scripts row states (holders, transfers, live cells), eight

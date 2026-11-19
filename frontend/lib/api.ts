@@ -1208,8 +1208,14 @@ export interface AddressHoldings {
   balance: string;
   occupiedCapacity: string;
   /** Ordinary free capacity; DAO free is a disjoint partition. */
-  freeCapacity: string;
-  daoFreeCapacity: string;
+  /**
+   * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
+   * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
+   * is "spendable": a lock, a since or a cellbase's maturity decides that.
+   */
+  daoCellsCapacity: string;
+  otherCellsOccupiedCapacity: string;
+  otherCellsFreeCapacity: string;
   liveCellsCount: number;
   holdings: { dao: number; token: number; object: number; identity: number };
   classes: Record<AddressCellClass, AddressClassTotals>;
@@ -1335,6 +1341,19 @@ interface ActivityTypeCall {
   scriptNameBy?: string | null;
 }
 
+/**
+ * A type script a committed activity's items or its Nervos DAO step carry, by its code
+ * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
+ * and the name of the code that pair runs (lane rd/api-lock-names: it was the code hash's).
+ */
+interface ActivityItemType {
+  typeCodeHash: string;
+  typeHashType: string;
+  scriptName: string | null;
+  /** The hash type beside the name where the pair is not the registry's reference for its code (`· by data2`); null otherwise. */
+  scriptNameBy?: string | null;
+}
+
 interface ActivityLockCall {
   lockCodeHash: string;
   lockHashType: string;
@@ -1398,7 +1417,14 @@ interface Activity {
   isCellbase: boolean;
   itemDeltas: ItemDelta[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   protocolActions: ActivityProtocolAction[];
   /** The OTHER parties of this transaction. */
   participants: ParticipantRef[];
@@ -1443,7 +1469,14 @@ interface GlobalActivity {
   isCellbase: boolean;
   protocolActions: ActivityProtocolAction[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   participants: ParticipantInfo[];
 }
 
@@ -1490,6 +1523,11 @@ interface DailyActivityStats {
   kindOccurrences: number;
   /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
   daoCount: number;
+  /**
+   * The day's user transactions, the route's count: its committed transactions less its cellbases
+   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
+   */
+  userTransactionCount: number;
 }
 
 interface ActivitySummary24h {
@@ -1513,6 +1551,10 @@ interface ActivitySummary24h {
   kindOccurrences: number;
   /** The window's Nervos DAO actions, the API's count. */
   daoCount: number;
+  /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
+  scriptCalls: number;
+  /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
+  scriptRest: { scripts: number; calls: number } | null;
 }
 
 interface GraphNode {
@@ -1614,7 +1656,14 @@ export interface TokenHistory {
   source: 'indexed_chain_time';
   completeThrough: string;
   anchor: { blockNumber: number; blockHash: string };
-  daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
+  /** Each day's held capacity, its occupied part and its free part (`capacity - occupied`). */
+  daily: {
+    date: string;
+    supply: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+  }[];
   /** Transactions (not transfer legs) per complete Monday-start week. */
   weeklyTransactions: { weekStart: string; transactionsCount: number }[];
   mintCount: number;
@@ -2206,6 +2255,11 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
+  /**
+   * The live DAO cells under a legacy name: `liveCellsCount`, which the route checks it equals (a
+   * withdrawal request is no active deposit). Its last reader is the home page's card; it goes when
+   * that reads `liveCellsCount` (lane exactness, part A2, S2; part B).
+   */
   activeDeposits: number;
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
@@ -2629,9 +2683,13 @@ interface DotCellPartyRef {
   hashPrefix: string;
   lockHash: string | null;
   address: string | null;
-  scriptName: string | null;
-  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
-  scriptNameBy?: string | null;
+  /**
+   * The name of the code the party's lock pair runs (lane rd/api-lock-names; lane P2's third
+   * round, item 12: the one name a lock has on the wire, `lockScriptName`; it was `scriptName`).
+   */
+  lockScriptName: string | null;
+  /** The hash type beside the name where the pair is not the registry's reference for its code (`· by data2`); null otherwise. */
+  lockScriptNameBy?: string | null;
 }
 
 interface DotCellDecodedAddress {
@@ -2922,6 +2980,11 @@ export interface BlockTimeDistributionChartResponse extends ChartResponse {
   intervals: number;
   /** The intervals past the drawn range, more than 50 s after their parent. */
   beyondRange: number;
+  /**
+   * Each bucket's intervals, one per point of `data` (lane exactness, part A2, N5): the most common
+   * interval and a tie are read from these, not from the cut shares.
+   */
+  bucketCounts: number[];
 }
 
 /** Cell size: the histogram and the two wholes its page divides by (lane D1). */
@@ -3103,7 +3166,11 @@ export interface ScriptCodeClassTotalApi {
 
 export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
   classSummary?: ScriptCodeClassTotalApi[];
-  roleCounts?: { all: number; locks: number; types: number };
+  /**
+   * The families by role, the route's: `locks` and `types` each count a family used as both
+   * (`both`); `neither` counts the families with no role (the P3 follow-up, SHOULD 3).
+   */
+  roleCounts?: { all: number; locks: number; types: number; both: number; neither: number };
 }
 
 export interface ScriptCustodyApi {
@@ -3116,6 +3183,8 @@ export interface ScriptCustodyApi {
   requireFirstN: number | null;
   keyHashes: string[];
   verifiedByTx: string | null;
+  /** The code cell `verifiedByTx` spent, `0x<tx hash>:<output index>` (with it, or neither). */
+  verifiedCodeCell: string | null;
   witnessState: 'never_signed' | 'verified' | 'unavailable' | 'not_applicable';
   owners: {
     lockCodeHash: string;
@@ -4023,6 +4092,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
+  ActivityItemType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,

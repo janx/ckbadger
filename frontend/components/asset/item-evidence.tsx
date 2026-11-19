@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import { HeadId } from '@/components/ui/head-id';
 import { useState } from 'react';
 import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
@@ -75,7 +76,11 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
         ...(lock.error === undefined
           ? [{ kind: 'lock' as const, script: cell.lock, name: lock.value }]
           : []),
-        { kind: 'type' as const, script: cell.type, name: cell.typeName },
+        {
+          kind: 'type' as const,
+          script: cell.type,
+          name: cell.typeName && withNameBy(cell.typeName, cell.typeNameBy),
+        },
       ].map(
         ({ kind, script, name }) =>
           script && (

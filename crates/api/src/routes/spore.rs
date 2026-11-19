@@ -901,14 +901,8 @@ async fn get_cluster_holders(
     let mut rows = owners;
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let total = rows.len() as i64;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        rows.iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid cluster holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this read's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&rows, cursor.as_ref());
 
     let page: Vec<_> = rows.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;

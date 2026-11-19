@@ -223,6 +223,11 @@ async fn token_history_reads_its_persisted_token_days() {
     assert_eq!(daily[6]["supply"], "100", "10-07, before the burn");
     assert_eq!(daily[7]["supply"], "90", "10-08, the burn");
     assert_eq!(daily.last().unwrap()["capacity"], "1000");
+    // lane P2's third round (item 13): the route states the free part beside the occupied, so a
+    // page subtracts nothing (it was capacity − occupied, in the page)
+    assert_eq!(daily.last().unwrap()["occupiedCapacity"], "600");
+    assert_eq!(daily.last().unwrap()["freeCapacity"], "400");
+    assert_eq!(daily[3]["freeCapacity"], "400", "10-04, a quiet day filled");
     assert_eq!(daily.last().unwrap()["supply"], "90");
     assert_eq!(
         body["weeklyTransactions"],
@@ -855,7 +860,8 @@ async fn token_history_accepts_same_day_mint_burn_with_zero_net_capacity() {
     assert_eq!(
         body["daily"],
         serde_json::json!([{
-            "date":"2026-10-01", "supply":"0", "capacity":"0", "occupiedCapacity":"0"
+            "date":"2026-10-01", "supply":"0", "capacity":"0", "occupiedCapacity":"0",
+            "freeCapacity":"0"
         }])
     );
     let (status, events) = response_json(

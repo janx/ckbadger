@@ -11,7 +11,7 @@ import {
   spelledDuration,
 } from '@/components/asset/object-hero';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
-import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { sporeCellVersionsProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemCellVersion } from '@/lib/api';
 
@@ -284,4 +284,110 @@ it('lists a DOB/1 object’s stored outputs with bytes and sha256, its drawn pic
     'href',
     expect.stringMatching(new RegExp(`/spore/objects/${DOB1_SVG_ID}/render$`))
   );
+});
+
+// Lane P2's third round (item 4): a label and its value are read together. A trait's value
+// stood at its row's right edge, "relief" at the left of a 780 px cell and "NERVAPE 3X" 600 px
+// away at 1280; it follows its label at one gap (12 px), left-aligned, the label column as wide as
+// the grid's longest label: Nervape 3x's readable traits are relief, Color, Serial and Note, the
+// longest six characters at the page's 14 px (8.4 px a glyph), 50.4 px, and the swatch's 8 and its
+// 8 px margin, 66.4: 67 px.
+it('sets each trait’s value at one gap after its label, the label column the longest label', () => {
+  render(
+    <ObjectTraits
+      traits={nervape3xGenetics.cachedVmTraits.traits}
+      colors={new Map()}
+      active={null}
+      onActive={() => {}}
+    />
+  );
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-trait]')];
+  expect(rows.map((r) => r.dataset.trait)).toEqual(['relief', 'Color', 'Serial', 'Note']);
+  for (const row of rows) {
+    expect(row).not.toHaveClass('justify-between');
+    expect(row.style.gridTemplateColumns).toBe('67px minmax(0, 1fr)');
+    expect(row).toHaveClass('gap-x-3');
+    expect(row.querySelector('dd')).not.toHaveClass('text-right');
+  }
+});
+
+// Lane P2's third round (item 15; review-p-logic-pages NOTE-2): "throughout" only where every
+// version's lock is the first's (code hash, hash type and args); it compared the first and the
+// last, so a cell that went A → B → A read "Lock: … throughout." Else the footnote says where the
+// lock changed: each lock the cell sat under, in order, from the day it went under it.
+describe('the lock footnote says where the lock changed', () => {
+  const DAY = 86_400_000;
+  const JOY_ARGS = `0x${'0a'.repeat(22)}`;
+  const DEFAULT_ARGS = `0x${'01'.repeat(20)}`;
+  const under = (
+    lock: { codeHash: string; hashType: 'type' | 'data'; args: string },
+    lockName: string | null,
+    day: number,
+    isLive: boolean
+  ) =>
+    v({
+      timestamp: String(Date.parse('2026-01-01T00:00:00+08:00') + day * DAY),
+      isLive,
+      lock,
+      lockName,
+      ownerAddress: ckbAddress(lock),
+      anatomy: {
+        capacityBytes: 8,
+        lockBytes: 33 + (lock.args.length - 2) / 2,
+        typeBytes: 0,
+        dataBytes: 0,
+      },
+    });
+  const DEFAULT = {
+    codeHash: DEFAULT_LOCK_CODE_HASH,
+    hashType: 'type' as const,
+    args: DEFAULT_ARGS,
+  };
+  const JOY = { codeHash: JOYID_CODE_HASH, hashType: 'type' as const, args: JOY_ARGS };
+
+  it('says the lock it went back to, never "throughout"', () => {
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(JOY, 'JoyID', 3, false),
+      under(DEFAULT, 'Default Lock', 9, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock with 20-byte args at minting → JoyID with 22-byte args from 2026-01-04 → Default Lock with 20-byte args since 2026-01-10. Type and data never changed.'
+    );
+  });
+
+  it('says another holder under the same lock as other args', () => {
+    const other = { ...DEFAULT, args: `0x${'02'.repeat(20)}` };
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(other, 'Default Lock', 2, false),
+    ];
+    expect(lockFootnote(versions, 'token')).toBe(
+      'Lock: Default Lock with 20-byte args at issue → Default Lock with other 20-byte args from 2026-01-03, last. Type and data never changed.'
+    );
+  });
+
+  it('reads a hash type that changed under the same code hash and args', () => {
+    const byData = { ...DEFAULT, hashType: 'data' as const };
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+      // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+      // stopgap that dropped the name is gone
+      under(byData, null, 1, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock with 20-byte args at minting → lock 0x9bd7e06f…a3cce8 by data with 20-byte args since 2026-01-02. Type and data never changed.'
+    );
+  });
+
+  it('says "throughout" where every version is under the first’s lock', () => {
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(DEFAULT, 'Default Lock', 5, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock throughout. Type and data never changed.'
+    );
+  });
 });

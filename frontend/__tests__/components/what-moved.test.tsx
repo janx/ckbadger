@@ -74,6 +74,8 @@ function activity(participants: ParticipantInfo[]): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants,
   };
 }
@@ -329,9 +331,45 @@ describe('WhatMoved, a Nervos DAO step', () => {
         e.textContent!.includes(seededAddress('vwd5rt', JOYID).slice(-6))
       )!;
       expect(holder).toHaveTextContent('Nervos DAO deposit');
+      // re-pinned (lane P1, the lead's look after the third round): the step on its own line with
+      // its own amount, which here is also what reached the holder
+      expect(holder.querySelector('[data-dao-step]')).toHaveTextContent(
+        /^Nervos DAO deposit 122,000 CKB$/
+      );
       expect(from).not.toHaveTextContent('Nervos DAO');
       unmount();
       vi.unstubAllGlobals();
     }
+  });
+
+  // Lane P1, the lead's look after the third round (tx 0xcb481014…610a at 1280): a deposit from the
+  // owner's own address leaves its one party −fee, so its end read "0.00001124 CKB · Nervos DAO
+  // deposit", a deposit of the fee's amount; the deposit is 50,000 CKB and never left its owner.
+  // The step stands on a line of its own with its own amount, apart from what flowed to the miner.
+  it('says a self-deposit’s own amount apart from the fee that flowed', () => {
+    stubChartWidth(1000);
+    const selfDeposit: GlobalActivity = {
+      ...activity([{ ...party('vwd5rt', '-1124'), tags: TAG_DAO_BIT }]),
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '5000000000000' },
+        },
+      ],
+    };
+    render(<WhatMoved hash={HASH} activity={selfDeposit} fee="1124" compensation={null} />);
+    const frame = screen.getByTestId('tx-what-moved');
+    const owner = frame.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
+    const step = owner.querySelector('[data-dao-step]')!;
+    expect(step).toHaveTextContent(/^Nervos DAO deposit 50,000 CKB$/);
+    // what flowed, the fee, on its own line, never beside the step
+    const flowed = owner.querySelector('[data-ckb-amount]')!.closest('div')!;
+    expect(flowed).toHaveTextContent(/^0\.00001124 CKB$/);
+    expect(flowed).not.toContainElement(step as HTMLElement);
+    expect(frame.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
+      'the miner fee0.00001124 CKB'
+    );
   });
 });

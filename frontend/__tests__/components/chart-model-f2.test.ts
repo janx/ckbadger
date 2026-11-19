@@ -88,12 +88,15 @@ describe('Charts index encodings (F2 charts)', () => {
       ['Objects', CLASS_COLORS.objects],
       ['Other scripts', CLASS_COLORS.other],
     ]);
-    // re-pinned for the four bands (lane D1, second follow-up, item 1): C in four bands, the unclaimed compensation the DAO's gold a step down
+    // re-pinned for the four bands (lane D1, second follow-up, item 1): C in four bands, the unclaimed compensation the DAO's gold a step down;
+    // re-pinned for lane exactness, part A2 (M1): the bands named and keyed for what they hold
     const supply = chartModel(def('total-supply'), {
       title: 'Total Supply',
       series: [
-        { key: 'outsideDao', label: 'Outside the DAO', color: '#00c389' },
-        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#3b82f6' },
+        // re-pinned for lane exactness, part B1: five bands, the DAO's cells whole
+        { key: 'outsideDao', label: 'Outside the Nervos DAO', color: '#00c389' },
+        { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#3b82f6' },
+        { key: 'daoWithdrawing', label: 'Withdrawing from the Nervos DAO', color: '#786540' },
         { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
@@ -101,8 +104,9 @@ describe('Charts index encodings (F2 charts)', () => {
         {
           date: '2026-10-29',
           values: {
-            outsideDao: '3',
+            outsideDao: '2',
             daoDeposited: '2',
+            daoWithdrawing: '1',
             unclaimedCompensation: '1',
             burnt: '1',
             totalIssuance: '7',
@@ -112,8 +116,9 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     expect(supply.series.map((s) => [s.label, s.color])).toEqual([
-      ['Outside the DAO', DATA_COLOR],
-      ['In the Nervos DAO', CLASS_COLORS.dao],
+      ['Outside the Nervos DAO', DATA_COLOR],
+      ['Deposited in the Nervos DAO', CLASS_COLORS.dao],
+      ['Withdrawing from the Nervos DAO', 'var(--c-gold-mid)'],
       ['Unclaimed DAO compensation', 'var(--c-gold-ramp)'],
       ['Burnt', CLASS_COLORS.ckb],
     ]);
@@ -665,8 +670,17 @@ const hours = (m: number) =>
   `${Math.floor(m / 60)}.${String(Math.floor(((m % 60) * 100) / 60)).padStart(2, '0')}`;
 
 describe('a filled histogram fails on what it cannot read', () => {
+  // block intervals carry each bucket's count and their window, the route's (lane exactness,
+  // part A2, N5: an API without them is refused before a bucket is read)
   const histogram = (slug: string, data: { date: string; value: string; value2?: string }[]) =>
-    chartModel(def(slug), { title: slug, yAxisLabel: 'Epochs', data });
+    chartModel(def(slug), {
+      title: slug,
+      yAxisLabel: 'Epochs',
+      data,
+      ...(slug === 'block-time-distribution'
+        ? { epochs: 1, intervals: data.length, beyondRange: 0, bucketCounts: data.map(() => 1) }
+        : {}),
+    });
   /** Epoch durations as the API labels them: the minute in hours, two decimals, cut. */
   const minutes = (from: number, to: number) =>
     Array.from({ length: to - from + 1 }, (_, i) => ({

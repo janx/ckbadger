@@ -20,6 +20,7 @@ import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
 import tailwindConfig from '@/tailwind.config';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -70,6 +71,8 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     protocolActions: [],
     typeCalls: [call('.bit Time Index State', '3a'), call('.bit Time Info', '9e')],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [oracleParty(seed)],
   };
 }
@@ -83,13 +86,16 @@ const transfer: GlobalActivity = {
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [],
+  itemTypesUnread: null,
   participants: [
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
     { ...oracleParty('recvr1'), ckbDelta: '99970000' },
   ],
 };
 
-const page = (data: GlobalActivity[]) => ({ data, limit: 50, hasMore: false, nextCursor: null });
+const page = (data: GlobalActivity[]) =>
+  pagedRead({ data, limit: 50, hasMore: false, nextCursor: null });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -220,31 +226,64 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     ).toEqual(rows.map((a) => a.txHash));
   });
 
-  // The live feed (mainnet, the first page of /activities read from the API on 2026-11-19, blocks
-  // #21,054,083 to #21,054,163): 50 activities drawn as 9 rows, five of them folded runs.
-  it('draws the live feed’s first page, 50 activities, as 9 rows', async () => {
-    const rows = live as unknown as GlobalActivity[];
+  // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
+  // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
+  // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
+  const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
+  const said = (el: Element) =>
+    el.getAttribute('data-role') === 'activity-run'
+      ? `${el.querySelector('[data-role="head-main"]')!.textContent!.replace(/\s+/g, ' ')} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
+      : el.querySelector('[data-role="headline"]')!.textContent;
+  const drawnFeed = async (rows: GlobalActivity[]) => {
     vi.setSystemTime(Number(rows[0].timestamp) + 60_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
-    const drawn = [
-      ...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]'),
-    ];
-    const said = (el: Element) =>
-      el.getAttribute('data-role') === 'activity-run'
-        ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
-        : el.querySelector('[data-role="headline"]')!.textContent;
-    expect(drawn.map(said)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
+    return [...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]')].map(
+      said
+    );
+  };
+
+  it('draws the live feed’s first page, 50 activities, in its runs', async () => {
+    expect(await drawnFeed(feeds.all)).toEqual([
+      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
       'Script call',
       'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 9 transactions ↓ · 3 participants',
-      '.bit · recycle expired account',
-      'Script call · .bit Time Index State · .bit Time Info | all 21 transactions ↓ · 3 participants',
       'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
+      'Script call',
+      'CKB Transfer | all 5 transactions ↓ · 6 participants',
+      'Script call',
+      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 4 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 participants',
+    ]);
+  });
+
+  // The lead's final round, item 1: the code is a set, so the 29 transfers that called the same
+  // codes with two to five Godwoken Withdrawal Lock outputs are one run, and its head names each
+  // code once: no "×2", which is a row's count of its own calls, not the run's
+  it('folds the live token transfers into one run whose head names each code once', async () => {
+    const drawn = await drawnFeed(feeds.token);
+    expect(drawn).toHaveLength(1);
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '29');
+    expect(folded.querySelector('[data-role="head-main"]')!.textContent).not.toMatch(/×/);
+  });
+
+  // the page-phase review's MUST-1: a folded run names the code its rows' items carry, here the
+  // standard of the tokens they moved ("Simple UDT"), whatever tokens each row moved
+  it('names the standard a run of token transfers carries, its tokens apart', async () => {
+    // re-pinned on purpose (the lead's final round, item 1): four runs, [11, 11, 3, 4], cut only by
+    // the count of Godwoken Withdrawal Lock outputs ("×2" to "×5" on the head), are one
+    expect(await drawnFeed(feeds.token)).toEqual([
+      // re-pinned on purpose (the lead's final round, item 2): a folded head names its item types
+      // first and six names at most, as a row's head does; the eight were "… · lock
+      // 0xede19974…56f0ba · Godwoken Withdrawal Lock · lock 0xff022d55…d32733"
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 149 participants',
     ]);
   });
 
@@ -401,7 +440,9 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream([crowd]);
     render(<ActivitiesStreamExplorer />);
-    const more = await screen.findByRole('button', { name: '+2 participants' });
+    // re-pinned on purpose (the lead's final round, item 3): the participants' fold is
+    // FoldToggle's box under their lines, "all 7 participants ↓" / "fewer ↑"
+    const more = await screen.findByRole('button', { name: /^all 7\sparticipants ↓$/ });
     await user.click(more);
     expect(more).toHaveAttribute('aria-expanded', 'true');
     const article = document.querySelector(`article[data-feed-row="${crowd.txHash}"]`)!;
@@ -410,7 +451,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     expect(article.isConnected).toBe(true);
     expect(more.isConnected).toBe(true);
     expect(more).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: 'Show fewer participants' })).toBe(more);
+    expect(within(article as HTMLElement).getByRole('button', { name: 'fewer ↑' })).toBe(more);
   });
 
   it('a new row that says the same as an open run joins it, open, its head and focus kept', async () => {
@@ -472,8 +513,11 @@ describe('an older page that continues the last run (B4 fix round)', () => {
   function pages(first: GlobalActivity[], older: GlobalActivity[]) {
     vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
       params?.cursor === 'older'
-        ? { data: older, limit: 50, hasMore: false, nextCursor: null }
-        : { data: first, limit: 50, hasMore: true, nextCursor: 'older' }
+        ? pagedRead({ data: older, limit: 50, hasMore: false, nextCursor: null })
+        : // a full page of its rows with more after it (lane cd-fixes-controls, review-p-tests
+          // SHOULD-5: it was the first rows on a page of fifty that said more followed); the
+          // stream's next button says that page's size, so the clicks below find it by its form
+          pagedRead({ data: first, limit: first.length, hasMore: true, nextCursor: 'older' })
     );
   }
   const feedRows = () =>
@@ -490,7 +534,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     await screen.findAllByRole('article');
     expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
     const drawn = document.querySelector(`article[data-feed-row="${last.txHash}"]`)!;
-    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
+    await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(feedRows()).toContain(transfer.txHash));
     await waitFor(() =>
       expect(document.querySelector('[data-role="activity-run"]')).toHaveAttribute(
@@ -511,7 +555,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
     const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
-    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
+    await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(toggle).toHaveTextContent(/^all 3\stransactions ↓$/));
     expect(toggle.isConnected).toBe(true);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -553,7 +597,7 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
     await user.click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
     // opened, each row draws its own parties by the rows' rule (over six, five and the count)
     const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
-    expect(row).toHaveTextContent('+2 participants');
+    expect(row).toHaveTextContent(/all 7\sparticipants ↓/);
   });
 });
 
@@ -643,13 +687,15 @@ describe('a token page’s feed folds within the page it shows (B4 item 5)', () 
         plain
         mark="tokens"
         loadActivities={async () => ({ ...page(run), total: 2 })}
-        loadTransactions={async () => ({
-          data: [],
-          total: 0,
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        })}
+        loadTransactions={async () =>
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
       />
     );
     const folded = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
@@ -700,13 +746,15 @@ describe('a run is set back as its rows are (R4)', () => {
         scope="This identity's whole life"
         item={{ kind: 'identity', protocolName: '.cell' }}
         loadActivities={async () => ({ ...page(rows), total: 3 })}
-        loadTransactions={async () => ({
-          data: [],
-          total: 0,
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        })}
+        loadTransactions={async () =>
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
       />
     );
     await waitFor(() =>
@@ -725,5 +773,57 @@ describe('a run is set back as its rows are (R4)', () => {
         r.getAttribute('data-feed-row')
       )
     ).toEqual([rows[2].txHash]);
+  });
+});
+
+// The lead's final round, item 7: a called lock is written by the one lock decision from its code
+// hash, hash type and name together. A lock on the Default Lock's code hash referenced by data is
+// not the Default Lock: today's API sends it the registered name ("Default Lock"), which the row
+// must not write, in a row's head, a folded head or the opened run's rows, nor in a link's hover or
+// address; it is written by its code hash and "by data".
+describe('a called lock on a registered code hash by another hash type (the lock decision)', () => {
+  const BY_DATA = {
+    lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+    lockHashType: 'data',
+    lockArgs: '0x' + 'ab'.repeat(20),
+    scriptHash: '0x' + 'cd'.repeat(32),
+    // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+    // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+    // stopgap that dropped the name is gone
+    scriptName: undefined,
+    decoded: null,
+    decodeError: null,
+  };
+  const called = (n: number): GlobalActivity => ({
+    ...oracle(n, 'q3q7ue', '0x00', n * 49),
+    lockCalls: [BY_DATA],
+  });
+  const said = (el: Element) =>
+    [
+      el.textContent ?? '',
+      ...[...el.querySelectorAll('[title]')].map((e) => e.getAttribute('title') ?? ''),
+      ...[...el.querySelectorAll('a[href]')].map((a) =>
+        decodeURIComponent(a.getAttribute('href') ?? '')
+      ),
+    ].join('\n');
+
+  it('writes it by its code hash and "by data", never "Default Lock", in a row and a run, opened or not', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([called(1), called(2)]));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded.querySelector('[data-role="head-main"]')).toHaveTextContent(
+      /lock 0x9bd7e06f…a3cce8 by data/
+    );
+    expect(said(folded)).not.toMatch(/Default Lock/);
+    await userEvent
+      .setup({ advanceTimers: () => {} })
+      .click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
+    const rows = [...document.querySelectorAll('article[data-feed-row]')];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelector('[data-role="head-main"]')).toHaveTextContent(/by data/);
+      expect(said(row)).not.toMatch(/Default Lock/);
+    }
   });
 });

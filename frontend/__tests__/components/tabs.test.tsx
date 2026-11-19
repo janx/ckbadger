@@ -230,12 +230,90 @@ describe('Tabs: the phone rule, by the one function (lib/control-row-fit)', () =
     expect(drawnPx(screen.getByRole('tablist'), 360)).toBe(324);
   });
 
-  it('throws when the names alone do not fit the narrowest line, at any width', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  // re-pinned on purpose (the lead's final round, item 4): a row whose names alone are wider than
+  // the narrowest line no longer throws; it is tabs where its line holds it, and its narrow form,
+  // the library's Select, where it does not (it threw at every width)
+  it('keeps a row wider than the narrowest line as tabs where its line holds it', () => {
     at(1280);
-    expect(() =>
-      render(<Row tabs={[...ADDRESS, { key: 'names' as Key, label: 'names', count: 1 }]} />)
-    ).toThrow('wider than the 328 px line of a 360 px window');
+    render(<Row tabs={[...ADDRESS, { key: 'names' as Key, label: 'names', count: 1 }]} />);
+    expect(screen.getAllByRole('tab')).toHaveLength(4);
+  });
+});
+
+/**
+ * The lead's final round, item 4: at 320 px the transactions page's row ("transactions · cellbases ·
+ * in the pool") and the address page's ran 13 px past the window. A tab row decides by measurement
+ * from its LABELS whether it fits the line it is given (the counts leave first, as before); on a
+ * line that cannot hold its names it takes its narrow form, the library's Select after "showing",
+ * never a clipped, wrapped or scrolled row. The arithmetic, a command row at the body step below
+ * 640 (14 px, a glyph 8.4 px; the square 8 less its 8 px pull, then a 16 px gap; 16 px between
+ * tabs): each row's names are 32 glyphs, 268.8 px, with 48 px of chrome, 316.8 px. A 320 px
+ * window's line is 288 px (316.8 is 28.8 over it, 12.8 past the window): the Select. A 360 px
+ * window's is 328: both stay tabs, the address row without its counts (356.4 px with them).
+ */
+describe('Tabs: the narrow form, where the line cannot hold the names', () => {
+  type View = 'committed' | 'cellbases' | 'pool';
+  const VIEWS: Tab<View>[] = [
+    { key: 'committed', label: 'transactions' },
+    { key: 'cellbases', label: 'cellbases' },
+    { key: 'pool', label: 'in the pool' },
+  ];
+  function Views() {
+    const [value, setValue] = useState<View>('committed');
+    return (
+      <Tabs label="Transaction views" command tabs={VIEWS} value={value} onChange={setValue}>
+        <p>the {value} list</p>
+      </Tabs>
+    );
+  }
+
+  it('measures both rows from their labels: 316.8 px, over a 320 window’s 288 and within a 360’s 328', () => {
+    expect(tabRowPx(VIEWS, 'body', true).bare).toBe(316.8);
+    expect(tabRowPx(ADDRESS, 'body', true).bare).toBe(316.8);
+    expect(containerContentPx(320)).toBe(288);
+    expect(containerContentPx(360)).toBe(328);
+  });
+
+  it('takes the Select after "showing" at 320, its options the tabs, and chooses through it', async () => {
+    const user = userEvent.setup();
+    at(320);
+    render(<Views />);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    const select = screen.getByRole('combobox', { name: 'showing' });
+    expect(select).toHaveValue('committed');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.textContent)
+    ).toEqual(['transactions', 'cellbases', 'in the pool']);
+    expect(screen.getByText('the committed list')).toBeInTheDocument();
+    await user.selectOptions(select, 'pool');
+    expect(screen.getByText('the pool list')).toBeInTheDocument();
+  });
+
+  it('takes the Select for the address row at 320 too, counts and all', () => {
+    at(320);
+    render(<Row />);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'showing' })).toHaveValue('activities');
+  });
+
+  it('stays tabs at 360: the transactions row whole, the address row without its counts', () => {
+    at(360);
+    const views = render(<Views />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'transactions',
+      'cellbases',
+      'in the pool',
+    ]);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    views.unmount();
+    render(<Row />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'activities',
+      'transactions',
+      'live cells',
+    ]);
   });
 });
 
@@ -391,12 +469,13 @@ describe('Tabs and TabLinks: a plain row takes the body step at every width', ()
         <p />
       </Tabs>
     );
-    // a command row there sets its names at 17 px: 428 px with its counts, past 380
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      'activities',
-      'transactions',
-      'live cells',
-    ]);
+    // a command row there sets its names at 17 px: 428 px with its counts, past 380, and 388.4
+    // without them (32 glyphs of 10.2 px, 326.4, and 62 px of chrome), past 380 too: re-pinned on
+    // purpose (the lead's final round, item 4), its narrow form, where it drew its names 8.4 px
+    // past its line
+    expect(tabRowPx(ADDRESS, 'section', true).bare).toBe(388.4);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'showing' })).toHaveValue('activities');
   });
 
   it('draws a plain TabLinks row at the body step too', () => {

@@ -14,10 +14,11 @@ import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { ckbAmountText } from '@/lib/amount-form';
 import {
   UNAVAILABLE,
   WIDEST_BLOCK_NUMBER,
+  WIDEST_CELL_AMOUNT_LINE,
+  WIDEST_CKB_HELD_COMPACT,
   WIDEST_ROW_COUNT,
   WIDEST_VERSION_CODE_CELLS,
 } from '@/lib/list-bounds';
@@ -70,14 +71,11 @@ const meta = (text: string) => textPx(text.length, fontPx('meta'));
 const ID_LINE_PX = columnPx(textPx(22, fontPx('small')) + CELL_GAP_PX);
 const BLOCK_PX = columnPx(small(WIDEST_BLOCK_NUMBER) + CELL_GAP_PX);
 /**
- * An amount on one line with its unit: under a million CKB, "999,999.99999999 CKB"; a larger one
- * breaks before its decimals (`wrap`).
+ * An amount on one line with its unit (WIDEST_CELL_AMOUNT_LINE, "999,999.99999999 CKB"); a larger
+ * one breaks before its decimals (`wrap`). Lane P2's third round (item 11): the bound is
+ * lib/list-bounds.ts's, as is a version's compact CKB (WIDEST_CKB_HELD_COMPACT, "999.99M").
  */
-const AMOUNT_LINE_PX = columnPx(
-  small(ckbAmountText(BigInt('99999999999999'), 'column')) + meta(' CKB') + CELL_GAP_PX
-);
-/** A version's CKB in its compact form, under a billion CKB: "999.99M". */
-const WIDEST_COMPACT_CKB = ckbAmountText(BigInt('99999999999999999'), 'compact');
+const AMOUNT_LINE_PX = columnPx(small(WIDEST_CELL_AMOUNT_LINE) + meta(' CKB') + CELL_GAP_PX);
 
 function CellOccupiedValue({
   cell,
@@ -455,8 +453,19 @@ export default function ScriptDetailPage({
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
   const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
-  // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const cellsPagination = useCursorPagination(cellsPageSize);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): the version
+  // (what the cells' query key holds of the list: a code-hash page's version and its kind, a
+  // family page's name)
+  const cellsPagination = useCursorPagination(cellsPageSize, {
+    list: isCodeHashMode
+      ? [
+          selectedVersion?.codeHash,
+          selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
+            ? selectedVersion.scriptKind
+            : undefined,
+        ]
+      : [name],
+  });
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
@@ -1312,7 +1321,6 @@ export default function ScriptDetailPage({
         scriptKind: versionRow.scriptKind,
       });
       setSelectedDeploymentOutpoint(null);
-      cellsPagination.reset();
     }
   };
   const isSelected = (versionRow: (typeof versionRows)[number]) =>
@@ -1504,7 +1512,7 @@ export default function ScriptDetailPage({
                       // the compact CKB and its unit, "999.99M CKB", or "unavailable" (the wider);
                       // the last column, no gap after it (F3-e: it was 150 and 24 %)
                       minWidth: columnPx(
-                        Math.max(small(WIDEST_COMPACT_CKB) + meta(' CKB'), small(UNAVAILABLE))
+                        Math.max(small(WIDEST_CKB_HELD_COMPACT) + meta(' CKB'), small(UNAVAILABLE))
                       ),
                       numeric: true,
                       render: (row) => <VersionUsageCell usage={row.usage} field="capacity" />,

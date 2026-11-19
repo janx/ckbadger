@@ -7,6 +7,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash } from '@/lib/shorten';
+import { withNameBy } from '@/lib/lock-words';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatStandard } from '@/components/activity-event-row';
@@ -144,14 +145,16 @@ const composition = [
   ['decodePending', 'decode_pending'],
 ] as const;
 /** "free part of 5 deposits": what the DAO free figure is made of (BA-37). */
-function daoFreeNote(holdings: AddressHoldings): string | undefined {
+/** The Nervos DAO cells a DAO part holds, by kind: "in 5 deposits", "in 1 deposit and 1 withdrawal request". */
+function daoCellsNote(holdings: AddressHoldings): string {
   const { depositCellsCount: deposits, withdrawalRequestCellsCount: requests } = holdings;
-  if (deposits + requests === 0) return undefined;
+  if (deposits + requests === 0)
+    throw new Error(`Address ${holdings.lockScriptHash}: CKB in Nervos DAO cells and no DAO cell`);
   const parts = [
     ...(deposits ? [formatCount(deposits, 'deposit')] : []),
     ...(requests ? [formatCount(requests, 'withdrawal request')] : []),
   ];
-  return `free part of ${parts.join(' and ')}`;
+  return `in ${parts.join(' and ')}`;
 }
 
 /**
@@ -196,32 +199,40 @@ function ExactParts({ shannons }: { shannons: bigint }) {
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
  * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — and beside it,
- * exact, what the address can spend and, where it holds Nervos DAO cells, the compensation they
- * have accrued unclaimed (lane P1, the plan's P1 paragraph: they stood under the bar and four
- * sections down; the live cells it stood "in" are the status strip's, said once); the 18 px
- * partition with each share inside its part (a share its part cannot hold is in the part's title,
- * never cut), its parts named "occupied", "spendable" and "in the DAO" (they were occupied, free
- * and DAO free: three frees for three things); and under it the two parts it cannot spend, as
- * labelled facts with their unit (`DetailFacts`; "in the DAO" says so when there is none). A DAO
- * part of the partition is drawn only when the address has CKB in the Nervos DAO.
+ * exact, where it holds Nervos DAO cells, the compensation they have accrued unclaimed (lane P1);
+ * the 18 px partition with each share inside its part (a share its part cannot hold is in the
+ * part's title, never cut); and under it the same parts as labelled facts with their unit
+ * (`DetailFacts`). The parts are the route's three, each true by its name, that make the balance
+ * exactly (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3 and SHOULD 3):
+ * "in Nervos DAO cells" (their whole capacity, as "Deposited" says it), "occupied" (what pays for
+ * the bytes of its other cells) and "free" (the rest of those), with one quiet line saying what
+ * "free" is. None is "spendable" (it was: said of the genesis burn cell's 8.4 billion and a
+ * miner's immature rewards), and a part with nothing in it is not drawn.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
   const sum = exactUnsignedInteger(holdings.balance, 'Address balance');
-  const occupied = exactUnsignedInteger(holdings.occupiedCapacity, 'Address occupied');
-  const free = exactUnsignedInteger(holdings.freeCapacity, 'Address free');
-  const daoFree = exactUnsignedInteger(holdings.daoFreeCapacity, 'Address DAO free');
-  if (occupied + free + daoFree !== sum)
+  const daoCells = exactUnsignedInteger(holdings.daoCellsCapacity, 'Address Nervos DAO cells');
+  const occupied = exactUnsignedInteger(
+    holdings.otherCellsOccupiedCapacity,
+    'Address other cells occupied'
+  );
+  const free = exactUnsignedInteger(holdings.otherCellsFreeCapacity, 'Address other cells free');
+  if (daoCells + occupied + free !== sum)
     throw new Error(
-      `Address ${holdings.lockScriptHash}: occupied ${occupied} + free ${free} + DAO free ${daoFree} ≠ balance ${sum} shannons`
+      `Address ${holdings.lockScriptHash}: Nervos DAO cells ${daoCells} + occupied ${occupied} + free ${free} ≠ balance ${sum} shannons`
     );
   const parts = (
     [
+      { key: 'in Nervos DAO cells', value: daoCells, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
       { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
-      { key: 'spendable', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
-      { key: 'in the DAO', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
+      { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
+  const holdsDao = holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0;
+  // "other" only beside a DAO part: the cells that are not Nervos DAO cells; an address with no
+  // DAO cell says "its cells" (lane P1, the lead's look after the third round)
+  const cells = daoCells > BigInt(0) ? 'its other cells' : 'its cells';
   const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const zero = sum === BigInt(0);
@@ -240,35 +251,32 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
-        <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
-          <DetailFacts
-            facts={[
-              { label: 'spendable', value: <ExactParts shannons={free} /> },
-              ...(holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0
-                ? [
-                    {
-                      label: 'unclaimed compensation',
-                      value: (
-                        <ExactParts
-                          shannons={exactUnsignedInteger(
-                            holdings.daoUnclaimedCompensation,
-                            'Address unclaimed compensation'
-                          )}
-                        />
-                      ),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        </div>
+        {holdsDao && (
+          <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
+            <DetailFacts
+              facts={[
+                {
+                  label: 'unclaimed compensation',
+                  value: (
+                    <ExactParts
+                      shannons={exactUnsignedInteger(
+                        holdings.daoUnclaimedCompensation,
+                        'Address unclaimed compensation'
+                      )}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
       </div>
       {!zero && (
         <div aria-label="Address capacity partition" className="mt-3.5">
           <div
             ref={barRef}
             role="img"
-            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}${daoFree === BigInt(0) ? ', nothing in the Nervos DAO' : ''}`}
+            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}`}
             className="text-meta flex h-[18px] gap-0.5"
           >
             {parts.map((p) => {
@@ -307,31 +315,46 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           <div data-testid="balance-parts" className="text-small mt-2 tabular-nums">
             <DetailFacts
               facts={[
-                {
-                  label: 'occupied',
-                  value: (
-                    <>
-                      <ExactParts shannons={occupied} />{' '}
-                      <span className="text-text-dim">pays for the bytes its cells keep</span>
-                    </>
-                  ),
-                },
-                {
-                  label: 'in the DAO',
-                  value:
-                    daoFree === BigInt(0) ? (
-                      <span className="text-text-dim">no CKB in the Nervos DAO</span>
-                    ) : (
-                      <>
-                        <ExactParts shannons={daoFree} />
-                        {daoFreeNote(holdings) && (
-                          <span className="text-text-dim">, {daoFreeNote(holdings)}</span>
-                        )}
-                      </>
-                    ),
-                },
+                ...(daoCells > BigInt(0)
+                  ? [
+                      {
+                        label: 'in Nervos DAO cells',
+                        value: (
+                          <>
+                            <ExactParts shannons={daoCells} />{' '}
+                            <span className="text-text-dim">{daoCellsNote(holdings)}</span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(occupied > BigInt(0)
+                  ? [
+                      {
+                        label: 'occupied',
+                        value: (
+                          <>
+                            <ExactParts shannons={occupied} />{' '}
+                            <span className="text-text-dim">pays for the bytes of {cells}</span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(free > BigInt(0)
+                  ? [{ label: 'free', value: <ExactParts shannons={free} /> }]
+                  : []),
               ]}
             />
+            {/* what "free" is, said once in a quiet line (the lead's ruling): no part is called
+                spendable, since the page cannot know what a lock, a since or a cellbase's
+                maturity allows */}
+            {free > BigInt(0) && (
+              <div data-testid="free-note" className="text-text-dim max-w-measure mt-1.5">
+                Free is the CKB {cells} hold beyond what their bytes occupy; whether it can be
+                spent, their locks decide.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -368,6 +391,9 @@ export function addressLockName(address: Address): string | null {
       {
         lock,
         name: registered !== null && registered.toLowerCase() !== 'unknown' ? registered : null,
+        // the hash type beside a name by another reference than the registry's (lane
+        // rd/api-lock-names)
+        nameBy: address.lockScriptInfo?.nameBy,
         address: address.address ?? null,
       },
       `address ${address.lockScriptHash}`
@@ -376,7 +402,9 @@ export function addressLockName(address: Address): string | null {
   );
   if (words === null)
     throw new Error(`address ${address.lockScriptHash}: a column's lock words are never empty`);
-  return words.form === 'not-indexed' ? null : words.name;
+  if (words.form === 'not-indexed' || words.name === null) return null;
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  return words.form === 'lock' ? withNameBy(words.name, words.byHashType) : words.name;
 }
 
 export function addressStripFacts(

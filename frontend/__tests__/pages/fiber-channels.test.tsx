@@ -15,18 +15,20 @@ import { http, HttpResponse } from 'msw';
 import network from '../fixtures/fiber-network.json';
 import channel from '../fixtures/fiber-open.json';
 import closedChannel from '../fixtures/fiber-force-closed.json';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const page = (rows: unknown[]) => ({
-  data: rows,
-  total: rows.length,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-});
+const page = (rows: unknown[]) =>
+  pagedRead({
+    data: rows,
+    total: rows.length,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
 
 describe('FiberChannelsPage', () => {
   it('does not show a stale Open row beneath a newly selected filter while it loads', async () => {
@@ -186,13 +188,15 @@ describe('FiberChannelsPage', () => {
         // re-pinned (lane C2 topics): the API answers one a page, so its 38 channels take 38
         // pages (it answered 50 a page with a next page, which the old pager drew and the board's
         // refuses: 38 rows at 50 a page are one page)
-        return HttpResponse.json({
-          ...page([channel]),
-          total: 38,
-          limit: 1,
-          hasMore: true,
-          nextCursor: '1:0x01',
-        });
+        return HttpResponse.json(
+          pagedRead({
+            ...page([channel]),
+            total: 38,
+            limit: 1,
+            hasMore: true,
+            nextCursor: '1:0x01',
+          })
+        );
       })
     );
     render(<FiberChannelsPage />);
@@ -288,13 +292,15 @@ describe('FiberChannelsPage', () => {
         asked.push({ state: params.get('state'), cursor });
         const second = cursor === 'after-first';
         // two channels, one a page: the second page is the last
-        return HttpResponse.json({
-          data: [second ? closedChannel : channel],
-          total: 2,
-          limit: 1,
-          hasMore: !second,
-          nextCursor: second ? null : 'after-first',
-        });
+        return HttpResponse.json(
+          pagedRead({
+            data: [second ? closedChannel : channel],
+            total: 2,
+            limit: 1,
+            hasMore: !second,
+            nextCursor: second ? null : 'after-first',
+          })
+        );
       })
     );
     // re-pinned (lane C2 topics): the board's pager's words and the state's radios (they were the

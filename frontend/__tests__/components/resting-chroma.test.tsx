@@ -9,7 +9,8 @@ import { linkLookClass } from '@/components/ui/link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { AQUA_AT_REST, expectRestingLink } from '@/__tests__/utils/resting-link';
+import { AQUA_AT_REST } from '@/__tests__/utils/resting-link';
+import type { LinkLook } from '@/components/ui/link';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { Address } from '@/components/ui/address';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -45,16 +46,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A link that states its look rests in that look's ink (components/ui/link.tsx), with no aqua at
+ * rest and no hover colour of its own: the global `a:hover` lights it.
+ */
+function expectLookedLink(link: HTMLElement, look: LinkLook) {
+  expect(link.tagName).toBe('A');
+  expect(link).toHaveClass(...linkLookClass(look)!.split(' '));
+  const classes = Array.from(link.classList);
+  expect(classes.filter((c) => AQUA_AT_REST.test(c))).toEqual([]);
+  expect(classes.filter((c) => c.startsWith('hover:text-'))).toEqual([]);
+}
+
 describe('resting chroma (V5): links in rows rest as ink and light up on hover', () => {
-  it('Address rests as ink with the faint aqua underline; the global a:hover is its hover', () => {
-    render(<Address address={ADDRESS} size="row" />);
-    expectRestingLink(screen.getByRole('link'));
+  // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): an Address states its
+  // look, which is required; the V5 resting look (bright over a faint aqua underline) was what an
+  // Address drew for a caller that stated none, and went with the last of them. It rests in its
+  // look's ink, with no aqua and no hover colour of its own (it was "Address rests as ink with the
+  // faint aqua underline; the global a:hover is its hover")
+  it('Address rests in the look its caller states; the global a:hover is its hover', () => {
+    render(<Address look="inline" address={ADDRESS} size="row" />);
+    expectLookedLink(screen.getByRole('link'), 'inline');
   });
 
-  it('keeps the resting ink when a caller sets only the size (the blocks table miner)', () => {
-    render(<Address address={ADDRESS} size="row" className="text-small" />);
+  // re-pinned on purpose, as above: the blocks table's miner is a row's key at the small step
+  it('keeps its look when a caller sets only the size (the blocks table miner)', () => {
+    render(<Address look="key" address={ADDRESS} size="row" className="text-small" />);
     const link = screen.getByRole('link');
-    expectRestingLink(link);
+    expectLookedLink(link, 'key');
     expect(link).toHaveClass('text-small');
     expect(link).not.toHaveClass('text-body');
   });
@@ -73,7 +92,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
         key: 'miner',
         label: 'Miner',
         minWidth: 200,
-        render: (b) => <Address address={b.miner} size="row" className="text-small" />,
+        render: (b) => <Address look="key" address={b.miner} size="row" className="text-small" />,
       },
     ];
     render(
@@ -89,7 +108,8 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
     // R9 (re-pinned): the row size is `ckb1…` and the last 8 characters
-    expectRestingLink(within(row).getByRole('link', { name: 'ckb1…dcratvu9' }));
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-4): its look's ink, as above
+    expectLookedLink(within(row).getByRole('link', { name: 'ckb1…dcratvu9' }), 'key');
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -124,10 +144,12 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       lockHashPrefix: null,
       roles: [],
     };
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-4): the standalone form states its
+    // Address's look, which is required (it drew the resting look of a caller that stated none)
     const { container, rerender } = render(
-      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" />
+      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" look="inline" />
     );
-    expectRestingLink(screen.getByRole('link'));
+    expectLookedLink(screen.getByRole('link'), 'inline');
     for (const compact of [false, true]) {
       rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');

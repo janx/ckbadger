@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import Link from '@/components/ui/link';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { CellTileData } from '@/components/ui/cell-tile';
@@ -81,10 +82,8 @@ export function registeredNameBy(
   return lookup?.[scriptLookupKey(codeHash, hashType)]?.nameBy ?? null;
 }
 
-/** A script's name and, where its pair is not the registry's reference, its hash type: "xUDT · by data2". */
-export function withNameBy(name: string, by: string | null): string {
-  return by === null ? name : `${name} · by ${by}`;
-}
+/** A script's name and, where its pair is not the registry's reference, its hash type (the one rule). */
+export { withNameBy } from '@/lib/lock-words';
 
 /** An output's state once a later transaction spent it (lane P1): the widest state a tile writes. */
 export const OUTPUT_SPENT = 'spent later';

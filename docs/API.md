@@ -73,6 +73,37 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 
+**The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
+and these codes, never their args)
+
+- `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
+  transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
+  code-hash order: the type script of every token, object and identity any participant gained or
+  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Each is
+  what the indexer classified, read from ckbadger's own stores in the request's view, never a
+  match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
+  - a token: its row (`CF_TOKENS`), the script itself;
+  - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
+    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
+  - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
+    (`object_outpoints`, MNFT_TOKEN);
+  - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
+    classifier would take as the cluster (a code the protocol registry names `Cluster`, the
+    cluster's id as args).
+
+  `null` on a pool row (a pending row never folds), and on a committed row whose item's script the
+  stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
+  item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
+  and a feed folds such a row with no other.
+
+- `itemTypesUnread: string | null` — see `itemTypes`.
+- `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
+  with their args.
+- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
+  An output's lock does not run: these are not the locks the transaction called. The locks that
+  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
+  input flag (a re-sync).
+
 **Participants**
 
 A participant is any party the transaction affects, not only a holder of one of its cells. Both
@@ -163,7 +194,8 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activity entries
 - `NftCollectionDetailResponse` — counts, composition, class/issuer summary
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
-- `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts, each with its lock's
+- `RankedPage<CollectionHolderResponse>` — holders with item counts, a cursor page with `firstRank`;
+  each holder with its lock's
   `lockKind`, `lockKindBy` and `lockHashType`: the lock is named by the code its pair (code hash,
   hash type) runs, never by its code hash alone (lane rd/api-lock-names; the same on identity,
   token and cluster holders, an item's owner lock, a token's supply events and issuer). The one
@@ -175,9 +207,9 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
   registry registers the data hash, or the reverse), `lockKindBy` is the pair's hash type, which a
   page writes beside the name ("xUDT · by data2"); `null` otherwise. Every route that names a
   script carries the same pair of fields: `lockKind`/`lockKindBy` (holders, owners, issuer, supply
-  events, gallery rows, activity participants), `scriptName`/`scriptNameBy` (activity calls,
-  identity parties), `lockScriptName`/`lockScriptNameBy` and `typeScriptName`/`typeScriptNameBy`
-  (cells, Fiber parties), `lockName`/`lockNameBy` and `typeName`/`typeNameBy` (cell versions),
+  events, gallery rows, activity participants), `scriptName`/`scriptNameBy` (activity calls and
+  `itemTypes`), `lockScriptName`/`lockScriptNameBy` and `typeScriptName`/`typeScriptNameBy`
+  (cells, Fiber parties, identity and `.cell` parties), `lockName`/`lockNameBy` and `typeName`/`typeNameBy` (cell versions),
   `name`/`nameBy` (the lookup, an address's `lockScriptInfo`, a code cell's `codeCellOf`, the
   daily `scriptCounts`); a resolved dependency's `scriptNames` writes "Name · by data1" itself
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
@@ -222,7 +254,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 **Responses**
 
 - `IdentityCollectionDetailResponse` — collection_id, standard, name, counts, owned capacity/knowledge
-- `CollectionHolderResponse` (from assets.rs)
+- `RankedPage<CollectionHolderResponse>` (from assets.rs) — a cursor page with `firstRank`
 - `CollectionActivityResponse` (from assets.rs)
 - `CollectionItemResponse` (from assets.rs) — used for item detail and item list
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activities
@@ -230,6 +262,10 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
   network with no `.cell` ring root indexed
 - `DotCellItemResponse` — the name, its owner/manager/sale/records, `parent`, and the **first
   page** of its live sub-names: `children` (at most 50), `childrenHasMore`, `childrenNextCursor`
+- `PartyRef` (a `.cell` name's owner, manager and sale seller) — `hashPrefix`, `lockHash`,
+  `address`, and `lockScriptName`, the registry's name for the party's lock code hash, the one
+  name every route gives a lock's registry name (it was `scriptName`, the word a type call and a
+  code cell keep)
 - `CursorPaginatedResponse<DotCellNameRef>` — `…/children`: `identityId`, `label`, `name`
 
 **`.cell` sub-names**
@@ -293,7 +329,12 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 **Params**
 
-- `ListParams` — `limit`, `block_number`, `cursor`
+- `ListParams` — `limit`, `block_number`, `cursor`, `activity_type`: one of `user`, `ckb`,
+  `script`, `cellbase`, `dao`, `token`, `object`, `identity` (none or `all`: every transaction).
+  `user` is every committed transaction but the cellbase, newest first, read from the
+  `activities` rows (which hold no cellbase) with their `tx_index` entries; the Transactions page
+  opens on it. A filtered list states no `total`. `/transactions/pool` takes the same values;
+  there `user` names every pool transaction (none is a cellbase), a partly read one too.
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**
@@ -472,8 +513,9 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
 `GET /addresses/{addr}/holdings` streams the complete existing owner live-cell
 index in one pinned read view. It returns:
 
-- `lockScriptHash`, `balance`, `occupiedCapacity`, `freeCapacity`,
-  `daoFreeCapacity`, `liveCellsCount`.
+- `lockScriptHash`, `balance`, `occupiedCapacity` (every live cell's),
+  `daoCellsCapacity`, `otherCellsOccupiedCapacity`, `otherCellsFreeCapacity`,
+  `liveCellsCount`.
 - `classes`: fixed keys `dao`, `token`, `object`, `identity`, `script`, `plain`;
   each contains `cellCount`, `capacity`, `occupiedCapacity`.
 - `holdings`: `dao` counts live DAO cells (both phases), `token` counts distinct
@@ -488,9 +530,17 @@ index in one pinned read view. It returns:
 itemCount: number, compositionCounts: <the same six counters>}`. These are
   whole-owner totals, independent of the currently displayed item page.
 
-All capacities/compensation are exact decimal **shannon strings**. The disjoint
-partition is `balance = occupiedCapacity + freeCapacity + daoFreeCapacity`;
-`freeCapacity` excludes DAO free capacity. DAO holdings follow the current cell
+All capacities/compensation are exact decimal **shannon strings**. The balance
+is stated in three disjoint parts, each true by its name, and the route fails
+with the address and the operands if they do not make it:
+`balance = daoCellsCapacity + otherCellsOccupiedCapacity + otherCellsFreeCapacity`.
+`daoCellsCapacity` is the whole capacity of the address's Nervos DAO cells
+(deposits and withdrawal requests, the `dao` class); `otherCellsOccupiedCapacity`
+is what pays for the bytes of its other cells; `otherCellsFreeCapacity` is the
+rest of its other cells, the CKB they hold beyond what their bytes occupy. No
+part is "spendable": a lock, a `since` or a cellbase's maturity decides that,
+and the route reads none of them. (`freeCapacity` and `daoFreeCapacity`, the
+other cells' free part and the DAO cells' free part, are gone.) DAO holdings follow the current cell
 lock, including a withdrawal request received from another depositor. The older
 `/dao/deposits/{lock_hash}` and `/dao/summary/{lock_hash}` describe the original
 depositor's lifecycle history and must not stand in for current holdings.
@@ -605,7 +655,7 @@ status.
   `minerLockHash` and an optional resolvable CKB `address`
 - `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`, one entry per script pair: `{codeHash, hashType, name, count}` (`name`: the registry's label of the pair, `null` when none)
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
-- `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened) and its window: `epochs`, `intervals`, `beyondRange`
+- `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened), its window (`epochs`, `intervals`, `beyondRange`) and each bucket's count (`bucketCounts`)
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
 
 **What a chart page states (lane D1)**
@@ -638,15 +688,23 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/common-knowledge-composition` — each point's
   `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
   partition.
-- `GET /charts/total-supply` — four bands that partition C, each point's
+- `GET /charts/total-supply` — five bands that make C, each point's
   `values.totalIssuance` (CKB), the total issuance in the day's DAO field:
-  `outsideDao` (the CKB circulating outside the DAO), `daoDeposited` (the DAO's
-  deposits), `unclaimedCompensation` (DAO compensation accrued and not yet
-  claimed, inside S) and `burnt` (genesis burnt and the treasury part of S).
-  They sum to C to the shannon; the route checks it per row and fails with the
-  date and the four operands where it does not. `values.circulating` is the
-  protocol circulation, `C − genesis burnt − S` (`outsideDao + daoDeposited`),
-  the amount the site calls circulating everywhere; it is not a band.
+  `outsideDao` ("Outside the Nervos DAO": the protocol circulation less every
+  live DAO cell, `circulating − protocol_deposited`), `daoDeposited`
+  ("Deposited in the Nervos DAO": the status-0 deposits, the amount the DAO page
+  calls deposited), `daoWithdrawing` ("Withdrawing from the Nervos DAO": the
+  principal of the withdrawal requests, `protocol_deposited − total_deposited`),
+  `unclaimedCompensation` (DAO compensation accrued and not yet claimed, inside
+  S) and `burnt` (genesis burnt and the treasury part of S). They sum to C to
+  the shannon and none is negative; the route checks both per row and fails
+  with the date and every operand where either does not hold, and refuses a day
+  whose snapshot has no `protocol_deposited` ("delete RocksDB and re-sync from
+  genesis"). `values.circulating` is the protocol circulation,
+  `C − genesis burnt − S` (`outsideDao + daoDeposited + daoWithdrawing`), the
+  amount the site calls circulating everywhere; it is not a band. (Part A2's
+  four bands keyed the first `circulatingNotDeposited`, the withdrawal requests
+  in it; lane D1's keyed it `outsideDao` with the same meaning.)
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
   `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
@@ -683,7 +741,20 @@ bands it draws and the wholes it divides by, read-only on the store:
   kind it is, so this is not a count of distinct activities; coinbase and
   unknown transactions are not in it. `daoCount` is the day's three DAO
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
-  band of Activity by type.
+  band of Activity by type. `userTransactionCount` is the day's user
+  transactions: its committed transactions (its `DailyStats` row) less its
+  cellbases (`coinbaseCount`), the figure the Transactions page's lede and
+  "all" chip, the Activities page's lede and the home's daily bars state; a
+  day without its chain row, or with more cellbases than transactions, is a
+  500 naming the date.
+- `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
+  and `daoCount`, counted as the daily rows count them (one helper each in the
+  route); the home page's activity shares divide by `kindOccurrences` and its
+  DAO share is `daoCount`. `scriptCounts` is ranked by calls, ties by code hash;
+  `scriptCalls` is every call it counts (a transaction calling two scripts
+  counts twice, so it is not `scriptCallCount`), and `scriptRest`
+  (`{ scripts, calls } | null`) the scripts after the five largest: the home
+  card's script shares and its "others" row, summed nowhere in the page.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 
@@ -702,15 +773,41 @@ network store too), no re-sync:
   `/spore/clusters/{cluster_id}/holders` — `firstRank`: the 1-based rank of the
   page's first row in the request's read view (a token's: the holders that
   sort before the cursor in `CF_TOKEN_HOLDERS_BY_BALANCE`, counted, plus one; a
-  collection's: the cursor's position in the ranking plus one, the ranking
-  cached by the view's tip block).
+  collection's: the rows before the cursor's place in the ranking plus one, the
+  ranking cached by the view's tip block). A cursor is a place in the order
+  (count or balance descending, lock ascending), not a row: a page starts at the
+  first row after it, whether or not its holder still stands there (a holder
+  that moved or left no longer makes the next page a 400).
 - `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
   pool, pending and proposed (not `awaitingIndex`).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
-- `GET /dao/statistics` — `liveCellsCount`: the live DAO cells, deposits and
-  withdrawal requests; `secondaryIssuance` (shannons): the miners' share, the
-  depositors' compensation and the burnt share, which make it.
+- `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
+  script families by role; `locks` and `types` each count a family used as both
+  (`both`), `neither` the families with no role, so the four make the whole
+  (`locks + types - both + neither = all`, checked in the route; the list's
+  first sentence says each).
+- `GET /dao/statistics` — `depositCellsCount` (deposits),
+  `withdrawalRequestCellsCount` (withdrawal requests) and `liveCellsCount`
+  (their total, the live DAO cells); `secondaryIssuance` (shannons): the
+  miners' share, the depositors' compensation and the burnt share, which make
+  it. `activeDeposits` is the same live-cell total under its legacy name (a
+  withdrawal request is no active deposit); the route refuses a row where it is
+  not the deposits and the requests, and it goes when its last reader, the home
+  page, reads `liveCellsCount`.
+- `GET /charts/block-time-distribution` — `bucketCounts`: each bucket's
+  intervals, one per point of `data`, so a tie or the most common interval is
+  read from counts, not from the cut shares.
+- `GET /tokens/{type_hash}/charts/capacity-history` — each point states
+  `capacity` beside `used` and `unused`, as the other "CKB held" histories do.
+- `GET /network/map` — a located node whose GeoIP record has no country is
+  `Unknown`, as the distributions name it (it was `""`).
+- Cut at the places the pages show, never rounded half up (part A2, S5), the
+  shapes unchanged: `/inventory`'s `hMultiplier` (two places),
+  `/statistics/network`'s `avgBlockTime` (two) and `tps`,
+  `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
+  `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
+  realized APC (two) and `/dao/evidence`'s percentages (two and four).
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five
@@ -800,16 +897,16 @@ network store too), no re-sync:
 **Responses**
 
 - `CursorPaginatedResponse<TokenResponse>` / `TokenResponse` — token info + standard, supply, holders/transfers
-- `TokenHoldersResponse` — flat cursor page plus `totalSupply` and nullable `anchor`
+- `TokenHoldersResponse` — flat cursor page plus `totalSupply`, nullable `anchor` and `firstRank`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`
 - `StackedAreaChartResponse` — used/unused capacity series
 
 **D4 exact read contracts**
 
-- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind, lockHashType} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
-- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind` and its lock's `lockHashType` (the name is the registry's label of the lock's pair, never of its code hash alone); percentages use this page's denominator, never another request's cached total.
-- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity}]`, `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind, lockHashType`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
+- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockCodeHash, lockHashType, lockKind, lockKindBy} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
+- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`, `lockKindBy` and its lock's `lockHashType` (the name of the code the lock's pair runs, never of its code hash alone: the one naming rule above); percentages use this page's denominator, never another request's cached total.
+- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockCodeHash, lockHashType, lockKind, lockKindBy`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
 - New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every participant remains present. Token amount moved can be read as the sum of positive deltas for that token in the complete activity; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
@@ -922,7 +1019,7 @@ Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/ma
 
 - `CursorPaginatedResponse<ClusterResponse>` / `ClusterResponse` — cluster_id, name, counts, composition (`ClusterCompositionResponse`)
 - `CursorPaginatedResponse<SporeResponse>` / `SporeResponse` — spore_id, content_type/size, owner, owned capacity, `media_profile`
-- `CursorPaginatedResponse<ClusterHolderResponse>` / `CursorPaginatedResponse<ClusterActivityResponse>`
+- `RankedPage<ClusterHolderResponse>` (a cursor page with `firstRank`) / `CursorPaginatedResponse<ClusterActivityResponse>`
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
 - `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON

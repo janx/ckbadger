@@ -1006,3 +1006,39 @@ async fn distributions_group_hosting_by_organisation_and_versions_by_release() {
         "{body}"
     );
 }
+
+/// lane exactness, part A2 (the pages review's NOTE 3): a located node whose GeoIP record has coordinates and no
+/// country is "Unknown" on the map, as the distributions route names it (the map sent "").
+#[tokio::test]
+async fn map_names_a_located_node_without_a_country_unknown_as_the_distributions_do() {
+    let network = test_network_store();
+    // the located peer, its GeoIP record now with coordinates and no country
+    let (peer, mut node) = network
+        .scan_nodes()
+        .unwrap()
+        .into_iter()
+        .find(|(_, record)| record.geo.is_some())
+        .unwrap();
+    node.geo.as_mut().unwrap().country = String::new();
+    network.put_node(&peer, &node).unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, map) = get_json(&app, "/network/map").await;
+    assert_eq!(status, StatusCode::OK, "{map}");
+    let countries: Vec<&str> = map["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["country"].as_str().unwrap())
+        .collect();
+    assert!(countries.contains(&"Unknown"), "{map}");
+    assert!(!countries.contains(&""), "{map}");
+    let (_, distributions) = get_json(&app, "/network/distributions").await;
+    assert!(
+        distributions["countries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Unknown"),
+        "{distributions}"
+    );
+}

@@ -263,10 +263,24 @@ describe('CellInventoryLine (lane U, U6)', () => {
   // inventory item is said by what its scripts and its data are, from the registry's names the
   // page already reads. It was "renders no line for a plain cell or an unhandled protocol".
   it('says what a cell that is no inventory item is, by its scripts (P1)', () => {
+    // Re-pinned on purpose (lane P1, third round; review p-logic-chain NOTE 3): a cell with no type
+    // script that holds data says so (it read "holds plain CKB" for 233 bytes of data, a contract
+    // binary no registered script references among them); one that holds none is plain CKB
+    const withData = view({
+      ...spore,
+      type: null,
+      typeScriptHash: null,
+      protocolScript: { lock: null, type: null },
+    });
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell holds 233 bytes of data, with no type script$/
+    );
+    withData.unmount();
     const plain = view({
       ...spore,
       type: null,
       typeScriptHash: null,
+      dataSize: 0,
       protocolScript: { lock: null, type: null },
     });
     expect(screen.getByTestId('cell-kind')).toHaveTextContent(

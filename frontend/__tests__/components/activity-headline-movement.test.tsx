@@ -1,5 +1,14 @@
 import { render, screen } from '@/__tests__/utils/test-utils';
-import { activityHeadline, protocolActionLabel } from '@/components/activity-event-row';
+import {
+  activityHeadline,
+  protocolActionLabel,
+  protocolActionNoteParts,
+} from '@/components/activity-event-row';
+import { runKey } from '@/lib/activity-runs';
+import type { ReactNode } from 'react';
+
+/** A note part's words (a string, or a node of strings). */
+const textOf = (part: ReactNode): string => (typeof part === 'string' ? part : String(part));
 import { ActivityRow } from '@/components/activity/activity-row';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import type { GlobalActivity } from '@/lib/api';
@@ -86,10 +95,46 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
     action: 'ring_relink',
     metadata: { label: 'apt', name: 'apt.cell', id: '0x' + 'a7'.repeat(20), changes: ['next'] },
   };
-  expect(protocolActionLabel(ringRelink)).toBe('.cell · ring pointer changed for apt.cell');
+  // re-pinned on purpose (the page-phase review's NOTE 6): the name is a fact of the action, not
+  // what was done, so the label (the row's title, which the fold compares) carries none; the
+  // note says it ("for apt.cell"). It read ".cell · ring pointer changed for apt.cell".
+  expect(protocolActionLabel(ringRelink)).toBe('.cell · ring pointer changed');
+  expect(protocolActionNoteParts(ringRelink, 'row', 'summary').map(textOf)).toEqual([
+    'for apt.cell',
+  ]);
   // A ring_relink names no participants and moves no items; it labels on its own.
   expect(protocolActionLabel({ ...ringRelink, metadata: { changes: ['next'] } })).toBe(
     '.cell · ring pointer changed'
+  );
+  expect(
+    protocolActionNoteParts({ ...ringRelink, metadata: { changes: ['next'] } }, 'row', 'summary')
+  ).toEqual([]);
+  // two relinks of two names did one thing: one title, so a feed folds them
+  expect(
+    runKey({
+      title: protocolActionLabel(ringRelink),
+      txHash: '0x01',
+      blockNumber: 1,
+      protocolActions: [ringRelink],
+      typeCalls: [],
+      lockCalls: [],
+      itemTypes: [],
+      parties: [],
+    })
+  ).toBe(
+    runKey({
+      title: protocolActionLabel({
+        ...ringRelink,
+        metadata: { name: 'bob.cell', changes: ['next'] },
+      }),
+      txHash: '0x02',
+      blockNumber: 2,
+      protocolActions: [ringRelink],
+      typeCalls: [],
+      lockCalls: [],
+      itemTypes: [],
+      parties: [],
+    })
   );
 });
 it('shows a register beside the ring_relink it caused in one transaction', () => {
@@ -114,6 +159,8 @@ it('shows a register beside the ring_relink it caused in one transaction', () =>
   };
   render(<ActivityRow activity={activity} />);
   expect(screen.getByText('.cell · register')).toBeInTheDocument();
-  expect(screen.getByText(/ring pointer changed for apt\.cell/)).toBeInTheDocument();
+  // re-pinned on purpose (NOTE 6): the name in the action's note, not its label
+  expect(screen.getByText(/ring pointer changed/)).toBeInTheDocument();
+  expect(screen.getByText('for apt.cell')).toBeInTheDocument();
   expect(screen.queryByTestId('activity-read-error')).not.toBeInTheDocument();
 });

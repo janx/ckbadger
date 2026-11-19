@@ -30,6 +30,7 @@ import { api, type CollectionHolder, type GlobalActivity, type TransactionDetail
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { scriptLookupKey } from '@/lib/script-pair';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 /** RFC 0021's example args on the default lock by type, and the same code hash by data. */
 const DEFAULT_ADDRESS =
@@ -67,6 +68,8 @@ describe('an activity row names a lock on the default code hash by data as anoth
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
+      itemTypes: [],
+      itemTypesUnread: null,
       // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
       // and a lock on the default lock's code hash by data runs none, so it sends no name for it
       participants: [party(BY_DATA_ADDRESS, null, '01', '-100000000')],
@@ -111,19 +114,21 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
 
   it('in the token holders: default by its name, by data as another lock, not indexed in words', async () => {
     atContainerWidth(1248);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        tokenHolder('11', DEFAULT_ADDRESS, DEFAULT_LOCK_CODE_HASH),
-        tokenHolder('22', BY_DATA_ADDRESS, DEFAULT_LOCK_CODE_HASH),
-        tokenHolder('33', null, null),
-      ],
-      total: 3,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '300',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          tokenHolder('11', DEFAULT_ADDRESS, DEFAULT_LOCK_CODE_HASH),
+          tokenHolder('22', BY_DATA_ADDRESS, DEFAULT_LOCK_CODE_HASH),
+          tokenHolder('33', null, null),
+        ],
+        total: 3,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '300',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
@@ -170,28 +175,30 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
       lockKind: null,
       ...over,
     });
-    const load = vi.fn().mockResolvedValue({
-      data: [
-        holder('11', {
-          address: DEFAULT_ADDRESS,
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        }),
-        holder('22', {}),
-        // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
-        // runs, and a lock on the default lock's code hash by data runs none, so it sends no name
-        // for it
-        holder('33', {
-          address: BY_DATA_ADDRESS,
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: null,
-        }),
-      ],
-      limit: 10,
-      total: 3,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: [
+          holder('11', {
+            address: DEFAULT_ADDRESS,
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: 'Default Lock',
+          }),
+          holder('22', {}),
+          // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+          // runs, and a lock on the default lock's code hash by data runs none, so it sends no
+          // name for it
+          holder('33', {
+            address: BY_DATA_ADDRESS,
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: null,
+          }),
+        ],
+        limit: 10,
+        total: 3,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="not-indexed" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     const { cells, minWidth } = lockColumn(table);
@@ -216,23 +223,25 @@ describe('a place that may name no lock leaves the part out', () => {
   it('the token holders’ phone row: no space and no empty slot after a default-lock address', async () => {
     atContainerWidth(358);
     atViewportWidth(390);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: DEFAULT_ADDRESS,
-          balance: '100',
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '100',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: DEFAULT_ADDRESS,
+            balance: '100',
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: 'Default Lock',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '100',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');
@@ -250,6 +259,8 @@ describe('a place that may name no lock leaves the part out', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
+      itemTypes: [],
+      itemTypesUnread: null,
       participants: [
         party(DEFAULT_ADDRESS, 'Default Lock', '01', '-100008888'),
         party(seededAddress('recvr1', JOYID_CODE_HASH), 'JoyID', '02', '100000000'),

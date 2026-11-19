@@ -2,12 +2,12 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
+import { withNameBy } from '@/lib/lock-words';
 import type {
   ActivitySummary24h,
   ScriptCountEntry,
   DailyActivityStats,
   GlobalActivityFilter,
-  TxStatsResponse,
 } from '@/lib/api';
 import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
@@ -79,31 +79,43 @@ export function scriptLabel(
   const name = entry.name?.trim();
   if (!name) return `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
   // the code the pair runs, by another reference than the registry's: "xUDT · by data2"
-  return entry.nameBy ? `${name} · by ${entry.nameBy}` : name;
+  return withNameBy(name, entry.nameBy);
 }
 
-/** Script calls ranked by count: the `limit` largest, then everything else as one row. */
-export function scriptShares(entries: ScriptCountEntry[], limit = 5): ScriptShares {
-  const ranked = entries.filter((e) => e.count > 0).sort((a, b) => b.count - a.count);
-  const total = ranked.reduce((sum, e) => sum + e.count, 0);
+/** How many scripts the route names before its rest (`scriptRest`): its `SCRIPT_TOP`. */
+const SCRIPT_TOP = 5;
+
+/**
+ * Script calls as the route ranks and counts them (the page-phase review's SHOULD 5): its five
+ * largest by calls, in its order, then its rest as one row; the total is its `scriptCalls`. The
+ * page sums nothing: a route whose named rows and rest do not make its total is refused.
+ */
+export function scriptShares(
+  summary: Pick<ActivitySummary24h, 'scriptCounts' | 'scriptCalls' | 'scriptRest'>
+): ScriptShares {
+  const total = summary.scriptCalls;
+  const named = summary.scriptCounts.slice(0, SCRIPT_TOP);
+  const parts = [...named.map((e) => e.count), summary.scriptRest?.calls ?? 0];
+  if (BigInt(total) !== parts.reduce((sum, n) => sum + BigInt(n), BigInt(0)))
+    throw new Error(`script calls: the route's ${total} is not its five named and its rest`);
   if (total === 0) return { total: 0, top: [], others: null };
-  // each script by its pair: one code hash by type and by data is two rows
-  const top = ranked.slice(0, limit).map((e) => ({
-    key: `${e.codeHash}:${e.hashType}`,
-    label: scriptLabel(e),
-    count: e.count,
-    share: e.count / total,
-    codeHash: e.codeHash,
-    hashType: e.hashType,
-    name: e.name,
-  }));
-  const rest = ranked.slice(limit);
-  const restCount = rest.reduce((sum, e) => sum + e.count, 0);
   return {
     total,
-    top,
-    others:
-      rest.length > 0 ? { scripts: rest.length, count: restCount, share: restCount / total } : null,
+    // each script by its pair: one code hash by type and by data is two rows
+    top: named.map((e) => ({
+      key: `${e.codeHash}:${e.hashType}`,
+      label: scriptLabel(e),
+      count: e.count,
+      share: e.count / total,
+      codeHash: e.codeHash,
+      hashType: e.hashType,
+      name: e.name,
+    })),
+    others: summary.scriptRest && {
+      scripts: summary.scriptRest.scripts,
+      count: summary.scriptRest.calls,
+      share: summary.scriptRest.calls / total,
+    },
   };
 }
 
@@ -124,29 +136,6 @@ export function completedYesterdayActivities(
 ): DailyActivityStats | undefined {
   const yesterday = previousChainDay(now);
   return days.find((day) => day.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') === yesterday);
-}
-/** Reads only the matching, explicitly complete canonical transaction-count bucket. */
-export function completedYesterdayTransactions(
-  stats: TxStatsResponse,
-  now = Date.now()
-): number | undefined {
-  const label = previousChainDay(now).slice(5).replace('-', '/');
-  const bucket = stats.dailyData.find((day) => day.complete && day.label === label);
-  if (!bucket) return undefined;
-  if (!Number.isSafeInteger(bucket.value) || bucket.value < 0)
-    throw new Error(`Invalid transaction count for ${label}: ${bucket.value}`);
-  return bucket.value;
-}
-/** The global activity stream is exactly canonical transactions minus cellbase. */
-export function nonCellbaseCount(transactions: number, cellbase: number, date: string): number {
-  if (
-    !Number.isSafeInteger(transactions) ||
-    !Number.isSafeInteger(cellbase) ||
-    cellbase < 0 ||
-    transactions < cellbase
-  )
-    throw new Error(`Invalid transaction/cellbase counts on ${date}: ${transactions}/${cellbase}`);
-  return transactions - cellbase;
 }
 /** Per-kind occurrences, with All supplied independently as an exact unique count. */
 export function activityFilterCounts(

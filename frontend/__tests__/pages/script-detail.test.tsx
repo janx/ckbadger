@@ -11,6 +11,7 @@ import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   // the error class itself: the page's failed-read line reads a gateway status off it
@@ -250,16 +251,16 @@ const mockCapacityChart = {
   totalPeak: { date: '2024-01-15', value: '10000000000' },
 };
 
-const emptyCells = {
+const emptyCells = pagedRead({
   data: [],
   total: 0,
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 const sharedVersionUsageCellsByRef = {
-  type: {
+  type: pagedRead({
     data: [
       {
         txHash: '0x4444444444444444444444444444444444444444444444444444444444444444',
@@ -275,8 +276,8 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
-  firstData: {
+  }),
+  firstData: pagedRead({
     data: [
       {
         txHash: '0x5555555555555555555555555555555555555555555555555555555555555555',
@@ -292,8 +293,8 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
-  secondData: {
+  }),
+  secondData: pagedRead({
     data: [
       {
         txHash: '0x6666666666666666666666666666666666666666666666666666666666666666',
@@ -309,7 +310,7 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
+  }),
 };
 
 function hasTextContent(element: HTMLElement, text: string): boolean {
@@ -330,7 +331,7 @@ function setViewportWidth(width: number): void {
  * no other reference lists it), and its detail for lane S's "Newest cells" row.
  */
 function serveBurnCell(cell: Cell) {
-  const page = { data: [cell], total: 1, limit: 50, hasMore: false, nextCursor: null };
+  const page = pagedRead({ data: [cell], total: 1, limit: 50, hasMore: false, nextCursor: null });
   vi.mocked(api.getCellsByScriptRef).mockImplementation(
     byScript(({ codeHash, hashType }) =>
       codeHash === sharedVersionCodeHash && hashType === 'type' ? page : emptyCells
@@ -764,7 +765,8 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getCellsByScriptRef).mockImplementation(async (params) => {
       const page = await oneReference(params);
       return params.codeHash === sharedVersionCodeHash && params.hashType === 'type'
-        ? { ...page, hasMore: true, nextCursor: 'older' }
+        ? // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+          pagedRead({ ...page, limit: page.data.length, hasMore: true, nextCursor: 'older' })
         : page;
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
@@ -791,13 +793,15 @@ describe('ScriptDetailPage', () => {
   });
 
   it('says so when no live cell uses the script', async () => {
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
-      data: [],
-      total: 0,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(
+      pagedRead({
+        data: [],
+        total: 0,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByText('No live cells use SECP256K1_BLAKE160')).toBeInTheDocument();
   });

@@ -1,4 +1,5 @@
 'use client';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
@@ -302,9 +303,14 @@ export function ScriptHeroMetrics({
           note={
             <>
               deployed in{' '}
+              {/* the deploying transaction opened at the code cell it created, which its page then
+                  never folds away (lane P2's third round, item 16: it linked the transaction bare) */}
               <Link
                 look="inline"
-                href={`/tx/${deployment.codeCellTxHash}`}
+                href={transactionAtCellHref(deployment.codeCellTxHash, {
+                  txHash: deployment.codeCellTxHash,
+                  index: deployment.codeCellOutputIndex,
+                })}
                 title={deployment.codeCellTxHash}
               >
                 <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
