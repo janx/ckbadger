@@ -182,6 +182,34 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(totals[1]).toHaveTextContent(/^0 CKB$/);
   });
 
+  // Lane P1 (lane D3's note: the sheets' totals used the column form, padded zeros; the board
+  // writes them exact): a sheet's total, its fee and a capacity entering from no cell are each one
+  // amount of the thing itself, not a column of them, so each is exact, its trailing zeros dropped;
+  // the tiles' capacities stay a column.
+  it('writes the totals, the fee and the inflow exact, the tiles’ capacities a column (P1)', () => {
+    render(
+      <TxStructure
+        txHash={TX}
+        inputs={[tile('in:0')]}
+        outputs={[tile('out:0'), tile('out:1')]}
+        fee="1572400"
+        consumedCapacity="10000000000"
+        createdCapacity="9998427600"
+        inflow={{ tone: 'reward', label: 'block reward', amount: '55900000000' }}
+      />
+    );
+    const totals = Array.from(document.querySelectorAll<HTMLElement>('[data-sheet-total]'));
+    expect(totals.map((t) => t.textContent)).toEqual(['100 CKB', '99.984276 CKB']);
+    for (const t of totals)
+      expect(t.querySelector('[data-ckb-amount]')).toHaveAttribute('data-form', 'exact');
+    expect(screen.getByTestId('tx-fee')).toHaveTextContent(/^fee0\.015724 CKB$/);
+    expect(screen.getByTestId('tx-inflow')).toHaveTextContent(/^block reward559 CKB$/);
+    expect(document.querySelector('[data-cell-id="in:0"] [data-ckb-amount]')).toHaveAttribute(
+      'data-form',
+      'column'
+    );
+  });
+
   it('refuses a total that is not an exact unsigned integer, naming the transaction and the sheet', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => structure({ consumedCapacity: '200.5', createdCapacity: '1' })).toThrow(
