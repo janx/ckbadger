@@ -227,8 +227,9 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   });
 
   // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
-  // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
-  // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
+  // mainnet stores on 2026-11-19, with itemTypes, and again at the third read's head, 574cb27d, T
+  // NOTE-7; the capture is said in the fixture): the first page of /activities, and the token
+  // feed's sUDT transfers, whose runs name their standard.
   const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
   const said = (el: Element) =>
     el.getAttribute('data-role') === 'activity-run'
@@ -244,22 +245,23 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     );
   };
 
+  // re-pinned on purpose at the recapture (T NOTE-7): the whole feed is the chain's newest page,
+  // #21,057,151 to #21,057,212; each run's rows and parties counted apart in Python from the
+  // fixture's code sets and lock hashes agree with every line here
   it('draws the live feed’s first page, 50 activities, in its runs', async () => {
     expect(await drawnFeed(feeds.all)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 participants',
-      'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
-      'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'CKB Transfer',
-      'Script call',
-      'CKB Transfer | all 5 transactions ↓ · 6 participants',
-      'Script call',
+      'Script call · Bitcoin SPV Type Lock | all 2 transactions ↓ · 2 participants',
       'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
-      'CKB Transfer | all 2 transactions ↓ · 4 participants',
-      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 5 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
+      'Script call · Bitcoin SPV Type Lock | all 2 transactions ↓ · 2 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
+      'CKB Transfer | all 5 transactions ↓ · 6 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 12 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 5 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
     ]);
   });
 
