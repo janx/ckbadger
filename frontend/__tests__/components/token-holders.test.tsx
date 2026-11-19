@@ -622,6 +622,13 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
       ['holder', `2ckb1…${UNREGISTERED_HOLDER.slice(-6)}`, '200 T'],
       ['share', '33.33%', 'lock 0x4343…4343'],
     ]);
+    // the page lane notes (B1): a phone row's value reads in the reading ink, its labels quiet:
+    // the share beside the bar is a value (it was the quiet ink); the lock's words stay quiet
+    const share = within(named.querySelector('[data-line="share"]') as HTMLElement).getByText(
+      '50.00%'
+    );
+    expect(share).toHaveClass('text-text');
+    expect(share).not.toHaveClass('text-text-dim');
     // the bar's line holds its right part where it fits beside the bar, by the row's own rule
     for (const row of [named, unnamed])
       expect(row.querySelector('[data-line="share"] > [data-part="left"]')).toHaveClass(
