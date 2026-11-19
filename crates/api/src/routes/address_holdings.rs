@@ -121,8 +121,14 @@ struct Summary {
     lock_script_hash: String,
     balance: String,
     occupied_capacity: String,
-    free_capacity: String,
-    dao_free_capacity: String,
+    /// The balance in three parts, each true by its name, that make it exactly: the whole
+    /// capacity of the address's Nervos DAO cells (deposits and withdrawal requests), what pays
+    /// for the bytes of its other cells, and the rest of its other cells (the CKB they hold
+    /// beyond what their bytes occupy). None is "spendable": a lock, a since or a cellbase's
+    /// maturity decides that, and the route reads none of them.
+    dao_cells_capacity: String,
+    other_cells_occupied_capacity: String,
+    other_cells_free_capacity: String,
     live_cells_count: i64,
     holdings: BTreeMap<Class, i64>,
     classes: BTreeMap<Class, Totals>,
@@ -752,7 +758,39 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
         Some(stored)=>ensure!(stored.balance==balance && stored.used_capacity==occupied && i64::from(stored.live_cells_count)==count,"address 0x{} aggregate disagrees with live cells: stored balance={} occupied={} count={}; scanned balance={balance} occupied={occupied} count={count}",hex::encode(owner),stored.balance,stored.used_capacity,stored.live_cells_count),
         None=>ensure!(count==0,"address 0x{} has live cells but no balance aggregate",hex::encode(owner)),
     }
-    let dao_free = classes[&Class::Dao].capacity - classes[&Class::Dao].occupied_capacity;
+    let dao_cells = classes[&Class::Dao].capacity;
+    let mut other_occupied = 0i128;
+    let mut other_free = 0i128;
+    for (class, totals) in &classes {
+        if *class == Class::Dao {
+            continue;
+        }
+        other_occupied = other_occupied
+            .checked_add(totals.occupied_capacity)
+            .context("other cells' occupied overflow")?;
+        let free = totals
+            .capacity
+            .checked_sub(totals.occupied_capacity)
+            .context("other cells' free underflow")?;
+        ensure!(
+            free >= 0,
+            "address 0x{}: its {class:?} cells occupy {} of their {} shannons",
+            hex::encode(owner),
+            totals.occupied_capacity,
+            totals.capacity
+        );
+        other_free = other_free
+            .checked_add(free)
+            .context("other cells' free overflow")?;
+    }
+    ensure!(
+        dao_cells
+            .checked_add(other_occupied)
+            .and_then(|sum| sum.checked_add(other_free))
+            == Some(balance),
+        "address 0x{}: its Nervos DAO cells {dao_cells} + its other cells' occupied {other_occupied} + their free {other_free} do not make its balance {balance} shannons",
+        hex::encode(owner)
+    );
     let holdings = BTreeMap::from([
         (Class::Dao, classes[&Class::Dao].cell_count),
         (Class::Token, i64::try_from(tokens.len())?),
@@ -770,8 +808,9 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
         lock_script_hash: format!("0x{}", hex::encode(owner)),
         balance: balance.to_string(),
         occupied_capacity: occupied.to_string(),
-        free_capacity: (balance - occupied - dao_free).to_string(),
-        dao_free_capacity: dao_free.to_string(),
+        dao_cells_capacity: dao_cells.to_string(),
+        other_cells_occupied_capacity: other_occupied.to_string(),
+        other_cells_free_capacity: other_free.to_string(),
         live_cells_count: count,
         holdings,
         classes,
