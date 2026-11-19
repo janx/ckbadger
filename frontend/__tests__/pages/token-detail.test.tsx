@@ -544,8 +544,12 @@ describe('TokenDetailPage', () => {
     }));
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('History read failed');
-    fireEvent.click(screen.getByRole('button', { name: /All .*holders/ }));
+    // Re-pinned on purpose (lane p-assets, the placement lane's toggles with the lead's ruling): the
+    // short list's form under the top ten, "all 21 holders ↓" (it was "All 21 holders →" in the
+    // heading row); its way back "fewer ↑"
+    fireEvent.click(await screen.findByRole('button', { name: /^all 21\sholders ↓$/ }));
     await screen.findByRole('table', { name: 'All holders' });
+    expect(screen.getByRole('button', { name: 'fewer ↑' })).toBeInTheDocument();
     const pager = screen.getByRole('navigation', { name: 'holders' });
     expect(pager).toHaveTextContent('1–20 of 21');
     fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));

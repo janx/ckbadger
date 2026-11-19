@@ -129,7 +129,10 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     expect(byType).toHaveTextContent(/^Default Lock$/);
     expect(byType).not.toHaveClass('border');
     expect(byData).toHaveTextContent(new RegExp(`^${BY_DATA_WORDS}$`));
-    expect(byData).toHaveClass('border');
+    // re-pinned on purpose (lane p-assets): a lock is plain words, no chip; another lock reads in
+    // the reading ink (it kept its tag's border)
+    expect(byData).not.toHaveClass('border');
+    expect(byData).toHaveClass('text-text');
     expect(notIndexed).toHaveTextContent(/^not indexed$/);
     expect(notIndexed).toHaveClass('text-text-dim');
     expect(notIndexed).not.toHaveClass('border');
@@ -145,8 +148,9 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     expect(titles[2]).toContain(' · not indexed · ');
     // NOTE-2: the column's budget, read from the table, holds the widest of its plain words whole
     // ("Default Lock", 12 glyphs at 12 px, 86.4; "not indexed", 79.2) and a 12-glyph tag (98.4)
-    const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
-    expect(minWidth).toBe(columnPx(tag + CELL_GAP_PX));
+    // re-pinned on purpose (lane p-assets): 12 characters of a lock's name at the cells' 13 px, no
+    // box (it was a tag of 12 characters at 12 px with its 5 px sides and 1 px border)
+    expect(minWidth).toBe(columnPx(textPx(12, fontPx('small')) + CELL_GAP_PX));
     for (const words of ['Default Lock', 'not indexed'])
       expect(textPx(words.length, fontPx('meta'))).toBeLessThanOrEqual(minWidth - CELL_GAP_PX);
   });
@@ -194,8 +198,9 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     expect(titles[1]).toContain(' · not indexed · ');
     expect(titles[2]).toContain(` · ${BY_DATA_WORDS} · `);
     expect(titles[2]).not.toContain('Default Lock');
-    const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
-    expect(minWidth).toBe(columnPx(tag + CELL_GAP_PX));
+    // re-pinned on purpose (lane p-assets): 12 characters of a lock's name at the cells' 13 px, no
+    // box (it was a tag of 12 characters at 12 px with its 5 px sides and 1 px border)
+    expect(minWidth).toBe(columnPx(textPx(12, fontPx('small')) + CELL_GAP_PX));
   });
 });
 

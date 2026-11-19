@@ -64,7 +64,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
         <ul className="text-small space-y-1">
           {children.map((child) => (
             <li key={child.identityId}>
-              <Link href={nameHref(child.identityId)} className="text-emphasis hover:underline">
+              <Link look="inline" href={nameHref(child.identityId)}>
                 {child.name}
               </Link>
             </li>
@@ -153,7 +153,10 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           <h2 className="text-text text-body font-medium">Name relationships</h2>
           {item.parent ? (
             <p className="max-w-measure">
-              Parent <AppLink href={nameHref(item.parent.identityId)}>{item.parent.name}</AppLink>
+              Parent{' '}
+              <AppLink look="inline" href={nameHref(item.parent.identityId)}>
+                {item.parent.name}
+              </AppLink>
             </p>
           ) : (
             <p className="text-text-dim">Top-level name</p>
@@ -163,6 +166,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
             <>
               <AssetReadState label="name ring" error={ring.error} retained />
               <AppLink
+                look="inline"
                 href={`/cell/${ring.data.rootOutPoint.txHash}-${ring.data.rootOutPoint.index}`}
               >
                 Namespace root cell · {ring.data.liveCount.toLocaleString('en-US')} live names
@@ -189,6 +193,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           </dl>
           {item.sale.offerOutPoint && (
             <AppLink
+              look="inline"
               href={`/cell/${item.sale.offerOutPoint.txHash}-${item.sale.offerOutPoint.index}`}
             >
               Sale offer cell

@@ -193,31 +193,46 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
       identity={<HeadId value={item.nftId} kind="hash" copy="copy object id" />}
-      intro={
-        <div className="space-y-4 pt-1">
-          <AssetReadState error={detail.error} label="m-NFT" retained />
-          {item.composition ? (
-            <CompositionLine tier={item.composition.tier} />
-          ) : (
-            <p className="text-text-dim text-meta">Composition unavailable.</p>
-          )}
+      // Readability R8: the lede says what the object is and whether it is live (its path to the
+      // lock that holds it now, or that its cell is gone), then what it is made of; it was the
+      // composition first and the life after it
+      lede={
+        <div className="space-y-2.5 pt-1">
           {history && history.data.length > 0 ? (
-            <p className="text-text text-body max-w-measure leading-relaxed">
+            <p
+              data-role="object-state"
+              className="text-text text-body max-w-measure leading-relaxed"
+            >
               <ItemLife
                 versions={history.data}
                 verb="Issued"
                 by={item.issuer.name ?? 'its issuer'}
+                lede
               />
             </p>
           ) : (
             <p className="text-text text-body max-w-measure">
-              Issued in <AppLink href={classHref}>{className}</AppLink> at{' '}
-              <AppLink href={`/blocks/${item.createdAtBlock}`}>
+              Issued in{' '}
+              <AppLink href={classHref} look="inline">
+                {className}
+              </AppLink>{' '}
+              at{' '}
+              <AppLink href={`/blocks/${item.createdAtBlock}`} look="inline">
                 block <AssetCount value={item.createdAtBlock} />
               </AppLink>
               .
             </p>
           )}
+          {item.composition ? (
+            <CompositionLine tier={item.composition.tier} lede />
+          ) : (
+            <p className="text-text-dim text-meta">Composition unavailable.</p>
+          )}
+        </div>
+      }
+      intro={
+        <div className="space-y-4 pt-1">
+          <AssetReadState error={detail.error} label="m-NFT" retained />
           {item.class.description && (
             <blockquote className="border-base-border max-w-measure border-l pl-4">
               <p className="break-words">{item.class.description}</p>
@@ -283,7 +298,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               size: 'body',
               value: history ? (
                 current ? (
-                  <AppLink href={`/address/${current.ownerAddress}`}>
+                  <AppLink look="key" href={`/address/${current.ownerAddress}`}>
                     <Hash
                       hash={current.ownerAddress}
                       kind="address"
@@ -312,7 +327,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             {
               label: 'Class',
               size: 'body',
-              value: <AppLink href={classHref}>{className}</AppLink>,
+              value: (
+                <AppLink look="key" href={classHref}>
+                  {className}
+                </AppLink>
+              ),
               note: `by ${item.issuer.name ?? 'an unnamed issuer'}`,
             },
             {
@@ -321,7 +340,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               value: first ? formatUtc8Date(first.timestamp) : evidenceState,
               note: first ? (
                 <>
-                  <AppLink href={`/blocks/${first.blockNumber}`}>
+                  <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>{' '}
                   · to {lockPhrase(first.lockName)}
@@ -336,7 +355,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   moves === 0 ? (
                     <span className="text-text-dim">never</span>
                   ) : (
-                    <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
+                    <AppLink look="key" href={`/cell/${last.txHash}-${last.outputIndex}`}>
                       <Utc8Date timestamp={last.timestamp} />
                     </AppLink>
                   )
@@ -349,7 +368,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     'since issue'
                   ) : (
                     <>
-                      <AppLink href={`/blocks/${last.blockNumber}`}>
+                      <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
                         {formatBlockNumber(last.blockNumber)}
                       </AppLink>{' '}
                       · {moves} {countNoun(moves, 'transfer')} since issue
@@ -492,7 +511,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         <PromptHeading
           command="Class"
           args={className}
-          note={<AppLink href={classHref}>Open the class →</AppLink>}
+          note={
+            <AppLink look="onward" href={classHref}>
+              Open the class
+            </AppLink>
+          }
         />
         {collection.data ? (
           <>

@@ -24,7 +24,7 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
         {summary.anchor ? (
           <>
             {' '}
-            at block <BlockLink number={summary.anchor.blockNumber} />
+            at block <BlockLink look="inline" number={summary.anchor.blockNumber} />
           </>
         ) : (
           ' · empty index'

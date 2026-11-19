@@ -68,7 +68,7 @@ describe('Inventory rows', () => {
     const value = within(table).getByText('×1.63');
     expect(value.closest('td')).not.toHaveClass('!whitespace-normal');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
-      'H-mult. ×1.6393442625'
+      'CKB held ÷ occupied ×1.6393442625'
     );
   });
   it('keeps every token digit in the row title and uses the canonical standard name there', () => {
@@ -80,7 +80,7 @@ describe('Inventory rows', () => {
     // was the two-place "1.00"), its exact value in its own title.
     expect(row).toHaveAttribute(
       'title',
-      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · CKB held ÷ occupied ×1.6393442625'
     );
     expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent(/^1$/);
     expect(table).not.toHaveTextContent('xUDT');
@@ -214,7 +214,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
       'Transfers',
       'Supply',
       'CKB held in its cells',
-      'H-mult.',
+      'CKB held ÷ occupied',
     ]);
     expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
     expectWordHeads(table);
@@ -262,14 +262,14 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(first.querySelector('[data-ckb-amount]')).toHaveTextContent(/^100$/);
     expect(first.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '100.00000001 CKB');
     expect(second.querySelector('[data-ckb-amount]')).toHaveTextContent(/^400$/);
-    expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
+    expect(cellUnder(table, 2, 'CKB held ÷ occupied')).toHaveTextContent('×2.18');
   });
 
   it('moves 24 h transfers, the standard, occupied and the exact digits into the row title', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.75%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
+      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.75%) · supply 16,063,603.56572848 SEAL · CKB held ÷ occupied ×2.18'
     );
   });
 });
@@ -318,12 +318,14 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
       'Holders',
       'Activity',
       'CKB held in its cells',
-      'H-mult.',
+      'CKB held ÷ occupied',
     ]);
     expectWordHeads(table);
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
-    expect(table).not.toHaveTextContent(/minted|Spore ·|occupied/);
+    // re-pinned on purpose (lane p-assets): the rows, not the heads, which name the ratio "CKB
+    // held ÷ occupied" (it was "H-mult.")
+    expect(table.querySelector('tbody')).not.toHaveTextContent(/minted|Spore ·|occupied/);
   });
 
   it('marks each collection with a 24 px framed thumb, its bright name and two tags', () => {
@@ -389,14 +391,14 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     ).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
     // re-pinned on purpose (lane D4 follow-up): cut, never rounded (it read ×1.64)
-    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.63');
+    expect(cellUnder(table, 1, 'CKB held ÷ occupied')).toHaveTextContent('×1.63');
   });
 
   it('moves the id, live of minted, occupied and the exact digits into the row title', () => {
     const table = mount();
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
-      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.00%) · H-mult. ×1.00`
+      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.00%) · CKB held ÷ occupied ×1.00`
     );
   });
 });
@@ -712,7 +714,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
-      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
+      ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
       // the supply and the occupied CKB with its exact share, in a phone row's summary form
       // (readability R5; each cut figure has its exact value in its title)
       ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
@@ -728,7 +730,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     const [row] = screen.getAllByTestId('inventory-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', 'Token', '100 CKB'],
-      ['what', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
+      ['what', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
       ['figures', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
   });
@@ -746,7 +748,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
       // a phone row's summary form (R5: was "100.00000001")
-      ['figures', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.63', null],
+      ['figures', '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63', null],
     ]);
     expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
   });
@@ -823,17 +825,17 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     const [token, sudt] = screen.getAllByTestId('inventory-row-mobile');
     expect(lines(token)).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
-      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
+      ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
       ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
     ]);
     expect(phoneLines(sudt)[1].left).toBe(
-      'T · sUDT · 2 holders · 4 transfers · H-mult. ×15,019.09'
+      'T · sUDT · 2 holders · 4 transfers · CKB held ÷ occupied ×15,019.09'
     );
     const labels = Array.from(token.querySelectorAll('[data-role="figure-label"]'));
     expect(labels.map((l) => l.textContent)).toEqual([
       'holders',
       'transfers',
-      'H-mult.',
+      'CKB held ÷ occupied',
       'supply',
       'occupied',
     ]);
@@ -851,11 +853,19 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(row)).toEqual([
       ['identity', 'head', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'body', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
-      ['figures', 'quiet', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.63', null],
+      [
+        'figures',
+        'quiet',
+        '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63',
+        null,
+      ],
     ]);
     // the chip holds line 2's right edge: the line does not wrap it under its figures
     const what = row.querySelector('[data-line="what"]')!;
-    expect(what).toHaveClass('flex-nowrap');
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(what.querySelector(':scope > [data-part="left"]')).toHaveClass('basis-0', 'min-w-min');
     expect(what.querySelector('[data-part="right"] [data-composition="pure_ckb"]')).not.toBeNull();
     expect(row.textContent).not.toMatch(/0xcdcd/);
   });
@@ -933,15 +943,17 @@ describe('the inventory’s H-multiplier is cut, never rounded', () => {
     atContainerWidth(1248);
     render(<InventoryRows assetType="token" rows={rows} />);
     const table = screen.getByRole('table');
-    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent(/^×1\.00$/);
-    expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent(/^×15,019\.09$/);
+    expect(cellUnder(table, 1, 'CKB held ÷ occupied')).toHaveTextContent(/^×1\.00$/);
+    expect(cellUnder(table, 2, 'CKB held ÷ occupied')).toHaveTextContent(/^×15,019\.09$/);
   });
 
   it('on the phone row', () => {
     atContainerWidth(358);
     render(<InventoryRows assetType="token" rows={rows} />);
     const [first, second] = screen.getAllByTestId('inventory-row-mobile');
-    expect(phoneLines(first)[1].left).toMatch(/ · H-mult\. ×1\.00$/);
-    expect(phoneLines(second)[1].left).toMatch(/ · H-mult\. ×15,019\.09$/);
+    // re-pinned on purpose (lane p-assets): the ratio named in words, "CKB held ÷ occupied" (was
+    // "H-mult.")
+    expect(phoneLines(first)[1].left).toMatch(/ · CKB held ÷ occupied ×1\.00$/);
+    expect(phoneLines(second)[1].left).toMatch(/ · CKB held ÷ occupied ×15,019\.09$/);
   });
 });

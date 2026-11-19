@@ -165,166 +165,56 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '2 without a look; inks by hand (hover:text-jade, text-text-dim)',
   },
   // ---- p-assets ----
-  'app/scripts/[name]/client-page.tsx': {
-    lane: 'p-assets',
-    sites: { look: 10, ink: 11, raw: 1 },
-    reason: '10 without a look; inks by hand (text-emphasis, hover:underline); 1 raw <a>',
-  },
-  'app/tokens/[typeHash]/client-page.tsx': {
-    lane: 'p-assets',
-    sites: { look: 4, ink: 2, raw: 1 },
-    reason: '4 without a look; inks by hand (text-jade, hover:text-jade); 1 raw <a>',
-  },
-  'components/asset/asset-feed.tsx': {
-    lane: 'p-assets',
-    sites: { look: 2 },
-    reason: '2 without a look',
-  },
-  'components/asset/asset-history.tsx': {
-    lane: 'p-assets',
-    sites: { look: 6, ink: 1 },
-    reason: '6 without a look; inks by hand (text-text-dim)',
-  },
-  'components/asset/cell-versions.tsx': {
-    lane: 'p-assets',
-    sites: { look: 5, ink: 3 },
-    reason: '5 without a look; inks by hand (text-text-dim, text-text-bright)',
-  },
-  'components/asset/collection-detail.tsx': {
-    lane: 'p-assets',
-    sites: { look: 2 },
-    reason: '2 without a look',
-  },
-  'components/asset/collection-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { look: 4 },
-    reason: '4 without a look',
-  },
-  'components/asset/collection-gallery.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3, ink: 1 },
-    reason: '3 without a look; inks by hand (text-text-bright)',
-  },
-  'components/asset/collection-objects.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3, ink: 1 },
-    reason: '3 without a look; inks by hand (text-text-bright)',
-  },
-  'components/asset/detail-shell.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
+  // app/scripts/[name]/client-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
+  // app/tokens/[typeHash]/client-page.tsx left the list (lane p-assets: each link states its look: look 4 → 0, ink 2 → 0, raw 1 → 0)
+  // components/asset/asset-feed.tsx left the list (lane p-assets: each link states its look: look 2 → 0)
+  // components/asset/asset-history.tsx left the list (lane p-assets: each link states its look: look 6 → 0, ink 1 → 0)
+  // components/asset/cell-versions.tsx left the list (lane p-assets: each link states its look: look 5 → 0, ink 3 → 0)
+  // components/asset/collection-detail.tsx left the list (lane p-assets: each link states its look: look 2 → 0)
+  // components/asset/collection-evidence.tsx left the list (lane p-assets: each link states its look: look 4 → 0)
+  // components/asset/collection-objects.tsx left the list (lane p-assets: each link states its look: look 3 → 0, ink 1 → 0)
+  // components/asset/detail-shell.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
   'components/asset/genetics.tsx': {
+    // look 4 → 0 (lane p-assets: each link states its look)
     lane: 'p-assets',
-    sites: { look: 4, ink: 2, raw: 2 },
+    sites: { ink: 2, raw: 2 },
     reason: '4 without a look; inks by hand (text-aqua); 2 raw <a>',
   },
-  'components/asset/identity-document.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/asset/inventory-summary.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/asset/inventory-table.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3, ink: 3 },
-    reason: '3 without a look; inks by hand (text-text-bright)',
-  },
-  'components/asset/item-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3 },
-    reason: '3 without a look',
-  },
+  // components/asset/identity-document.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
+  // components/asset/inventory-summary.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
+  // components/asset/inventory-table.tsx left the list (lane p-assets: each link states its look: look 3 → 0, ink 3 → 0)
+  // components/asset/item-evidence.tsx left the list (lane p-assets: each link states its look: look 3 → 0)
   'components/asset/mnft-detail.tsx': {
+    // look 6 → 0 (lane p-assets: each link states its look)
     lane: 'p-assets',
-    sites: { look: 8, ink: 1, raw: 1 },
-    reason: '8 without a look; inks by hand (text-aqua); 1 raw <a>',
+    // look 8 → 6 (lane p-assets, R8): the issue sentence's two links, moved to the lede, are inline
+    sites: { ink: 1, raw: 1 },
+    reason: '6 without a look; inks by hand (text-aqua); 1 raw <a>',
   },
   'components/asset/object-media.tsx': {
     lane: 'p-assets',
     sites: { ink: 2, raw: 2 },
     reason: 'inks by hand (text-base-bg, text-copper); 2 raw <a>',
   },
-  'components/asset/spore-detail.tsx': {
-    lane: 'p-assets',
-    sites: { look: 9 },
-    reason: '9 without a look',
-  },
-  'components/asset/token-holders.tsx': {
-    lane: 'p-assets',
-    sites: { look: 2, ink: 1 },
-    reason: '2 without a look; inks by hand (text-text-bright)',
-  },
+  // components/asset/spore-detail.tsx left the list (lane p-assets: each link states its look: look 9 → 0)
+  // components/asset/token-holders.tsx left the list (lane p-assets: each link states its look: look 2 → 0, ink 1 → 0)
   'components/identity/did-readout.tsx': {
+    // look 1 → 0 (lane p-assets: each link states its look)
     lane: 'p-assets',
-    sites: { look: 1, ink: 1, raw: 1 },
+    sites: { ink: 1, raw: 1 },
     reason: '1 without a look; inks by hand (text-text-bright, hover:underline); 1 raw <a>',
   },
-  'components/identity/dotcell-item-detail.tsx': {
-    lane: 'p-assets',
-    sites: { look: 4, ink: 1 },
-    reason: '4 without a look; inks by hand (text-emphasis, hover:underline)',
-  },
-  'components/identity/dotcell-party.tsx': {
-    lane: 'p-assets',
-    sites: { look: 2 },
-    reason: '2 without a look (its two Address links; its lock hash link states `block`)',
-  },
-  'components/identity/dotcell-records-table.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, decoration-aqua/35, underline)',
-  },
-  'components/identity/dotcell-roles.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-jade)',
-  },
-  'components/identity/identity-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { look: 6 },
-    reason: '6 without a look',
-  },
-  'components/identity/identity-overview.tsx': {
-    lane: 'p-assets',
-    // look 6 → 5 (lane D2, PB-22): the owner line, one form on the four identity pages, states
-    // its look (the Owner fact's address; a .cell party's is the same Address now)
-    sites: { look: 5 },
-    reason: '5 without a look',
-  },
-  'components/identity/identity-records.tsx': {
-    lane: 'p-assets',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/scripts/script-code-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3, ink: 3 },
-    reason:
-      '3 without a look; inks by hand (hover:underline, text-emphasis, hover:text-text-bright)',
-  },
-  'components/scripts/script-family-board.tsx': {
-    lane: 'p-assets',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:text-jade, hover:text-text-bright, hover:underline); 1 raw <a>',
-  },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'p-assets',
-    sites: { look: 10, ink: 11, raw: 1 },
-    reason:
-      '10 without a look; inks by hand (hover:text-jade, text-text, hover:underline); 1 raw <a>',
-  },
-  'components/scripts/script-newest-cells.tsx': {
-    lane: 'p-assets',
-    sites: { look: 6, ink: 6, raw: 1 },
-    reason: '6 without a look; inks by hand (hover:text-jade, text-text, text-text-dim); 1 raw <a>',
-  },
+  // components/identity/dotcell-item-detail.tsx left the list (lane p-assets: each link states its look: look 4 → 0, ink 1 → 0)
+  // components/identity/dotcell-party.tsx left the list (lane p-assets: each link states its look: look 2 → 0)
+  // components/identity/dotcell-records-table.tsx left the list (lane p-assets: each link states its look: look 1 → 0, ink 1 → 0)
+  // components/identity/dotcell-roles.tsx left the list (lane p-assets: each link states its look: look 1 → 0, ink 1 → 0)
+  // components/identity/identity-evidence.tsx left the list (lane p-assets: each link states its look: look 6 → 0)
+  // components/identity/identity-overview.tsx left the list (lane p-assets: each link states its look: look 5 → 0)
+  // components/identity/identity-records.tsx left the list (lane p-assets: each link states its look: look 1 → 0)
+  // components/scripts/script-code-evidence.tsx left the list (lane p-assets: each link states its look: look 3 → 0, ink 3 → 0)
+  // components/scripts/script-family-board.tsx left the list (lane p-assets: each link states its look: look 3 → 0, ink 4 → 0, raw 1 → 0)
+  // components/scripts/script-family-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
+  // components/scripts/script-newest-cells.tsx left the list (lane p-assets: each link states its look: look 5 → 0, ink 4 → 0)
   'components/ui/address.tsx': {
     lane: 'p-assets',
     sites: { ink: 1 },
@@ -467,7 +357,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // hash a key), and lane D3, 14 (the transaction page's script-group code links moved to
 // script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the
 // structure's group link went, 2; the cell page's transaction links, 4: two looks, two inks)
-const TOLERATED_TOTAL = 434;
+// → 265: page lane P2 (p-assets), 169: the m-NFT issue sentence's two links inline (2); a
+// collection's items list, its name a key, its holder and its block inline (4); a script's
+// newest cells' footer, two ways onward (4); the script pages, 44 (app/scripts/[name] and
+// script-family-page, each link its look); the asset, identity, token and script components,
+// 115 (23 entries left the list; genetics, mnft-detail, object-media and did-readout keep their
+// raw anchors to a file of any scheme and their inks)
+const TOLERATED_TOTAL = 265;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

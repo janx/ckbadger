@@ -195,7 +195,7 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
     // F2 objects (OB-M5): the hero sentence tells who issued it and its life since.
     expect(screen.getByText(/^Issued by Issuer A/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the class →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open the class' })).toHaveAttribute(
       'href',
       `/mainnet/classes/${detail.class.classId}`
     );
@@ -374,7 +374,7 @@ describe('MnftItemDetailPage', () => {
     // the owner field says 'No live owner', as every object's owner field does (U-15)
     expect(screen.getByText('No live owner')).toBeInTheDocument();
     expect(screen.getAllByText('No live cell')).toHaveLength(1);
-    expect(screen.getByRole('link', { name: 'Consumed in transaction →' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Consumed in transaction' })).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();

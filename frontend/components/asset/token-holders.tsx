@@ -12,6 +12,7 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
+import { FoldBack } from '@/components/transaction/tx-structure';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -20,13 +21,11 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { SHARE_TRACK_PX, formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { rowTagClass } from '@/components/ui/row-tag';
 import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
-import { unitNode } from '@/components/ui/units';
 import {
   AlignedBar,
   BAR_FIGURE_GAP,
@@ -51,8 +50,6 @@ const WIDEST_HOLDERS = '99,999';
 /** A name a column ends in the one ellipsis (a lock's kind, a balance): 12 characters of it. */
 const NAME_CHARS = 12;
 const cell = (chars: number) => textPx(chars, fontPx('small'));
-/** A row tag (`rowTagClass`): its words at the meta step, 5 px sides and a 1 px border. */
-const tag = (chars: number) => textPx(chars, fontPx('meta')) + 2 * 5 + 2 * 1;
 /**
  * The holders-per-range bar of "Holders by balance", and the share bar of the holder list: each
  * track holds its head's ticks whole. The count's ("0" … "750M", the tick form) are under the 48 px
@@ -300,6 +297,15 @@ function distributionParts(d: TokenDistribution, symbol: string | null) {
     bands,
   };
 }
+/**
+ * The rows a holders' response counts, the figure its "all N holders ↓" states (a pager states its
+ * own response's figures); a holders' route always counts them, so a response without its count is
+ * a contract break, named.
+ */
+export function listTotal(read: { total?: number }, what: string): number {
+  if (read.total === undefined) throw new Error(`${what}: the response counts no rows`);
+  return read.total;
+}
 export interface TokenHoldersProps {
   typeHash: string;
   symbol: string | null;
@@ -327,13 +333,18 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   // a change of page size (at md, or the top ten opened to all) starts the walk again (lane
   // c2-finish, 1d)
   const pagination = useCursorPagination(limit);
+  const showAll = (open: boolean) => {
+    setAll(open);
+    pagination.reset();
+  };
   const holders = useQuery({
     queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
     queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),
   });
   /**
-   * A holder's share of the same response's supply, exact to 0.01 %: its text, and the same
-   * rounding as an integer of hundredths for the bar's geometry.
+   * A holder's share of the same response's supply: the stated share is its text (`percentOf`);
+   * the bar's width is drawing, the share in hundredths cut by `formatScaledInteger`, never a
+   * figure on the page (review of phases C and D, charts NOTE 9: this said "the same rounding").
    */
   const holderShare = (h: TokenHolder) => {
     const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
@@ -343,9 +354,10 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     const hundredths = Number(formatScaledInteger(amount * BigInt(10000), total, 0));
     return { text: percentOf(amount, total), hundredths };
   };
-  // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock a tag, the
-  // amount to 2 dp and the share as an 8 px bar on the page's scale — 554 px of minimums (rank 55,
-  // address 159, lock 115, balance 110, share 115), so the table holds in the token page's 554 px
+  // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock its words (a
+  // tag before lane p-assets), the amount to 2 dp and the share as an 8 px bar on the page's scale
+  // — 549 px of minimums (rank 55, address 159, lock 110, balance 110, share 115; the lock was a
+  // 115 px tag, 554 in all), so the table holds in the token page's 554 px
   // column at 1280; the two-line phone row takes over below it. Every digit of the amount is in the row's title.
   /** R7: the one scale of the page's share bars, the table's and the phone rows' alike. */
   const shareScaleOf = (rows: readonly TokenHolder[]) =>
@@ -374,8 +386,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         ),
         render: (h) => (
           <AppLink
+            look="key"
             href={`/address/${h.address ?? h.lockScriptHash}`}
-            className="text-body text-text-bright leading-row"
+            className="text-body leading-row"
           >
             <Hash
               hash={h.address ?? h.lockScriptHash}
@@ -390,15 +403,15 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'lock',
         label: 'Lock',
-        // The flexible column (readability F3-e): its tag holds 12 characters of the kind at its
-        // minimum (98.4 with its sides and border) and the gap, and takes what the container gives
-        // beyond the sum. It was 116.
-        minWidth: columnPx(tag(NAME_CHARS) + CELL_GAP_PX),
+        // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
+        // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum. It
+        // was 115, a tag of 12 characters at 12 px with its sides and border (98.4).
+        minWidth: columnPx(cell(NAME_CHARS) + CELL_GAP_PX),
         width: 'auto',
-        // A flex line holds the chip at its own 18 px, so the row stays 41 px; a long lock kind
-        // ends in an ellipsis, whole in the row's hover (the chip's hover is the code hash).
-        // U-15: a lock the registry does not name reads "lock <code hash>", as on the collection
-        // holders.
+        // A lock is plain words, no chip (lane p-assets; D5 as the readability plan changed it):
+        // the column's value in the reading ink; a long one ends in an ellipsis, its code hash in
+        // its hover. U-15: a lock the registry does not name reads "lock <code hash>", as on the
+        // collection holders.
         render: (h) => (
           <span className="flex min-w-0">
             {/* a column headed "Lock" is never empty: the default lock by its name (B4) */}
@@ -408,7 +421,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               address={h.address}
               size="row"
               place="column"
-              className={rowTagClass('default', 'min-w-0 truncate')}
+              className="text-text text-small min-w-0 truncate"
             />
           </span>
         ),
@@ -499,7 +512,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                     <HolderPhoneRow
                       rank={rank(h)}
                       party={
-                        <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+                        <AppLink look="key" href={`/address/${h.address ?? h.lockScriptHash}`}>
                           {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
                           address, lock and amount share a 358 px line (L5); from sm the row
                           size, the table's (R9). */}
@@ -540,17 +553,35 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               />
             )}
           />
-          {holdersAt && (
-            // the controls board's pager: a ranked list in pages, every figure the response's
-            <div className="mt-3">
-              <Pager
-                mode="pages"
-                label="holders"
-                {...holdersAt}
-                onPrevious={pagination.goToPrevious}
-                onNext={() => pagination.goToNext(holders.data.nextCursor)}
-              />
+          {all ? (
+            <div className="mt-3 space-y-1">
+              {holdersAt && (
+                // the controls board's pager: a ranked list in pages, every figure the response's
+                <Pager
+                  mode="pages"
+                  label="holders"
+                  {...holdersAt}
+                  onPrevious={pagination.goToPrevious}
+                  onNext={() => pagination.goToNext(holders.data.nextCursor)}
+                />
+              )}
+              <FoldBack onFold={() => showAll(false)} />
             </div>
+          ) : (
+            holders.data.hasMore && (
+              // the short list's form, opened in place (the placement lane's toggles, the lead's
+              // ruling): "all 522 holders ↓", the count its response's own
+              <div className="mt-3">
+                <Pager
+                  mode="more"
+                  all={{
+                    count: listTotal(holders.data, `the holders of token ${typeHash}`),
+                    singular: 'holder',
+                    onShow: () => showAll(true),
+                  }}
+                />
+              </div>
+            )
           )}
         </>
       ) : (
@@ -559,24 +590,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     </div>
   );
   return (
-    <DetailSection
-      title="Who holds it"
-      actions={
-        <button
-          className="text-jade text-small"
-          onClick={() => {
-            setAll(!all);
-            pagination.reset();
-          }}
-        >
-          {unitNode(
-            all
-              ? 'Top 10 holders'
-              : `All ${distribution.data ? formatCount(distribution.data.holdersCount, 'holder') : 'holders'} →`
-          )}
-        </button>
-      }
-    >
+    <DetailSection title="Who holds it">
       {distribution.data ? (
         <>
           <AssetReadState error={distribution.error} label={distributionSource} retained />

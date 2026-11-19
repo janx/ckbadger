@@ -176,7 +176,11 @@ export function AmongDidCkb({
     <section aria-label="Among did:ckb" className="min-w-0 space-y-3">
       <PromptHeading
         command="Among did:ckb"
-        note={<AppLink href={collectionHref}>All {total.toLocaleString('en-US')} →</AppLink>}
+        note={
+          <AppLink look="onward" href={collectionHref}>
+            All {total.toLocaleString('en-US')}
+          </AppLink>
+        }
       />
       <p className="max-w-measure">
         {total.toLocaleString('en-US')} did:ckb identities live on CKB. By the personal data server

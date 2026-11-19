@@ -137,6 +137,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       size: 'body',
       value: object.ownerLockHash ? (
         <Address
+          look="key"
           address={object.ownerAddress ?? object.ownerLockHash}
           size="row"
           className="text-body"
@@ -167,7 +168,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             label: 'Collection',
             size: 'body' as const,
             value: (
-              <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
+              <AppLink look="key" href={collectionHref!}>
+                {collectionName ?? 'Unnamed collection'}
+              </AppLink>
             ),
             note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
           },
@@ -181,16 +184,16 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: first ? (
         formatUtc8Date(first.timestamp)
       ) : (
-        <AppLink href={`/blocks/${object.createdAtBlock}`}>
+        <AppLink look="key" href={`/blocks/${object.createdAtBlock}`}>
           {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
       note: first ? (
         <>
-          <AppLink href={`/blocks/${first.blockNumber}`}>
+          <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
             {formatBlockNumber(first.blockNumber)}
           </AppLink>{' '}
-          · by <Address address={first.ownerAddress} size="row" className="inline" />
+          · by <Address look="inline" address={first.ownerAddress} size="row" className="inline" />
         </>
       ) : undefined,
     },
@@ -213,7 +216,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             'since minting'
           ) : (
             <>
-              <AppLink href={`/blocks/${last.blockNumber}`}>
+              <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
                 {formatBlockNumber(last.blockNumber)}
               </AppLink>{' '}
               · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
@@ -241,20 +244,15 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   ];
   const coll = collection.data;
   const onchain = coll?.composition?.onchainCount;
-  // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column.
-  const words = (history || coll || genetics.data) && (
+  // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column. Its life
+  // story is the page's lede since readability R8 (what it is and whether it is live, said once).
+  const words = (coll || genetics.data || (history && lockFootnote(history, 'object'))) && (
     <DetailSection title="This object, in words">
       <Prose>
-        {(history || coll) && (
+        {coll && collectionName && (
           <p>
-            {history && history.length > 0 && <ItemLife versions={history} />}
-            {coll && collectionName && (
-              <span>
-                {' '}
-                {unitNode(
-                  `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
-                )}
-              </span>
+            {unitNode(
+              `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
             )}
           </p>
         )}
@@ -284,10 +282,16 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
       identity={<HeadId value={id} kind="hash" copy="copy object id" />}
-      // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
-      // moved to tier 2 ("This object, in words").
+      // Readability R8: the lede says what the object is and whether it is live — its path to the
+      // lock that holds it now, or that its cell is gone — the sentence "This object, in words"
+      // told; then what it is made of (the composition, the owner's first-class rule)
       lede={
-        <div className="pt-1">
+        <div className="space-y-2.5 pt-1">
+          {history && history.length > 0 && (
+            <p data-role="object-state" className="text-text text-body max-w-measure">
+              <ItemLife versions={history} lede />
+            </p>
+          )}
           {tier ? (
             <CompositionLine tier={tier} lede />
           ) : (
@@ -459,7 +463,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <PromptHeading
             command="Collection"
             args={collectionName ?? 'this collection'}
-            note={<AppLink href={collectionHref!}>Open the collection →</AppLink>}
+            note={
+              <AppLink look="onward" href={collectionHref!}>
+                Open the collection
+              </AppLink>
+            }
           />
           {coll ? (
             <>
@@ -521,6 +529,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   Its cluster cell is held by{' '}
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address
+                      look="inline"
                       address={cluster.data.ownerAddress ?? cluster.data.ownerLockHash!}
                       size="row"
                       className="inline"
@@ -531,7 +540,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   {cluster.data.createdAtBlock !== null && (
                     <>
                       {' '}
-                      · created at <BlockLink number={cluster.data.createdAtBlock} />
+                      · created at <BlockLink look="inline" number={cluster.data.createdAtBlock} />
                     </>
                   )}
                 </p>

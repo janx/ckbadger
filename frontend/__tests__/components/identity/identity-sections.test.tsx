@@ -309,7 +309,7 @@ describe('AmongDidCkb (ID-D3)', () => {
     );
     const section = screen.getByRole('region', { name: 'Among did:ckb' });
     expect(section).toHaveTextContent('114 did:ckb identities live on CKB.');
-    expect(within(section).getByRole('link', { name: 'All 114 →' })).toHaveAttribute(
+    expect(within(section).getByRole('link', { name: 'All 114' })).toHaveAttribute(
       'href',
       '/mainnet/identities/did:ckb'
     );
@@ -317,7 +317,7 @@ describe('AmongDidCkb (ID-D3)', () => {
     const heading = within(section).getByRole('heading', { name: 'Among did:ckb' });
     expectPrompt(heading, 'Among did:ckb');
     expect(promptNote(heading)).toContainElement(
-      within(section).getByRole('link', { name: 'All 114 →' })
+      within(section).getByRole('link', { name: 'All 114' })
     );
     const mine = within(section).getByText('web5.bbs.fans').closest('li')!;
     expect(mine).toHaveTextContent('99');

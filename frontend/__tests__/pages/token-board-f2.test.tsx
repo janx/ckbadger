@@ -279,6 +279,19 @@ describe('Token board (F2 objects)', () => {
     expect(screen.queryByText('Remaining holders')).not.toBeInTheDocument();
   });
 
+  // Readability R7 (lane p-assets): who holds it first, then the history, 160 px under one sentence
+  // its points give; the history stood first under the metrics.
+  it('draws the history after who holds it, under one sentence (R7)', async () => {
+    render(<TokenDetailPage typeHash={hash} />);
+    const history = await screen.findByRole('region', { name: 'History' });
+    const holders = screen.getByRole('heading', { name: 'Who holds it' });
+    expect(
+      holders.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(document.querySelector('[data-tier="1"]')).toContainElement(history);
+    expect(await within(history).findByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
+  });
+
   it('keeps issuer and cap "Not established" and says why (D8, IV-19)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, transfers24h: 0 });
     render(<TokenDetailPage typeHash={hash} />);

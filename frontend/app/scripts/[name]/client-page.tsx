@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Pager } from '@/components/ui/pager';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -109,7 +110,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
 
 function CellOwner({ cell }: { cell: Cell }) {
   return cell.address ? (
-    <Link href={`/address/${cell.address}`} className="text-emphasis break-all hover:underline">
+    <Link href={`/address/${cell.address}`} look="inline" className="break-all">
       {cell.address}
     </Link>
   ) : (
@@ -130,7 +131,8 @@ function CellTypeReference({ cell }: { cell: Cell }) {
   return (
     <Link
       href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
-      className="text-emphasis break-all hover:underline"
+      look="inline"
+      className="break-all"
     >
       {cell.typeProtocolName ?? cell.typeCodeHash}
     </Link>
@@ -1338,9 +1340,9 @@ export default function ScriptDetailPage({
           }
           actions={
             pageWebsite && (
-              <a href={pageWebsite} className="text-emphasis text-small hover:underline">
-                Website ↗
-              </a>
+              <ExternalLink href={pageWebsite} look="onward" className="text-small">
+                Website
+              </ExternalLink>
             )
           }
           facts={[
@@ -1420,7 +1422,7 @@ export default function ScriptDetailPage({
                         row.firstDeploymentCell ? (
                           <Link
                             href={`/blocks/${row.firstDeploymentCell.createdAtBlock}`}
-                            className="text-emphasis"
+                            look="inline"
                           >
                             {formatBlockNumber(row.firstDeploymentCell.createdAtBlock)}
                           </Link>
@@ -1497,7 +1499,8 @@ export default function ScriptDetailPage({
                           row.outpointKey ? (
                             <Link
                               href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
-                              className="text-emphasis break-all"
+                              look="key"
+                              className="break-all"
                             >
                               {row.outpointKey}
                             </Link>
@@ -1543,10 +1546,7 @@ export default function ScriptDetailPage({
                         ),
                         render: (row) =>
                           row.codeCell ? (
-                            <Link
-                              href={`/blocks/${row.codeCell.createdAtBlock}`}
-                              className="text-emphasis"
-                            >
+                            <Link href={`/blocks/${row.codeCell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(row.codeCell.createdAtBlock)}
                             </Link>
                           ) : (
@@ -1558,7 +1558,8 @@ export default function ScriptDetailPage({
                       <div className="text-small space-y-2">
                         <Link
                           href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
-                          className="text-emphasis break-all"
+                          look="key"
+                          className="break-all"
                         >
                           {row.outpointKey}
                         </Link>
@@ -1601,7 +1602,8 @@ export default function ScriptDetailPage({
                           render: (cell) => (
                             <Link
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                              className="text-emphasis break-all"
+                              look="key"
+                              className="break-all"
                             >
                               {cell.txHash}
                               <OutpointIndex index={cell.outputIndex} />
@@ -1658,7 +1660,7 @@ export default function ScriptDetailPage({
                           minWidth: BLOCK_PX,
                           numeric: true,
                           render: (cell) => (
-                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
+                            <Link href={`/blocks/${cell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           ),
@@ -1679,7 +1681,8 @@ export default function ScriptDetailPage({
                         <div className="text-small min-w-0 space-y-2">
                           <Link
                             href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                            className="text-emphasis break-all"
+                            look="key"
+                            className="break-all"
                           >
                             {cell.txHash}
                             <OutpointIndex index={cell.outputIndex} />
@@ -1701,7 +1704,7 @@ export default function ScriptDetailPage({
                           </div>
                           <div>
                             Created{' '}
-                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
+                            <Link href={`/blocks/${cell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           </div>

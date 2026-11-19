@@ -4,8 +4,7 @@ import { api } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 import { collectionGalleryFilteredProducer } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
-import { atViewportWidth } from '@/__tests__/utils/viewport';
-import { phoneLines, statedHeadPx } from '@/__tests__/utils/phone-row';
+import { atContainerWidth, phoneLines, statedHeadPx } from '@/__tests__/utils/phone-row';
 import { shortenAddress } from '@/lib/shorten';
 import { PHONE_LINE_PX } from '@/lib/type-metrics';
 beforeEach(mockItemReads);
@@ -126,6 +125,65 @@ it('runs the items command on the total and the chosen status, the controls besi
     expectPrompt(screen.getByRole('heading', { name: 'Identities all' }), 'Identities', 'all')
   );
 });
+// Readability P2 (lane p-assets): "a list of items gets column heads"; a sub-line the same on every
+// row is said once (the review: 24 rows of ".bit · Live", the name at x 24, the holder at x 607,
+// an unnamed "#5,996,749" at x 1,256, 74 px a row). The standard is the page's, the status the
+// filter's; a name no longer live says so where the list shows every status.
+it('lists its items under column heads, without the sub-line every row repeated', async () => {
+  atContainerWidth(1248);
+  const live = identityItem('dotbit');
+  const gone = { ...identityItem('dotbit'), nftId: `${live.nftId}ff`, isLive: false };
+  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
+    ...emptyPage([live, gone]),
+    total: 2,
+  });
+  render(<CollectionItems id="dotbit" kind="identity" />);
+  const table = await screen.findByRole('table', { name: 'Identities' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Name', 'Held by', 'Created']);
+  expect(table).not.toHaveTextContent('.bit · Live');
+  expect(table).not.toHaveTextContent('Live');
+  // the block is the Created column's
+  const [, first, second] = within(table).getAllByRole('row');
+  expect(
+    within(first).getByRole('link', { name: `#${live.createdAtBlock.toLocaleString('en-US')}` })
+  ).toHaveAttribute('href', `/mainnet/blocks/${live.createdAtBlock}`);
+  // a name no longer live says so; the live one says nothing
+  expect(first).not.toHaveTextContent('inactive');
+  expect(second).toHaveTextContent('inactive');
+  // where the filter shows inactive names only, the filter says it: no row repeats it
+  fireEvent.click(
+    within(screen.getByRole('radiogroup', { name: 'status' })).getByRole('radio', {
+      name: 'inactive',
+    })
+  );
+  await waitFor(() =>
+    expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith(
+      'dotbit',
+      expect.objectContaining({ status: 'recycled' })
+    )
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('table', { name: 'Identities' })).not.toHaveTextContent('inactive')
+  );
+});
+
+it('heads a class’s objects with their composition, the owner’s rule on every row', async () => {
+  atContainerWidth(1248);
+  vi.mocked(api.getObjectCollectionItems).mockResolvedValue(emptyPage([identityItem('dotbit')]));
+  render(<CollectionItems id="0xabc" kind="object" tier="centralized_mixture" />);
+  const table = await screen.findByRole('table', { name: 'Objects' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Name', 'Held by', 'Composition', 'Created']);
+  expect(within(table).getAllByRole('row')[1]).toHaveTextContent('Centralized mix');
+});
+
 it('names an object collection by its objects', async () => {
   vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
     ...emptyPage([identityItem('dotbit')]),
@@ -203,8 +261,10 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
     createdAtBlock: 6_140_203,
   });
 
+  // re-pinned on purpose (lane p-assets): the list is a table with its heads, its phone row drawn
+  // where its container is narrower than the table (it was drawn below sm by the viewport)
   it('writes a class’s item as name · holder and composition · where it was minted', async () => {
-    atViewportWidth(390);
+    atContainerWidth(358);
     vi.mocked(api.getObjectCollectionItems).mockResolvedValue(emptyPage([mnft(0), mnft(2, false)]));
     render(<CollectionItems id="class" kind="object" tier="centralized_mixture" />);
     const [live, gone] = await screen.findAllByTestId('collection-item-row-mobile');
@@ -214,7 +274,13 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
       ['minted', 'quiet', 'minted at #6,140,203', null],
     ]);
     // the chip holds the holder's line's right edge, whatever the holder's length
-    expect(live.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(live.querySelector('[data-line="holder"] > [data-part="left"]')).toHaveClass(
+      'basis-0',
+      'min-w-min'
+    );
     expect(phoneLines(gone).map((l) => [l.key, l.left, l.right])).toEqual([
       ['name', 'Non-Fungible Santa Claus #2', null],
       ['holder', 'No live owner', 'Centralized mix'],
@@ -227,7 +293,7 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
   });
 
   it('writes an identity collection’s item with its holder and no chip of an object', async () => {
-    atViewportWidth(390);
+    atContainerWidth(358);
     const item = identityItem('dotbit');
     vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(emptyPage([item]));
     render(<CollectionItems id="dotbit" kind="identity" />);

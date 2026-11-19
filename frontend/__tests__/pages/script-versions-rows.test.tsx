@@ -105,20 +105,25 @@ describe('Code versions rows (table-rows L1-4)', () => {
     );
     expect(deployed).toHaveTextContent(/^2025-11-21$/);
     expect(block).toHaveTextContent(/^#17,894,900$/);
-    expect(within(block).getByRole('link')).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lane p-assets, the link-look gate): a link inside the row takes the
+    // inline look, the row's reading ink and its underline (it was the quiet ink by hand)
+    expect(within(block).getByRole('link')).toHaveClass('underline');
+    expect(within(block).getByRole('link')).not.toHaveClass('text-text-dim');
     // U-09 (re-pinned): the table's out point at the row size
     expect(cell).toHaveTextContent(/^0x673e1843…1355f9:0$/);
     expect(cell.firstElementChild).toHaveAttribute(
       'title',
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
-    // The out point opens the code cell too, in dim ink (T5: the version stays the bright thing).
+    // The out point opens the code cell too, inline (T5: the version stays the bright thing;
+    // re-pinned on purpose, lane p-assets: it was the quiet ink by hand).
     const outpoint = within(cell).getByRole('link', { name: '0x673e1843…1355f9:0' });
     expect(outpoint).toHaveAttribute(
       'href',
       '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
     );
-    expect(outpoint).toHaveClass('text-text-dim');
+    expect(outpoint).toHaveClass('underline');
+    expect(outpoint).not.toHaveClass('text-text-dim', 'text-text-bright');
     expect(held).toHaveTextContent(/^multisig 0x6598…d696$/);
     // T5: one bright thing a row — the version; the rest in body ink or dim.
     expect(rows[0]).toHaveClass('text-text');

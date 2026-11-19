@@ -373,7 +373,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               cluster.data.createdAtBlock === null ? (
                 'Not recorded'
               ) : (
-                <AppLink href={`/blocks/${cluster.data.createdAtBlock}`}>
+                <AppLink look="key" href={`/blocks/${cluster.data.createdAtBlock}`}>
                   {formatBlockNumber(cluster.data.createdAtBlock)}
                 </AppLink>
               ),
@@ -384,6 +384,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             value: protocol.data ? (
               protocol.data.current ? (
                 <Address
+                  look="key"
                   address={protocol.data.current.cell.ownerAddress}
                   size="row"
                   className="text-body"
@@ -549,7 +550,6 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             {counts && (
               <CompositionSet counts={counts} total={data.liveCount} caption={permanence(counts)} />
             )}
-            {history}
           </div>
         ) : (
           // Lane D2 (PB-13): an identity collection is headed as a cluster or a class is — the
@@ -695,6 +695,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           read={cluster}
         />
       )}
+      {/* Readability R7: a cluster's or a class's history out of the hero, after the metrics, 160 px
+          under its sentence; an identity collection's after its names */}
+      {objectsKind && history}
       {/* Main.dc.html: Objects (the genes that vary and the objects), then who holds it beside the
           recent activity. */}
       {kind === 'spore' &&
@@ -714,7 +717,6 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       {kind === 'object' && (
         <CollectionItems id={id} kind={kind} tier={sharedTier(counts, data.liveCount)} />
       )}
-      {kind === 'identity' && history}
       {kind !== 'spore' && (
         <AssetReadState
           label="collection insights"
@@ -724,6 +726,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         />
       )}
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
+      {kind === 'identity' && history}
       {kind === 'identity' && isDidCkbCollectionAlias(id) && (
         <section aria-label="PDS distribution" className="space-y-4">
           <PromptHeading command="Personal data servers" />

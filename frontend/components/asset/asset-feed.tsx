@@ -45,6 +45,7 @@ import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/ty
 import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
   MAX_BLOCK_BYTES,
+  MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_BLOCK_NUMBER,
@@ -293,7 +294,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       // the hash at the row size (17 characters, 132.6); it was 178
       minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
       render: (r) => (
-        <AppLink href={`/tx/${r.hash}`}>
+        <AppLink look="key" href={`/tx/${r.hash}`}>
           <Hash hash={r.hash} size="row" className="text-small" />
         </AppLink>
       ),
@@ -312,7 +313,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       ),
       render: (r) => (
         <>
-          <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
+          <AppLink look="inline" href={`/blocks/${r.blockNumber}`}>
+            {formatBlockNumber(r.blockNumber)}
+          </AppLink>
           <span className="text-text-dim">
             {' '}
             ·{' '}
@@ -337,10 +340,10 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     {
       key: 'cells',
       label: 'Cells',
-      // four digits a side as written, "9999 → 9999" (85.8); it was 70
-      minWidth: columnPx(
-        cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT_DIGITS}`.length) + CELL_GAP_PX
-      ),
+      // a transaction's inputs, up to MAX_TX_INPUTS (13,568: five digits, a consensus bound), and
+      // its outputs, four digits (WIDEST_COUNT), ungrouped as written: "13568 → 9999" (93.6 at 13
+      // px; it budgeted four digits of inputs, "9999 → 9999", 85.8: the page lane notes)
+      minWidth: columnPx(cell(`${MAX_TX_INPUTS} → ${WIDEST_COUNT_DIGITS}`.length) + CELL_GAP_PX),
       numeric: true,
       render: (r) => `${r.inputsCount} → ${r.outputsCount}`,
     },
@@ -723,7 +726,11 @@ function FullAssetFeed({
   // a change of page size at md starts each walk again (lane c2-finish, 1d)
   const actsPages = useCursorPagination(pageSize),
     txPages = useCursorPagination(pageSize);
-  const activityCursor = actsPages.cursor ?? initialActivityCursor;
+  // The URL's cursor, until the reader goes newer from it: the API pages one way (older), so the
+  // way newer from a cursor the walk has no history of is the newest end (the page lane notes:
+  // a reader who landed on page 3 could not go newer at all)
+  const [urlCursor, setUrlCursor] = useState(initialActivityCursor);
+  const activityCursor = actsPages.cursor ?? urlCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
   }, [activityCursor, onActivityCursorChange]);
@@ -742,7 +749,12 @@ function FullAssetFeed({
   const at = current.data ? timePageAt(tab, pages.page, current.data) : null;
   // A page counts from where its cursor started: an activity page opened at a cursor from the
   // URL (an identity page's link) is not counted from the newest end, so it names no page.
-  const fromNewest = tab === 'transactions' || initialActivityCursor === undefined;
+  const fromNewest = tab === 'transactions' || urlCursor === undefined;
+  const newer = pages.hasPrevious
+    ? pages.goToPrevious
+    : tab === 'activities' && urlCursor !== undefined
+      ? () => setUrlCursor(undefined)
+      : undefined;
   return (
     <section aria-label="What happened" className="min-w-0">
       {/* the tab row is the section's command line (the controls board); the outline keeps the
@@ -790,7 +802,7 @@ function FullAssetFeed({
                   order="newest first"
                   page={fromNewest ? at.page : undefined}
                   pages={fromNewest ? at.pages : undefined}
-                  onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
+                  onNewer={newer}
                   onOlder={
                     current.data.hasMore
                       ? () => pages.goToNext(current.data!.nextCursor)

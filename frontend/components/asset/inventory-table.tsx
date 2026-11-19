@@ -120,7 +120,7 @@ function Counted({
 /** The H-multiplier, named, to 2 dp and grouped as the table writes it (PA-09). */
 function hMultiplierPart(a: Asset): ReactNode {
   return (
-    <Labelled key="hm" label="H-mult.">
+    <Labelled key="hm" label="CKB held ÷ occupied">
       <HMultiplier value={a.hMultiplier} />
     </Labelled>
   );
@@ -374,10 +374,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
       <ClassMark kind="tokens" size={16} />
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name ?? a.symbol ?? <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
@@ -398,7 +395,9 @@ function tokenTitle(a: Asset): string {
     a.totalSupply === null
       ? 'supply unavailable'
       : `supply ${formatTokenBalanceWithRawMarker(a.totalSupply, a.decimals)}${a.symbol ? ` ${a.symbol}` : ''}`,
-    a.hMultiplier === null ? 'H-mult. unavailable' : `H-mult. ×${a.hMultiplier}`,
+    a.hMultiplier === null
+      ? 'CKB held ÷ occupied unavailable'
+      : `CKB held ÷ occupied ×${a.hMultiplier}`,
   ].join(' · ');
 }
 
@@ -458,7 +457,7 @@ function tokenColumns(): ListColumn<Asset>[] {
     HELD_COLUMN,
     {
       key: 'hm',
-      label: 'H-mult.',
+      label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
@@ -506,10 +505,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       >
         <ClassMark kind="objects" size={12} />
       </span>
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
@@ -551,7 +547,9 @@ function objectTitle(a: Asset): string {
     a.id,
     `${countText(a.liveCount, 'live', 'live')} of ${countText(a.totalSupply, 'minted', 'minted')}`,
     heldTitle(a),
-    a.hMultiplier === null ? 'H-mult. unavailable' : `H-mult. ×${a.hMultiplier}`,
+    a.hMultiplier === null
+      ? 'CKB held ÷ occupied unavailable'
+      : `CKB held ÷ occupied ×${a.hMultiplier}`,
   ].join(' · ');
 }
 
@@ -599,7 +597,7 @@ function objectColumns(): ListColumn<Asset>[] {
     HELD_COLUMN,
     {
       key: 'hm',
-      label: 'H-mult.',
+      label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
@@ -614,10 +612,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
       <ClassMark kind="identities" size={16} />
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}

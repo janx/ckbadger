@@ -155,14 +155,25 @@ describe('Mnft board (F2 objects)', () => {
     return view;
   }
 
-  it('opens with the composition sentence, its life and the board properties (OB-M4, OB-M5, OB-M6)', async () => {
+  // Re-pinned on purpose (readability R8, lane p-assets; renamed, it was "opens with the
+  // composition sentence, its life and the board properties"): the lede is its life, what it is and
+  // whether it is live, then the composition; as a lede it names no count (the metrics row's, C7:
+  // it read "then moved 2 times")
+  it('opens with its life as the lede, then the composition sentence and the board properties (R8, OB-M4, OB-M5, OB-M6)', async () => {
     await page();
     const header = screen.getByRole('banner');
     expect(within(header).getByText('Centralized mix')).toBeInTheDocument();
     expect(header).toHaveTextContent('Partly off-chain: its content lives on a web server');
-    expect(within(header).getByText(/^Issued by Issuer A to a UniPass lock/)).toHaveTextContent(
-      'then moved 2 times'
+    const life = within(header).getByText(/^Issued by Issuer A to a UniPass lock/);
+    expect(life).toHaveTextContent(
+      /^Issued by Issuer A to a UniPass lock, then moved; the last move put it under .+, where it sits now\.$/
     );
+    const lede = header.querySelector('[data-role="lede"]')!;
+    expect(lede).toContainElement(life);
+    expect(
+      life.compareDocumentPosition(within(header).getByText('Centralized mix')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     // Lane P: the ages are the sentence's hover, never its text.
     expect(within(header).getByText(/^Issued by Issuer A/)).toHaveAttribute(
       'title',
@@ -246,7 +257,7 @@ describe('Mnft board (F2 objects)', () => {
     const heading = within(cls).getByRole('heading', { name: 'Class Class A' });
     expectPrompt(heading, 'Class', 'Class A');
     expect(promptNote(heading)).toContainElement(
-      within(cls).getByRole('link', { name: 'Open the class →' })
+      within(cls).getByRole('link', { name: 'Open the class' })
     );
     expect(cls).toHaveTextContent('150 holders');
     expect(cls).toHaveTextContent('0 of 198 fully on-chain');
