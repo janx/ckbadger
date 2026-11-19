@@ -440,11 +440,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 3 },
     reason: 'the round lines and the MaxMind credit in the quiet ink',
   },
-  'app/network/distributions.tsx': {
-    family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the empty line and the exact counts line under a distribution',
-  },
   'app/network/network-map.tsx': {
     family: 'topics',
     // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country

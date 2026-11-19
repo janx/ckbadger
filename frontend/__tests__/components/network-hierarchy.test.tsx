@@ -472,28 +472,53 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
     expect(bar).toHaveClass('h-[28px]');
     const words = Array.from(bar.querySelectorAll('[data-provider]')).map((s) => s.textContent);
-    expect(words).toEqual(['Amazon.com 54.55%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%']);
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part's
+    // words are its name, its share and its count, said once, inside its segment where they fit
+    // and else on its own line under the bar at the part (the counts' quiet line went). At 1200 px
+    // the bar's 1,196 px less its two 2 px gaps give Amazon.com 652.4 px and Hetzner 362.4, each
+    // holding its words and 10 px each side; Unknown's 181.2 px cannot hold "Unknown 15.15% · 10
+    // nodes", 25 characters at 13 px, 195 px and 20: it is named under the bar. It was
+    // ['Amazon.com 54.55%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%'].
+    expect(words).toEqual([
+      'Amazon.com 54.55% · 36 nodes',
+      'Hetzner Online GmbH 30.30% · 20 nodes',
+      '',
+    ]);
     // The words are their own box inside the coloured segment, as the DAO's concentration bar.
-    for (const segment of Array.from(bar.querySelectorAll('[data-provider]'))) {
+    for (const segment of Array.from(bar.querySelectorAll('[data-provider]')).slice(0, 2)) {
       expect(segment.childNodes).toHaveLength(1);
       expect(segment.firstElementChild!.tagName).toBe('SPAN');
     }
+    expect(bar.querySelector('[data-provider="Unknown"]')!.childNodes).toHaveLength(0);
   });
 
-  it('writes a share alone, or nothing, where a segment cannot hold its words', async () => {
+  // Re-pinned on purpose (readability P4): it was "writes a share alone, or nothing, where a
+  // segment cannot hold its words" (['Amazon.com 54.55%', '30.30%', '']); a share alone left its
+  // part unnamed. At 358 px no segment holds its words (354 px: 193.1, 107.3 and 53.6), so all
+  // three are named on their lines under the bar and every segment is a fill without words.
+  it('names a part under the bar where its segment cannot hold its words, and writes nothing in it', async () => {
     const section = await renderHosting(358);
     const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
     const words = Array.from(bar.querySelectorAll('[data-provider]')).map((s) => s.textContent);
-    expect(words).toEqual(['Amazon.com 54.55%', '30.30%', '']);
+    expect(words).toEqual(['', '', '']);
+    const lines = [...section.querySelectorAll('[data-provider-line]')];
+    expect(lines.map((line) => line.textContent)).toEqual([
+      'Amazon.com 54.55% · 36 nodes',
+      'Hetzner Online GmbH 30.30% · 20 nodes',
+      'Unknown 15.15% · 10 nodes',
+    ]);
   });
 
-  it('gathers the exact counts in one quiet line and closes with one caption (R12, R15)', async () => {
+  // Re-pinned on purpose (readability P4): it was "gathers the exact counts in one quiet line and
+  // closes with one caption (R12, R15)"; every count is now said with its part, inside the bar or
+  // on the part's line under it, and the quiet line in bar order went.
+  it('names its parts once, inside or under the bar, and closes with one caption (R15)', async () => {
     const section = await renderHosting(1200);
-    const exact = section.querySelector('[data-role="exact-amounts"]') as HTMLElement;
-    expect(exact).toHaveTextContent(/^Amazon\.com 36 · Hetzner Online GmbH 20 · Unknown 10$/);
-    expect(exact).toHaveClass('text-small', 'text-text-dim');
-    for (const value of Array.from(exact.querySelectorAll('[data-role="count"]')))
-      expect(value).toHaveClass('text-text');
+    expect(section.querySelector('[data-role="exact-amounts"]')).toBeNull();
+    const lines = section.querySelector('[aria-label="Hosting networks named under the bar"]')!;
+    expect([...lines.querySelectorAll('[data-provider-line]')].map((l) => l.textContent)).toEqual([
+      'Unknown 15.15% · 10 nodes',
+    ]);
     const caption = section.lastElementChild as HTMLElement;
     expect(caption).toHaveAttribute('data-role', 'caption');
     expect(caption).toHaveTextContent(
@@ -501,8 +526,77 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
-    // heading, bar, exact line, caption: no legend row of its own.
+    // heading, bar, the lines of the parts named under it, caption: no legend row of its own.
     expect(section.children).toHaveLength(4);
+  });
+
+  // Readability P4 ("a split bar names every segment in place"; the review: only the leader was
+  // named in its segment, the others in order in a quiet line under the bar). The mainnet crawl of
+  // the review: 80 nodes, Amazon 50, four networks of 5, 5, 5 and 4, and 11 on other networks. At
+  // 1232 px the bar's 1,222 px (less five 2 px gaps) give a node 15.275 px. Each part not holding
+  // its words is named on its own line under the bar, after a swatch of its own fill, the words
+  // starting at the part's left edge, or ending at its right edge where they would run past the
+  // bar's end: a line is the 9 px swatch, 6 px and its words at 13 px, 7.8 px a character.
+  it('names each part at its place under the bar, starting at it or ending at it (P4)', async () => {
+    stubChartWidth(1232);
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          ...distributions,
+          verifiedRetained: 80,
+          asns: [
+            { label: 'AS16509 Amazon.com, Inc.', count: 50 },
+            { label: 'AS24940 Hetzner Online GmbH', count: 5 },
+            { label: 'AS14061 DigitalOcean, LLC', count: 5 },
+            { label: 'AS4134 Chinanet', count: 5 },
+            { label: 'AS63949 Akamai Connected Cloud', count: 4 },
+            { label: 'AS1 a', count: 3 },
+            { label: 'AS2 b', count: 3 },
+            { label: 'AS3 c', count: 3 },
+            { label: 'AS4 d', count: 2 },
+          ],
+        })
+      )
+    );
+    render(wrap(<HostingBar />));
+    const section = await screen.findByRole('region', { name: 'Where they run' });
+    const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
+    expect([...bar.querySelectorAll('[data-provider]')].map((s) => s.textContent)).toEqual([
+      'Amazon.com, Inc. 62.50% · 50 nodes',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+    const node = (1232 - 5 * 2) / 80;
+    // a part's left edge: the nodes before it and the gaps before it
+    const leftOf = (before: number, gaps: number) => before * node + gaps * 2;
+    const line = (chars: number) => 9 + 6 + chars * 7.8;
+    // the three networks of 5 rank by their names
+    const expected = [
+      // from 765.75 its 202.2 px end at 967.95, inside the bar
+      ['Chinanet 6.25% · 5 nodes', leftOf(50, 1)],
+      ['DigitalOcean, LLC 6.25% · 5 nodes', leftOf(55, 2)],
+      // from 922.5 its 288 px end at 1,210.5
+      ['Hetzner Online GmbH 6.25% · 5 nodes', leftOf(60, 3)],
+      // from 1,000.875 its 311.4 px would end at 1,312.3, past the bar: it ends at its part's
+      // right edge, 1,061.975, and starts at 750.575
+      ['Akamai Connected Cloud 5.00% · 4 nodes', leftOf(69, 4) - line(38)],
+      // from 1,063.975 its 264.6 px would end past the bar: it ends at the bar's end, 967.4
+      ['other networks 13.75% · 11 nodes', 1232 - line(32)],
+    ] as const;
+    const lines = [...section.querySelectorAll('[data-provider-line]')] as HTMLElement[];
+    expect(lines.map((l) => l.textContent)).toEqual(expected.map(([words]) => words));
+    lines.forEach((l, i) => {
+      expect(parseFloat(l.style.marginLeft), expected[i][0]).toBeCloseTo(expected[i][1], 1);
+      // the swatch is the part's own fill
+      const segment = bar.querySelectorAll('[data-provider]')[i + 1] as HTMLElement;
+      const swatch = l.querySelector('[data-role="swatch"]') as HTMLElement;
+      expect(swatch.style.backgroundColor).toBe(segment.style.backgroundColor);
+      // the words are values and names in the reading ink; the separator is quiet
+      expect(l).toHaveClass('text-text');
+    });
   });
 
   it('heads the software list alone; its scope note is tier 2', async () => {

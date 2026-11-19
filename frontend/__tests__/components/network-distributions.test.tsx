@@ -90,7 +90,18 @@ describe('NetworkDistributions', () => {
       expect(found).not.toBeNull();
       return found!;
     });
-    expect(segment.textContent).toBe('50.00%');
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part
+    // whose segment cannot hold its words (its name, share and count) writes none there and is
+    // named on its own line under the bar; it was '50.00%', the share alone, its name nowhere near
+    // it. Each segment is (240 − 2) / 2 = 119 px; "中国电信 50.00% · 5 nodes" counts 4 × 16.25 +
+    // 17 × 7.8 = 197.6 px and 20 of padding.
+    expect(segment.textContent).toBe('');
+    const line = container.querySelector('[data-provider-line="中国电信"]') as HTMLElement;
+    expect(line.textContent).toBe('中国电信 50.00% · 5 nodes');
+    // two parts of 5 rank by their names, Hetzner first: from its part's left edge, 121 px (119
+    // and the 2 px gap), its line, 9 + 6 + 197.6 = 212.6 px, would run past the bar's end, so it
+    // ends at its part's right edge, the bar's end: 240 − 212.6
+    expect(parseFloat(line.style.marginLeft)).toBeCloseTo(240 - 212.6, 6);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });

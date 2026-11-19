@@ -49,7 +49,7 @@ function useDistributions() {
 function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
-  if (top.length === 0) return <p className="text-text-dim text-small">No data.</p>;
+  if (top.length === 0) return <p className="text-text text-small">No data.</p>;
   return (
     <div className="flex max-w-[720px] flex-col gap-1">
       {top.map((it, i) => (
@@ -162,10 +162,29 @@ export function HostingBar() {
       total={total}
       caption={
         leader &&
-        `${leader[1].toLocaleString()} of the ${total.toLocaleString()} verified nodes run on ${leader[0]}, across ${countries} countries.`
+        `${leader[1].toLocaleString('en-US')} of the ${total.toLocaleString('en-US')} verified nodes run on ${leader[0]}, across ${countries.toLocaleString('en-US')} countries.`
       }
     />
   );
+}
+
+/** The segments of the hosting bar stand this far apart (`gap-0.5`). */
+const SEGMENT_GAP_PX = 2;
+/** A part's swatch under the bar and the room after it (`h-[9px] w-[9px]`, `mr-1.5`). */
+const SWATCH_PX = 9;
+const SWATCH_GAP_PX = 6;
+
+/**
+ * Where a part named under the bar stands (readability plan 2026-11-18, P4: "a split bar names
+ * every segment in place"): its line starts at the part's left edge where its words fit from there
+ * to the bar's end, else it ends at the part's right edge, else (words wider than the bar up to the
+ * part's end, a narrow phone) it starts at the bar's start and wraps inside the bar's width. Never
+ * before the bar's start, never past its end.
+ */
+function underLineLeft(left: number, right: number, words: number, bar: number): number {
+  if (left + words <= bar) return left;
+  if (words <= right) return right - words;
+  return 0;
 }
 
 /** The section once its counts are known, so the bar measures its own width from mount. */
@@ -180,24 +199,38 @@ function HostingSection({
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { resolved: theme } = useTheme();
-  const spans = partitionSpans(
-    segments.map(([, count]) => BigInt(count)),
-    BigInt(total),
-    0,
-    100,
-    'hosting networks'
-  );
+  const counts = segments.map(([, count]) => BigInt(count));
+  // The segments grow by their parts from no width (`flex-grow`), so the bar's width less its gaps
+  // is shared by the parts exactly as `partitionSpans` shares it: the lines under the bar stand at
+  // the segments' own edges.
+  const weights = partitionSpans(counts, BigInt(total), 0, 100, 'hosting networks');
+  const gaps = SEGMENT_GAP_PX * (segments.length - 1);
+  const spans =
+    width === null
+      ? null
+      : partitionSpans(counts, BigInt(total), 0, width - gaps, 'hosting networks').map(
+          (span, i) => ({ left: span.x + SEGMENT_GAP_PX * i, width: span.width })
+        );
   const share = (count: number) => percentOf(BigInt(count), BigInt(total));
-  /** The words a segment holds: name and share, else the share alone, else none. */
-  const inside = (org: string, count: number, i: number): string => {
-    if (width === null) return '';
-    const room = (width * spans[i].width) / 100;
-    // an organisation is the ASN registry's text, in any script: measured by the bound of
-    // lib/type-metrics.ts (review F-B, logic finding 5), and drawn whole or not at all, never cut
-    const fits = (text: string) => foreignTextPx(text, fontPx('small')) + 2 * LABEL_PAD <= room;
-    const full = `${org} ${share(count)}`;
-    return fits(full) ? full : fits(share(count)) ? share(count) : '';
-  };
+  /** A part's words, said once: its name, its share and its count. */
+  const words = (org: string, count: number) =>
+    `${org} ${share(count)} · ${formatCount(count, 'node')}`;
+  // An organisation is the ASN registry's text, in any script: measured by lib/type-metrics.ts's
+  // count for text that is not ours (not an upper bound: a few graphemes draw wider), and held by
+  // its room either way: clipped at its segment's edge, wrapped inside the bar under it.
+  const wordsPx = (org: string, count: number) => foreignTextPx(words(org, count), fontPx('small'));
+  /** Whether a part's segment holds its words, 10 px each side. */
+  const inside = (org: string, count: number, i: number): boolean =>
+    spans !== null && wordsPx(org, count) + 2 * LABEL_PAD <= spans[i].width;
+  const under =
+    spans === null
+      ? []
+      : segments.flatMap(([org, count], i) => {
+          if (inside(org, count, i)) return [];
+          const line = SWATCH_PX + SWATCH_GAP_PX + wordsPx(org, count);
+          const { left, width: part } = spans[i];
+          return [{ org, count, i, left: underLineLeft(left, left + part, line, width!) }];
+        });
   return (
     <TopicSection title="Where they run" args={formatCount(total, 'node')}>
       <div
@@ -211,30 +244,44 @@ function HostingSection({
           <span
             key={org}
             data-provider={org}
-            className="flex items-center overflow-hidden whitespace-nowrap px-2.5"
+            className="flex min-w-0 items-center overflow-hidden whitespace-nowrap px-2.5"
             style={{
-              width: `${spans[i].width}%`,
+              flexGrow: weights[i].width,
+              flexShrink: 1,
+              flexBasis: 0,
               backgroundColor: dataHue(PROVIDER_OPACITY[i]),
-              // DY-03: the share takes the ink its fill's own luminance calls for, in this theme.
+              // DY-03: the words take the ink their fill's own luminance calls for, in this theme.
               color: color(inkOnFill(theme, DATA_KEY, PROVIDER_OPACITY[i]).ink),
             }}
           >
-            {inside(org, count, i) && <span>{inside(org, count, i)}</span>}
+            {inside(org, count, i) && <span>{words(org, count)}</span>}
           </span>
         ))}
       </div>
-      {/* R12: the exact counts leave the bar for one quiet line, which also names every segment. */}
-      <p data-role="exact-amounts" className="text-text-dim text-small max-w-measure mt-2.5">
-        {segments.map(([org, count], i) => (
-          <span key={org}>
-            {i > 0 && ' · '}
-            {org}{' '}
-            <span data-role="count" className="text-text tabular-nums">
-              {count.toLocaleString()}
-            </span>
-          </span>
-        ))}
-      </p>
+      {under.length > 0 && (
+        // Each part that does not hold its words is named on a line of its own under the bar, at
+        // the part, after a swatch of its own fill: one line a part, in the bar's order.
+        <ul aria-label="Hosting networks named under the bar" className="text-small mt-1.5">
+          {under.map(({ org, count, i, left }) => (
+            <li
+              key={org}
+              data-provider-line={org}
+              className="text-text w-fit [overflow-wrap:anywhere]"
+              style={{ marginLeft: `${left}px`, maxWidth: `${width! - left}px` }}
+            >
+              <span
+                aria-hidden="true"
+                data-role="swatch"
+                className="mr-1.5 inline-block h-[9px] w-[9px] align-middle"
+                style={{ backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
+              />
+              {org} <span className="tabular-nums">{share(count)}</span>
+              <span className="text-text-dim"> · </span>
+              <span className="tabular-nums">{formatCount(count, 'node')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {caption && (
         <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
           {caption}
