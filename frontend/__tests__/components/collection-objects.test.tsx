@@ -17,6 +17,7 @@ import {
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 beforeEach(() => {
   mockItemReads();
   // the allele gel lays itself out for its measured box (V2); 1248 px is the 1280 column
@@ -47,11 +48,13 @@ it('keeps multiple values of one trait on one row without React identity collisi
 });
 
 it('passes the whole-collection trait predicate before cursor pagination', async () => {
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...collectionGalleryFilteredProducer,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...collectionGalleryFilteredProducer,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const { container } = render(
     <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
   );
@@ -410,19 +413,21 @@ it('puts a many-gene gel above the table at full width, a few-gene gel beside it
 // request (the fixture said 50).
 it('pages the objects with the shared pager wording (C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...emptyPage(
-      Array.from({ length: 20 }, (_, i) => ({
-        ...base,
-        sporeId: `0x${(i + 16).toString(16).padStart(2, '0').repeat(32)}`,
-        number: String(i + 1),
-      }))
-    ),
-    limit: 20,
-    total: 1298,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...emptyPage(
+        Array.from({ length: 20 }, (_, i) => ({
+          ...base,
+          sporeId: `0x${(i + 16).toString(16).padStart(2, '0').repeat(32)}`,
+          number: String(i + 1),
+        }))
+      ),
+      limit: 20,
+      total: 1298,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   await screen.findByRole('table', { name: 'Newest objects' });
   const pager = screen.getByRole('navigation', { name: 'objects' });

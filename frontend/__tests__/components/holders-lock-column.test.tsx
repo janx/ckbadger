@@ -12,6 +12,7 @@ import { TokenHolders } from '@/components/asset/token-holders';
 import { api, type CollectionHolder } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { fontPx, textPx } from '@/lib/type-metrics';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const JOYID = '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323';
 
@@ -62,31 +63,33 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
 
   it('in the token holders: the default lock by its name, another lock by its name in plain words', async () => {
     atContainerWidth(1248);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          // B4 fix round: real addresses, the lock read off them
-          address: seededAddress('x7kq8p'),
-          balance: '300',
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        },
-        {
-          lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: seededAddress('tllakf', JOYID),
-          balance: '200',
-          lockCodeHash: JOYID,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 2,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '500',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            // B4 fix round: real addresses, the lock read off them
+            address: seededAddress('x7kq8p'),
+            balance: '300',
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: 'Default Lock',
+          },
+          {
+            lockScriptHash: `0x${'22'.repeat(32)}`,
+            address: seededAddress('tllakf', JOYID),
+            balance: '200',
+            lockCodeHash: JOYID,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 2,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '500',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
@@ -104,20 +107,22 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
       lockCodeHash,
       lockKind,
     });
-    const load = vi.fn().mockResolvedValue({
-      // B4 fix round: the default lock is the pair, read off the holder's address
-      data: [
-        {
-          ...holder('11', DEFAULT_LOCK_CODE_HASH, 'Default Lock'),
-          address: seededAddress('x7kq8p'),
-        },
-        holder('22', JOYID, 'JoyID'),
-      ],
-      limit: 10,
-      total: 2,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        // B4 fix round: the default lock is the pair, read off the holder's address
+        data: [
+          {
+            ...holder('11', DEFAULT_LOCK_CODE_HASH, 'Default Lock'),
+            address: seededAddress('x7kq8p'),
+          },
+          holder('22', JOYID, 'JoyID'),
+        ],
+        limit: 10,
+        total: 2,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="lock-column" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     const cells = lockCells(table);

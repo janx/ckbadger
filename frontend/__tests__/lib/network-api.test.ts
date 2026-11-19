@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { api } from '@/lib/api';
 import { server } from '../msw/server';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // MSW handlers (Task adds them) serve /network/summary etc. from __tests__/msw/handlers.ts
 
 describe('network api', () => {
@@ -73,13 +74,15 @@ describe('network-scoped api routing', () => {
     server.use(
       http.get('/api/:network/v1/blocks', ({ params }) => {
         seen = params.network as string;
-        return HttpResponse.json({
-          data: [],
-          total: 0,
-          limit: 20,
-          hasMore: false,
-          nextCursor: null,
-        });
+        return HttpResponse.json(
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          })
+        );
       })
     );
     return () => seen;

@@ -26,6 +26,7 @@ import {
 } from '@/components/transaction/transaction-list-table';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -86,30 +87,32 @@ describe('TransactionsPage', () => {
   });
 
   it('renders neutral transaction hashes and block links from fetched transactions', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [
-        {
-          hash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          blockNumber: 123456,
-          blockHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          index: 0,
-          inputsCount: 2,
-          outputsCount: 3,
-          fee: '100000000',
-          value: '123456789012345678',
-          txSize: 226,
-          cycles: 1000000,
-          cyclesStatus: 'complete',
-          activity: feedSamples.eightParties,
-          isCellbase: false,
-          timestamp: '2026-02-20T00:00:00Z',
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            hash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            blockNumber: 123456,
+            blockHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            index: 0,
+            inputsCount: 2,
+            outputsCount: 3,
+            fee: '100000000',
+            value: '123456789012345678',
+            txSize: 226,
+            cycles: 1000000,
+            cyclesStatus: 'complete',
+            activity: feedSamples.eightParties,
+            isCellbase: false,
+            timestamp: '2026-02-20T00:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     render(<TransactionsPage />);
 
@@ -170,12 +173,14 @@ describe('TransactionsPage', () => {
 
 describe('Transactions pool view', () => {
   it('keeps full pool evidence inside the desktop width budget without shortening exact amounts', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       summary: {
@@ -261,12 +266,14 @@ describe('Transactions pool view', () => {
   // "● Pending · 26s ago" broke onto two lines. Status is now declared for its widest content on
   // one line, and Size, whose values are at most 7 characters, pays for it.
   it('declares Status wide enough for every status with the longest one-unit wait, on one line', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const statuses = ['pending', 'proposed', 'committed_awaiting_index'] as const;
     // 59.5 s ago: "59s ago", the longest seconds form. The wait is read from the clock when the
     // row renders, which a loaded machine can put more than half a second after this line (it read
@@ -357,12 +364,14 @@ describe('Transactions pool view', () => {
   // px for the wait) it was one NoBreak 233.4 px wide ("· " and 29 characters) in a flex row that
   // does not wrap; it breaks between its words, and the comment that said it did is now true.
   it('lets the clock-behind sentence break between its words in the Status column', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       total: 1,
@@ -399,12 +408,14 @@ describe('Transactions pool view', () => {
   // one line, 7.2 px wider than its box, start-aligned past its right edge (CSS Text 3) into its
   // own 16 px gap, short of the Size column.
   it('holds a fee rate one glyph past its bound on one line, 7.2 px into its gap', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       total: 1,
@@ -454,12 +465,14 @@ describe('Transactions pool view', () => {
   // Re-pinned on purpose (readability R6): the transaction's row stone 16 px, its footprint 56.5 →
   // 40.3, so a table from 1,212 px (renamed: "1,228 px").
   it('lays the pool out as a table from 1,212 px, phone rows below', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const poolPage = {
       ...emptyPool,
       total: 1,
@@ -520,29 +533,31 @@ describe('Transactions pool view', () => {
   // size and the cycles bars left it), the cellbases' 804, the pool's 1,212 the largest: What it
   // did keeps 314 px beyond its 204 (renamed: "keeps 1 px").
   it('changes the lists’ form at the largest sum: the committed What it did keeps 314 px', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [
-        {
-          hash: `0x${'cd'.repeat(32)}`,
-          blockNumber: 123456,
-          blockHash: `0x${'ef'.repeat(32)}`,
-          index: 1,
-          inputsCount: 1,
-          outputsCount: 2,
-          fee: '1000',
-          value: '123456789',
-          txSize: 500,
-          cycles: 1000,
-          cyclesStatus: 'complete',
-          timestamp: '2026-10-25T00:00:00Z',
-          isCellbase: false,
-          activity: feedSamples.eightParties,
-        },
-      ],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            hash: `0x${'cd'.repeat(32)}`,
+            blockNumber: 123456,
+            blockHash: `0x${'ef'.repeat(32)}`,
+            index: 1,
+            inputsCount: 1,
+            outputsCount: 2,
+            fee: '1000',
+            value: '123456789',
+            txSize: 500,
+            cycles: 1000,
+            cyclesStatus: 'complete',
+            timestamp: '2026-10-25T00:00:00Z',
+            isCellbase: false,
+            activity: feedSamples.eightParties,
+          },
+        ],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<TransactionsPage />);
     const table = await screen.findByRole('table', { name: 'Committed transactions' });
     expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
@@ -602,12 +617,14 @@ describe('Transactions pool view', () => {
     // (lists lane P3): the user transactions 898, the cellbases 804, the pool's 1,212 the largest
     expect(TRANSACTION_LIST_MIN_PX).toBe(898);
     expect(CELLBASE_LIST_MIN_PX).toBe(804);
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const poolPage = {
       ...emptyPool,
       total: 1,
@@ -669,12 +686,14 @@ describe('Transactions pool view', () => {
     // the pool never holds a cellbase, but a row the API marks one consumes no cell, as its Cells
     // column already reads
     const cellbaseHash = `0x${'ce'.repeat(32)}`;
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       total: 2,
@@ -756,12 +775,14 @@ describe('Transactions pool view', () => {
     onTestFinished(() => {
       vi.useRealTimers();
     });
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       summary: { ...emptyPool.summary, newestSeenAt: String(T0 - 20_000) },
@@ -785,12 +806,14 @@ describe('Transactions pool view', () => {
   });
 
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       summary: {
         size: '226',
@@ -875,12 +898,14 @@ describe('Transactions pool view', () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     });
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       summary: {
         size: '226',
@@ -954,13 +979,15 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
     hourlyData: [],
     dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 20, complete: true }],
   });
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [],
-    limit: 50,
-    nextCursor: null,
-    hasMore: false,
-    total: 0,
-  });
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    })
+  );
   render(<TransactionsPage />);
   // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
   // radio per kind named by its lowercase words and yesterday's count, and the views a tablist
@@ -1021,12 +1048,14 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
     hourlyData: [],
     dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 999, complete: false }],
   });
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [],
-    limit: 50,
-    nextCursor: null,
-    hasMore: false,
-  });
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+    })
+  );
   render(<TransactionsPage />);
   expect(
     await screen.findByText(`No complete transaction count for ${yesterday} (UTC+8).`)
@@ -1036,12 +1065,14 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
 });
 
 it('draws awaiting-index pool squares hollow, apart from pending (cyan) and proposed (gold) (TX-38)', async () => {
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [],
-    limit: 50,
-    hasMore: false,
-    nextCursor: null,
-  });
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
   const row = (n: number, status: 'pending' | 'proposed' | 'committed_awaiting_index') => ({
     hash: `0x${String(n).repeat(64)}`,
     status,
@@ -1087,30 +1118,32 @@ describe('Transactions notes a reader needs, above the table (readability B5)', 
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
   it('says how to read the Value column before the committed table', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [
-        {
-          hash: `0x${'cd'.repeat(32)}`,
-          blockNumber: 123456,
-          blockHash: `0x${'ef'.repeat(32)}`,
-          index: 1,
-          inputsCount: 2,
-          outputsCount: 3,
-          fee: '100000000',
-          value: '123456789',
-          txSize: 226,
-          cycles: 1000000,
-          cyclesStatus: 'complete',
-          activity: feedSamples.eightParties,
-          isCellbase: false,
-          timestamp: '2026-02-20T00:00:00Z',
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            hash: `0x${'cd'.repeat(32)}`,
+            blockNumber: 123456,
+            blockHash: `0x${'ef'.repeat(32)}`,
+            index: 1,
+            inputsCount: 2,
+            outputsCount: 3,
+            fee: '100000000',
+            value: '123456789',
+            txSize: 226,
+            cycles: 1000000,
+            cyclesStatus: 'complete',
+            activity: feedSamples.eightParties,
+            isCellbase: false,
+            timestamp: '2026-02-20T00:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<TransactionsPage />);
     const table = await screen.findByRole('table', { name: 'Committed transactions' });
     const note = screen.getByText(/^Value is what the participants received\./);
@@ -1118,12 +1151,14 @@ describe('Transactions notes a reader needs, above the table (readability B5)', 
   });
 
   it('says how to read the pool before its table', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       truncated: true,
@@ -1172,13 +1207,15 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
     vi.mocked(api.getDailyActivityStats).mockResolvedValue([
       { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
     ]);
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      nextCursor: null,
-      hasMore: false,
-      total: 0,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        nextCursor: null,
+        hasMore: false,
+        total: 0,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
       ...emptyPool,
       totals: { pending: 4, proposed: 1, awaitingIndex: 0 },
@@ -1226,13 +1263,15 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
 
   it('asks for twenty transactions a page below md', async () => {
     stubViewportFromMd(false);
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 20,
-      nextCursor: null,
-      hasMore: false,
-      total: 0,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 20,
+        nextCursor: null,
+        hasMore: false,
+        total: 0,
+      })
+    );
     render(<TransactionsPage />);
     await waitFor(() =>
       expect(api.getTransactions).toHaveBeenCalledWith({
@@ -1254,13 +1293,15 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
 // page starts on the kind its URL names and writes a chosen kind back (replace, not push).
 describe('Transactions kind in the URL (D11)', () => {
   beforeEach(() => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      nextCursor: null,
-      hasMore: false,
-      total: 0,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        nextCursor: null,
+        hasMore: false,
+        total: 0,
+      })
+    );
   });
 
   function renderAt(url: string) {
@@ -1371,13 +1412,15 @@ describe('Transactions paging and kind (what the controls ask for)', () => {
     isCellbase: false,
     timestamp: '2026-02-20T00:00:00Z',
   });
-  const committed = (from: number, nextCursor: string | null) => ({
-    data: [tx(from), tx(from - 1)],
-    total: 120,
-    limit: 50,
-    hasMore: nextCursor !== null,
-    nextCursor,
-  });
+  const committed = (from: number, nextCursor: string | null) =>
+    pagedRead({
+      data: [tx(from), tx(from - 1)],
+      total: 120,
+      // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+      limit: 2,
+      hasMore: nextCursor !== null,
+      nextCursor,
+    });
   const block = async (n: number) =>
     within(await screen.findByRole('table', { name: 'Committed transactions' })).findByRole(
       'link',
@@ -1468,13 +1511,15 @@ describe('Transactions paging and kind (what the controls ask for)', () => {
 // awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
 describe('TransactionsPage while its read is paused', () => {
   it('says it is loading, not nothing; a real empty answer still says so once back online', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      total: 0,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        total: 0,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const { resume } = renderPaused(<TransactionsPage />);
     expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
     expect(screen.queryByText('No transactions.')).toBeNull();
@@ -1533,12 +1578,14 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
 
   it('is three parts at 358 px: hash and status, what it does, then cells · value · fee · rate', async () => {
     atContainerWidth(358);
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue(pool('76729874184'));
     render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
@@ -1572,12 +1619,14 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
   it('says a value it cannot read in the value’s place, and the strip keeps its figures', async () => {
     atViewportWidth(390);
     atContainerWidth(358);
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getPoolTransactions).mockResolvedValue(pool(null));
     render(<TransactionsPage />);
     const banner = await screen.findByTestId('pool-banner');
@@ -1625,12 +1674,14 @@ describe('Transactions: the cellbases, one tab away (lists lane P3)', () => {
   };
 
   it('asks for the cellbases on their tab, lists them in their own words, and back on a kind', async () => {
-    vi.mocked(api.getTransactions).mockImplementation(async (params = {}) => ({
-      data: params.activityType === 'cellbase' ? [cellbase] : [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    }));
+    vi.mocked(api.getTransactions).mockImplementation(async (params = {}) =>
+      pagedRead({
+        data: params.activityType === 'cellbase' ? [cellbase] : [],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<TransactionsPage />);
     expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
       'aria-selected',

@@ -9,6 +9,8 @@ import {
   dotbitV4ProtocolProducer,
   didProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { itemActivityFeedProducer } from '@/__tests__/msw/fixtures/item-producer';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -90,12 +92,16 @@ it('resets the independent activity cursor when navigating to another identity',
   // re-pinned (lane c2-assets): the page counts the identity's activities, 100 as on the other
   // identity pages' tests; it said 0 with more after it, which the board's pager refuses ("page 1
   // of 0") where the old one wrote nothing
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const view = render(<IdentityItemDetail config={dotbitConfig} identityId={first.nftId} />);
   fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>

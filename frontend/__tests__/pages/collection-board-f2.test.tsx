@@ -28,6 +28,7 @@ import {
   nervape3xInsights,
   nervape3xOtherTraits,
 } from '@/__tests__/fixtures/objects/nervape3x';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
 const template = collectionGalleryFilteredProducer.data[0];
@@ -100,13 +101,15 @@ beforeEach(() => {
       { key: 'unused', label: 'Unused', color: '#00c389' },
     ],
   });
-  vi.spyOn(api, 'getCollectionGallery').mockResolvedValue({
-    data: rows,
-    total: 90,
-    limit: 8,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.spyOn(api, 'getCollectionGallery').mockResolvedValue(
+    pagedRead({
+      data: rows,
+      total: 90,
+      limit: 8,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();

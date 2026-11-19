@@ -17,6 +17,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const API = '/api/:network/v1';
 
@@ -41,13 +42,15 @@ function tx(i: number): Transaction {
 function serveTransactions(txs: Transaction[]) {
   server.use(
     http.get(`${API}/transactions`, () =>
-      HttpResponse.json({
-        data: txs,
-        total: txs.length,
-        limit: 10,
-        hasMore: false,
-        nextCursor: null,
-      })
+      HttpResponse.json(
+        pagedRead({
+          data: txs,
+          total: txs.length,
+          limit: 10,
+          hasMore: false,
+          nextCursor: null,
+        })
+      )
     )
   );
 }

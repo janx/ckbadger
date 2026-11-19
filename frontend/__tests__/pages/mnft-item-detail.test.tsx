@@ -26,6 +26,7 @@ import {
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -261,11 +262,13 @@ describe('MnftItemDetailPage', () => {
   });
 
   it('starts a newly navigated-to token on its first activity page', async () => {
-    vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-      ...itemActivityFeedProducer,
-      hasMore: true,
-      nextCursor: '100:2',
-    });
+    vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+      pagedRead({
+        ...itemActivityFeedProducer,
+        hasMore: true,
+        nextCursor: '100:2',
+      })
+    );
     const { rerender } = render(<MnftItemDetailPage objectId={id} />);
     fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
     await waitFor(() =>

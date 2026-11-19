@@ -14,6 +14,7 @@ import { fullText } from '@/__tests__/utils/full-text';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { numberStrings } from '@/__tests__/utils/lede-rule';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -118,7 +119,7 @@ const neighbour = (number: number, over: Record<string, unknown> = {}) => ({
   proposalsCount: 0,
   ...over,
 });
-const neighbours = {
+const neighbours = pagedRead({
   data: [
     neighbour(N + 2, { size: 3917, transactionSizes: [355, 500, 977] }),
     neighbour(N + 1),
@@ -127,10 +128,10 @@ const neighbours = {
     neighbour(N - 2, { proposalsCount: 3 }),
   ],
   total: N + 3,
-  limit: 50,
+  limit: 5,
   hasMore: true,
   nextCursor: String(N - 2),
-};
+});
 const activity = (txIndex: number): GlobalActivity => ({
   txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
   blockNumber: N,
@@ -200,18 +201,22 @@ beforeEach(() => {
     rawEpoch: '0x5c003e9003b45',
   });
   // R2b-a 3: `order=asc` answers the block in tx order, cellbase first.
-  vi.mocked(api.getGlobalActivities).mockResolvedValue({
-    data: [0, 1, 2, 3].map(activity),
-    limit: 100,
-    hasMore: false,
-    nextCursor: null,
-  });
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [0, 1, 2, 3].map(tx),
-    limit: 100,
-    hasMore: false,
-    nextCursor: null,
-  });
+  vi.mocked(api.getGlobalActivities).mockResolvedValue(
+    pagedRead({
+      data: [0, 1, 2, 3].map(activity),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [0, 1, 2, 3].map(tx),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
   vi.mocked(api.getBlockProposals).mockResolvedValue([
     {
       proposalIndex: 0,
@@ -356,17 +361,19 @@ describe('Block board · first tier', () => {
       rewardFinalizesAt: null,
     };
     vi.mocked(api.getBlock).mockResolvedValue(genesis);
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [
-        { ...genesis, number: 2, hash: h('02'), timestamp: '2019-11-16T06:12:03.871Z' },
-        { ...genesis, number: 1, hash: h('01'), timestamp: '2019-11-16T06:11:53.574Z' },
-        genesis,
-      ],
-      total: 3,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [
+          { ...genesis, number: 2, hash: h('02'), timestamp: '2019-11-16T06:12:03.871Z' },
+          { ...genesis, number: 1, hash: h('01'), timestamp: '2019-11-16T06:11:53.574Z' },
+          genesis,
+        ],
+        total: 3,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
     expect(screen.queryAllByRole('link', { name: /^Previous block,/, hidden: true })).toEqual([]);
@@ -795,30 +802,32 @@ describe('Block board · R2b-a fields', () => {
   // pays and to whom. It read "Cellbase pays the reward of #20,827,921".
   it('says which block the cellbase pays and to whom (BA-12, P1)', async () => {
     const payee = seededAddress('ratvu9');
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [0, 1, 2, 3].map((i) =>
-        i === 0
-          ? {
-              ...activity(0),
-              participants: [
-                {
-                  address: payee,
-                  lockHash: h('9a'),
-                  lockHashPrefix: null,
-                  roles: [],
-                  ckbDelta: '55951224916',
-                  usedDelta: '6100000000',
-                  itemDeltas: [],
-                  tags: 0,
-                },
-              ],
-            }
-          : activity(i)
-      ),
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [0, 1, 2, 3].map((i) =>
+          i === 0
+            ? {
+                ...activity(0),
+                participants: [
+                  {
+                    address: payee,
+                    lockHash: h('9a'),
+                    lockHashPrefix: null,
+                    roles: [],
+                    ckbDelta: '55951224916',
+                    usedDelta: '6100000000',
+                    itemDeltas: [],
+                    tags: 0,
+                  },
+                ],
+              }
+            : activity(i)
+        ),
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     const row = (await screen.findByText('Cellbase')).closest('[data-feed-row]') as HTMLElement;
     expect(row.querySelector('[data-role="headline"]')).toHaveTextContent(
@@ -912,12 +921,14 @@ describe('Block board · R2b-a fields', () => {
   });
 
   it('asks the API for the block in tx order and keeps that order (BA-14)', async () => {
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [0, 1, 2, 3].map(activity),
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [0, 1, 2, 3].map(activity),
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
@@ -940,13 +951,20 @@ describe('Block board · R2b-a fields', () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...block, transactionsCount: 150 });
     vi.mocked(api.getGlobalActivities).mockImplementation(async (p) =>
       p?.cursor
-        ? { data: [4].map(activity), limit: 100, hasMore: false, nextCursor: null }
-        : { data: [0, 1, 2, 3].map(activity), limit: 100, hasMore: true, nextCursor: 'acts-on' }
+        ? pagedRead({ data: [4].map(activity), limit: 100, hasMore: false, nextCursor: null })
+        : pagedRead({
+            data: [0, 1, 2, 3].map(activity),
+            // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+            limit: 4,
+            hasMore: true,
+            nextCursor: 'acts-on',
+          })
     );
     vi.mocked(api.getTransactions).mockImplementation(async (p) =>
       p?.cursor
-        ? { data: [3].map(tx), limit: 100, hasMore: false, nextCursor: null }
-        : { data: [0, 1, 2].map(tx), limit: 100, hasMore: true, nextCursor: 'txs-on' }
+        ? pagedRead({ data: [3].map(tx), limit: 100, hasMore: false, nextCursor: null })
+        : // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+          pagedRead({ data: [0, 1, 2].map(tx), limit: 3, hasMore: true, nextCursor: 'txs-on' })
     );
     // a view by its name, a tab or a pressed button
     const view = (name: RegExp) =>

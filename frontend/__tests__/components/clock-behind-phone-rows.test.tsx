@@ -11,6 +11,7 @@ import TransactionsPage from '@/app/transactions/page';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { api, type Transaction } from '@/lib/api';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // The pool's phone row is drawn by the page (it is not exported): the page's reads are stubbed.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
@@ -81,12 +82,14 @@ const emptyPool = {
 };
 
 beforeEach(() => {
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [],
-    limit: 50,
-    hasMore: false,
-    nextCursor: null,
-  });
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
   vi.mocked(api.getPoolTransactions).mockResolvedValue({
     ...emptyPool,
     total: 1,

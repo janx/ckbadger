@@ -467,11 +467,14 @@ describe('Address v3', () => {
         ? pageFixture(addressIdentitiesFixture)
         : p?.class === 'dao'
           ? pageFixture(addressDaoCellsFixture)
-          : {
+          : // a full page of two with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5: two on a page of
+            // twenty that said more followed)
+            pagedRead({
               ...pageFixture(addressObjectsFixture.slice(0, 2)),
+              limit: 2,
               hasMore: true,
               nextCursor: 'objects-next',
-            }
+            })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -548,7 +551,14 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressTokens).mockImplementation(async (_a, p) =>
       p?.cursor
         ? pageFixture([{ ...addressTokensFixture[0], name: 'Last token' }])
-        : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
+        : // a full page of the nine kinds with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5: nine on a page
+          // of twenty that said more followed)
+          pagedRead({
+            ...pageFixture(addressTokensFixture),
+            limit: addressTokensFixture.length,
+            hasMore: true,
+            nextCursor: 'next-token',
+          })
     );
     render(<AddressDetailPage />);
     // re-pinned (lane c2-chain): the library's pager, its range as the board writes it (was
@@ -557,7 +567,8 @@ describe('Address v3', () => {
     // response counts no rows, so the pager draws its rows and its page, the next by its "more",
     // and the 101 stands where the page states it, the holdings' count of token kinds.
     const pages = await screen.findByRole('navigation', { name: 'token kinds' });
-    expect(pages).toHaveTextContent(/^1–9 · 20 a page/);
+    // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): the page is a full page of nine (it said 20 a page)
+    expect(pages).toHaveTextContent(/^1–9 · 9 a page/);
     expect(within(pages).getByText('page 1')).toBeInTheDocument();
     expect(pages).not.toHaveTextContent(/of 101|page 1 of/);
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
@@ -717,7 +728,13 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressDotCellNames).mockImplementation(async (_a, p) =>
       p?.cursor
         ? pageFixture([{ ...namedRight, name: 'next.cell' }])
-        : { ...pageFixture([namedRight]), hasMore: true, nextCursor: 'next-name' }
+        : // a full page of one with more after it (lane cd-fixes-controls, review-p-tests SHOULD-5)
+          pagedRead({
+            ...pageFixture([namedRight]),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'next-name',
+          })
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
@@ -983,9 +1000,22 @@ describe('Address v3', () => {
   it('counts the Activities tab from the unfiltered activity total, never the transaction count', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.filter === 'all'
-        ? { ...pageFixture(addressActivitiesFixture, 1682), hasMore: true, nextCursor: 'next' }
-        : // a filtered page with an older one after it, so its pager and its range are drawn
-          { ...pageFixture([]), hasMore: true, nextCursor: 'next' }
+        ? // a full page of 20 of the 1,682 (lane cd-fixes-controls, review-p-tests SHOULD-5: the address's few
+          // activities said more followed on a page of twenty)
+          pagedRead({
+            ...pageFixture(activitiesPage(20), 1682),
+            hasMore: true,
+            nextCursor: 'next',
+          })
+        : // a filtered page with an older one after it, so its pager and its range are drawn: a
+          // full page of one activity of another kind, as the API reads one past the page to say
+          // more follow (it was an empty page that said more followed, which the API cannot send)
+          pagedRead({
+            ...pageFixture(activitiesPage(1, 40)),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'next',
+          })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -1001,12 +1031,19 @@ describe('Address v3', () => {
     expect(within(pages).getByText('page 1 of 85')).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the pager has none.
     fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
-    expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
     // Restored (review of main..fix/readability, test finding 3): readability B5 drew no pager for
     // one page, and the re-pin of this test dropped the range check with it; the filtered mock now
     // has an older page, so the pager is drawn and must carry no unfiltered total ("of 85").
-    const filtered = screen.getByRole('navigation', { name: 'activities' });
-    expect(within(filtered).getByText('page 1')).toBeInTheDocument();
+    // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): the filtered page
+    // holds one activity, a full page of one with more after it; it was an empty page that said
+    // more followed, which the API cannot send (it reads one row past a page to say more follow),
+    // and the page said "No DAO activities on this page." of it. The filtered page's own pager is
+    // waited for: the unfiltered page stands, kept, while the filtered one loads.
+    const filtered = await waitFor(() => {
+      const nav = screen.getByRole('navigation', { name: 'activities' });
+      expect(within(nav).getByText('page 1')).toBeInTheDocument();
+      return nav;
+    });
     expect(filtered).not.toHaveTextContent(/ of /);
     expect(activitiesTab()).toHaveTextContent(/^activities 1,682$/);
     await tab('Transactions');
@@ -1247,12 +1284,19 @@ describe('Address v3', () => {
   it('counts no unconfirmed row in the pager: a list in time states its order and its page', async () => {
     // Re-pinned on purpose (readability B5): one page draws no pager, so the fixture has an older
     // page.
-    vi.mocked(api.getAddressActivities).mockResolvedValue({
-      ...pageFixture([poolActivity(), ...addressActivitiesFixture]),
-      hasMore: true,
-      nextCursor: 'next',
-      pool,
-    });
+    // a full page of 20 committed rows under the pool's row (lane cd-fixes-controls, SHOULD-5:
+    // the address's few activities said more followed on a page of twenty); the filter chips'
+    // one-row pages are empty
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+      p?.limit === 1
+        ? pagedRead(pageFixture([]))
+        : pagedRead({
+            ...pageFixture([poolActivity(), ...activitiesPage(20)]),
+            hasMore: true,
+            nextCursor: 'next',
+            pool,
+          })
+    );
     render(<AddressDetailPage />);
     await loaded();
     const pages = await screen.findByRole('navigation', { name: 'activities' });
@@ -1278,8 +1322,8 @@ describe('Address v3', () => {
       p?.limit === 1
         ? pageFixture([])
         : p?.cursor
-          ? { ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' }
-          : { ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' }
+          ? pagedRead({ ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' })
+          : pagedRead({ ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' })
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -1314,11 +1358,15 @@ describe('Address v3', () => {
       ...addressFixture,
       pendingSummary: { txCount: 2, capacityDelta: '1' },
     });
-    vi.mocked(api.getAddressActivities).mockResolvedValue({
-      ...pageFixture(addressActivitiesFixture),
-      hasMore: true,
-      nextCursor: 'next',
-    });
+    // two pages that agree with themselves (lane cd-fixes-controls, SHOULD-5: the address's few
+    // activities said more followed on a page of twenty, at every cursor)
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+      p?.limit === 1
+        ? pagedRead(pageFixture([]))
+        : p?.cursor
+          ? pagedRead(pageFixture(activitiesPage(5, 20)), 20)
+          : pagedRead({ ...pageFixture(activitiesPage(20)), hasMore: true, nextCursor: 'next' })
+    );
     render(<AddressDetailPage />);
     await loaded();
     // re-pinned (lane c2-chain): `older →` of the library's pager (was Next), the dao chip a radio

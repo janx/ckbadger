@@ -150,20 +150,24 @@ describe('Shared asset feeds', () => {
         queryKey="identity-mark"
         scope="This identity's whole life"
         item={cell}
-        loadActivities={async () => ({
-          data: [edit],
-          total: 1,
-          limit: 20,
-          hasMore: false,
-          nextCursor: null,
-        })}
-        loadTransactions={async () => ({
-          data: [],
-          total: 0,
-          limit: 20,
-          hasMore: false,
-          nextCursor: null,
-        })}
+        loadActivities={async () =>
+          pagedRead({
+            data: [edit],
+            total: 1,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
+        loadTransactions={async () =>
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
       />
     );
     const headline = await screen.findByText('.cell · edit records');
@@ -196,13 +200,17 @@ describe('Shared asset feeds', () => {
         queryKey="dotcell:v3-first-name"
         scope="This identity's whole life"
         item={cell}
-        loadActivities={async () => ({
-          data: [t3, broken],
-          limit: 20,
-          hasMore: false,
-          nextCursor: null,
-        })}
-        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
+        loadActivities={async () =>
+          pagedRead({
+            data: [t3, broken],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
+        loadTransactions={async () =>
+          pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null })
+        }
       />
     );
     const headline = await screen.findByText('Neighbour registered a sub-name');
@@ -242,13 +250,17 @@ describe('Shared asset feeds', () => {
         queryKey="dotbit:valar"
         scope="This identity's whole life"
         item={{ kind: 'identity', protocol: 'dotbit' }}
-        loadActivities={async () => ({
-          data: [own, neighbour],
-          limit: 20,
-          hasMore: false,
-          nextCursor: null,
-        })}
-        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
+        loadActivities={async () =>
+          pagedRead({
+            data: [own, neighbour],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
+        loadTransactions={async () =>
+          pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null })
+        }
       />
     );
     const renewed = await screen.findByText(/^Renewed/);
@@ -281,10 +293,14 @@ describe('Shared asset feeds', () => {
   it('keeps both layers with independent cursors and exact tx identity', async () => {
     const loadActivities = vi
       .fn()
-      .mockResolvedValue({ data: [activity], limit: 20, hasMore: true, nextCursor: 'older' });
+      .mockResolvedValue(
+        pagedRead({ data: [activity], limit: 1, hasMore: true, nextCursor: 'older' })
+      );
     const loadTransactions = vi
       .fn()
-      .mockResolvedValue({ data: [transaction], limit: 20, hasMore: false, nextCursor: null });
+      .mockResolvedValue(
+        pagedRead({ data: [transaction], limit: 20, hasMore: false, nextCursor: null })
+      );
     render(
       <AssetFeed
         queryKey="token:test"
@@ -306,19 +322,28 @@ describe('Shared asset feeds', () => {
   // command line (the prompt square, lowercase names; an h2 keeps the section in the outline) and
   // pages as a list in time, the page counted from the newest end and its pages from the count.
   it('opens on the board’s tab row and says where a page of the feed stands', async () => {
-    const loadActivities = vi.fn().mockImplementation(async ({ cursor }) => ({
-      data: [activity],
-      total: 100,
-      limit: 20,
-      hasMore: true,
-      nextCursor: cursor ? 'older-still' : 'older',
-    }));
+    // a full page of 20 of the 100 (lane cd-fixes-controls, SHOULD-5: one row on a page of twenty
+    // that said more followed)
+    const loadActivities = vi.fn().mockImplementation(async ({ cursor }) =>
+      pagedRead({
+        data: Array.from({ length: 20 }, (_, i) => ({
+          ...activity,
+          txHash: `0x${(8192 + i + (cursor ? 20 : 0)).toString(16).padStart(64, '0')}`,
+        })),
+        total: 100,
+        limit: 20,
+        hasMore: true,
+        nextCursor: cursor ? 'older-still' : 'older',
+      })
+    );
     const { container } = render(
       <AssetFeed
         queryKey="where"
         scope="This token"
         loadActivities={loadActivities}
-        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
+        loadTransactions={async () =>
+          pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null })
+        }
       />
     );
     const feed = screen.getByRole('region', { name: 'What happened' });
@@ -361,7 +386,9 @@ describe('Shared asset feeds', () => {
     );
     const loadTransactions = vi
       .fn()
-      .mockResolvedValue({ data: [], total: 0, limit: 20, hasMore: false, nextCursor: null });
+      .mockResolvedValue(
+        pagedRead({ data: [], total: 0, limit: 20, hasMore: false, nextCursor: null })
+      );
     const changed = vi.fn();
     render(
       <AssetFeed
@@ -396,13 +423,21 @@ describe('Shared asset feeds', () => {
   // newer. The API pages one way (older); the way newer from a cursor it has no history of is the
   // newest end, after which the walk counts its pages again.
   it('goes newer from an activity page opened at a URL cursor: to the newest end', async () => {
-    const loadActivities = vi.fn().mockResolvedValue({
-      data: [activity],
-      total: 100,
-      limit: 20,
-      hasMore: true,
-      nextCursor: 'older',
-    });
+    // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): a full page of 20 of
+    // the 100 with more after it, through pagedRead (it was 1 row on a page of 20 that said more
+    // followed)
+    const loadActivities = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: Array.from({ length: 20 }, (_, i) => ({
+          ...activity,
+          txHash: `0x${(4096 + i).toString(16).padStart(64, '0')}`,
+        })),
+        total: 100,
+        limit: 20,
+        hasMore: true,
+        nextCursor: 'older',
+      })
+    );
     const changed = vi.fn();
     render(
       <AssetFeed
