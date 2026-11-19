@@ -7,8 +7,8 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
 /**
  * Gate for the controls (UI review 2026-11-14, phase C, lane C1; the controls board the owner
  * passed on 2026-11-19, gate D0′): a tab row, a filter, a range, a pager, a text field, a select, a
- * copy button, a help mark and a fold's toggle are each one component of `components/ui/`
- * (CONTROL_FILES). Outside
+ * copy button, a help mark, a fold's toggle and a section's disclosure are each one component of
+ * `components/ui/` (CONTROL_FILES). Outside
  * them no page or component writes the raw form of one. Four kinds can be told from the source:
  *
  * - `select`: a `<select>`;
@@ -73,6 +73,9 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * - `fold`: a disclosure written by hand (review-p-tests SHOULD-6), an element that says whether it
  *   is open (`aria-expanded`, set or through a spread) outside the library, whose one disclosure
  *   is FoldToggle; the shell's menus and a figure's own selection are named, the rest a work list;
+ *   and (the lead's ruling on review-fix-tests SHOULD-4: a native disclosure is a control like any
+ *   other) a native one, a `<details>`, or a `<summary>` written apart from its details: one site
+ *   per disclosure, whose one component is SectionDisclosure;
  * - the roles `checkbox`, `switch`, `option` and `menuitemcheckbox` as a choice (NOTE-5);
  * - `retry`: an action after a failed read written by hand, its words `Retry`, `try again` or
  *   `Reload` (a `↻` before them) on the same elements: the library's RetryAction draws it (the
@@ -82,7 +85,9 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * file also bears is read as the binder; a spread it cannot follow on an element that is a control
  * by the spread alone (an SVG mark with no click of its own) walks past; a pager whose words come
  * from a prop (`<Go words="next →">`) or drawn by a component with no click and no link is not
- * seen.
+ * seen; a `<details>` drawn by `createElement` or through a tag it cannot read (refused above, by
+ * name) and a disclosure drawn by a component other than SectionDisclosure that writes no
+ * `<details>` and says nothing of its state are not seen.
  *
  * The sites tolerated today are listed per file with their count per kind, the lane that takes
  * them and a reason: the work list. A new site fails (its file's count is exceeded, or the file is
@@ -129,6 +134,7 @@ type Lane =
   | 'shared'
   // the page lanes working in those files now (lane cd-fixes-controls, review-p-tests SHOULD-6)
   | 'p-chain'
+  | 'p-assets'
   | 'p-lists'
   | 'p-topics';
 
@@ -154,6 +160,9 @@ const CONTROL_FILES = [
   // the fold's one control (review of phases C and D, SHOULD 5; lane P1): "all 158 cells ↓" and
   // "fewer ↑" on one button that keeps its focus, the short list's words the Pager writes too
   'components/ui/fold-toggle.tsx',
+  // a section's disclosure, the one place a `<details>` is written (lane cd-fixes-controls, the
+  // lead's ruling on review-fix-tests SHOULD-4): detail-layout's "Raw data" was its first form
+  'components/ui/section-disclosure.tsx',
 ] as const;
 
 /** What the scan leaves to the library: its controls, and the one copy path the copy button uses. */
@@ -173,6 +182,75 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // the lead's final round, item 3: the advertisement graph's observations fold by FoldToggle's
   // box (fold 1 → 0); the address holdings' collection rows, what-moved's rest of a side and the
   // nodes table's peer rows and phone filters are another kind of thing, NAMED with their controls
+  // ---- the native disclosures the reader sees since lane cd-fixes-controls (the lead's ruling on
+  // review-fix-tests SHOULD-4: a native disclosure is a control like any other; SectionDisclosure
+  // is the library's one): recorded for the page lanes in these files, converted in one sweep
+  // after their rounds merge. Each says whether it is the section disclosure as it stands or needs
+  // a form the component lacks (an inner disclosure, no rule of its own; a state its page holds) ----
+  'app/tx/[hash]/client-page.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 7 },
+    reason:
+      'the raw section’s Cells, Scripts, Witness bytes, Header deps and JSON, inner disclosures with no rule (a form the component lacks); its Cell graph, whose state the page holds (onToggle: a form it lacks); and the page’s own Raw data, the section disclosure as it stands',
+  },
+  'components/cell/code-cell-board.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 1 },
+    reason:
+      'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
+  },
+  'components/asset/asset-history.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason:
+      '“Every change to the supply (N)” under the history, under its own rule: the section disclosure as it stands',
+  },
+  'components/asset/collection-evidence.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 2 },
+    reason:
+      'the description and the issuer info as stored, inner disclosures of the evidence with no rule (a form the component lacks)',
+  },
+  'components/asset/genetics.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 2 },
+    reason:
+      'the DNA as hex and every gene one row each, inner disclosures with no rule (a form the component lacks)',
+  },
+  'components/asset/item-evidence.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason:
+      'a script of the item at 12 px, its summary in the reading ink: an inner disclosure (a form the component lacks)',
+  },
+  'components/asset/mnft-detail.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason: 'the raw issuer metadata at 12 px, an inner disclosure (a form the component lacks)',
+  },
+  'components/asset/object-media.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason: 'the media dependencies at 12 px, an inner disclosure (a form the component lacks)',
+  },
+  'components/asset/protocol-evidence.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 3 },
+    reason:
+      'the decoded fields, all the bytes as hex, and a reading’s bytes at 12 px: inner disclosures with no rule (a form the component lacks)',
+  },
+  'components/scripts/script-code-evidence.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason:
+      'the committed key hashes of a custody, an inner disclosure at the body step (a form the component lacks)',
+  },
+  'components/scripts/script-family-page.tsx': {
+    lane: 'p-assets',
+    sites: { fold: 1 },
+    reason:
+      '“Each reference in full”, an inner disclosure at the body step (a form the component lacks)',
+  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -200,8 +278,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // head's names fold by FoldToggle's inline form) → 8 (the activity row's objects, phone object
 // count and participants: FoldToggle's inline and box forms) → 1 (the lead's final round, item
 // 3: the advertisement graph's fold is FoldToggle's box; the holdings' rows, what-moved's rest of a
-// side and the nodes table's rows and filters are NAMED; the crash page's reload stands)
-const TOLERATED_TOTAL = 1;
+// side and the nodes table's rows and filters are NAMED; the crash page's reload stands) → 22 (lane
+// cd-fixes-controls, the lead's ruling on review-fix-tests SHOULD-4: the reader learned a native
+// disclosure, and 21 came to light for the page lanes: the transaction page 7 and the code cell 1
+// for p-chain; the asset components 11 and the script pages 2 for p-assets. Detail-layout's "Raw
+// data" became SectionDisclosure, the one place a `<details>` is written)
+const TOLERATED_TOTAL = 22;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
@@ -746,6 +828,30 @@ function scanControls(
     return readings.map((r) => r.replace(/\s+/g, ' ').trim());
   };
 
+  /**
+   * Whether a `<summary>` stands in a `<details>` of the same JSX: up through elements, fragments,
+   * expressions and the `?:`, `&&` and parentheses they hold, to an element whose tag is `details`.
+   */
+  const insideDetails = (node: ts.Node): boolean => {
+    for (let at = node.parent; at; at = at.parent) {
+      if (ts.isJsxElement(at) && at.openingElement !== node) {
+        if (tagsOf(at.openingElement.tagName)?.includes('details')) return true;
+        continue;
+      }
+      if (
+        ts.isJsxFragment(at) ||
+        ts.isJsxExpression(at) ||
+        ts.isParenthesizedExpression(at) ||
+        ts.isConditionalExpression(at) ||
+        ts.isBinaryExpression(at) ||
+        (ts.isJsxElement(at) && at.openingElement === node)
+      )
+        continue;
+      return false;
+    }
+    return false;
+  };
+
   const visitElement = (
     node: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
     children: ts.NodeArray<ts.JsxChild> | null
@@ -783,6 +889,11 @@ function scanControls(
     // whether it is open; FoldToggle is the library's one
     if (attr('aria-expanded'))
       sites.push({ kind: 'fold', line: lineOf(node), what: `<${shown} aria-expanded>` });
+    // a native disclosure (lane cd-fixes-controls, the lead's ruling on review-fix-tests SHOULD-4):
+    // a `<details>`, or a `<summary>` written apart from its details; SectionDisclosure is the
+    // library's one
+    if (tags.includes('details') || (tags.includes('summary') && !insideDetails(node)))
+      sites.push({ kind: 'fold', line: lineOf(node), what: `<${shown}>` });
 
     // a control by its tag, its component or its attributes
     const handled = INTERACTIVE_ATTRS.some((key) => attr(key));
@@ -1390,6 +1501,28 @@ describe('the controls scan finds what it must, and only that', () => {
       'fold <button aria-expanded>',
       'fold <tr {…} aria-expanded>',
     ]);
+  });
+
+  // Lane cd-fixes-controls (review-fix-tests SHOULD-4, the lead's ruling): a native disclosure is
+  // a control like any other. A `<details>` takes its state from the browser and says nothing of
+  // it, so `aria-expanded` never saw one; one disclosure is one site, its `<details>`, and a
+  // `<summary>` written apart from its details (a part of one drawn elsewhere) is one too
+  it('finds a native disclosure: a details, and a summary written apart from its details', () => {
+    expect(
+      kinds(`
+        export const A = ({ open, more }: { open: boolean; more: boolean }) => (
+          <div>
+            <details open={open}>
+              <summary className="text-text-dim">Raw data</summary>
+              <pre />
+            </details>
+            <details>
+              {more ? <summary>Cells · 3</summary> : <summary>Cells</summary>}
+            </details>
+          </div>
+        );
+        export const Part = () => <summary>Witness bytes</summary>;`)
+    ).toEqual(['fold <details>', 'fold <details>', 'fold <summary>']);
   });
 
   // Lane cd-fixes-controls (review-p-tests NOTE-5): the choice roles it did not read
