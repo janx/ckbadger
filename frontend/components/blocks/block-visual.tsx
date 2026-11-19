@@ -26,6 +26,19 @@ interface BlockContentsProps {
 }
 
 /** The same square/diamond/dot grammar as the transaction pipeline. */
+/**
+ * A count beside the glyph: the figure a value, the reading ink at 13 px; its word a unit, quiet at
+ * 12 px (the ink and size round, the shared lane: the whole count was quiet at 12).
+ */
+function Count({ figure, unit }: { figure: string; unit: string }) {
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-text text-small tabular-nums">{figure}</span>{' '}
+      <span className="text-text-dim text-meta">{unit}</span>
+    </span>
+  );
+}
+
 export function BlockContents({
   transactionSizes,
   proposalsCount,
@@ -86,22 +99,24 @@ export function BlockContents({
             />
           ))}
         </svg>
-        {showCount && (
-          <span className="text-text-dim text-meta">
-            {transactionSizes.length.toLocaleString('en-US')} tx
-          </span>
-        )}
+        {showCount && <Count figure={transactionSizes.length.toLocaleString('en-US')} unit="tx" />}
       </span>
       {showCount && (userSizes.length > shown.length || proposalsCount > dots) && (
         <span className="text-text-dim text-meta">
           {[
             ...(userSizes.length > shown.length
-              ? [`+${userSizes.length - shown.length} tiles`]
+              ? [<Count key="tiles" figure={`+${userSizes.length - shown.length}`} unit="tiles" />]
               : []),
             ...(proposalsCount > dots
-              ? [`${proposalsCount.toLocaleString('en-US')} proposed`]
+              ? [
+                  <Count
+                    key="proposed"
+                    figure={proposalsCount.toLocaleString('en-US')}
+                    unit="proposed"
+                  />,
+                ]
               : []),
-          ].join(' · ')}
+          ].flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}
         </span>
       )}
     </span>

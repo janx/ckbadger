@@ -59,6 +59,24 @@ describe('LockKind (R-2)', () => {
     expect(kind).toHaveClass('whitespace-nowrap');
   });
 
+  // The ink and size round (the shared lane): the code hash is an id, its link in the reading ink at
+  // 13 px; a caller's class sets the words around it ("lock", "by data"), never the link's size or
+  // ink (balance-changes passes `text-text-dim text-meta`, as the token history does)
+  it('holds an unregistered lock’s code-hash link at 13 px in the reading ink, whatever its caller passes', () => {
+    render(
+      <LockKind
+        address={null}
+        size="row"
+        lockKind={null}
+        lockCodeHash={CODE}
+        className="text-text-dim text-meta whitespace-nowrap"
+      />
+    );
+    const link = screen.getByRole('link', { name: '0x9b9b9b9b…9b9b9b' });
+    expect(link.parentElement).toHaveClass('text-text', 'text-small');
+    expect(link.closest('[data-lock-kind]')).toHaveClass('text-text-dim', 'text-meta');
+  });
+
   // A4 Chrome sweep (re-pinned): a registered name is words ("Nervape Shadow Lock"), not a unit, so
   // LockKind makes it nowrap in no form; only the unregistered "lock <code hash>" (a label with its
   // id) is. A row chip is a box whose own class keeps its words on one line (rowTagClass).
