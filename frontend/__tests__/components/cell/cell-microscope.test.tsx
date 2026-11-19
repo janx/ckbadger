@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
+import { DetailTier2 } from '@/components/ui/detail-layout';
 import { cellDataParts, cellOutputParts, elfRegions } from '@/lib/cell-parts';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
@@ -60,6 +61,22 @@ describe('cell microscope', () => {
     expect(within(args!).getByText('6')).toHaveStyle({ color: DATA_COLOR });
     expect(promptNote(heading)).toHaveTextContent(/^room for 94 more$/);
     expect(heading).not.toHaveTextContent('occupied bytes');
+  });
+
+  // Lane P1 (lane D3's note: the byte map's heading was a tier-1 command line inside the developer
+  // tier): in tier 2 it is a tier-2 heading, as every section there is, its args and note quiet.
+  it('heads the bytes as a tier-2 section in the developer tier (P1)', () => {
+    render(
+      <DetailTier2>
+        <CellMicroscope cell={cell} />
+      </DetailTier2>
+    );
+    const heading = screen.getByRole('heading', { name: 'Bytes 8 + 0 + 0 + 4 = 6' });
+    expect(heading.tagName).toBe('H2');
+    expect(heading).toHaveClass('text-body', 'text-text', 'font-medium');
+    expect(heading.querySelector('.section-mark')).toBeNull();
+    const section = screen.getByRole('region', { name: 'Cell byte microscope' });
+    expect(within(section).getByText(/^room for 94 more$/)).toHaveClass('text-text-dim');
   });
 
   it('sticks the field detail one gutter under the measured site header, not a fixed offset', () => {
