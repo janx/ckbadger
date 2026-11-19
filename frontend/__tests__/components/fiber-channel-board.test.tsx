@@ -506,7 +506,7 @@ describe('FiberChannelBoard', () => {
       />
     );
     expect(screen.getByTestId('what-moved')).toHaveTextContent(
-      'ckb1…7sppedrr put in 1,000 CKB and got back 1,061.99 CKB; ckb1…rc5eyy6y put in 62 CKB and got back nothing.'
+      'ckb1…7sppedrr put in 1,000 CKB and got back 1,061 CKB; ckb1…rc5eyy6y put in 62 CKB and got back nothing.'
     );
   });
   it('says what a waiting channel’s parties put in, and that nothing is paid out yet (P4)', () => {

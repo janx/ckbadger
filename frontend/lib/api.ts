@@ -2167,6 +2167,11 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
+  /**
+   * The live DAO cells under a legacy name: `liveCellsCount`, which the route checks it equals (a
+   * withdrawal request is no active deposit). Its last reader is the home page's card; it goes when
+   * that reads `liveCellsCount` (lane exactness, part A2, S2; part B).
+   */
   activeDeposits: number;
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;

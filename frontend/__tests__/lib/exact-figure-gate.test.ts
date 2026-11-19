@@ -11,9 +11,11 @@ import { exactSites, type ExactKind, type ExactSite } from '@/__tests__/utils/ex
  * rounded. In `app/`, `components/`, `hooks/` and `lib/` the gate reads each source's syntax tree
  * (`__tests__/utils/exact-figure-scan.ts`, which says what it counts) and finds every call that
  * rounds a number or reads a decimal into a float where its result may be written: `toFixed`,
- * `toPrecision`, `Math.round` / `floor` / `ceil` reaching text, `toLocaleString` or
- * `Intl.NumberFormat` given fraction or significant digits, `Number(…)` / `parseFloat(…)` reaching
- * text. Each is one of:
+ * `toPrecision`, `Math.round` / `floor` / `ceil` / `trunc` reaching text, `toLocaleString` or
+ * `Intl.NumberFormat` given fraction or significant digits, or a percent or compact style, or a
+ * `toLocaleString` of a quotient, `Number(…)` / `parseFloat(…)` / `Number.parseFloat(…)` / a unary
+ * `+` reaching text, a rounded value in a title or an accessible name (lane exactness, part A2, the test review's
+ * NOTE-2, added the last five). Each is one of:
  *
  * - `drawing`: geometry — a width, a coordinate, a stroke, a colour channel, an error's pixels —
  *   never a figure a reader is told;
@@ -27,8 +29,13 @@ import { exactSites, type ExactKind, type ExactSite } from '@/__tests__/utils/ex
  * a site that goes leaves the list, and a new one fails. The chart pages and the topic pages hold
  * no `part B` site: each of theirs is named.
  *
- * What the reader cannot see (its limits): a value handed to a function or a component and
- * written there (`formatValue={(n) => …}` counts only a call it can read in that function); names
+ * What the reader cannot see (its limits): a name's `toLocaleString` (or a `format` of an
+ * `Intl.NumberFormat`) with no digit option, which rounds a float at three places where it is exact
+ * on an integer or a BigInt, and a name does not say which it holds (every such call sampled in the
+ * chart and topic files is on an integer or a BigInt; a quotient written so is counted); a value
+ * handed to a function or a component and written there, a component's text prop among them
+ * (`label={Math.round(x)}`; `formatValue={(n) => …}` counts only a call it can read in that
+ * function); names
  * are the file's, not a scope's (a name bound to a rounded value anywhere is read as bound
  * everywhere in the file); rounding done in BigInt arithmetic (`formatPercent`'s and `percentOf`'s
  * half up, part B's) or by a function of the site's own that is not one of these calls; a
@@ -120,6 +127,14 @@ const TOLERATED: readonly Tolerated[] = [
     reason: "the height of a row's labels in whole px (the DAO page's issuance icicle)",
   },
   // ---- shared modules ----
+  {
+    path: 'lib/format-asset.ts',
+    lane: 'shared',
+    what: 'exact',
+    sites: { 'locale-rounds': 1 },
+    reason:
+      "a BigInt quotient written by the locale (lane exactness, part A2: the reader counts a quotient's toLocaleString and cannot tell a BigInt from a float): a token amount's whole units, the amount over 10^decimals in BigInt, its fraction written beside it",
+  },
   {
     path: 'components/ui/share-bar.tsx',
     lane: 'shared',
@@ -234,6 +249,30 @@ const TOLERATED: readonly Tolerated[] = [
     what: 'part B',
     sites: { 'number-to-text': 1 },
     reason: "an ELF section's size read from the API's digits",
+  },
+  {
+    path: 'lib/tx-detail-model.ts',
+    lane: 'p1-chain',
+    what: 'exact',
+    sites: { 'locale-rounds': 1 },
+    reason:
+      "a BigInt quotient written by the locale (lane exactness, part A2: the reader counts a quotient's toLocaleString and cannot tell a BigInt from a float): a column head's whole CKB, shannons over 10^8 in BigInt, an integer the locale writes exactly",
+  },
+  {
+    path: 'components/scripts/script-family-page.tsx',
+    lane: 'p1-chain',
+    what: 'exact',
+    sites: { 'locale-rounds': 1 },
+    reason:
+      "a BigInt quotient written by the locale (lane exactness, part A2: the reader counts a quotient's toLocaleString and cannot tell a BigInt from a float): a cell's whole bytes, shannons over 10^8 in BigInt after the check that they are whole",
+  },
+  {
+    path: 'components/asset/object-hero.tsx',
+    lane: 'p2-assets',
+    what: 'exact',
+    sites: { 'locale-rounds': 1 },
+    reason:
+      "a BigInt quotient written by the locale (lane exactness, part A2: the reader counts a quotient's toLocaleString and cannot tell a BigInt from a float): a cell's whole CKB, shannons over 10^8 in BigInt where they divide exactly",
   },
   {
     path: 'components/asset/cell-versions.tsx',
@@ -370,6 +409,7 @@ const KINDS: readonly ExactKind[] = [
   'toPrecision',
   'round',
   'fraction-digits',
+  'locale-rounds',
   'number-to-text',
 ];
 
@@ -421,9 +461,12 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
     }).toEqual({
       charts: 5,
       topics: 12,
-      shared: 17,
-      'p1-chain': 13,
-      'p2-assets': 7,
+      // re-pinned for lane exactness, part A2 (the test review's NOTE-2): the reader now counts a quotient's
+      // toLocaleString, and four BigInt quotients, exact, are named (shared 17, p1-chain 13 and
+      // p2-assets 7 before); no site was added to the code
+      shared: 18,
+      'p1-chain': 15,
+      'p2-assets': 8,
       'p3-lists': 53,
     });
   });
@@ -482,14 +525,14 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
         ].join('\n')
       )
     ).toEqual([
+      '1 locale-rounds',
       '2 locale-rounds',
-      '4 locale-rounds',
-      '5 locale-rounds',
-      '7 number-to-text',
-      '8 number-to-text',
-      '10 round',
-      '12 round',
-      '13 round',
+      '3 locale-rounds',
+      '4 number-to-text',
+      '5 number-to-text',
+      '6 round',
+      '7 round',
+      '8 round',
     ]);
   });
 

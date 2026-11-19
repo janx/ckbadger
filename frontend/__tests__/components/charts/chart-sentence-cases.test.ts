@@ -333,8 +333,8 @@ describe('a tie of the largest kinds (lane exactness, part A2, N9)', () => {
     );
     // 3 CKB transfers and 3 token actions of 8: neither is "the largest kind" alone
     expect(tied.eyebrow).toBe('CKB transfers and tokens, the largest kinds in a day');
-    expect(tied.sentence).toMatch(
-      /^CKB transfers and tokens were 37\.50% each of the day's .+, script calls 25\.00%\.$/
+    expect(tied.sentence).toBe(
+      "CKB transfers and tokens were 37.50% each of the day's kind counts, script calls 25.00%. An activity of two kinds counts under both."
     );
   });
 });

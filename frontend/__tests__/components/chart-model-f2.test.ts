@@ -666,8 +666,17 @@ const hours = (m: number) =>
   `${Math.floor(m / 60)}.${String(Math.floor(((m % 60) * 100) / 60)).padStart(2, '0')}`;
 
 describe('a filled histogram fails on what it cannot read', () => {
+  // block intervals carry each bucket's count and their window, the route's (lane exactness,
+  // part A2, N5: an API without them is refused before a bucket is read)
   const histogram = (slug: string, data: { date: string; value: string; value2?: string }[]) =>
-    chartModel(def(slug), { title: slug, yAxisLabel: 'Epochs', data });
+    chartModel(def(slug), {
+      title: slug,
+      yAxisLabel: 'Epochs',
+      data,
+      ...(slug === 'block-time-distribution'
+        ? { epochs: 1, intervals: data.length, beyondRange: 0, bucketCounts: data.map(() => 1) }
+        : {}),
+    });
   /** Epoch durations as the API labels them: the minute in hours, two decimals, cut. */
   const minutes = (from: number, to: number) =>
     Array.from({ length: to - from + 1 }, (_, i) => ({
