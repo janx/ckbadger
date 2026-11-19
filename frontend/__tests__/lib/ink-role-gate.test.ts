@@ -322,8 +322,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/inventory/inventory-page-client.tsx': {
     family: 'lists',
-    sites: { link: 1, prose: 1 },
-    reason: "the kind switch's links and the loading line in the quiet ink",
+    // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
+    sites: { prose: 1 },
+    reason: 'the loading line in the quiet ink',
   },
   'app/scripts/[name]/client-page.tsx': {
     family: 'lists',

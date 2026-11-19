@@ -3,9 +3,12 @@
 // names (IV-03, IV-04), occupied as whole CKB (IV-06), instant search and the board's "sorted by"
 // line (IV-07), crystal / copper thumbnail frames (IV-10), "m-NFT" (IV-11) and a quiet identities
 // view (IV-12).
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { containerContentPx, contentPx } from '@/__tests__/utils/tailwind-box';
 import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
@@ -152,28 +155,36 @@ beforeEach(() => {
 });
 
 // Responsive fix plan 2026-11-01 (A12a, report B#25): at 390 the three class tabs (~414 px in one
-// line) wrapped "Identities 4" onto a line of its own. Below sm each tab puts its count under its
-// label (~330 px for the three), so they share one line at full type size; from sm one line each.
+// line) wrapped "Identities 4" onto a line of its own. Re-pinned on purpose (controls lane C2):
+// the classes are the controls board's tab row, the page's command line, one line at every width
+// by the one fit function (lib/control-row-fit.ts): at a 360 px window its names and counts are
+// 324 px in the 328 px line, so the counts stay (the board's caption). It stacked each count under
+// its label below sm.
 describe('Inventory class tabs across widths', () => {
   beforeEach(() => {
     window.history.replaceState(null, '', '/inventory/objects');
     vi.mocked(api.getAssets).mockResolvedValue(objects);
   });
-  it('stacks each count under its label below sm so the three tabs share one line', async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('keeps the three classes and their counts on one line of a 360 px window (324 px in 328)', async () => {
+    atViewportWidth(360);
+    stubChartWidth(containerContentPx(360));
     render(<ObjectsPage />);
-    const nav = await screen.findByRole('navigation', { name: 'Inventory classes' });
-    await waitFor(() => expect(nav).toHaveTextContent('5,653'));
-    expect(nav).toHaveClass('gap-x-5', 'sm:gap-x-6');
-    const tabs = within(nav).getAllByRole('link');
-    expect(tabs.map((t) => t.querySelector('[data-role="tab-label"]')?.textContent)).toEqual([
-      'Tokens',
-      'Objects',
-      'Identities',
-    ]);
-    for (const tab of tabs) {
-      expect(tab).toHaveClass('grid', 'grid-cols-[16px_auto]', 'sm:flex');
-      expect(tab.querySelector('[data-role="tab-count"]')).toHaveClass('col-start-2');
-    }
+    const list = await screen.findByRole('tablist', { name: 'Inventory classes' });
+    await waitFor(() => expect(list).toHaveTextContent('5,653'));
+    expect(
+      within(list)
+        .getAllByRole('tab')
+        .map((t) => t.textContent)
+    ).toEqual(['tokens 727', 'objects 5,653', 'identities 4']);
+    expect(within(list).getByRole('tab', { name: 'objects 5,653' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(Math.round(contentPx(list, 360) * 100) / 100).toBe(324);
   });
 });
 
@@ -245,12 +256,19 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
     expect(rgbpp.getAttribute('title')).toMatch(/^RGB\+\+ Protocol · RGB\+\+ · xUDT · /);
     expect(within(table).getByRole('link', { name: 'SEAL' })).toBeInTheDocument();
     expect(within(seal).getByText('sUDT')).toHaveAttribute('data-row-tag', 'default');
-    const chips = screen.getByRole('group', { name: 'Standard filters' });
+    // Re-pinned on purpose (controls lane C2): the controls board's filter chips, a radio group
+    // named by the filter, its words lowercase (it was the aria-pressed group "Standard filters",
+    // "All 727", "xUDT 629", "sUDT 94", "xUDT-compatible 4").
+    const chips = await screen.findByRole('radiogroup', { name: 'standard' });
     expect(
       within(chips)
-        .getAllByRole('button')
+        .getAllByRole('radio')
         .map((b) => b.textContent)
-    ).toEqual(['All 727', 'xUDT 629', 'sUDT 94', 'xUDT-compatible 4']);
+    ).toEqual(['all 727', 'xudt 629', 'sudt 94', 'xudt-compatible 4']);
+    expect(within(chips).getByRole('radio', { name: 'all 727' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
   });
   it('counts each standard chip from the summary, which sums to All (R-3, IV-03)', async () => {
     vi.mocked(api.getInventorySummary).mockResolvedValue({
@@ -263,14 +281,15 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
     });
     render(<TokensPage />);
     await screen.findByRole('table', { name: 'Tokens' });
-    const chips = screen.getByRole('group', { name: 'Standard filters' });
+    // Re-pinned on purpose (controls lane C2): the filter chips' radio group, lowercase words.
+    const chips = await screen.findByRole('radiogroup', { name: 'standard' });
     // A standard absent from the summary has no catalog token, so it has no chip.
     await waitFor(() =>
       expect(
         within(chips)
-          .getAllByRole('button')
+          .getAllByRole('radio')
           .map((b) => b.textContent)
-      ).toEqual(['All 723', 'xUDT 629', 'sUDT 94'])
+      ).toEqual(['all 723', 'xudt 629', 'sudt 94'])
     );
   });
   // Re-pinned on purpose (readability B5, plan §7.6): the azure bar on the page's scale left the
@@ -299,8 +318,10 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'rgb' }))
     );
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label it
+    // stands after, "sorted by" (it was the aria-label "Sort inventory").
     expect(screen.getByText(/^sorted by$/)).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Sort inventory' })).toHaveValue('capacity');
+    expect(screen.getByRole('combobox', { name: 'sorted by' })).toHaveValue('capacity');
   });
 });
 

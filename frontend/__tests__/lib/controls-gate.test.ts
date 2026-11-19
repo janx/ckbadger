@@ -78,12 +78,6 @@ const CONTROL_FILES = [
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
-  'app/inventory/inventory-page-client.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 2, 'text-input': 1, tab: 1, pager: 1 },
-    reason:
-      'the standard filter’s phone select and the sort select, the name search, the class tabs (links), the pager',
-  },
   'app/transactions/page.tsx': {
     lane: 'c2-lists',
     sites: { select: 1, tab: 1, pager: 2 },
@@ -202,7 +196,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 43;
+const TOLERATED_TOTAL = 38;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

@@ -92,13 +92,6 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
   // The controls library (UI review 2026-11-14, phase C, lane C1), built before any page uses it:
   // the C2 lanes place each component, from the controls gate's work list; an entry goes when a
   // page first draws its component (this test then fails until it does).
-  'components/ui/filter-chips.tsx#FilterChips': {
-    why: 'the controls library’s filter chips (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
-    anchor: {
-      file: '__tests__/lib/controls-gate.test.ts',
-      text: "'components/ui/filter-chips.tsx'",
-    },
-  },
   'components/ui/range-select.tsx#RangeSelect': {
     why: 'the controls library’s range (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
     anchor: {

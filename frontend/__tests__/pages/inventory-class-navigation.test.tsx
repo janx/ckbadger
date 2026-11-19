@@ -60,13 +60,15 @@ describe('the inventory’s classes (behaviour the controls lane keeps)', () => 
   it('goes to a class’s address as a step of history, under the network it leaves', async () => {
     const router = renderAt('/mainnet/inventory/tokens');
     await waitFor(() => expect(api.getAssets).toHaveBeenCalled());
-    fireEvent.click(await screen.findByRole('link', { name: /^objects/i }));
+    // Re-pinned on purpose (the same commit as the change, controls lane C2): the class row is
+    // the controls board's tab row, a tab per class (it was a link per class).
+    fireEvent.click(await screen.findByRole('tab', { name: /^objects/i }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/mainnet/inventory/objects'));
     expect(router.state.historyAction).toBe('PUSH');
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'object' }))
     );
-    fireEvent.click(await screen.findByRole('link', { name: /^identities/i }));
+    fireEvent.click(await screen.findByRole('tab', { name: /^identities/i }));
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/mainnet/inventory/identities')
     );

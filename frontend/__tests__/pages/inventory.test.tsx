@@ -352,9 +352,14 @@ describe('Tokens Inventory Page', () => {
     window.history.replaceState(null, '', '/inventory/tokens');
   });
 
-  // L4 (responsive plan, board L3): below sm the standard chips fold into a select on the sort
-  // line, so the tabs, the filter and the sort take two lines at 390 px; a phone reads twenty.
-  it('folds the standard chips into the sort line below sm and reads twenty rows on a phone', async () => {
+  // L4 (responsive plan, board L3): below sm the standard chips fold into a select; a phone reads
+  // twenty. Re-pinned on purpose (controls lane C2): the fold is the filter chips' own phone form
+  // (the four standards are 397.6 px of chips, wider than a 360 px window's 328 px line), a select
+  // after the filter's label "standard" in the filter's row beside the search, and the sort is the
+  // select after "sorted by", shown at every width. It was the page's own select on the sort line
+  // (sm:hidden, "Standard filter" for a screen reader, "All 500" / "xUDT 398" …), the chips
+  // hidden below sm, and "sorted by" for a screen reader only below sm.
+  it('folds the standard chips into a select after "standard" below sm and reads twenty rows on a phone', async () => {
     stubViewportFromMd(false);
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -365,23 +370,18 @@ describe('Tokens Inventory Page', () => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }))
     );
     expect(api.getAssets).not.toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
-    const controls = screen.getByTestId('inventory-controls');
-    const standard = within(controls).getByLabelText('Standard filter');
-    expect(standard).toHaveClass('sm:hidden');
+    const standard = await screen.findByRole('combobox', { name: 'standard' });
     await waitFor(() =>
       expect(
         within(standard)
           .getAllByRole('option')
           .map((o) => o.textContent)
-      ).toEqual(['All 500', 'xUDT 398', 'sUDT 100', 'xUDT-compatible 2'])
+      ).toEqual(['all 500', 'xudt 398', 'sudt 100', 'xudt-compatible 2'])
     );
-    expect(screen.getByRole('group', { name: 'Standard filters' })).toHaveClass(
-      'hidden',
-      'sm:flex'
-    );
-    // The words "sorted by" stay for the screen reader below sm and show from sm.
-    expect(within(controls).getByText('sorted by')).toHaveClass('sr-only', 'sm:not-sr-only');
-    expect(within(controls).getByLabelText('Sort inventory')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'standard' })).toBeNull();
+    const controls = screen.getByTestId('inventory-controls');
+    expect(within(controls).getByText('sorted by')).not.toHaveClass('sr-only');
+    expect(within(controls).getByRole('combobox', { name: 'sorted by' })).toBeInTheDocument();
     fireEvent.change(standard, { target: { value: 'sudt' } });
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -409,7 +409,9 @@ describe('Tokens Inventory Page', () => {
     render(<TokensPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Tokens')).toBeInTheDocument();
+      // Re-pinned on purpose (controls lane C2): the class is the current tab of the command
+      // line, its name lowercase (it was the nav link "Tokens").
+      expect(screen.getByRole('tab', { name: /^tokens/ })).toHaveAttribute('aria-selected', 'true');
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
       // F2 objects (IV-04): the full name leads. Table-rows L2-1: the symbol is a tag beside it
       // and the standard is in the row's title.
@@ -518,11 +520,13 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort inventory").
     await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: 'Sort inventory' })).toHaveValue('capacity');
+      expect(screen.getByRole('combobox', { name: 'sorted by' })).toHaveValue('capacity');
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sort inventory' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'used' },
     });
 
@@ -585,7 +589,9 @@ describe('Tokens Inventory Page', () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'xUDT 398' }));
+    // Re-pinned on purpose (controls lane C2): the controls board's chip, a radio named by its
+    // lowercase words (it was the aria-pressed button "xUDT 398").
+    fireEvent.click(await screen.findByRole('radio', { name: 'xudt 398' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -595,15 +601,50 @@ describe('Tokens Inventory Page', () => {
     });
   });
 
+  // The controls lane (C2, c2-lists): the filter holds one value of its own, so a standard the URL
+  // chose that the summary does not list (no catalog token, by the summary's own count) stands as
+  // the chosen chip with none (0), and the list asks for it as before; another choice drops it.
+  it('names a URL standard the summary does not list as the chosen chip, with none', async () => {
+    window.history.replaceState(null, '', '/inventory/tokens?standard=spore');
+    vi.mocked(api.getAssets).mockResolvedValue({ ...mockTokenAssets, data: [], total: 0 });
+    render(<TokensPage />);
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'token', standard: 'spore' })
+      )
+    );
+    const chips = await screen.findByRole('radiogroup', { name: 'standard' });
+    expect(
+      within(chips)
+        .getAllByRole('radio')
+        .map((r) => r.textContent)
+    ).toEqual(['all 500', 'xudt 398', 'sudt 100', 'xudt-compatible 2', 'spore 0']);
+    expect(within(chips).getByRole('radio', { name: 'spore 0' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(within(chips).getByRole('radio', { name: 'spore 0' })).toHaveClass('text-text-bright');
+    fireEvent.click(within(chips).getByRole('radio', { name: 'all 500' }));
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'token', standard: undefined })
+      )
+    );
+    expect(window.location.search).toBe('');
+    expect(within(chips).queryByRole('radio', { name: 'spore 0' })).toBeNull();
+  });
+
   it('renders the HMul column and supports sorting by HMul', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
     render(<TokensPage />);
+    // Re-pinned on purpose (controls lane C2): the select's choices in the controls board's
+    // lowercase ("h-mult.", was "H-mult."), the select named by "sorted by".
     await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'H-mult.' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'h-mult.' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Explain HMul' })).toBeInTheDocument();
       expect(screen.getAllByText('\u00d72.00').length).toBeGreaterThan(0);
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sort inventory' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'hMultiplier' },
     });
     await waitFor(() => {
@@ -644,7 +685,12 @@ describe('Objects Inventory Page', () => {
     render(<ObjectsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Objects')).toBeInTheDocument();
+      // Re-pinned on purpose (controls lane C2): the current tab of the command line (it was the
+      // nav link "Objects").
+      expect(screen.getByRole('tab', { name: /^objects/ })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       // Table-rows L2-2: the composition is the row's second tag, not a column of its own.
       expect(screen.queryByRole('columnheader', { name: 'Composition' })).toBeNull();
@@ -779,7 +825,10 @@ describe('Identities Inventory Page', () => {
           expect.objectContaining({ type: 'identity', standard: wire })
         )
       );
-      expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();
+      // Re-pinned on purpose (controls lane C2): the filter is the controls board's chips (a
+      // radio group) or their phone select, both named "standard" (it was "Standard filters").
+      expect(screen.queryByRole('radiogroup', { name: 'standard' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('combobox', { name: 'standard' })).not.toBeInTheDocument();
       view.unmount();
     }
   });
@@ -866,9 +915,9 @@ describe('Inventory approved board regressions', () => {
     );
     expect(within(table).getByText('123')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
-      'Tokens'
-    );
+    // Re-pinned on purpose (controls lane C2): the classes are the command line's tablist, their
+    // names lowercase (it was the nav "Inventory classes" with "Tokens").
+    expect(screen.getByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent('tokens');
   });
   it('shows transport errors as errors, not an empty inventory', async () => {
     vi.mocked(api.getAssets).mockRejectedValue(new Error('pinned read failed'));
@@ -899,29 +948,36 @@ describe('Inventory snapshot and pagination lifecycle', () => {
     });
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
     render(<TokensPage />);
-    expect(await screen.findByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
-      'Tokens'
+    // Re-pinned on purpose (controls lane C2): the command line's tablist, lowercase names (it was
+    // the nav "Inventory classes" with "Tokens").
+    expect(await screen.findByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent(
+      'tokens'
     );
     await waitFor(() =>
-      expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent('500')
+      expect(screen.getByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent('500')
     );
     expect(screen.getByLabelText('Inventory totals')).toHaveTextContent(
       'cached snapshot and can lag'
     );
   });
+  // Re-pinned on purpose (controls lane C2): the controls board's pager and chips — "next →",
+  // the radio "sudt 100" (they were the buttons "Next" and "sUDT 100"); the fixture's total says
+  // the second page it serves (52 rows, it said 2 beside a next page, which the old pager drew and
+  // the new one refuses).
   it('resets the cursor when a standard chip changes', async () => {
     vi.mocked(api.getAssets).mockResolvedValue({
       ...mockTokenAssets,
+      total: 52,
       hasMore: true,
       nextCursor: 'older',
     });
     render(<TokensPage />);
     await screen.findAllByText('Test Token');
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'sUDT 100' }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'sudt 100' }));
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ standard: 'sudt', cursor: undefined })
