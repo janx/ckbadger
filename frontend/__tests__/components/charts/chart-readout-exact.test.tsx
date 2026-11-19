@@ -71,8 +71,10 @@ describe('a CKB chart’s readouts state the exact value', () => {
           // re-pinned for the four bands (lane D1, second follow-up, item 1): the four bands that make C, C and the protocol circulation;
           // re-pinned for lane exactness, part A2 (M1): the bands named and keyed for what they hold
           values: {
-            circulatingNotDeposited: '8131306075.44505907',
+            // re-pinned for lane exactness, part B1: five bands; 100.5 CKB of the first is withdrawing
+            outsideDao: '8131305974.94505907',
             daoDeposited: '1234.50000000',
+            daoWithdrawing: '100.5',
             unclaimedCompensation: '2',
             burnt: '0.1',
             totalIssuance: '8131307312.04505907',
@@ -81,8 +83,9 @@ describe('a CKB chart’s readouts state the exact value', () => {
         },
       ],
       series: [
-        { key: 'circulatingNotDeposited', label: 'Circulating, not deposited', color: '#00c389' },
+        { key: 'outsideDao', label: 'Outside the Nervos DAO', color: '#00c389' },
         { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#3b82f6' },
+        { key: 'daoWithdrawing', label: 'Withdrawing from the Nervos DAO', color: '#786540' },
         { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
@@ -91,7 +94,7 @@ describe('a CKB chart’s readouts state the exact value', () => {
     const plot = await screen.findByRole('img', { name: 'Supply, CKB' });
     fireEvent.keyDown(plot, { key: 'ArrowLeft' });
     expect(screen.getByRole('status', { name: 'Supply readout' })).toHaveTextContent(
-      '2026-02-23 · Circulating, not deposited 8,131,306,075.44505907 CKB · Deposited in the Nervos DAO 1,234.5 CKB · Unclaimed DAO compensation 2 CKB · Burnt 0.1 CKB'
+      '2026-02-23 · Outside the Nervos DAO 8,131,305,974.94505907 CKB · Deposited in the Nervos DAO 1,234.5 CKB · Withdrawing from the Nervos DAO 100.5 CKB · Unclaimed DAO compensation 2 CKB · Burnt 0.1 CKB'
     );
   });
 });
