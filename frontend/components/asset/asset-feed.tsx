@@ -723,7 +723,11 @@ function FullAssetFeed({
   // a change of page size at md starts each walk again (lane c2-finish, 1d)
   const actsPages = useCursorPagination(pageSize),
     txPages = useCursorPagination(pageSize);
-  const activityCursor = actsPages.cursor ?? initialActivityCursor;
+  // The URL's cursor, until the reader goes newer from it: the API pages one way (older), so the
+  // way newer from a cursor the walk has no history of is the newest end (the page lane notes:
+  // a reader who landed on page 3 could not go newer at all)
+  const [urlCursor, setUrlCursor] = useState(initialActivityCursor);
+  const activityCursor = actsPages.cursor ?? urlCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
   }, [activityCursor, onActivityCursorChange]);
@@ -742,7 +746,12 @@ function FullAssetFeed({
   const at = current.data ? timePageAt(tab, pages.page, current.data) : null;
   // A page counts from where its cursor started: an activity page opened at a cursor from the
   // URL (an identity page's link) is not counted from the newest end, so it names no page.
-  const fromNewest = tab === 'transactions' || initialActivityCursor === undefined;
+  const fromNewest = tab === 'transactions' || urlCursor === undefined;
+  const newer = pages.hasPrevious
+    ? pages.goToPrevious
+    : tab === 'activities' && urlCursor !== undefined
+      ? () => setUrlCursor(undefined)
+      : undefined;
   return (
     <section aria-label="What happened" className="min-w-0">
       {/* the tab row is the section's command line (the controls board); the outline keeps the
@@ -790,7 +799,7 @@ function FullAssetFeed({
                   order="newest first"
                   page={fromNewest ? at.page : undefined}
                   pages={fromNewest ? at.pages : undefined}
-                  onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
+                  onNewer={newer}
                   onOlder={
                     current.data.hasMore
                       ? () => pages.goToNext(current.data!.nextCursor)
