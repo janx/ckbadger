@@ -353,6 +353,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   subject={title}
                   decoded={decoded.data}
                   description={cluster.data?.description}
+                  // the sequencing gel stands here now (lane P2's follow-up, item 1): a trait's
+                  // hover lights its gene in it, as it lights its lane in tier 1's allele gel
+                  active={activeGene}
+                  onActive={setActiveGene}
+                  tier={tier}
                 />
               ) : (
                 <AssetReadState label="DNA evidence" error={genetics.error} read={genetics} />

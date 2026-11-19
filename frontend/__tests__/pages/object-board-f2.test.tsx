@@ -195,10 +195,14 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   const dna = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
   // the hint is the readout line's "tap or hover" under the map (R6), not a header suffix
   expect(dna).not.toHaveTextContent('6 genes · hover a gene');
-  expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(
-    'tap or hover'
-  );
-  // evidence first: one caption under the plate, the full paragraph in tier 2 (F4, R13)
+  // re-pinned on purpose (lane P2's follow-up, item 1): the byte-level plot, the sequencing gel,
+  // stands in one place, the evidence tier, with its readout; tier 1 says what the traits are read
+  // from in one caption, and the allele gel says how common each variant is
+  const evidence = screen.getByRole('region', { name: 'DNA evidence' });
+  expect(evidence.closest('[data-tier="2"]')).not.toBeNull();
+  expect(within(dna).queryByRole('status', { name: 'Gene readout' })).toBeNull();
+  expect(within(evidence).getByRole('status', { name: 'Gene readout' })).toBeInTheDocument();
+  // one caption in tier 1, the full paragraph in tier 2 (F4, R13)
   const caption = dna.querySelector('p[data-role="caption"]')!;
   expect(caption).toHaveTextContent(
     'Its traits are read from 53 bytes of DNA; its prev.bg gene points to a Bitcoin inscription, which makes it BTC+CKB.'
@@ -207,7 +211,7 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   expect(caption).toHaveClass('text-body', 'max-w-measure');
   expect(caption.textContent!.length).toBeLessThanOrEqual(160);
   const plate = container.querySelector('[data-nibble]')!;
-  expect(plate.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(evidence).toContainElement(plate as HTMLElement);
   expect(dna).not.toHaveTextContent('The object’s traits are not stored as text.');
   expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
     'The object’s traits are not stored as text. It carries 53 bytes of DNA, and the collection’s decoder reads each gene to express a trait. Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
@@ -231,7 +235,8 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   expect(among.querySelector('[data-role="caption"]')).toHaveTextContent(
     'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
   );
-  for (const section of [dna, among]) {
+  // C10: one hint in each section that draws a gel (tier 1's DNA caption holds none now)
+  for (const section of [among, evidence]) {
     const hints = [...section.querySelectorAll('*')].filter((el) =>
       [...el.childNodes].some(
         (n) => n.nodeType === Node.TEXT_NODE && /\b(tap|hover)\b/i.test(n.textContent ?? '')

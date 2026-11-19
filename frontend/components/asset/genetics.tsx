@@ -174,8 +174,12 @@ export function DnaParagraph({
 }
 
 /**
- * The object's DNA: a sequencing gel of its own bytes (gene by gene), then, on the same plate, the
- * allele gel of its collection with this object's genotype drawn across it ("this one").
+ * The object's DNA in tier 1: what its traits are read from, in one caption, then the allele gel of
+ * its collection with this object's genotype drawn across it ("this one"): its variant in each
+ * gene and how common it is. Lane P2's follow-up (item 1): the byte-level plot, the sequencing gel
+ * of its own bytes gene by gene, stands in one place, the evidence tier (`ObjectGeneticsEvidence`),
+ * beside the byte map and the gene table; a trait's hover lights its gene's lane here and its
+ * gene in the gel there.
  */
 export function ObjectGeneticsView({
   evidence,
@@ -236,32 +240,8 @@ export function ObjectGeneticsView({
             DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}
           </p>
         )}
-        <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
-          {layout.genes.length ? (
-            <SequencingGel
-              layout={layout}
-              subject={subject}
-              active={active}
-              onActive={setActive}
-              // C10: the readout row's own "tap or hover" is the section's one hint.
-              idle="A gene's bytes, its rule and the trait they express."
-            />
-          ) : (
-            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-          )}
-          {layout.unsupported.map((u) => (
-            <p
-              key={u.step}
-              role="status"
-              title={u.reason}
-              className="text-text text-meta max-w-measure"
-            >
-              Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
-              is used.
-            </p>
-          ))}
-        </GelPlate>
-        {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
+        {/* Hierarchy v3 (F4): one caption; the paragraph and the bytes, gene by gene, are tier 2
+            (the caption's 160-character budget holds no pointer to them). */}
         <p data-role="caption" className="text-text text-body max-w-measure">
           Its traits are read from {unitText(formatCount(words.bytes, 'byte'))} of DNA
           {words.pointer
@@ -341,9 +321,17 @@ export function ObjectGeneticsEvidence({
   subject,
   decoded,
   description,
+  active,
+  onActive,
+  tier,
 }: {
   evidence: ObjectGenetics;
   subject: string;
+  /** The object's composition: the gel's plate keeps its copper for BTC+CKB and pure CKB. */
+  tier?: CompositionTier;
+  /** The gene lit by a trait's hover in tier 1, and the gel's own hover reported back. */
+  active?: string | null;
+  onActive?: (gene: string | null) => void;
   /**
    * F2 objects (OB-14): the decoder's own output files and the picture drawn from the traits, if
    * any, from `/spore/objects/{id}/decode`.
@@ -354,11 +342,13 @@ export function ObjectGeneticsEvidence({
 }) {
   const { dnaHex, cachedVmTraits: cached } = evidence;
   const layout = dnaHex === null ? null : sequencingGenes(evidence, subject, description);
-  const tier = useDetailTier();
+  const detailTier = useDetailTier();
   return (
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
       <h2
-        className={tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'}
+        className={
+          detailTier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'
+        }
       >
         DNA evidence
       </h2>
@@ -373,6 +363,36 @@ export function ObjectGeneticsEvidence({
         <ObjectDnaReading
           key={`${dnaHex}#${layout.genes.map((g) => g.key).join(',')}`}
           layout={layout}
+          // Lane P2's follow-up (item 1): the byte-level plot moved here from tier 1. The byte map
+          // above it draws the DNA to scale, a part per gene; the gel reads the mechanism, each
+          // hex digit a band in the lane of its value, a gene's bytes, its rule and the trait they
+          // express in its readout; the table under it gives this one object's every gene.
+          gel={
+            <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
+              {layout.genes.length ? (
+                <SequencingGel
+                  layout={layout}
+                  subject={subject}
+                  active={active ?? null}
+                  onActive={(gene) => onActive?.(gene)}
+                  idle="A gene's bytes, its rule and the trait they express."
+                />
+              ) : (
+                <DnaStrip dna={dnaHex!} label={`${subject} DNA`} />
+              )}
+              {layout.unsupported.map((u) => (
+                <p
+                  key={u.step}
+                  role="status"
+                  title={u.reason}
+                  className="text-text text-meta max-w-measure"
+                >
+                  Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern
+                  alone is used.
+                </p>
+              ))}
+            </GelPlate>
+          }
         />
       )}
       {dnaHex !== null && (
@@ -445,7 +465,14 @@ export function ObjectGeneticsEvidence({
  * rule, its raw bytes and value; the declared range in words is the row's title. Genes clipped to
  * this DNA, and genes it has no bytes for, are named under the rows.
  */
-function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGenes> }) {
+function ObjectDnaReading({
+  layout,
+  gel,
+}: {
+  layout: ReturnType<typeof sequencingGenes>;
+  /** The sequencing gel's plate, drawn between the byte map and the gene table. */
+  gel: ReactNode;
+}) {
   const readout = usePinnedReadout<string>();
   const byKey = new Map(layout.genes.map((g) => [g.key, g]));
   const span = (offset: number, length: number) =>
@@ -501,6 +528,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
           note={inside.length > 0 ? insideNote(inside) : undefined}
         />
       )}
+      {gel}
       {layout.genes.length > 0 && (
         <ListTable
           label="DNA genes"
