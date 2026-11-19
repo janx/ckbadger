@@ -190,7 +190,7 @@ function Reading({ label, raw, unit }: { label: string; raw: string; unit: strin
         <span className="text-section text-text-bright font-medium tabular-nums">
           {formatChartHead(raw, unit)}
         </span>
-        <span className="text-text-dim text-meta whitespace-pre">{unitAfter(unit, ' ')}</span>
+        <span className="text-text-dim text-meta whitespace-pre">{unitAfter(unit, '\u00a0')}</span>
       </span>
     </div>
   );
@@ -233,13 +233,16 @@ function HeroFigure({ head, gold }: { head: ChartHead; gold: boolean }) {
           data-testid="figure-value"
           title={figure.title}
           className={cn(
-            'text-index sm:text-display whitespace-nowrap tabular-nums',
+            // a long unit's words wrap under the figure on a phone ("16.37% of circulating CKB" is
+            // 342 px at 26 px, the 360 px phone's line 328); the figure keeps the unit's first word:
+            // the % against its digits, else a no-break space
+            'text-index sm:text-display tabular-nums',
             gold ? 'text-gold' : 'text-text-bright'
           )}
         >
           {figure.display}
           <span className="text-hero text-text-dim font-normal">
-            {figure.unit.startsWith('%') ? figure.unit : ` ${figure.unit}`}
+            {figure.unit.startsWith('%') ? figure.unit : `\u00a0${figure.unit}`}
           </span>
         </div>
       )}

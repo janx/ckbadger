@@ -311,13 +311,13 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
   // the line by 14 px when held on one line. The unit's words wrap between themselves; the figure
   // and the unit's first word stay together (a no-break space, or the % sign against the digits).
   it('lets a long unit wrap under its figure on a phone, never the figure from its unit', async () => {
-    render(<ChartDetail slug="circulation-ratio" />);
+    const view = render(<ChartDetail slug="circulation-ratio" />);
     const value = await screen.findByTestId('figure-value');
     expect(value).not.toHaveClass('whitespace-nowrap');
     expect(value.textContent).toBe('16.37% of circulating CKB');
-    chartProps.length = 0;
+    view.unmount();
     render(<ChartDetail slug="hash-rate" />);
-    const rate = (await screen.findAllByTestId('figure-value')).at(-1)!;
+    const rate = await screen.findByTestId('figure-value');
     expect(rate.textContent).toBe('81.05\u00a0PH/s');
   });
 
