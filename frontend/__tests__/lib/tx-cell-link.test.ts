@@ -4,7 +4,7 @@
  * transaction page keeps drawn under its fold.
  */
 import { describe, expect, it } from 'vitest';
-import { transactionAtCellHref } from '@/lib/tx-cell-link';
+import { anchoredOutPoint, transactionAtCellHref } from '@/lib/tx-cell-link';
 
 const CREATED = `0x1422d49b${'04b8'.repeat(13)}4c02`;
 const SPENT = `0x${'cd'.repeat(32)}`;
@@ -42,5 +42,19 @@ describe('transactionAtCellHref', () => {
     expect(() => transactionAtCellHref(CREATED, { txHash: CREATED, index: 1.5 })).toThrow(
       'is not an output index'
     );
+  });
+});
+
+describe('anchoredOutPoint', () => {
+  it('reads the out point the builder writes, lowercase, from the raw fragment', () => {
+    const href = transactionAtCellHref(CREATED, { txHash: CREATED, index: 57 });
+    expect(anchoredOutPoint(href.slice(href.indexOf('#') + 1))).toBe(`${CREATED}-57`);
+    const upper = `0x${'AB'.repeat(32)}-0`;
+    expect(anchoredOutPoint(upper)).toBe(`0x${'ab'.repeat(32)}-0`);
+  });
+
+  it('names no cell for any other fragment, a stray "%" too, and never throws', () => {
+    for (const fragment of ['', 'tx-dep-0', '100%', '%E0%A4%A', `${CREATED}-57%`, `${CREATED}-07`])
+      expect(anchoredOutPoint(fragment)).toBeNull();
   });
 });

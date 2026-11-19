@@ -21,6 +21,18 @@ function cellAnchor(cell: { txHash: string; index: number }): string {
 }
 
 /**
+ * The out point the transaction page's anchor names (`fragment`, after its `#`), in the form
+ * `cellAnchor` writes, or null for any other fragment: an out point is hex and digits and needs no
+ * decoding, so the raw fragment is read as it stands and a fragment that is not one (another
+ * anchor of the page, a pasted link with a stray `%`) names no cell, as a browser goes nowhere for
+ * an unknown anchor (review of phases C and D, SHOULD 3: it was decoded first, and a stray `%`
+ * threw).
+ */
+export function anchoredOutPoint(fragment: string): string | null {
+  return /^0x[0-9a-fA-F]{64}-(0|[1-9][0-9]*)$/.test(fragment) ? fragment.toLowerCase() : null;
+}
+
+/**
  * `/tx/<txHash>#<cell's out point>`: the transaction `txHash` (the one that created the cell, or
  * the one that spent it) opened at `cell`, which its page then never folds away. A hash that is
  * not one, or an index that is not an output's, is refused, never written into a link.

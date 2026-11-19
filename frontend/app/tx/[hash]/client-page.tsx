@@ -31,6 +31,7 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { flowKey, onlyFeeMoved, txFlows } from '@/lib/tx-flows';
+import { anchoredOutPoint } from '@/lib/tx-cell-link';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import {
@@ -156,11 +157,6 @@ function cellsValue(open: Record<'consumed' | 'created', boolean>): string | nul
       : open.created
         ? 'created'
         : null;
-}
-/** A cell's out point as the URL's anchor names it (`#<tx hash>-<index>`), or null for another. */
-function outPointAnchor(fragment: string): string | null {
-  const name = decodeURIComponent(fragment).toLowerCase();
-  return /^0x[0-9a-f]{64}-(0|[1-9][0-9]*)$/.test(name) ? name : null;
 }
 function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
@@ -984,7 +980,7 @@ export default function TransactionDetailPage() {
   // The cell the URL points at by its out point (the cell page's link to this transaction): drawn
   // wherever it stands, its continuity partner with it (the fold keeps both). An anchor that names
   // no cell of this transaction keeps none, as a browser goes nowhere for an unknown anchor.
-  const anchored = outPointAnchor(fragment.slice(1));
+  const anchored = anchoredOutPoint(fragment.slice(1));
   const kept = tiles
     ? [...tiles.inputs, ...tiles.outputs].filter(
         (t) =>
