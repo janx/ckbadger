@@ -798,11 +798,14 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
     expect(screen.queryByText('confirming')).not.toBeInTheDocument();
     // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
-    // one on each sheet).
+    // one on each sheet). Re-pinned on purpose (lane D3): in two forms, one shown at a width, from
+    // lg across the seam and below it across the gap of the stacked sheets, two halves each (it
+    // was the first form's two)
     expectHeadStone('pressed');
-    expect(document.querySelectorAll('[data-seam-seal] [data-seal-state="pressed"]')).toHaveLength(
-      2
-    );
+    for (const form of ['side-by-side', 'stacked'])
+      expect(
+        document.querySelectorAll(`[data-seam-seal="${form}"] [data-seal-state="pressed"]`)
+      ).toHaveLength(2);
 
     await act(() => vi.advanceTimersByTimeAsync(9000));
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(3);

@@ -83,15 +83,18 @@ describe('TxStructure seam seal: one stone pulled apart by the seam (C11)', () =
 
   it('presses the transaction’s stone in the seam, centred on it, as two halves of one stone', () => {
     const { container } = structure({ id: ID });
-    const holders = container.querySelectorAll<HTMLElement>('[data-seam-seal]');
+    // Re-pinned on purpose (lane D3, PA-07): the seam holds the stone in two forms, this one from
+    // lg (it was the only one, and the seam was hidden below lg); the stacked form is the test
+    // after the next
+    const holders = container.querySelectorAll<HTMLElement>('[data-seam-seal="side-by-side"]');
     expect(holders).toHaveLength(1);
     const [holder] = Array.from(holders);
-    // in the 4 px seam between the sheets (hidden below lg, where the sheets stack), centred on
-    // it across the heads' band, over the sheets, hidden from a screen reader (the head's stone
-    // is the page's image) and from the pointer
+    // in the 4 px seam between the sheets (shown from lg, where they lie side by side), centred
+    // on it across the heads' band, over the sheets, hidden from a screen reader (the head's
+    // stone is the page's image) and from the pointer
     const seam = container.querySelector('[data-seam]')!;
     expect(holder.parentElement).toBe(seam);
-    expect(seam).toHaveClass('hidden', 'lg:block');
+    expect(seam).toHaveClass('relative', 'self-stretch', 'lg:h-auto');
     expect(holder).toHaveAttribute('aria-hidden', 'true');
     expect(holder).toHaveClass(
       'pointer-events-none',
@@ -100,7 +103,8 @@ describe('TxStructure seam seal: one stone pulled apart by the seam (C11)', () =
       'top-0',
       '-translate-x-1/2',
       'z-20',
-      'flex',
+      'hidden',
+      'lg:flex',
       `h-[${SEAM_SEAL.band}px]`,
       'items-center'
     );
@@ -152,7 +156,8 @@ describe('TxStructure seam seal: one stone pulled apart by the seam (C11)', () =
     for (const state of ['unpressed', 'ink'] as const) {
       const { container, unmount } = structure({ id: ID, state });
       const seals = container.querySelectorAll<HTMLElement>('[data-seam-seal] [data-seal]');
-      expect(seals).toHaveLength(2);
+      // re-pinned on purpose (lane D3): two halves in each of the two forms (it was one form's 2)
+      expect(seals).toHaveLength(4);
       for (const seal of Array.from(seals)) {
         expect(seal).toHaveAttribute('data-seal-state', state);
         expect(seal.innerHTML).toBe(stone(state));

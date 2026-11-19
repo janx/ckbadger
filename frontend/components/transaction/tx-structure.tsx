@@ -76,7 +76,8 @@ export const SHEETS = {
  * Tilted, it covers 108.7 × 71.1 px; centred in the heads' 95 px band (1 px border, 12 px padding,
  * the heads' 70 px, their 12 px margin) it keeps 11.9 px above and below, and each half reaches
  * 54.4 px into its sheet from the sheet's edge: the heads keep 24 px clear inside the 36 px lane.
- * Below lg, where the sheets stack, there is none.
+ * Below lg, where the sheets stack, the same stone is pressed across the 4 px row between them,
+ * 18 px from the right (lane D3; `SeamSeal`'s stacked form).
  */
 export const SEAM_SEAL = {
   /** The stone's height, px: the transaction's narrow page height. */
@@ -290,7 +291,13 @@ export function TxStructure({
           the last created tile) when the sheet stretches to its pair */}
         <div
           data-sheet-content=""
-          className={cn('p-3', side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]')}
+          className={cn(
+            'p-3',
+            side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]',
+            // below lg the seam seal's upper half lies in the consumed sheet's last 35.6 px: 44 px
+            // of padding keep it clear of the sheet's last row and its control (SEAM_SEAL)
+            seamSeal && side === 'consumed' && 'max-lg:pb-11'
+          )}
         >
           <SheetHead
             txHash={txHash}
@@ -326,7 +333,8 @@ export function TxStructure({
           each sheet an instrument frame, its head its eyebrow; the prose and lists under them
           stay flat. From lg they lie side by side, one size (stretched to the taller), with the
           4 px seam between, the continuity links drawn over the seam and the sheets' lanes; below
-          lg they stack, 12 px apart, each its own height. */}
+          lg they stack, each its own height, the seam the 4 px row between them (lane D3, the
+          board's phone: the sheets of one contract, as from lg; they were 12 px apart). */}
       <div
         ref={canvas}
         data-tx-canvas=""
@@ -334,20 +342,21 @@ export function TxStructure({
         aria-label="Cells consumed and created"
         data-testid="tx-cells-frame"
         className={cn(
-          'relative grid min-w-0 grid-cols-1 items-stretch gap-y-3 lg:gap-y-0',
+          'relative grid min-w-0 grid-cols-1 items-stretch',
           meOut === undefined
             ? 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]'
             : 'lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)_96px]'
         )}
       >
         {sheet('consumed', inputs, consumedCapacity)}
-        <div data-seam="" className="relative hidden self-stretch lg:block">
+        <div data-seam="" className="relative h-1 self-stretch lg:h-auto">
           {continuity.length > 0 && (
             // Only the cells that continue (round 3): each link from its consumed tile's edge
-            // across both lanes and the seam to its created tile's edge.
+            // across both lanes and the seam to its created tile's edge, from lg (below it the
+            // sheets stack and no line crosses between them).
             <svg
               aria-label="Cells that continue from consumed to created"
-              className="pointer-events-none absolute inset-y-0 -left-9 z-20 h-full w-[76px] overflow-visible"
+              className="pointer-events-none absolute inset-y-0 -left-9 z-20 hidden h-full w-[76px] overflow-visible lg:block"
             >
               {ys.length > 0 &&
                 // a link between two drawn tiles; a folded cell has no tile to start or end at
@@ -366,7 +375,12 @@ export function TxStructure({
                   ))}
             </svg>
           )}
-          {seamSeal && <SeamSeal id={seamSeal.id} state={seamSeal.state} />}
+          {seamSeal && (
+            <>
+              <SeamSeal id={seamSeal.id} state={seamSeal.state} form="side-by-side" />
+              <SeamSeal id={seamSeal.id} state={seamSeal.state} form="stacked" />
+            </>
+          )}
         </div>
         {sheet('created', outputs, createdCapacity)}
         {meOut !== undefined && (
@@ -711,16 +725,36 @@ function SheetHead({
  * seam's 4 px of ground runs between them. The clip's outer insets are −8 px so the tilt's
  * overhang (2.1 px across, 3.6 px down) is kept. The library's `seamPx` is not used: its gap
  * tilts with the stone and would not meet the real seam.
+ *
+ * Two forms, one shown at a width (lane D3, PA-07, the board's phone): `side-by-side`, from lg,
+ * in the heads' band over the vertical seam; `stacked`, below lg, where the sheets stack and the
+ * seam is the 4 px row between them, the stone at the right of that row, cut across: its upper
+ * half clipped at its middle and moved 2 px up onto the consumed sheet, its lower half moved 2 px
+ * down onto the created sheet. Tilted it reaches 35.6 px past each sheet's edge: into the consumed
+ * sheet's bottom padding (44 px there below lg) and over the created head's first line at the
+ * right, where the head (reading from the left below lg) writes nothing and holds no control.
  */
-function SeamSeal({ id, state }: { id: TxSealId; state?: SealState }) {
+function SeamSeal({
+  id,
+  state,
+  form,
+}: {
+  id: TxSealId;
+  state?: SealState;
+  form: 'side-by-side' | 'stacked';
+}) {
   const half = (side: Side) => (
     <span
       data-seam-half={side}
       className={cn(
         'flex',
-        side === 'consumed'
-          ? '-translate-x-0.5 [clip-path:inset(-8px_50%_-8px_-8px)]'
-          : 'absolute inset-0 translate-x-0.5 [clip-path:inset(-8px_-8px_-8px_50%)]'
+        form === 'side-by-side'
+          ? side === 'consumed'
+            ? '-translate-x-0.5 [clip-path:inset(-8px_50%_-8px_-8px)]'
+            : 'absolute inset-0 translate-x-0.5 [clip-path:inset(-8px_-8px_-8px_50%)]'
+          : side === 'consumed'
+            ? '-translate-y-0.5 [clip-path:inset(-8px_-8px_50%_-8px)]'
+            : 'absolute inset-0 translate-y-0.5 [clip-path:inset(50%_-8px_-8px_-8px)]'
       )}
     >
       <Seal
@@ -737,9 +771,13 @@ function SeamSeal({ id, state }: { id: TxSealId; state?: SealState }) {
   // hidden from it, and from the pointer.
   return (
     <span
-      data-seam-seal=""
+      data-seam-seal={form}
       aria-hidden="true"
-      className="pointer-events-none absolute left-1/2 top-0 z-20 flex h-[95px] -translate-x-1/2 items-center"
+      className={
+        form === 'side-by-side'
+          ? 'pointer-events-none absolute left-1/2 top-0 z-20 hidden h-[95px] -translate-x-1/2 items-center lg:flex'
+          : 'pointer-events-none absolute right-[18px] top-1/2 z-20 flex -translate-y-1/2 lg:hidden'
+      }
     >
       <span className="relative flex">
         {half('consumed')}

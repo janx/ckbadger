@@ -235,8 +235,10 @@ const lookup = {
  * The page's seals by kind (C2): the header presses one page stone of `id` (its long stone, 94 px,
  * 64 below md), and — when the cells are drawn — the same stone is pressed again at 64 px across
  * the seam between the two sheets (C11: two impressions of it, its left half on the consumed sheet
- * and its right half on the created one), shown from lg only. Returns the head's stone and the
- * seam seal's first half (null when none).
+ * and its right half on the created one), shown from lg only. Re-pinned on purpose (lane D3,
+ * PA-07): below lg the same stone is pressed across the gap of the stacked sheets, a second
+ * holder of two halves (upper, lower) shown below lg only; it was none. Returns the head's stone
+ * and the seam seal's first half (null when none).
  */
 function expectTxSeals(
   container: HTMLElement,
@@ -253,22 +255,32 @@ function expectTxSeals(
     expect(holders).toHaveLength(0);
     return { head, seam: null };
   }
-  // the seam seal's two halves of one stone, never a second one in the header
-  expect(all).toHaveLength(3);
-  expect(holders).toHaveLength(1);
-  const [holder] = Array.from(holders);
-  expect(header).not.toContainElement(holder);
-  expect(screen.getByTestId('tx-cells-frame')).toContainElement(holder);
-  // in the seam, from lg only (below it the sheets stack and the header's stone is the one), and
-  // hidden from a screen reader, which has the header's
-  expect(holder.parentElement).toHaveAttribute('data-seam');
-  expect(holder.parentElement).toHaveClass('hidden', 'lg:block');
-  expect(holder).toHaveAttribute('aria-hidden', 'true');
-  const stamps = Array.from(holder.querySelectorAll<HTMLElement>('[data-seal]'));
-  expect(stamps.map((s) => s.closest('[data-seam-half]')!.getAttribute('data-seam-half'))).toEqual([
-    'consumed',
-    'created',
+  // the seam seal's two halves of one stone in each of its two forms (one shown at a width), never
+  // a second one in the header
+  expect(all).toHaveLength(5);
+  expect(Array.from(holders).map((h) => h.getAttribute('data-seam-seal'))).toEqual([
+    'side-by-side',
+    'stacked',
   ]);
+  const [holder, stacked] = Array.from(holders);
+  for (const h of [holder, stacked]) {
+    expect(header).not.toContainElement(h);
+    expect(screen.getByTestId('tx-cells-frame')).toContainElement(h);
+    // in the seam (a column from lg, the row between the stacked sheets below it), hidden from a
+    // screen reader, which has the header's
+    expect(h.parentElement).toHaveAttribute('data-seam');
+    expect(h).toHaveAttribute('aria-hidden', 'true');
+    expect(
+      Array.from(h.querySelectorAll<HTMLElement>('[data-seal]')).map((s) =>
+        s.closest('[data-seam-half]')!.getAttribute('data-seam-half')
+      )
+    ).toEqual(['consumed', 'created']);
+  }
+  expect(holder).toHaveClass('hidden', 'lg:flex');
+  expect(stacked).toHaveClass('flex', 'lg:hidden');
+  const stamps = Array.from(holders).flatMap((h) =>
+    Array.from(h.querySelectorAll<HTMLElement>('[data-seal]'))
+  );
   for (const stamp of stamps) {
     expect(stamp).toHaveAttribute('data-seal', 'tx');
     expect(stamp).toHaveAttribute('data-seal-form', 'page');
