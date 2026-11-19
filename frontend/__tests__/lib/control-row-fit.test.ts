@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { NARROWEST_LINE_PX, tabRowPx, tabRowShowsCounts, type TabRowItem } from '@/lib/tab-row-fit';
+import {
+  NARROWEST_LINE_PX,
+  tabRowPx,
+  tabRowShowsCounts,
+  type TabRowItem,
+} from '@/lib/control-row-fit';
 import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 
 /**

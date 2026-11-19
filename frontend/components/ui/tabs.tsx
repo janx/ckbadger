@@ -5,7 +5,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { useFromSm } from '@/hooks/useFromMd';
 import { rovingTarget } from '@/lib/roving-focus';
 import { groupCount } from '@/lib/format-count';
-import { tabRowShowsCounts, type TabRowItem } from '@/lib/tab-row-fit';
+import { tabRowShowsCounts, type TabRowItem } from '@/lib/control-row-fit';
 import { cn } from '@/lib/utils';
 
 /** One tab: its key, the name it writes and its count where it has one. */
@@ -43,7 +43,7 @@ interface TabsProps<K extends string> {
  *
  * The phone rule the owner passed: when the row is wider than its line the counts leave it (the
  * list's own count line keeps them); a name is never cut and the row never scrolls or wraps. The
- * row measures its line and lib/tab-row-fit.ts decides, the one function, which throws for a row
+ * row measures its line and lib/control-row-fit.ts decides, the one function, which throws for a row
  * whose names alone do not hold a 360 px window's line.
  */
 export function Tabs<K extends string>({

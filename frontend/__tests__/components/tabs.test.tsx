@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, within } from '@testing-library/react';
 import { Tabs, type Tab } from '@/components/ui/tabs';
-import { tabRowPx } from '@/lib/tab-row-fit';
+import { tabRowPx } from '@/lib/control-row-fit';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { inkOf, BRIGHT, QUIET, READING } from '@/__tests__/utils/ink-role';
@@ -173,7 +173,7 @@ describe('Tabs: the board’s look', () => {
   });
 });
 
-describe('Tabs: the phone rule, by the one function (lib/tab-row-fit)', () => {
+describe('Tabs: the phone rule, by the one function (lib/control-row-fit)', () => {
   it('draws the row the function measures: 428 px at 1280, 356.4 px at 390 with the counts', () => {
     at(1280);
     const wide = render(<Row />);

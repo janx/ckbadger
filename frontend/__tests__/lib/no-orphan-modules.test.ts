@@ -57,7 +57,8 @@ const ALLOWLIST: Record<string, string> = {
     'the controls library’s copy button (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
   'components/ui/select.tsx':
     'the controls library’s select (lane C1): drawn by the filter chips’ phone form and placed by the C2 lanes',
-  'lib/tab-row-fit.ts': 'the tab row’s fit, imported by components/ui/tabs.tsx until a page does',
+  'lib/control-row-fit.ts':
+    'the tab row’s and the filter chips’ fit, imported by components/ui/tabs.tsx and filter-chips.tsx until a page does',
   'lib/roving-focus.ts':
     'the keyboard of the tab row, the filter chips and the range (lane C1), imported by them alone',
 };
