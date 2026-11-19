@@ -190,6 +190,22 @@ it('appends every sub-name page and only reports the full child count after comp
   expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Show more sub-names' })).not.toBeInTheDocument();
 });
+// Pinned before the controls lane (C2) replaced the boxed button: a load of sub-names in flight
+// cannot be asked for a second time (the button was disabled while it loaded).
+it('asks for the next sub-names once while they load', async () => {
+  const item = dotcellItem();
+  item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];
+  item.childrenHasMore = true;
+  item.childrenNextCursor = 'first';
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
+  vi.mocked(api.getDotCellItemChildren).mockReturnValue(new Promise(() => {}));
+  render(<Page identityId="alice" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  await waitFor(() => expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1));
+  const again = screen.queryByRole('button', { name: 'Show more sub-names' });
+  if (again) fireEvent.click(again);
+  expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1);
+});
 // C16: a name with no sub-names says so in a line, not under a heading of its own.
 it('states "Sub-names · none" as a line, not a heading', async () => {
   render(<Page identityId="alice" />);

@@ -239,6 +239,33 @@ describe('Asset history', () => {
     fireEvent.click(screen.getByRole('button', { name: '1W' }));
     expect(readout).toHaveTextContent('2024-01-08');
   });
+  // Pinned before the controls lane (C2) put the range on RangeSelect: another span drops the day
+  // the reader chose, and the reading returns to the newest complete day.
+  it('reads the newest day again when another span is chosen', () => {
+    stubChartWidth(358);
+    try {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 8 }}
+        />
+      );
+      const readout = screen.getByLabelText('History readout');
+      const day = () =>
+        within(readout).getByTitle('complete UTC+8 days through 2024-01-08 · indexed chain time');
+      expect(day()).toHaveTextContent(/^2024-01-08$/);
+      fireEvent.keyDown(screen.getByRole('img', { name: 'Supply, T' }), { key: 'ArrowLeft' });
+      expect(day()).toHaveTextContent(/^2024-01-01$/);
+      fireEvent.click(screen.getByRole('button', { name: '1M' }));
+      expect(day()).toHaveTextContent(/^2024-01-08$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('labels supply events in UTC+8 and distinguishes raw block dates from indexed chart days', () => {
     render(
       <AssetHistory
