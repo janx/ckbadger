@@ -62,8 +62,15 @@ describe('scriptShares', () => {
     { codeHash: '0x2222000000000000', name: 'rare', count: 1 },
   ];
 
+  // Re-pinned on purpose (the page-phase review's SHOULD 5): the total and the rest are the
+  // route's (scriptCalls, scriptRest), its ranking its order; the page summed both and ranked again
+  const route = {
+    scriptCounts: entries.filter((e) => e.count > 0),
+    scriptCalls: 9063,
+    scriptRest: { scripts: 2, calls: 4 },
+  };
   it('keeps the top five and folds the rest into one row', () => {
-    const s = scriptShares(entries);
+    const s = scriptShares(route);
     expect(s.total).toBe(9063);
     expect(s.top.map((r) => r.label)).toEqual([
       '.bit Time Info',
@@ -77,8 +84,21 @@ describe('scriptShares', () => {
   });
 
   it('has no others row when every script fits', () => {
-    expect(scriptShares(entries.slice(0, 2)).others).toBeNull();
-    expect(scriptShares([])).toEqual({ total: 0, top: [], others: null });
+    expect(
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 8790, scriptRest: null })
+        .others
+    ).toBeNull();
+    expect(scriptShares({ scriptCounts: [], scriptCalls: 0, scriptRest: null })).toEqual({
+      total: 0,
+      top: [],
+      others: null,
+    });
+  });
+
+  it('states the route’s whole: a total its rows do not make is refused', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 9000, scriptRest: null })
+    ).toThrow(/script calls/);
   });
 });
 

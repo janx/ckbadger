@@ -74,26 +74,38 @@ export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>):
   return name ? name : shortenHash(entry.codeHash, 'tight');
 }
 
-/** Script calls ranked by count: the `limit` largest, then everything else as one row. */
-export function scriptShares(entries: ScriptCountEntry[], limit = 5): ScriptShares {
-  const ranked = entries.filter((e) => e.count > 0).sort((a, b) => b.count - a.count);
-  const total = ranked.reduce((sum, e) => sum + e.count, 0);
+/** How many scripts the route names before its rest (`scriptRest`): its `SCRIPT_TOP`. */
+const SCRIPT_TOP = 5;
+
+/**
+ * Script calls as the route ranks and counts them (the page-phase review's SHOULD 5): its five
+ * largest by calls, in its order, then its rest as one row; the total is its `scriptCalls`. The
+ * page sums nothing: a route whose named rows and rest do not make its total is refused.
+ */
+export function scriptShares(
+  summary: Pick<ActivitySummary24h, 'scriptCounts' | 'scriptCalls' | 'scriptRest'>
+): ScriptShares {
+  const total = summary.scriptCalls;
+  const named = summary.scriptCounts.slice(0, SCRIPT_TOP);
+  const parts = [...named.map((e) => e.count), summary.scriptRest?.calls ?? 0];
+  if (BigInt(total) !== parts.reduce((sum, n) => sum + BigInt(n), BigInt(0)))
+    throw new Error(`script calls: the route's ${total} is not its five named and its rest`);
   if (total === 0) return { total: 0, top: [], others: null };
-  const top = ranked.slice(0, limit).map((e) => ({
-    key: e.codeHash,
-    label: scriptLabel(e),
-    count: e.count,
-    share: e.count / total,
-    codeHash: e.codeHash,
-    name: e.name,
-  }));
-  const rest = ranked.slice(limit);
-  const restCount = rest.reduce((sum, e) => sum + e.count, 0);
   return {
     total,
-    top,
-    others:
-      rest.length > 0 ? { scripts: rest.length, count: restCount, share: restCount / total } : null,
+    top: named.map((e) => ({
+      key: e.codeHash,
+      label: scriptLabel(e),
+      count: e.count,
+      share: e.count / total,
+      codeHash: e.codeHash,
+      name: e.name,
+    })),
+    others: summary.scriptRest && {
+      scripts: summary.scriptRest.scripts,
+      count: summary.scriptRest.calls,
+      share: summary.scriptRest.calls / total,
+    },
   };
 }
 

@@ -2857,6 +2857,111 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
 // Exact activity summary: chain-time window and cross-hour address dedup
 // ============================================================
 
+/// The page-phase review's SHOULD 5 (the P3 follow-up): the home card's script shares divided by a
+/// total the page summed from scriptCounts, and its "others" row was summed in the page too. The
+/// route states them: the scripts ranked by calls (ties by code hash), every call counted
+/// (`scriptCalls`), and the scripts after the five largest with their calls (`scriptRest`).
+#[tokio::test]
+async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions, TypeCallEntry};
+    use ckbadger_store::StoreBatch;
+
+    let store = test_store();
+    let tip_time = 1_700_000_000_000i64;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(
+        1,
+        &CachedBlockHeader {
+            hash: vec![1; 32],
+            timestamp: tip_time,
+            chain_time_ms: tip_time,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 9,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    // the calls each transaction makes, by code: 0x0a 4, 0x0b 3, 0x0c 3, 0x0d 2, 0x0e 2, 0x0f 1, 0x10 1
+    let calls: [&[u8]; 4] = [
+        &[0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10],
+        &[0x0a, 0x0c, 0x0b, 0x0e, 0x0d],
+        &[0x0b, 0x0c, 0x0a],
+        &[0x0a],
+    ];
+    for (n, codes) in calls.iter().enumerate() {
+        let tx_index = i32::try_from(n).unwrap() + 1;
+        let actions = TxActions {
+            tx_hash: vec![0x60 + n as u8; 32],
+            block_hash: vec![1; 32],
+            block_number: 1,
+            tx_index,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: codes
+                .iter()
+                .map(|code| TypeCallEntry {
+                    type_code_hash: vec![*code; 32],
+                    type_hash_type: 1,
+                    type_args: vec![],
+                })
+                .collect(),
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0x70 + n as u8; 32]),
+                ckb_delta: 10,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            }],
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let ranked: Vec<(String, u64)> = json["scriptCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["codeHash"].as_str().unwrap()[..4].to_string(),
+                e["count"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    let code = |b: &str, n: u64| (format!("0x{b}"), n);
+    assert_eq!(
+        ranked,
+        vec![
+            code("0a", 4),
+            code("0b", 3),
+            code("0c", 3),
+            code("0d", 2),
+            code("0e", 2),
+            code("0f", 1),
+            code("10", 1),
+        ],
+        "ranked by calls, ties by code hash: {json}"
+    );
+    assert_eq!(json["scriptCalls"], 16, "{json}");
+    assert_eq!(
+        json["scriptRest"],
+        serde_json::json!({ "scripts": 2, "calls": 2 }),
+        "{json}"
+    );
+}
+
 /// The tests review's SHOULD 3 (the P3 follow-up): the 24 h summary's kindOccurrences and daoCount
 /// were pinned only on a transfers-only seed, where kindOccurrences equals transferCount and
 /// daoCount is 0, so a route that stated either wrongly passed. Four transactions whose kinds

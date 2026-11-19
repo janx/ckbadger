@@ -273,6 +273,9 @@ export const activitySummary24h: ActivitySummary24h = {
   // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
   kindOccurrences: 7115,
   daoCount: 8,
+  // the route's script calls (5,480 + 5,480 + 294 + 23 + 12 + 6 + 3 + 2) and its rest after five
+  scriptCalls: 11300,
+  scriptRest: { scripts: 3, calls: 11 },
 };
 
 /** 29 complete days, 09/25 … 10/23, oldest first; the last day has 6,691 activities. */

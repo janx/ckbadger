@@ -1524,6 +1524,10 @@ interface ActivitySummary24h {
   kindOccurrences: number;
   /** The window's Nervos DAO actions, the API's count. */
   daoCount: number;
+  /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
+  scriptCalls: number;
+  /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
+  scriptRest: { scripts: number; calls: number } | null;
 }
 
 interface GraphNode {

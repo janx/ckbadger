@@ -4818,6 +4818,24 @@ pub struct ActivitySummary24hResponse {
     pub kind_occurrences: u64,
     /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
     pub dao_count: u64,
+    /// Every script call `script_counts` counts, summed here (the P3 follow-up, SHOULD 5): what the
+    /// home card's script shares are shares of. One transaction calling two scripts counts twice,
+    /// so this is not `script_call_count` (transactions with a script call).
+    pub script_calls: u64,
+    /// The scripts after the [`SCRIPT_TOP`] largest of `script_counts` (ranked by calls, ties by
+    /// code hash) and their calls, the home card's "others" row; `None` when there are none.
+    pub script_rest: Option<ScriptRest>,
+}
+
+/// How many of the window's scripts the home card ranks by name; the rest is one row.
+pub const SCRIPT_TOP: usize = 5;
+
+/// The scripts a ranking does not name, counted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptRest {
+    pub scripts: u64,
+    pub calls: u64,
 }
 
 /// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
@@ -5032,7 +5050,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:v2:tip:{}",
+            "stats:activity-summary-24h:v3:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -5079,7 +5097,18 @@ async fn get_activity_summary_24h(
             count,
         })
         .collect();
-    script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
+    // ranked by calls, ties by code hash, so the five named and the rest are one partition
+    script_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.code_hash.cmp(&b.code_hash))
+    });
+    let script_calls = script_counts.iter().map(|e| u64::from(e.count)).sum();
+    let rest = script_counts.get(SCRIPT_TOP..).unwrap_or_default();
+    let script_rest = (!rest.is_empty()).then(|| ScriptRest {
+        scripts: rest.len() as u64,
+        calls: rest.iter().map(|e| u64::from(e.count)).sum(),
+    });
 
     let result = ActivitySummary24hResponse {
         activity_count,
@@ -5099,6 +5128,8 @@ async fn get_activity_summary_24h(
         hours_covered,
         kind_occurrences: kind_occurrences(&agg),
         dao_count: dao_count(&agg),
+        script_calls,
+        script_rest,
     };
 
     if let Some(key) = cache_key {

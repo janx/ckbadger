@@ -75,7 +75,7 @@ interface SummaryView {
 }
 
 function summaryView(s: ActivitySummary24h): SummaryView {
-  const scripts = scriptShares(s.scriptCounts, 5);
+  const scripts = scriptShares(s);
   const rows: RankedRow[] = scripts.top.map((r) => ({
     key: r.key,
     label: r.label,

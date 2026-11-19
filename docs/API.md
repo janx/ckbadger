@@ -704,7 +704,11 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
   and `daoCount`, counted as the daily rows count them (one helper each in the
   route); the home page's activity shares divide by `kindOccurrences` and its
-  DAO share is `daoCount`.
+  DAO share is `daoCount`. `scriptCounts` is ranked by calls, ties by code hash;
+  `scriptCalls` is every call it counts (a transaction calling two scripts
+  counts twice, so it is not `scriptCallCount`), and `scriptRest`
+  (`{ scripts, calls } | null`) the scripts after the five largest: the home
+  card's script shares and its "others" row, summed nowhere in the page.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 
