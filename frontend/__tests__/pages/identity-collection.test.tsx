@@ -286,3 +286,14 @@ it('counts PDS identities in the singular for one (visual pass)', async () => {
   expect(await within(pds).findByText('1 identity')).toBeInTheDocument();
   expect(pds).not.toHaveTextContent('1 identities');
 });
+
+// Readability R7 (lane p-assets): the history stays in tier 1, after the collection's names (its
+// first list), 160 px under one sentence its points give; it stood before the names.
+it('draws its history after the names it lists, under one sentence (R7)', async () => {
+  render(<Page collectionId="dotbit" />);
+  const names = await screen.findByRole('heading', { name: 'Identities 1 live' });
+  const history = await screen.findByRole('region', { name: 'History' });
+  expect(document.querySelector('[data-tier="1"]')).toContainElement(history);
+  expect(names.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(await within(history).findByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
+});

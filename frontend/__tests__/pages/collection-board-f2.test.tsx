@@ -202,9 +202,20 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
 });
 
 // Main.dc.html: the history is the hero's picture; then Objects; then who holds it beside the
-// recent activity.
-it('orders sections as the board: History in the hero, Objects, Who holds it beside Recent activity', async () => {
+// recent activity. Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "… History
+// in the hero, …"): the history left the hero for tier 1's body, after the metrics, 160 px under
+// one sentence its points give; the order of the sections stands.
+it('orders sections as the board: History after the metrics, Objects, Who holds it beside Recent activity', async () => {
   await page();
+  const history = screen.getByRole('region', { name: 'History' });
+  expect(document.querySelector('[data-role="hero"]')).not.toContainElement(history);
+  expect(
+    screen.getByRole('region', { name: 'Metrics' }).compareDocumentPosition(history) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(within(history).getByTestId('history-sentence')).toHaveTextContent(
+    'CKB held: rose from 0 CKB on 2026-10-21 to 28,920 CKB.'
+  );
   // Phase 5: a tier-1 heading is a command line; its command is the section's word.
   const heads = screen
     .getAllByRole('heading', { level: 2 })

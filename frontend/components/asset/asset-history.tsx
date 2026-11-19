@@ -38,8 +38,114 @@ const HISTORY_RANGES: readonly RangeOption<'1W' | '1M' | '1Y' | 'All'>[] = [
 ];
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
-/** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
-export const HISTORY_PLOT_HEIGHT = 280;
+/**
+ * The main history plot's height. Readability R7: 160 px, after the page's facts and its first
+ * list and under one sentence that says what the series did (it was 280, the hero's picture of
+ * R13, the largest and brightest thing of a first screen that never said its conclusion).
+ */
+export const HISTORY_PLOT_HEIGHT = 160;
+
+/** A day of a CKB-held series: its date and what its cells held, exact (shannons). */
+export interface HeldDay {
+  date: string;
+  held: bigint;
+}
+
+/**
+ * What a CKB-held series did (readability R7), read from its own exact points, never from a cut
+ * figure: one day; the same value every day (`flat`, since its first day); or where it started and
+ * ended, its greatest value where that is above both ends (`peak`, its first day), and the day its
+ * last value began when it has held it more than one day (`since`).
+ */
+export type HeldStory =
+  | { kind: 'one'; day: HeldDay }
+  | { kind: 'flat'; held: bigint; since: string }
+  | {
+      kind: 'moved';
+      first: HeldDay;
+      last: HeldDay;
+      peak: HeldDay | null;
+      since: string | null;
+    };
+
+export function heldStory(days: readonly HeldDay[]): HeldStory {
+  if (days.length === 0) throw new Error('a CKB-held history of no days');
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (days.length === 1) return { kind: 'one', day: first };
+  // the first day of the last run of one value
+  let start = days.length - 1;
+  while (start > 0 && days[start - 1].held === last.held) start--;
+  if (start === 0) return { kind: 'flat', held: last.held, since: first.date };
+  let peak = first;
+  for (const d of days) if (d.held > peak.held) peak = d;
+  const ends = first.held > last.held ? first.held : last.held;
+  return {
+    kind: 'moved',
+    first,
+    last,
+    peak: peak.held > ends ? peak : null,
+    since: start < days.length - 1 ? days[start].date : null,
+  };
+}
+
+/**
+ * The one sentence over a CKB-held history (R7): what its series did, in the summary form (cut,
+ * each figure's exact value in its title), its dates whole. The reading ink on the prose measure.
+ */
+export function HeldSentence({ days }: { days: readonly HeldDay[] }) {
+  const story = heldStory(days);
+  const ckb = (v: bigint) => <CkbAmount form="summary" shannons={v} signed={false} tone="plain" />;
+  const on = (date: string) => <> on {unitNode(date)}</>;
+  let said: ReactNode;
+  if (story.kind === 'one')
+    said = (
+      <>
+        {ckb(story.day.held)}
+        {on(story.day.date)}, the one complete day so far
+      </>
+    );
+  else if (story.kind === 'flat')
+    said = (
+      <>
+        unchanged at {ckb(story.held)} since {unitNode(story.since)}
+      </>
+    );
+  else {
+    const { first, last, peak, since } = story;
+    said = (
+      <>
+        {last.held > first.held ? (
+          <>
+            rose from {ckb(first.held)}
+            {on(first.date)} to {ckb(last.held)}
+          </>
+        ) : last.held < first.held ? (
+          <>
+            fell from {ckb(first.held)}
+            {on(first.date)} to {ckb(last.held)}
+          </>
+        ) : (
+          <>
+            back at {ckb(last.held)}, as{on(first.date)}
+          </>
+        )}
+        {peak && (
+          <>
+            , peaking at {ckb(peak.held)}
+            {on(peak.date)}
+          </>
+        )}
+        {since && <>; unchanged since {unitNode(since)}</>}
+      </>
+    );
+  }
+  return (
+    <p data-testid="history-sentence" className="text-text text-body max-w-measure">
+      CKB held: {said}.
+    </p>
+  );
+}
 /**
  * The name of every CKB-held history plot — a token's, a collection's, a script's — and its unit,
  * said once (the ticks are bare). A fixed form: SVG text does not wrap, so a name carries no free
@@ -467,12 +573,23 @@ export function AssetHistory({
         />
       }
     >
+      {/* R7: what the whole series did, in one sentence over its plots, from its own points */}
+      {daily.length > 0 && (
+        <div className="mb-3">
+          <HeldSentence
+            days={daily.map((p) => ({
+              date: p.date,
+              held: exactUnsignedInteger(p.capacity, `${p.date} capacity`),
+            }))}
+          />
+        </div>
+      )}
       {point ? (
         <>
           <Chart
             {...capacityAxis}
             subtitle="Occupied and free"
-            // The page's picture (R13): at least 280 px, its name inside it.
+            // R7: 160 px under its sentence, its name inside it
             height={HISTORY_PLOT_HEIGHT}
             // SVG text cannot wrap: the name fits beside the gutter on a 360 px phone (U-19).
             plotName={HELD_PLOT_NAME}

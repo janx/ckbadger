@@ -399,6 +399,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         </DetailSection>
       }
     >
+      {/* Readability R7: who holds it first, then the history, 160 px under its sentence (it was
+          the first thing under the metrics, before the holders) */}
+      <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
       <div role="region" aria-label="History" className="min-w-0">
         {history.data ? (
           <>
@@ -458,7 +461,6 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           <AssetReadState error={history.error} read={history} label="token history" />
         )}
       </div>
-      <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
     </AssetDetailShell>
   );
 }

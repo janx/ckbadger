@@ -61,7 +61,6 @@ import {
   versionNumbers,
 } from '@/lib/script-lineage';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { useFromMd } from '@/hooks/useFromMd';
 import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -541,9 +540,8 @@ export function ScriptFamilyPage({
   useDocumentTitle([family.name, 'script']);
   // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
-  // PA-18: one range control, drawn at the end of the title row from md (R13) and in the chart's
-  // caption row, right over the picture it redraws, below md.
-  const fromMd = useFromMd();
+  // PA-18: one range control, right over the picture it redraws: since R7, at every width, in the
+  // History section's heading row.
   const range = (
     <RangeSelect
       label="range"
@@ -1072,7 +1070,6 @@ export function ScriptFamilyPage({
                     </RowTag>
                   )}
                 </div>
-                {fromMd && range}
               </div>
               {(family.description || family.website) && (
                 <p
@@ -1094,39 +1091,41 @@ export function ScriptFamilyPage({
                 </p>
               )}
               <ScriptHeroFigure family={family} />
-              {!fromMd && (
-                <div data-role="chart-controls" className="mt-[18px] flex justify-end">
-                  {range}
-                </div>
-              )}
-              {chartLoading ? (
-                <p className="text-text-dim text-small mt-[18px] py-6">Loading capacity history…</p>
-              ) : chartError ? (
-                <p role="alert" className="text-negative text-small max-w-measure mt-[18px]">
-                  Capacity history unavailable: {chartError.message}
-                </p>
-              ) : chart?.data.length ? (
-                <ScriptHistoryFigure
-                  family={family}
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  active={active}
-                  onActive={setActive}
-                />
-              ) : (
-                <p className="text-text-dim text-small mt-[18px] py-6">No capacity history.</p>
-              )}
             </section>
-            {!chartLoading && !chartError && chart?.data.length ? (
-              <ScriptHistoryReading
-                chart={chart}
-                lineage={lineage}
-                numbers={numbers}
-                active={active}
-              />
-            ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
+            {/* Readability R7: the history after the hero's figures, 160 px under one sentence its
+                points give, its range in its own heading row at every width (it was the hero's
+                300 px picture, the range at the end of the title row from md) */}
+            <div role="region" aria-label="History" className="mt-[72px] min-w-0">
+              <DetailSection title="History" actions={range}>
+                {chartLoading ? (
+                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
+                ) : chartError ? (
+                  <p role="alert" className="text-negative text-small max-w-measure">
+                    Capacity history unavailable: {chartError.message}
+                  </p>
+                ) : chart?.data.length ? (
+                  <>
+                    <ScriptHistoryFigure
+                      family={family}
+                      chart={chart}
+                      lineage={lineage}
+                      numbers={numbers}
+                      active={active}
+                      onActive={setActive}
+                    />
+                    <ScriptHistoryReading
+                      chart={chart}
+                      lineage={lineage}
+                      numbers={numbers}
+                      active={active}
+                    />
+                  </>
+                ) : (
+                  <p className="text-text-dim text-small py-6">No capacity history.</p>
+                )}
+              </DetailSection>
+            </div>
             {/* Lane S: what the script holds now, before how its code can change. */}
             <ScriptNewestCells family={family} newest={newest} className="mt-16" />
             {/* A17: the holders the timeline draws (each run of the lineage's code cell, a

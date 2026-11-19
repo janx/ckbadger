@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
@@ -494,7 +494,10 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   const follows = (a: Element, b: Element) =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-  it('opens with the title row — h1, its role and the range buttons — and the description as the lede (R13)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "opens with the title row
+  // — h1, its role and the range buttons — …"): the range went with the history to the History
+  // section's heading row; the title row is the h1 and its role.
+  it('opens with the title row — h1 and its role — and the description as the lede; the range heads the History', async () => {
     await renderJoyid();
     const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(tier1()).toContainElement(nav);
@@ -505,11 +508,16 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
+    expect(within(row).queryByRole('radiogroup', { name: 'range' })).toBeNull();
     // Re-pinned on purpose (lane c2-chain, the controls board): the range is the library's
     // RangeSelect, a radio group whose spans are written `30 d · 90 d · 1 y · all` (it was a group
     // of pressed buttons, "30D 90D 1Y ALL"); the chosen span is the board's one selected state, the
     // celadon line around the bright ink, so still no jade text in tier 1 (R11; D3 call 8).
-    const range = within(row).getByRole('radiogroup', { name: 'range' });
+    const historyHead = within(screen.getByRole('region', { name: 'History' })).getByRole(
+      'heading',
+      { name: 'History' }
+    ).parentElement!;
+    const range = within(historyHead).getByRole('radiogroup', { name: 'range' });
     expect(
       within(range)
         .getAllByRole('radio')
@@ -534,24 +542,29 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   });
 
   // PA-18 (UI review 2026-11-14): on a phone "30D 90D 1Y ALL" sat between the kind line and the
-  // description, about 250 px above the chart it controls. Below md the one range group stands in
-  // the chart's caption row, right over the picture, after the figure; from md it keeps its place
-  // at the end of the title row (R13), as the test above pins.
-  it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
+  // description, about 250 px above the chart it controls. Re-pinned on purpose (readability R7,
+  // lane p-assets; renamed, it was "puts the range buttons in the chart’s caption row below md, not
+  // in the title row"): the one range group heads the History section at every width, right over
+  // the sentence and the picture it redraws, after the hero's figures.
+  it('puts the range buttons in the History heading row at every width, not in the title row (PA-18, R7)', async () => {
+    for (const fromMd of [false, true]) {
+      stubViewportFromMd(fromMd);
+      await renderJoyid();
+      // re-pinned (lane c2-chain): the range is the library's radio group
+      const groups = screen.getAllByRole('radiogroup', { name: 'range' });
+      expect(groups).toHaveLength(1);
+      const [range] = groups;
+      expect(hero()).not.toContainElement(range);
+      const section = screen.getByRole('region', { name: 'History' });
+      const head = within(section).getByRole('heading', { name: 'History' }).parentElement!;
+      expect(head).toContainElement(range);
+      expect(follows(head, within(section).getByTestId('history-sentence'))).toBe(true);
+      expect(follows(screen.getByLabelText('Script figures'), section)).toBe(true);
+      cleanup();
+    }
     stubViewportFromMd(false);
     await renderJoyid();
-    // re-pinned (lane c2-chain): the range is the library's radio group
-    const groups = within(hero()).getAllByRole('radiogroup', { name: 'range' });
-    expect(groups).toHaveLength(1);
-    const [range] = groups;
-    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
-    expect(h1.parentElement!.parentElement!).not.toContainElement(range);
-    const history = within(hero()).getByTestId('script-history');
-    const caption = range.parentElement!;
-    expect(caption.nextElementSibling).toBe(history);
-    expect(caption).toHaveClass('flex', 'justify-end');
-    expect(caption.children).toHaveLength(1);
-    expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
+    const range = screen.getByRole('radiogroup', { name: 'range' });
     // still the page's range: it draws the picture again
     fireEvent.click(within(range).getByRole('radio', { name: '90 d' }));
     expect(within(range).getByRole('radio', { name: '90 d' })).toHaveAttribute(
@@ -582,14 +595,21 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
   });
 
-  it('draws its capacity history right under the figure: ≥ 280 px, named inside, no History heading (R13, tier 1 always)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "draws its capacity
+  // history right under the figure: ≥ 280 px, named inside, no History heading (R13, tier 1
+  // always)"): the history stays in tier 1, after the hero's figures, in a History section of its
+  // own, 160 px under one sentence its points give.
+  it('draws its capacity history after the figures: 160 px under its sentence, named inside (R7, tier 1 always)', async () => {
     await renderJoyid();
-    expect(within(tier1()).queryByRole('heading', { name: 'History' })).toBeNull();
+    const section = screen.getByRole('region', { name: 'History' });
+    expect(tier1()).toContainElement(section);
     expect(tier1().querySelector('figcaption')).toBeNull();
-    const history = within(hero()).getByTestId('script-history');
-    expect(follows(hero().querySelector('[data-role="figure"]')!, history)).toBe(true);
+    const history = within(section).getByTestId('script-history');
+    expect(within(hero()).queryByTestId('script-history')).toBeNull();
+    expect(follows(screen.getByLabelText('Script figures'), history)).toBe(true);
+    expect(within(section).getByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
     const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
-    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    expect(Number(main.getAttribute('height'))).toBe(160);
     // Re-pinned with the plot-name fit: the fixed name of every CKB-held history plot.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
       'CKB held · occupied, free'
@@ -606,13 +626,17 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   });
 
   // Table-rows L1-3 ruling: no code track between the picture and its reading any more.
-  it('reads the last full day in one row under the picture, then the remaining figures in one quiet row (R13)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "reads the last full day
+  // in one row under the picture, then the remaining figures in one quiet row (R13)"): the figures
+  // come first, then the history and its reading.
+  it('reads the figures in one quiet row after the hero, then the last full day in one row under the picture (R7)', async () => {
     await renderJoyid();
     expect(screen.queryByLabelText('Code track')).toBeNull();
     const reading = screen.getByTestId('script-history-reading');
     const metrics = screen.getByLabelText('Script figures');
-    expect(follows(hero(), reading)).toBe(true);
-    expect(follows(reading, metrics)).toBe(true);
+    expect(follows(hero(), metrics)).toBe(true);
+    expect(follows(metrics, reading)).toBe(true);
+    expect(follows(screen.getByTestId('script-history'), reading)).toBe(true);
     expect(reading).toHaveClass('text-small', 'border-t');
     expect(reading).toHaveTextContent('2026-10-29');
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
@@ -641,13 +665,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const reading = screen.getByTestId('script-history-reading');
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
     expect(factsOf(reading)[0]).toEqual(['day', '2026-10-29 · last full day']);
+    // re-pinned (readability R7): the history and its range are the History section's
+    const section = screen.getByRole('region', { name: 'History' });
     const [main] = [
-      ...within(hero()).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
+      ...within(section).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
     ];
     fireEvent.keyDown(main, { key: 'ArrowLeft' });
     expect(reading).not.toHaveTextContent('last full day');
     expect(reading).not.toHaveTextContent('2026-10-29');
-    fireEvent.click(within(hero()).getByRole('radio', { name: '90 d' }));
+    fireEvent.click(within(section).getByRole('radio', { name: '90 d' }));
     // The picture and its reading are drawn again for the new range.
     await waitFor(() =>
       expect(factsOf(screen.getByTestId('script-history-reading'))[0]).toEqual([
@@ -668,7 +694,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     ] as const) {
       const days = getCapacityRangeParams(key);
       expect(days).toBeDefined();
-      fireEvent.click(within(hero()).getByText(span));
+      // re-pinned (readability R7): the range is the History section's
+      fireEvent.click(within(screen.getByRole('region', { name: 'History' })).getByText(span));
       await waitFor(() =>
         expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', days)
       );
