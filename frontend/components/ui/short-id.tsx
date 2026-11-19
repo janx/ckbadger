@@ -6,7 +6,7 @@ import { shortenId, type IdKind, type ShortSize } from '@/lib/shorten';
  * A shortened id written as text (U-09): the hash or address at one of the three sizes of
  * `lib/shorten.ts`, one unit a line never breaks inside (`NoBreak`). It draws no ink, link, copy or
  * title of its own, so it stands inside what the call site draws: a link with its own look and
- * the full value in its title, a row's key, a sentence. `HexCode` (a copyable hex value) and
+ * the full value in its title, a row's key, a sentence. `HexCode` (a hex value in its ink) and
  * `Address` (the address link) shorten by the same rule; this is the piece for the text alone.
  */
 export function ShortId({
