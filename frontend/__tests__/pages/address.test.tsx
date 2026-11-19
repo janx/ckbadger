@@ -826,6 +826,45 @@ describe('Address v3', () => {
     );
   });
 
+  // Lane cd-fixes-controls, the second read's SHOULD 1: Activities on "all", the reader picks
+  // "dao" and, before dao's page arrives, presses `older →`. The page still held "all"'s page one,
+  // whose stamp matched the reset walk, so `older →` walked dao from "all"'s 20th row as "page 2".
+  // The walk knows its list: "all"'s page, still shown, is another list's, with no way on.
+  it('offers no way on from the old kind’s page while the new kind’s page loads', async () => {
+    let arrive: () => void = () => {};
+    const dao = new Promise<void>((resolve) => (arrive = resolve));
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) => {
+      if (p?.limit !== 20) return pagedRead(pageFixture([]));
+      if (p.filter === 'dao') {
+        await dao;
+        return pagedRead(pageFixture(activitiesPage(5, 40)));
+      }
+      return pagedRead({ ...pageFixture(activitiesPage(20)), hasMore: true, nextCursor: 'all-20' });
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
+    await waitFor(() =>
+      expect(api.getAddressActivities).toHaveBeenLastCalledWith(
+        addressHash,
+        expect.objectContaining({ filter: 'dao', limit: 20, cursor: undefined })
+      )
+    );
+    // "all"'s page one stands while dao's loads: drawn as its own, with no way on and no way back
+    expect(within(history).queryByRole('button', { name: 'older →' })).toBeNull();
+    expect(within(history).queryByRole('button', { name: /newer/ })).toBeNull();
+    await act(async () => arrive());
+    await waitFor(() =>
+      expect(within(history).queryByRole('navigation', { name: 'activities' })).toBeNull()
+    );
+    expect(api.getAddressActivities).not.toHaveBeenCalledWith(
+      addressHash,
+      expect.objectContaining({ filter: 'dao', cursor: 'all-20' })
+    );
+  });
+
   it('steps into the last page of 25 live cells while page 2 is still on its way', async () => {
     let arrive: () => void = () => {};
     const second = new Promise<void>((resolve) => (arrive = resolve));
