@@ -208,7 +208,9 @@ pub fn seed_sparse_daily_chart_history(store: &Arc<CkbadgerStore>) {
             frozen_phase1_compensation: 0,
             cumulative_depositors: depositors,
             daily_depositor_addresses: 0,
-            protocol_deposited: None,
+            // the DAO cells' capacity, as the indexer's reducer writes it on every day
+            // (lane exactness, part B1: the Supply chart reads it; a day's deposits that left were withdrawn)
+            protocol_deposited: Some(deposited),
         };
         let key = ckbadger_store::keys::encode_stats_key(
             ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
