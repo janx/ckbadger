@@ -221,6 +221,31 @@ it('names each identity owner by address, a .cell owner by its prefix when unres
   expect(within(carol).queryByRole('link', { name: /0x4646/ })).not.toBeInTheDocument();
   expect(carol).toHaveTextContent('address not indexed');
 });
+// Lane D2 (PB-13): an identity collection is headed as a cluster or a class is — the eyebrow over
+// its one figure, the live count with what was minted and what is gone beside it and the CKB its
+// cells hold at the right, then the bar of what that CKB is (occupied and free) — and states "CKB
+// held" once: the metrics row said it with its share, and the partition under it said it again.
+it('heads the collection as a cluster or class is headed, CKB held said once (lane D2, PB-13)', async () => {
+  const { container } = render(<Page collectionId="dotbit" />);
+  const eyebrow = await screen.findByText('identities live');
+  expect(eyebrow).toHaveClass('eyebrow', 'text-meta', 'text-text-dim');
+  const figure = eyebrow.closest('[data-role="figure"]') as HTMLElement;
+  expect(figure).toHaveTextContent(
+    /^identities live1 of 2 minted \/ created · 1 inactive \/ burned$/
+  );
+  // the CKB held beside the figure, then the bar of what it is, before the metrics
+  const head = figure.parentElement!.parentElement as HTMLElement;
+  expect(head).toHaveTextContent('1,000 CKB held in their cells');
+  const partition = within(container).getByLabelText('.bit capacity partition');
+  expect(head).toContainElement(partition);
+  expect(partition.querySelector('[data-part="occupied"]')).not.toBeNull();
+  // CKB held said once in the head: the partition states no total of its own, the metrics none
+  expect(partition).not.toHaveTextContent('CKB held');
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  expect(metrics).not.toHaveTextContent('CKB held');
+  expect(metrics).not.toHaveTextContent('minted');
+});
+
 it('opens with what the standard is, not its route alias or a placeholder (ID-COL-5)', async () => {
   render(<Page collectionId="dotbit" />);
   // Wait for the collection itself, not the loading shell that shares its title.
