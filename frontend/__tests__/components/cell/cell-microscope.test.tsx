@@ -498,7 +498,7 @@ describe('cell microscope field detail rail (old issue B)', () => {
       ...cell,
       commonKnowledgeSizeBreakdown: { ...cell.commonKnowledgeSizeBreakdown!, lockScriptBytes: 2 },
     } as Cell;
-    render(<CellMicroscope cell={locked} lockName="Multisig" />);
+    render(<CellMicroscope cell={locked} lockLabel="Multisig" />);
     const map = screen.getByRole('group', { name: 'Capacity map' });
     fireEvent.mouseEnter(within(map).getByTitle('lock · 2 bytes'));
     expectHead('lock · Multisig', '2 B occupied');

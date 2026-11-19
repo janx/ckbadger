@@ -230,8 +230,11 @@ export function highlightCss(ids: readonly string[] | null): string {
 
 export interface CellMicroscopeProps {
   cell: Cell;
-  /** Registry names of its lock and type scripts, for the map detail. */
-  lockName?: string | null;
+  /**
+   * The lock's name as the one decision gives it (`lockWords`), and the registry's name of its
+   * type, for the map detail.
+   */
+  lockLabel?: string | null;
   typeName?: string | null;
 }
 
@@ -241,7 +244,7 @@ export interface CellMicroscopeProps {
  * byte, field or map part is under the pointer. A tap pins it, with a readout line under the
  * bytes, until a second tap on it or Escape (R6).
  */
-export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
+export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProps) {
   const { resolved: theme } = useTheme();
   const molecule = cell.cellOutputMolecule;
   const outBytes = useMemo(
@@ -416,7 +419,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const line = (target: Target): string => {
     if (target.kind === 'group') {
       const g = target.group;
-      const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+      const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
       return `${g}${name ? ` · ${name}` : ''} · ${fmt(groupBytes[g])} B occupied`;
     }
     if (target.kind === 'region') {
@@ -471,7 +474,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     const range = g === 'lock' || g === 'type' ? groupRange(g) : null;
     const hash =
       g === 'lock' ? molecule?.lockScriptHash : g === 'type' ? molecule?.typeScriptHash : null;
-    const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+    const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
     detail = (
       <div data-detail={`group:${g}`}>
         <DetailHead

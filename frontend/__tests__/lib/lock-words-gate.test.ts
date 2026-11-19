@@ -213,6 +213,9 @@ const FEEDS: Reads = {
   'components/transaction/transaction-cell-tiles.tsx': { 'registry name': 2 },
   // "Lock of output i": the output's name handed to `cellLockFacts`
   'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
+  // the cell's lock: the registry's name for its code hash handed to `cellLockFacts` with the
+  // lock and its address (lane P1 follow-up; it was known writer 8, with the fact's `lockName`)
+  'app/cell/[outpoint]/client-page.tsx': { 'registry name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -244,11 +247,11 @@ const KNOWN: Reads = {
   'components/identity/identity-overview.tsx': { 'api name': 3 },
   'components/identity/identity-evidence.tsx': { 'api name': 1 },
   'components/address/address-holdings.tsx': { 'script info name': 1 },
-  'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
-  // registry name 1 → 0 (lane D3): the structure's group names, the third copy of the registry
-  // rule (9), went with the list; the cell page's groups are the rows of script-group-rows.tsx
-  'components/cell/cell-transactions.tsx': { 'api name': 2 },
-  'components/cell/cell-microscope.tsx': { 'api name': 1 },
+  // app/cell/[outpoint]/client-page.tsx, components/cell/cell-transactions.tsx and
+  // components/cell/cell-microscope.tsx left (lane P1 follow-up; writers 8, 9 and 10): the cell
+  // page decides its lock once (`cellLockFacts`, `lockWords`), and its Lock fact, its spend
+  // requirement and the microscope's readout write the decision's name (`lockLabel`); a lock on
+  // the default lock's code hash by data is written by its code hash and "by data"
   // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
   // address-holdings.tsx's one read
   'app/address/[addr]/client-page.tsx': { 'script info name': 2 },
@@ -330,11 +333,15 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane p-assets; renamed, it was "… 36 reads in 21 files, … 13 files and
   // 23 reads"): a version's lock (cell-versions) and an identity's Owner note read the decision,
   // 23 → 21 known reads in 12 files, 36 → 34 in all in 20
-  it('pins the totals: 34 reads in 20 files, the known writers 12 files and 21 reads', () => {
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 34 reads in 20 files, … 12 files
+  // and 21 reads"): the cell page decides its lock once, its registry read feeds the decision and
+  // the three `lockName`s are the decision's name; 21 → 16 known reads in 9 files, 34 → 30 in all
+  // in 18
+  it('pins the totals: 30 reads in 18 files, the known writers 9 files and 16 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(20);
-    expect(total(all)).toBe(34);
-    expect(Object.keys(KNOWN)).toHaveLength(12);
-    expect(total(KNOWN)).toBe(21);
+    expect(Object.keys(all)).toHaveLength(18);
+    expect(total(all)).toBe(30);
+    expect(Object.keys(KNOWN)).toHaveLength(9);
+    expect(total(KNOWN)).toBe(16);
   });
 });
