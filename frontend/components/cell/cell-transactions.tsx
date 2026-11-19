@@ -6,7 +6,11 @@ import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure } from '@/components/transaction/tx-structure';
-import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
+import {
+  CellTilesError,
+  readCellTiles,
+  sheetTotals,
+} from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import { scriptGroupRows } from '@/components/transaction/script-group-rows';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
@@ -61,16 +65,20 @@ function useCellTransaction(hash: string) {
 /**
  * The read transaction, or what stands in its place: a line while it is read, its error where it
  * cannot be. A read answered without its evidence, or a transaction without its committed
- * structure, broke an invariant and is refused.
+ * structure, broke an invariant and is refused. `deps` says whether the part needs the cell deps
+ * too (the script groups do; the embed draws none, so it neither waits for that read nor fails
+ * on it: review of phases C and D, SHOULD 7).
  */
 function readTransaction(
   read: ReturnType<typeof useCellTransaction>,
   hash: string,
   label: Role,
-  what: string
+  what: string,
+  deps: boolean
 ): { tx: TransactionDetail } | { node: ReactNode } {
-  const { transaction, dependencies } = read;
-  if (isAwaited(transaction) || isAwaited(dependencies))
+  const { transaction } = read;
+  const dependencies = deps ? read.dependencies : null;
+  if (isAwaited(transaction) || (dependencies !== null && isAwaited(dependencies)))
     return {
       node: (
         <p className="text-text-dim text-small max-w-measure">
@@ -78,16 +86,16 @@ function readTransaction(
         </p>
       ),
     };
-  if (transaction.error || dependencies.error)
+  if (transaction.error || dependencies?.error)
     return {
       node: (
         <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
-          {label} transaction {what} unavailable: {String(transaction.error ?? dependencies.error)}
+          {label} transaction {what} unavailable: {String(transaction.error ?? dependencies?.error)}
         </p>
       ),
     };
   // awaited and failed are answered above: an answered read without its evidence broke an invariant
-  if (!transaction.data || !dependencies.data)
+  if (!transaction.data || (dependencies !== null && !dependencies.data))
     throw new Error(`${label} transaction ${hash}: its read answered without its evidence`);
   const tx: TransactionDetail = transaction.data;
   if (
@@ -128,13 +136,17 @@ export function TransactionEvidence({
   onward?: string;
 }) {
   const read = useCellTransaction(hash);
-  const got = readTransaction(read, hash, label, 'evidence');
+  const got = readTransaction(read, hash, label, 'evidence', false);
   if ('node' in got) return got.node;
   const { tx } = got;
-  const tiles = cellTiles(tx, read.lookup.data);
-  if (![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
+  // the tiles as the transaction page reads them: a cell the lock decision refuses fails this
+  // part in its place, never the page (review of phases C and D, SHOULD 7)
+  const tilesRead = readCellTiles(tx, read.lookup.data);
+  const tiles = tilesRead.value;
+  if (tiles && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
-  const side = label === 'Created' ? tiles.outputs : tiles.inputs;
+  // the side's cells, the transaction's list (a tile is drawn for each)
+  const side = label === 'Created' ? tx.outputs! : tx.inputs!;
   const verb = label === 'Created' ? 'created' : 'consumed';
   return (
     <div className="space-y-3">
@@ -163,25 +175,29 @@ export function TransactionEvidence({
           open the transaction
         </Link>
       </p>
-      <TxStructure
-        txHash={hash}
-        inputs={tiles.inputs}
-        outputs={tiles.outputs}
-        fee={tx.fee}
-        // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
-        {...sheetTotals(tx)}
-        continuity={txContinuity(tx, tiles.inputs)}
-        focusedCellIds={[focus]}
-        meOut={onward !== undefined ? focus : undefined}
-        onward={onward}
-        afterOnward={afterOnward}
-        // the board's embed: this cell and its continuity partner; the rest counted, no control
-        fold={{
-          head: 0,
-          keep: [focus],
-          open: { consumed: false, created: false },
-        }}
-      />
+      {tilesRead.error !== undefined ? (
+        <CellTilesError tx={tx} error={tilesRead.error} />
+      ) : (
+        <TxStructure
+          txHash={hash}
+          inputs={tiles!.inputs}
+          outputs={tiles!.outputs}
+          fee={tx.fee}
+          // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
+          {...sheetTotals(tx)}
+          continuity={txContinuity(tx, tiles!.inputs)}
+          focusedCellIds={[focus]}
+          meOut={onward !== undefined ? focus : undefined}
+          onward={onward}
+          afterOnward={afterOnward}
+          // the board's embed: this cell and its continuity partner; the rest counted, no control
+          fold={{
+            head: 0,
+            keep: [focus],
+            open: { consumed: false, created: false },
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -193,7 +209,7 @@ export function TransactionEvidence({
  */
 function TransactionScriptGroups({ hash, label }: { hash: string; label: Role }) {
   const read = useCellTransaction(hash);
-  const got = readTransaction(read, hash, label, 'script groups');
+  const got = readTransaction(read, hash, label, 'script groups', true);
   const title = `Script groups of the transaction that ${label === 'Created' ? 'created' : 'spent'} it`;
   if ('node' in got)
     return (

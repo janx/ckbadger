@@ -41,7 +41,11 @@ import {
   type TxSealId,
 } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
-import { cellTiles, registeredName } from '@/components/transaction/transaction-cell-tiles';
+import {
+  CellTilesError,
+  readCellTiles,
+  registeredName,
+} from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import {
   groupCells,
@@ -891,7 +895,7 @@ export default function TransactionDetailPage() {
   if (selectedGroup !== null && !groups.some((g) => groupKey(g) === selectedGroup))
     throw new Error(`Transaction ${hash}: unknown script group ${selectedGroup}`);
   // the cells' tiles; a cell the lock decision refuses fails the Cells section in its place (D7)
-  const tilesRead = isProvisional ? null : readPart(() => cellTiles(tx, lookup));
+  const tilesRead = isProvisional ? null : readCellTiles(tx, lookup);
   const tiles = tilesRead?.value ?? null;
   const compensation = activity ? daoCompensation(activity) : undefined;
   // Lane P1: only the fee moved (`onlyFeeMoved`, the figure's own flows); an activity whose flows
@@ -1380,11 +1384,7 @@ export default function TransactionDetailPage() {
         {tilesRead?.error !== undefined && (
           <div className="min-w-0">
             <DetailSection title="Cells">
-              <PartReadError
-                what="the cells"
-                where={`transaction ${hash}`}
-                error={tilesRead.error}
-              />
+              <CellTilesError tx={tx} error={tilesRead.error} />
             </DetailSection>
           </div>
         )}

@@ -20,7 +20,10 @@ import { LONG_TX_HASH, LONG_TX_PREV, LONG_TX_SENDER, longDeposit } from '@/__tes
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
-vi.mock('@/lib/api', () => ({
+// the module's own exports kept (a part's read error names an ApiRequestError's status), its reads
+// mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     getTransactionDetail: (...args: unknown[]) => getTransactionDetail(...args),
     getTransactionCellDeps: (...args: unknown[]) => getTransactionCellDeps(...args),
