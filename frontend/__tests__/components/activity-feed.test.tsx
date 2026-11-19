@@ -158,7 +158,9 @@ describe('ActivityFeed', () => {
     expect(screen.getByRole('heading', { level: 2 })).toBe(heading);
   });
 
-  it('shows 8 activities: the narrative left, the raw evidence quiet on the right', async () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles items 1 and 2: the evidence's block link and age are a link and a
+  // value, the reading ink at 13 px; it was "… the raw evidence quiet on the right")
+  it('shows 8 activities: the narrative left, the evidence on the right in the reading ink', async () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
     const first = rows()[0] as HTMLElement;
@@ -166,7 +168,8 @@ describe('ActivityFeed', () => {
     expect(first.tagName).toBe('ARTICLE');
     expect(within(first).getByText('Script call')).toHaveAttribute('data-role', 'headline');
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
-    expect(evidence).toHaveClass('text-text-dim');
+    expect(evidence).not.toHaveClass('text-text-dim');
+    expect(evidence).toHaveClass('text-small');
     expect(within(evidence).getByRole('link', { name: '#20,819,142' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/20819142'
@@ -205,9 +208,11 @@ describe('ActivityFeed', () => {
     expect(call.parentElement).toHaveClass('whitespace-nowrap');
     expect(call).toHaveAttribute('title', '.bit Time Info(0x00)');
     // re-pinned on purpose (lists lane P3, the link-look gate): a link inside its line, the inline
-    // look, its ink the detail run's quiet one (it wrote text-text-dim on itself)
+    // look, its ink the detail run's (it wrote text-text-dim on itself). Re-pinned on purpose
+    // (BRIEF-ink-size-roles items 1 and 2: a link is never quiet): the detail run reads in the reading ink
     expect(call).toHaveClass('underline');
-    expect(call.closest('[data-role="detail"]')).toHaveClass('text-text-dim');
+    expect(call.closest('[data-role="detail"]')).toHaveClass('text-text');
+    expect(call.closest('[data-role="detail"]')).not.toHaveClass('text-text-dim');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
   });
 
@@ -225,9 +230,12 @@ describe('ActivityFeed', () => {
     // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
     // exact value in its title (it was the padded column form in the line)
     expect(note).toHaveTextContent('26,050 CKB · deposited at #19,695,550');
-    // T7: the action's facts follow the headline inline, dim, quieter than the headline.
+    // T7: the action's facts follow the headline inline, quieter than the headline. Re-pinned on
+    // purpose (BRIEF-ink-size-roles item 1: the facts are values and the block a link, the reading
+    // ink; the headline stays the bright one): it was the dim ink
     expect(note.closest('[data-role="row-head"]')).not.toBeNull();
-    expect(note).toHaveClass('text-text-dim', 'text-small');
+    expect(note).toHaveClass('text-text', 'text-small');
+    expect(note).not.toHaveClass('text-text-dim');
     // Paid first, received next, the zero last.
     const parties = [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     expect(parties).toEqual(['hxw6h7', 'r4p74p', 'fxdtl8'].map(shown));
