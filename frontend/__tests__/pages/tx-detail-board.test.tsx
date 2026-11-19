@@ -1112,6 +1112,84 @@ describe('Transaction variants (D4)', () => {
     });
   });
 
+  // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
+  // said "no block before it is final yet", which is false for block 0 (it created the chain's
+  // first cells) and for the first blocks after it (the block whose reward they would pay is the
+  // genesis block, which earns none, or comes before the chain began). The API's `pays: null`
+  // means just that; each says what is true, and the cells' note with it.
+  describe('a cellbase that pays no block’s reward', () => {
+    const cellbase = (blockNumber: number) => {
+      const tx = committed();
+      return {
+        ...tx,
+        blockNumber,
+        isCellbase: true,
+        fee: '0',
+        feeRate: null,
+        inputs: [
+          {
+            previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+            since: '0x0',
+            capacity: null,
+            commonKnowledgeSize: null,
+            lock: null,
+            type: null,
+            address: null,
+            cellType: null,
+            display: null,
+          } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+        ],
+        inputsCapacity: '0',
+        inputsCommonKnowledgeSize: '0',
+        outputsCapacity: '55961739927',
+        outputsCommonKnowledgeSize: '61',
+        outputs: [
+          {
+            ...tx.outputs![0],
+            type: undefined,
+            cellType: 'plain',
+            capacity: '55961739927',
+            commonKnowledgeSize: '61',
+          },
+        ],
+        scriptGroups: [tx.scriptGroups![2]],
+        witnessDetails: [],
+        witnesses: [],
+        cellbaseWitness: null,
+        feePaidBy: [],
+        pays: null,
+      } as TransactionDetail;
+    };
+
+    it('says the genesis cellbase created the chain’s first cells', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(0));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^The genesis block’s cellbase pays no block’s reward: it created the chain’s first cells, 559\.61 CKB\.$/
+      );
+      expect(summary).not.toHaveTextContent('final');
+      expect(
+        screen.getByText(
+          'The genesis cellbase consumes no cell: it creates the chain’s first cells.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('says block 5’s cellbase pays no reward because genesis earns none', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(5));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^It pays no block’s reward: the block whose reward it would pay is the genesis block, which earns none, or would come before the chain began\.$/
+      );
+      expect(
+        screen.getByText('A cellbase consumes no cell; this one pays no block’s reward.')
+      ).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent('now final');
+    });
+  });
+
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
     const message = `0x${Buffer.from('0.210.0 (860c9bb 2026-09-21) ').toString('hex')}0011223344556677`;
     vi.mocked(api.getTransactionDetail).mockResolvedValue({

@@ -1129,7 +1129,29 @@ export default function TransactionDetailPage() {
       {tx.pays === undefined ? (
         <ActivityReadError txHash={hash} error={new Error('cellbase has no "pays" field')} />
       ) : tx.pays === null ? (
-        'It pays no block’s reward: no block before it is final yet.'
+        // the API's null: the block whose reward it would pay is the genesis block or before it
+        // (lane P1, third round; review p-logic-chain SHOULD 4: it read "no block before it is
+        // final yet", false for block 0 and for the blocks after it)
+        tx.blockNumber === 0 ? (
+          readable(hash, () => (
+            <>
+              The genesis block’s cellbase pays no block’s reward: it created the chain’s first
+              cells,{' '}
+              <CkbAmount
+                form="summary"
+                shannons={exactUnsignedInteger(
+                  required(tx.outputsCapacity, hash, 'outputsCapacity'),
+                  `${hash}: outputs capacity`
+                )}
+                signed={false}
+                tone="plain"
+              />
+              .
+            </>
+          ))
+        ) : (
+          'It pays no block’s reward: the block whose reward it would pay is the genesis block, which earns none, or would come before the chain began.'
+        )
       ) : (
         readable(hash, () => {
           const pays = tx.pays!;
@@ -1534,7 +1556,11 @@ export default function TransactionDetailPage() {
               {/* an explaining sentence: the reading ink (R3; lane P1 follow-up) */}
               <p className="text-text text-small max-w-measure -mt-2 mb-4">
                 {tx.isCellbase
-                  ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
+                  ? tx.blockNumber === 0
+                    ? 'The genesis cellbase consumes no cell: it creates the chain’s first cells.'
+                    : tx.pays === null
+                      ? 'A cellbase consumes no cell; this one pays no block’s reward.'
+                      : 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
                   : compensation
                     ? 'A transaction spends whole cells and creates new ones. The Nervos DAO adds the compensation; the rest of the difference is the fee.'
                     : 'A transaction spends whole cells and creates new ones. Capacity is conserved; the difference is the fee.'}
