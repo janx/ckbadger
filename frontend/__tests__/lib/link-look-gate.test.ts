@@ -180,8 +180,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/asset/asset-feed.tsx': {
     lane: 'p-assets',
-    sites: { look: 4, ink: 1 },
-    reason: '4 without a look; inks by hand (text-text-bright)',
+    sites: { look: 2 },
+    reason: '2 without a look',
   },
   'components/asset/asset-history.tsx': {
     lane: 'p-assets',
@@ -511,8 +511,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // lock link and its Lock metric's (4: two looks, two inks), the uncle page's canonical-hash link
 // (1), the identity owner line's address (1) → 559 (lane D4, 18 more: the phone rows' keys, block
 // links and names state their look — transactions 4, pool 2, block transactions 2, scripts 2, a
-// script's cells 2, inventory 4, Fiber channels 2)
-const TOLERATED_TOTAL = 559;
+// script's cells 2, inventory 4, Fiber channels 2) → 556 (lane D4 follow-up: the asset feed's
+// phone row, its key and its block link, 3: two looks, one ink)
+const TOLERATED_TOTAL = 556;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

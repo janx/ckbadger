@@ -235,17 +235,15 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     );
     expect(screen.queryByRole('table')).toBeNull();
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    // Re-pinned on purpose (lane D4 follow-up, the address page's transaction row): the output
+    // capacity left line 2's right (it was a bare "500 CKB"), and the bytes, the cycles and the
+    // index left the quiet line ("· 1,930 B · 1,923,713 cycles · tx 1 in block"); the table and the
+    // cards from 560 px keep them
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
       ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-      // decimals)
-      ['what', 'Minted 3', '500 CKB'],
-      [
-        'figures',
-        '1 → 2\u00a0cells · fee 0.00001 CKB · 1,930 B · 1,923,713 cycles · tx 1 in block',
-        null,
-      ],
+      ['what', 'Minted 3', null],
+      ['figures', '1 → 2\u00a0cells · fee 0.00001 CKB', null],
     ]);
   });
 
@@ -261,24 +259,27 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     const lines = phoneLines(row);
     expect(lines[0].right).toMatch(/^#1,001 · \d{4}-\d{2}-\d{2}$/);
-    expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after: output 1', right: null });
-    // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-    // decimals)
-    expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001 CKB · 640 B · tx 1 in block');
+    // re-pinned on purpose (lane D4 follow-up): the context is named by its label as a labelled
+    // figure ("Cell after output 1", was "Cell after: output 1"), and the bytes and the index left
+    // the quiet line (it read "… · 640 B · tx 1 in block")
+    expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after output 1', right: null });
+    expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001 CKB');
   });
 
-  it('folds into two lines at 608 px', () => {
+  // Re-pinned on purpose (lane D4 follow-up): the card at 608 px is the phone row's parts, its quiet
+  // line keeping the output, the bytes, the cycles and the index where no table stands (it was two
+  // lines: a bare "500 CKB" with the figures at its right)
+  it('keeps the output, bytes, cycles and index on the quiet line of the 608 px card', () => {
     atContainerWidth(608);
     render(<AssetTransactions rows={[tx(1, 1930, null)]} />);
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0x0101…0101', expect.stringMatching(/ago$/)],
       [
-        'what',
-        // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-        // decimals)
-        '500 CKB',
-        '1 → 2\u00a0cells · fee 0.00001 CKB · 1,930 B · cycles not computed · tx 1 in block',
+        'figures',
+        // a phone row is the summary form (readability R5)
+        '1 → 2\u00a0cells · fee 0.00001 CKB · output 500 CKB · 1,930 B · cycles not computed · tx 1 in block',
+        null,
       ],
     ]);
   });
