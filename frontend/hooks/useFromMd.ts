@@ -34,7 +34,7 @@ const FROM = { sm: viewportFrom('sm'), md: viewportFrom('md'), lg: viewportFrom(
  * Whether the viewport is at least `sm` wide (640 px), following it across the breakpoint: below
  * it a phone. For what a component decides in script at the width its classes switch at: an id's
  * size (`useTightBelowSm`), a control's phone form (the controls of `components/ui/`: a tab row's
- * step, more than four filter values drawn as a select).
+ * step, a filter whose chips do not fit a phone's line drawn as a select).
  */
 export function useFromSm(): boolean {
   return useSyncExternalStore(FROM.sm.subscribe, FROM.sm.getSnapshot, () => true);

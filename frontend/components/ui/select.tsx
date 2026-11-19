@@ -33,6 +33,8 @@ export function Select<V extends string>({
   className,
 }: SelectProps<V>) {
   const id = useId();
+  if (label.trim() === '')
+    throw new Error('Select: a select stands after its label, and this one has none');
   if (!options.some((option) => option.value === value))
     throw new Error(`Select "${label}": no option ${value}`);
   return (

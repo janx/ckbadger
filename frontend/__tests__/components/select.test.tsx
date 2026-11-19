@@ -71,4 +71,11 @@ describe('Select', () => {
       render(<Select label="sorted by" value={'age' as Sort} options={SORTS} onChange={() => {}} />)
     ).toThrow('Select "sorted by": no option age');
   });
+
+  it('refuses to stand without its label', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(<Select label=" " value="capacity" options={SORTS} onChange={() => {}} />)
+    ).toThrow('Select: a select stands after its label, and this one has none');
+  });
 });

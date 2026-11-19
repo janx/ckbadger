@@ -6,7 +6,8 @@
  * stylesheet, so the controls can be measured in a real browser at 1280, 1024, 640, 390 and 360
  * before any page uses them. Development only: the dev server serves it, `vite build` never reads
  * it. Each control is live: a click, a key or a narrower window shows what it does there (the tab
- * row's counts leave at 360, more than four filter values become a select below 640).
+ * row's counts leave at 360, a filter whose chips do not fit a 360 px phone's line becomes a
+ * select below 640).
  */
 import { StrictMode, useState, type CSSProperties, type ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -95,16 +96,35 @@ const STANDARDS: FilterValue<Standard>[] = [
   { key: 'sudt', label: 'sudt', count: 94 },
   { key: 'compatible', label: 'xudt-compatible', count: 4 },
 ];
+type AddressKind = 'all' | 'ckb' | 'dao';
+const ADDRESS_KINDS: FilterValue<AddressKind>[] = [
+  { key: 'all', label: 'all', count: 3 },
+  { key: 'ckb', label: 'ckb', count: 2 },
+  { key: 'dao', label: 'dao', count: 1, mark: 'gold' },
+];
 
 function Filters() {
   const [kind, setKind] = useState<Kind>('all');
   const [standard, setStandard] = useState<Standard>('all');
+  const [addressKind, setAddressKind] = useState<AddressKind>('all');
   return (
     <Item name="filter chips">
       <FilterChips label="kind" values={KINDS} value={kind} onChange={setKind} />
-      <Note>six values: chips from 640, the select after its label below it</Note>
+      <Note>
+        the six kinds, 783.2 px of chips: chips from 640, the select after its label below it
+      </Note>
       <FilterChips label="standard" values={STANDARDS} value={standard} onChange={setStandard} />
-      <Note>four values: chips at every width</Note>
+      <Note>
+        the inventory’s four standards, 397.6 px, wider than a 360 px phone’s 328 px line: chips
+        from 640, the select after “standard” below it
+      </Note>
+      <FilterChips
+        label="kind"
+        values={ADDRESS_KINDS}
+        value={addressKind}
+        onChange={setAddressKind}
+      />
+      <Note>the address page’s three kinds, 200.8 px: chips at every width</Note>
     </Item>
   );
 }

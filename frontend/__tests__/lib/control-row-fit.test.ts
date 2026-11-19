@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chipRowFits,
+  chipRowPx,
   NARROWEST_LINE_PX,
   tabRowPx,
   tabRowShowsCounts,
+  type ChipRowItem,
   type TabRowItem,
 } from '@/lib/control-row-fit';
 import { containerContentPx } from '@/__tests__/utils/tailwind-box';
@@ -115,5 +118,82 @@ describe('the counts leave a row wider than its line (the owner’s phone rule)'
       'tab row "activities · transactions · live cells · names" is 374.8 px without its counts at 14 px: wider than the 328 px line of a 360 px window'
     );
     expect(() => tabRowPx(four, 'body', true)).not.toThrow();
+  });
+});
+
+/**
+ * Chips or a select (the controls board's pictures at 390; the coordinator's follow-up of lane C1):
+ * below 640 a filter's values are chips when their row fits one line of the narrowest phone, the
+ * 328 px line of a 360 px window, and a select after the filter's label when it does not; from 640
+ * they are chips. A chip is its 1 px frame and 10 px padding each side (22), its 7 px mark and its
+ * 6 px gap where it has one, its label at 13 px (7.8 a glyph), its count at 12 px (7.2) after a
+ * 6 px gap; chips stand 6 px apart. Each figure is written here.
+ */
+const ADDRESS_KINDS: ChipRowItem[] = [
+  { label: 'all', count: 3 },
+  { label: 'ckb', count: 2 },
+  { label: 'dao', count: 1, mark: 'gold' },
+];
+const STANDARDS: ChipRowItem[] = [
+  { label: 'all', count: 727 },
+  { label: 'xudt', count: 629 },
+  { label: 'sudt', count: 94 },
+  { label: 'xudt-compatible', count: 4 },
+];
+const KINDS: ChipRowItem[] = [
+  { label: 'all', count: 6122 },
+  { label: 'ckb transfers', count: 683, mark: 'jade' },
+  { label: 'script calls', count: 5425, mark: 'slate-ckb' },
+  { label: 'nervos dao', count: 11, mark: 'gold' },
+  { label: 'tokens', count: 3, mark: 'token' },
+  { label: 'objects', count: 0, mark: 'object' },
+];
+
+describe('a row of filter chips fits the narrowest phone, or is a select', () => {
+  it('measures the address page’s three kinds at 200.8 px: chips', () => {
+    // all 3: 22 + 23.4 + 6 + 7.2 = 58.6; ckb 2: 58.6; dao 1 with its mark: 22 + 7 + 6 + 23.4 +
+    // 13.2 = 71.6; two gaps of 6
+    expect(chipRowPx(ADDRESS_KINDS)).toBe(200.8);
+    expect(chipRowFits(ADDRESS_KINDS)).toBe(true);
+  });
+
+  it('measures the inventory’s four standards at 397.6 px: a select', () => {
+    // all 727: 22 + 23.4 + 6 + 21.6 = 73; xudt 629: 22 + 31.2 + 27.6 = 80.8; sudt 94: 22 + 31.2 +
+    // 6 + 14.4 = 73.6; xudt-compatible 4: 22 + 117 + 6 + 7.2 = 152.2; three gaps of 6
+    expect(chipRowPx(STANDARDS)).toBe(397.6);
+    expect(chipRowFits(STANDARDS)).toBe(false);
+  });
+
+  it('measures the six kinds at 783.2 px: a select', () => {
+    // all 6,122: 87.4; with their marks (7 + 6): ckb transfers 683, 164; script calls 5,425, 170.6;
+    // nervos dao 11, 133.4; tokens 3, 95; objects 0, 102.8; five gaps of 6
+    expect(chipRowPx(KINDS)).toBe(783.2);
+    expect(chipRowFits(KINDS)).toBe(false);
+  });
+
+  it('keeps a row 0.6 px inside the line as chips, and makes one 0.6 px over it a select', () => {
+    // four chips: 4 × 22 + 3 × 6 = 106; 23 glyphs of label, 179.4; one count of five glyphs, 42
+    const inside: ChipRowItem[] = [
+      { label: 'all', count: 1234 },
+      { label: 'tokens' },
+      { label: 'objects' },
+      { label: 'domains' },
+    ];
+    expect(chipRowPx(inside)).toBe(327.4);
+    expect(chipRowFits(inside)).toBe(true);
+    // 25 glyphs of label, 195; one count of three glyphs, 27.6
+    const over: ChipRowItem[] = [
+      { label: 'all', count: 727 },
+      { label: 'tokens' },
+      { label: 'objects' },
+      { label: 'addresses' },
+    ];
+    expect(chipRowPx(over)).toBe(328.6);
+    expect(chipRowFits(over)).toBe(false);
+    expect(NARROWEST_LINE_PX).toBe(328);
+  });
+
+  it('refuses a count that is not a count', () => {
+    expect(() => chipRowPx([{ label: 'all', count: -1 }])).toThrow('Invalid count -1');
   });
 });

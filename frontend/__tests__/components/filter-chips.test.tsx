@@ -5,14 +5,14 @@ import { render, screen, within } from '@testing-library/react';
 import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { inkOf, BRIGHT, QUIET, READING } from '@/__tests__/utils/ink-role';
-import { boxPx, targetHeightPx } from '@/__tests__/utils/tailwind-box';
+import { boxPx, contentPx, targetHeightPx } from '@/__tests__/utils/tailwind-box';
 
 /**
  * The filter chips of the controls board (gate D0′): 28 px high and 32 below 640, square, the frame
  * line; the label 13 px in the reading ink, the count 12 px in the quiet ink, an optional 7 px
  * mark; the selected one the celadon line and the bright ink; a zero's label quiet, never faded.
- * A filter holds one value at a time: a radio group. More than four values below 640 are a select
- * after the filter's label.
+ * A filter holds one value at a time: a radio group. Below 640 a row of chips that does not fit
+ * one line of the narrowest phone is a select after the filter's label.
  */
 type Kind = 'all' | 'ckb' | 'scripts' | 'dao' | 'tokens' | 'objects';
 const KINDS: FilterValue<Kind>[] = [
@@ -129,8 +129,54 @@ describe('FilterChips: the board’s look', () => {
   });
 });
 
-describe('FilterChips: the phone form', () => {
-  it('draws more than four values below 640 as a select after the filter’s label', async () => {
+// Re-pinned on purpose (the coordinator's follow-up of lane C1): the phone form is decided by
+// measurement (lib/control-row-fit.ts `chipRowFits`: the row on one 328 px line), no longer by a
+// count of values, as the board's pictures at 390 draw it: the address page's three kinds are
+// chips, the inventory's four standards (397.6 px) and the six kinds (783.2 px) a select.
+const ADDRESS_KINDS: FilterValue<string>[] = [
+  { key: 'all', label: 'all', count: 3 },
+  { key: 'ckb', label: 'ckb', count: 2 },
+  { key: 'dao', label: 'dao', count: 1, mark: 'gold' },
+];
+const STANDARDS: FilterValue<string>[] = [
+  { key: 'all', label: 'all', count: 727 },
+  { key: 'xudt', label: 'xudt', count: 629 },
+  { key: 'sudt', label: 'sudt', count: 94 },
+  { key: 'compatible', label: 'xudt-compatible', count: 4 },
+];
+const INSIDE: FilterValue<string>[] = [
+  { key: 'all', label: 'all', count: 1234 },
+  { key: 'tokens', label: 'tokens' },
+  { key: 'objects', label: 'objects' },
+  { key: 'domains', label: 'domains' },
+];
+const OVER: FilterValue<string>[] = [
+  { key: 'all', label: 'all', count: 727 },
+  { key: 'tokens', label: 'tokens' },
+  { key: 'objects', label: 'objects' },
+  { key: 'addresses', label: 'addresses' },
+];
+
+function Values({ label, values }: { label: string; values: FilterValue<string>[] }) {
+  const [value, setValue] = useState('all');
+  return <FilterChips label={label} values={values} value={value} onChange={setValue} />;
+}
+
+/** The form a value set takes at a viewport: chips, or the select after its label. */
+function formAt(viewport: number, values: FilterValue<string>[], label = 'standard') {
+  atViewportWidth(viewport);
+  const { unmount } = render(<Values label={label} values={values} />);
+  const form = screen.queryByRole('radiogroup')
+    ? 'chips'
+    : screen.queryByRole('combobox', { name: label })
+      ? 'select'
+      : 'none';
+  unmount();
+  return form;
+}
+
+describe('FilterChips: the phone form, by the one function (lib/control-row-fit)', () => {
+  it('draws a row wider than the narrowest phone’s line as a select after the filter’s label', async () => {
     atViewportWidth(390);
     const user = userEvent.setup();
     render(<Filter />);
@@ -148,14 +194,35 @@ describe('FilterChips: the phone form', () => {
     expect(screen.getByText('showing dao')).toBeInTheDocument();
   });
 
-  it('keeps four values as chips below 640, and six from 640', () => {
-    atViewportWidth(390);
-    const { unmount } = render(<Filter values={KINDS.slice(0, 4)} />);
-    expect(screen.getAllByRole('radio')).toHaveLength(4);
-    unmount();
-    atViewportWidth(640);
-    render(<Filter />);
-    expect(screen.getAllByRole('radio')).toHaveLength(6);
+  it('draws the board’s three cases at 390: the address page’s chips, the two selects', () => {
+    expect(formAt(390, ADDRESS_KINDS, 'kind')).toBe('chips');
+    expect(formAt(390, STANDARDS)).toBe('select');
+    expect(formAt(390, KINDS, 'kind')).toBe('select');
+  });
+
+  it('keeps a row 0.6 px inside the line as chips, and draws one 0.6 px over it as a select', () => {
+    expect(formAt(390, INSIDE)).toBe('chips');
+    expect(formAt(360, INSIDE)).toBe('chips');
+    expect(formAt(390, OVER)).toBe('select');
+  });
+
+  it('draws every value set as chips from 640', () => {
+    for (const values of [ADDRESS_KINDS, STANDARDS, KINDS, OVER])
+      expect(formAt(640, values)).toBe('chips');
+  });
+
+  it('draws the row the function measures', () => {
+    atViewportWidth(1280);
+    for (const [values, px] of [
+      [ADDRESS_KINDS, 200.8],
+      [STANDARDS, 397.6],
+      [KINDS, 783.2],
+    ] as const) {
+      const { unmount } = render(<Values label="kind" values={[...values]} />);
+      const row = screen.getByRole('radiogroup');
+      expect(Math.round(contentPx(row, 1280) * 100) / 100).toBe(px);
+      unmount();
+    }
   });
 
   it('refuses a value that is none of its values', () => {
@@ -165,5 +232,15 @@ describe('FilterChips: the phone form', () => {
         <FilterChips label="kind" values={KINDS} value={'names' as Kind} onChange={() => {}} />
       )
     ).toThrow('FilterChips "kind": no value names');
+  });
+
+  it('refuses a filter with no label, at every width: its select would stand without one', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const viewport of [1280, 390]) {
+      atViewportWidth(viewport);
+      expect(() =>
+        render(<FilterChips label="" values={STANDARDS} value="all" onChange={() => {}} />)
+      ).toThrow('FilterChips: a filter has a label');
+    }
   });
 });
