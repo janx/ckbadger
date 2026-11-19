@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { parseMarkdownSourcePath } from '@/lib/ai/markdown-route';
 import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-renderer';
 import { api } from '@/lib/api';
@@ -897,13 +899,18 @@ describe('renderMarkdownPage', () => {
         hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
         lockHash: null,
         address: null,
-        scriptName: null,
+        lockScriptName: null,
       },
+      // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
       manager: {
         hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
         lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
-        address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-        scriptName: 'SECP256K1_BLAKE160',
+        address: ckbAddress({
+          codeHash: DEFAULT_LOCK_CODE_HASH,
+          args: '0x' + '57'.repeat(20),
+          network: 'ckt',
+        }),
+        lockScriptName: 'SECP256K1_BLAKE160',
       },
       sale: null,
       records: [],
@@ -942,6 +949,8 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# .cell support.cell');
     expect(result.body).toContain('## Name');
     expect(result.body).toContain('ownerHashPrefix');
+    // lane P2's third round (item 12): the manager's lock in the page's words, the decision's
+    expect(result.body).toContain('| managerLock | SECP256K1_BLAKE160 |');
     expect(result.body).toContain('0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019');
     expect(result.body).toContain('## Activities');
     expect(api.getDotCellItemActivities).toHaveBeenCalledWith(

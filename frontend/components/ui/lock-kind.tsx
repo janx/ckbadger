@@ -191,10 +191,39 @@ export function cellLockFacts(
  * the name alone.
  */
 export function partyLockFacts(party: ParticipantRef): LockFacts {
-  const name = party.lockKind ?? null;
+  return namedPartyLockFacts({ lockScriptName: party.lockKind ?? null, address: party.address });
+}
+
+/**
+ * A named party's lock (a .cell name's owner, manager, a sale's seller; lane P2's third round,
+ * item 12): the registry's name the API sends for its lock code hash (`lockScriptName`) and, where
+ * the party has an address, the lock read off it, which decides (a lock on the default lock's code
+ * hash by data is not the default lock). A party with no address keeps the name alone.
+ */
+function namedPartyLockFacts(party: {
+  lockScriptName: string | null;
+  address: string | null;
+}): LockFacts {
+  const name = party.lockScriptName;
   if (party.address === null) return { name, codeHash: null, hashType: null };
   const { codeHash, hashType } = addressScript(party.address);
   return { name, codeHash, hashType };
+}
+
+/** A named party's lock in a fact's note or a row (the decision's column words, never silent). */
+export function partyLockWordsText(
+  party: Parameters<typeof namedPartyLockFacts>[0],
+  size: ShortSize
+): string {
+  return lockWordsText(namedLockWords(namedPartyLockFacts(party), 'column'), size);
+}
+
+/** A named party's lock in a sentence ("a JoyID lock owns it"; the decision's sentence form). */
+export function partyLockSentence(
+  party: Parameters<typeof namedPartyLockFacts>[0],
+  size: ShortSize
+): string {
+  return lockPhrase(namedLockWords(namedPartyLockFacts(party), 'sentence'), size);
 }
 
 /**

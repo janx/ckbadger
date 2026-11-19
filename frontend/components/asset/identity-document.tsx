@@ -1,4 +1,5 @@
 'use client';
+import { partyLockWordsText } from '@/components/ui/lock-kind';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { HeadId } from '@/components/ui/head-id';
 import { useDetailTier } from '@/components/ui/detail-layout';
@@ -30,8 +31,9 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
             </span>
           </>
         )}
-        {party.lockScriptName && (
-          <span className="text-text-dim text-meta block">{party.lockScriptName}</span>
+        {/* the party's lock by the one decision (lane P2's third round, item 12) */}
+        {party.lockHash && (
+          <span className="text-text-dim text-meta block">{partyLockWordsText(party, 'row')}</span>
         )}
       </dd>
     </div>

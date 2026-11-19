@@ -9,31 +9,22 @@ const LOCK_HASH = '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5c
 const ADDRESS = 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
 
 describe('DotCellParty', () => {
-  it('links a resolved party to its address and names its lock script', () => {
-    render(
-      <DotCellParty
-        party={{
-          hashPrefix: PREFIX,
-          lockHash: LOCK_HASH,
-          address: ADDRESS,
-          lockScriptName: 'SECP256K1_BLAKE160',
-        }}
-      />
-    );
+  // Re-pinned on purpose (lane P2's third round, item 12; renamed, it was "… and names its lock
+  // script"): the chip names the party by its address; no caller gave it a lock name, and a lock's
+  // words are the one decision's, said where the page names the party's lock (a fact's note, a
+  // Lock column), not a badge of the API's name beside the chip
+  it('links a resolved party to its address', () => {
+    render(<DotCellParty party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: ADDRESS }} />);
     expect(screen.getByRole('link', { name: ADDRESS })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );
-    expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
+    expect(screen.queryByText('SECP256K1_BLAKE160')).toBeNull();
     expect(screen.queryByText('unresolved')).not.toBeInTheDocument();
   });
 
   it('links a lock that encodes to no address by its full lock hash', () => {
-    render(
-      <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, lockScriptName: null }}
-      />
-    );
+    render(<DotCellParty party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null }} />);
     expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${LOCK_HASH}`);
     expect(screen.queryByText('unresolved')).not.toBeInTheDocument();
   });
@@ -48,7 +39,7 @@ describe('DotCellParty', () => {
       try {
         render(
           <DotCellParty
-            party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, lockScriptName: null }}
+            party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null }}
             size={size}
           />
         );
@@ -64,11 +55,7 @@ describe('DotCellParty', () => {
     });
 
   it('shows a bare prefix as an unresolved prefix, never as a link to an address', () => {
-    render(
-      <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
-      />
-    );
+    render(<DotCellParty party={{ hashPrefix: PREFIX, lockHash: null, address: null }} />);
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.getByText('unresolved')).toBeInTheDocument();
     expect(screen.getByTitle(PREFIX)).toHaveTextContent(PREFIX);
@@ -76,10 +63,7 @@ describe('DotCellParty', () => {
 
   it('shortens a bare prefix in list rows but keeps the whole prefix in its tooltip', () => {
     render(
-      <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
-        size="row"
-      />
+      <DotCellParty party={{ hashPrefix: PREFIX, lockHash: null, address: null }} size="row" />
     );
     // U-09 (re-pinned): a list row's size, 10…6 (it was 12…10)
     expect(screen.getByTitle(PREFIX)).toHaveTextContent(/^0x57d926a4…e3c867$/);
@@ -88,7 +72,7 @@ describe('DotCellParty', () => {
   it('carries the test id it is given', () => {
     render(
       <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
+        party={{ hashPrefix: PREFIX, lockHash: null, address: null }}
         testId="dotcell-owner"
       />
     );

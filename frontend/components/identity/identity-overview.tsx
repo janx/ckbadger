@@ -5,7 +5,12 @@ import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } fro
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
-import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
+import {
+  cellLockSentence,
+  cellOwnerLockPart,
+  partyLockSentence,
+  partyLockWordsText,
+} from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
@@ -188,9 +193,8 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
       // scrolled): 42 characters at 13 px, 327.6 px, one line from 360, two halves at 320
       <HeadId value={party.hashPrefix} kind="hash" />
     ),
-    note: party.lockHash
-      ? (party.lockScriptName ?? 'lock not named')
-      : 'prefix · no uniquely resolved lock',
+    // the party's lock by the one decision (lane P2's third round, item 12)
+    note: party.lockHash ? partyLockWordsText(party, 'row') : 'prefix · no uniquely resolved lock',
   };
 }
 
@@ -209,7 +213,7 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
           className="text-body"
         />
       </AppLink>
-      <Sub>{party.lockScriptName ?? 'lock not named'}</Sub>
+      <Sub>{partyLockWordsText(party, 'row')}</Sub>
     </>
   ) : (
     <>
@@ -381,11 +385,6 @@ export function identityFacts({
       ];
     }
   }
-}
-
-function lockPhrase(name: string | null) {
-  if (!name) return 'an unnamed lock';
-  return name.toLowerCase().endsWith('lock') ? `the ${name}` : `a ${name} lock`;
 }
 
 /** The one-paragraph summary under an identity's title (ID-C5), every clause an API fact. */
@@ -577,9 +576,11 @@ export function IdentitySummary({
             <>
               It changed hands {times(owners.changes)}; since{' '}
               <NoBreak>{formatUtc8Date(owners.since.cell.timestamp)}</NoBreak>{' '}
-              <B>{lockPhrase(d.owner.lockScriptName)}</B> owns it
+              {/* the locks by the one decision's sentence form (lane P2's third round, item 12;
+                  a second lockPhrase here wrote "the Default Lock" and "an unnamed lock") */}
+              <B>{partyLockSentence(d.owner, 'row')}</B> owns it
               {d.manager.hashPrefix !== d.owner.hashPrefix
-                ? ` while ${lockPhrase(d.manager.lockScriptName)} manages its records`
+                ? ` while ${partyLockSentence(d.manager, 'row')} manages its records`
                 : ''}
               .{' '}
             </>

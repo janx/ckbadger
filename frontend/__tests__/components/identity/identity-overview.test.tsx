@@ -1,4 +1,4 @@
-import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { ckbAddress, namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { AssetMetrics } from '@/components/asset/detail-shell';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
@@ -392,7 +392,8 @@ describe('.cell rail parties (visual pass)', () => {
     item.owner = {
       hashPrefix: '0x69',
       lockHash: '0x' + '69'.repeat(32),
-      address: 'ckb1qqcz6d',
+      // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+      address: seededAddress('qqcz6d', namedLockCodeHash('Quantum-Resistant Lock')),
       lockScriptName: 'Quantum-Resistant Lock',
     };
     const protocol = structuredClone(dotcellProtocolProducer) as IdentityProtocol;
@@ -408,11 +409,69 @@ describe('.cell rail parties (visual pass)', () => {
     );
     expect(fact('Owner')!.querySelector('a')).toHaveAttribute(
       'href',
-      '/mainnet/address/ckb1qqcz6d'
+      `/mainnet/address/${item.owner.address}`
     );
     expect(fact('Owner')).toHaveTextContent('Quantum-Resistant Lock');
     expect(fact('Owner')).not.toHaveTextContent("named in the name's data");
     expect(fact('Manager')).not.toHaveTextContent('edits its records');
     expect(fact('Manager')).toHaveTextContent('prefix · no uniquely resolved lock');
+  });
+});
+
+// Lane P2's third round (item 12c, the test review's MUST-1): a .cell party's lock is said through
+// the one decision, off the party's address, which spells the lock: a lock on the default lock's
+// code hash by data is not the default lock, whose name the registry sends for that code hash, so
+// it reads "lock 0x9bd7e06f…a3cce8 by data", never "Default Lock"; the summary says it in the
+// decision's sentence form, the facts in its column words.
+describe('.cell parties name their locks through the decision', () => {
+  const byData = (seed: string) => {
+    const args = '0x' + seed.repeat(20);
+    return {
+      hashPrefix: '0x' + seed.repeat(20),
+      lockHash: '0x' + seed.repeat(32),
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+      lockScriptName: 'Default Lock',
+    };
+  };
+  it('writes a by-data lock on the default code hash by its code hash, in the facts and the summary', () => {
+    const item = dotcellItem();
+    const protocol = structuredClone(dotcellProtocolProducer) as Extract<
+      IdentityProtocol,
+      { kind: 'dotcell' }
+    >;
+    const first = protocol.versions[0];
+    const second = structuredClone(first);
+    second.cell.timestamp = String(Number(first.cell.timestamp) + 86_400_000);
+    second.cell.txHash = '0x' + '77'.repeat(32);
+    second.decoded.owner = byData('6a');
+    second.decoded.manager = byData('6b');
+    protocol.versions = [first, second];
+    const dotcell = { ...item, owner: byData('6a'), manager: byData('6b') };
+    render(
+      <>
+        <Facts
+          protocol={protocol}
+          term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+          now={NOW}
+          isLive
+          createdAtBlock={100}
+          dotcell={dotcell}
+        />
+        <IdentitySummary
+          protocol={protocol}
+          term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+          now={NOW}
+          isLive
+          subject="alice.cell"
+        />
+      </>
+    );
+    expect(fact('Owner')).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data');
+    expect(fact('Manager')).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data');
+    const summary = screen.getByTestId('identity-summary');
+    expect(summary).toHaveTextContent(
+      /a lock 0x9bd7e06f…a3cce8 by data owns it while a lock 0x9bd7e06f…a3cce8 by data manages its records/
+    );
+    expect(document.body).not.toHaveTextContent('Default Lock');
   });
 });

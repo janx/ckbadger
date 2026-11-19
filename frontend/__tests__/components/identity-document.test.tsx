@@ -1,10 +1,12 @@
 import { render, screen } from '@/__tests__/utils/test-utils';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { MnftPermissions, NamedParty } from '@/components/asset/identity-document';
 import { mnftProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 // The identity read-out these tests covered moved to components/identity/* (F2 identities,
 // round 2); its invariants are tested there (identity-sections / identity-evidence tests).
 it('links only a uniquely resolved named party', () => {
+  const address = seededAddress('manager', JOYID_CODE_HASH);
   render(
     <dl>
       <NamedParty
@@ -12,13 +14,15 @@ it('links only a uniquely resolved named party', () => {
         party={{
           hashPrefix: '0x11',
           lockHash: '0x22',
-          address: 'ckb1manager',
+          // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+          address,
           lockScriptName: 'JoyID',
         }}
       />
     </dl>
   );
-  expect(screen.getByRole('link')).toHaveAttribute('href', '/mainnet/address/ckb1manager');
+  expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${address}`);
+  // the lock's words are the one decision's, off the address (a JoyID lock's name stays its name)
   expect(screen.getByText('JoyID')).toBeInTheDocument();
 });
 // Lane c2-finish (item 4, and rulings round 1): a party with no unique address writes its

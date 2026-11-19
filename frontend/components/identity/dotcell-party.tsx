@@ -20,7 +20,6 @@ export interface PartyDisplay {
   hashPrefix: string | null;
   lockHash: string | null;
   address: string | null;
-  lockScriptName?: string | null;
 }
 
 interface DotCellPartyProps {
@@ -41,7 +40,6 @@ export function DotCellParty({ party, size, testId, className }: DotCellPartyPro
       className={cn('inline-flex min-w-0 flex-wrap items-center gap-2', className)}
     >
       <PartyIdentity party={party} size={size} />
-      {party.lockScriptName && <Badge variant="gray">{party.lockScriptName}</Badge>}
     </span>
   );
 }

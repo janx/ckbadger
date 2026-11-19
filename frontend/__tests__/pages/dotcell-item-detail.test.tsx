@@ -5,7 +5,7 @@ import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-re
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
-import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -91,10 +91,14 @@ it('shows current name state, exact protocol, physical cell history and both fee
 });
 it('links a uniquely resolved protocol owner and retains unresolved manager bytes', async () => {
   const protocol: ItemProtocol = structuredClone(evidence);
+  // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address
+  // by the one decision, so the owner's address is a real one on JoyID's code hash (it was
+  // 'ckb1owner', a made-up string)
+  const owner = seededAddress('owner', JOYID_CODE_HASH);
   protocol.versions[0].decoded.owner = {
     ...protocol.versions[0].decoded.owner,
     lockHash: '0x' + '22'.repeat(32),
-    address: 'ckb1owner',
+    address: owner,
     lockScriptName: 'JoyID',
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
@@ -102,7 +106,7 @@ it('links a uniquely resolved protocol owner and retains unresolved manager byte
   const rights = await screen.findByRole('region', { name: 'Owner and manager' });
   expect(
     within(within(rights).getByLabelText('Owner · holds the name')).getByRole('link')
-  ).toHaveAttribute('href', '/mainnet/address/ckb1owner');
+  ).toHaveAttribute('href', `/mainnet/address/${owner}`);
   expect(rights).toHaveTextContent(evidence.versions[0].decoded.manager.hashPrefix);
   expect(rights.querySelector('a[href*="626262"]')).toBeNull();
 });

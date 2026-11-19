@@ -254,6 +254,9 @@ const FEEDS: Reads = {
   'components/transaction/transaction-cell-tiles.tsx': { 'registry name': 2 },
   // "Lock of output i": the output's name handed to `cellLockFacts`
   'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
+  // an address record that is the owner's or manager's own: the party's name handed with the
+  // record's address to `partyLockSentence` (lane P2's third round, item 12)
+  'components/identity/identity-records.tsx': { 'api name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -303,15 +306,13 @@ const KNOWN: Reads = {
   'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
   // 14–20, found when the gate learned the identity parties' lock name (lane P2's third round,
   // item 12, the test review's MUST-1): a .cell / .bit party's `scriptName`, renamed on the wire
-  // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Converted to
-  // the decision in the next commit, but for the lists lane's activity row and the AI view's
-  // primary lock call
-  'components/identity/identity-overview.tsx': { 'api name': 4 },
-  'components/identity/dotcell-roles.tsx': { 'api name': 1 },
-  'components/identity/identity-records.tsx': { 'api name': 2 },
-  'components/identity/dotcell-party.tsx': { 'api name': 2 },
-  'components/asset/identity-document.tsx': { 'api name': 2 },
-  'lib/ai/markdown-renderer.ts': { 'api name': 3 },
+  // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Then the .cell
+  // parties' writers went to the decision (`partyLockWordsText`, `partyLockSentence`): the
+  // identity overview (4), the roles (1), the records (2 → 1, which feeds it), the party chip (2,
+  // its badge gone), the named party (2) and the AI view's owner and manager rows (2). Left: the
+  // AI view's primary lock call (an activity's called lock, its hash type not sent) and the lists
+  // lane's activity row, not this lane's to edit
+  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
   'components/activity/activity-row.tsx': { 'api name': 2 },
 };
 
@@ -443,11 +444,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // could not see (the test review's MUST-1): 16 reads in 7 more files came to light, so the
   // totals RISE here, 12 → 28 known reads in 8 → 15 files, 25 → 41 in all in 16 → 23; they fall as
   // the writers go to the decision
-  it('pins the totals: 41 reads in 23 files, the known writers 15 files and 28 reads', () => {
+  // Re-pinned on purpose (lane P2's third round, item 12b; renamed, it was "… 41 reads in 23
+  // files, … 15 files and 28 reads"): the .cell parties' lock words go through the decision, 28 →
+  // 15 known reads in 15 → 10 files; the records' one read feeds it; 41 → 29 in all in 23 → 19
+  it('pins the totals: 29 reads in 19 files, the known writers 10 files and 15 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(23);
-    expect(total(all)).toBe(41);
-    expect(Object.keys(KNOWN)).toHaveLength(15);
-    expect(total(KNOWN)).toBe(28);
+    expect(Object.keys(all)).toHaveLength(19);
+    expect(total(all)).toBe(29);
+    expect(Object.keys(KNOWN)).toHaveLength(10);
+    expect(total(KNOWN)).toBe(15);
   });
 });
