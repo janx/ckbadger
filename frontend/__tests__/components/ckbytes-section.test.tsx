@@ -8,6 +8,9 @@ import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width
 import { server } from '@/__tests__/msw/server';
 import { ckbytesAllocation, daoStatistics } from '@/__tests__/msw/fixtures/home';
 import { CkbytesSection } from '@/components/home/ckbytes-section';
+import { fontPx, textPx } from '@/lib/type-metrics';
+import type { TypeStep } from '@/lib/type-scale';
+import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { MINUS } from '@/lib/chart-ticks';
 import type { CkbytesAllocation } from '@/lib/api';
@@ -67,14 +70,14 @@ describe('CkbytesSection', () => {
   // PA-19 (UI review 2026-11-14): at 390 the supply figure filled the line and its "CKB" went to
   // the caption's line, 3 px off its baseline; at 360 the figure itself, 23 characters at 26 px
   // (355.2 px with its −0.01 em tracking), could break inside (overflow-wrap: anywhere). The same
-  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.8 px), the
-  // decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at 360, and the figure
+  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.76 px), the
+  // decimals (67.86) and " CKB" at 13 px (30.16) take 312.78 px of the 328 at 360, and the figure
   // and its unit are one unbreakable unit; "in circulation" moves under it whole.
   // re-pinned on purpose (the lead's final round, item 5): at 320 the figure and its unit ran 14 px
-  // past the window (main 9): a 320 px window's line is 288 px, the figure alone 283.8 (the
-  // integer 214.8 and the decimals 69.0) and with " CKB" 314.5. The figure stays one unbreakable
+  // past the window (main 9): a 320 px window's line is 288 px, the figure alone 282.62 (the
+  // integer 214.76 and the decimals 67.86) and with " CKB" 312.78. The figure stays one unbreakable
   // run, exact to the shannon; its unit goes under it where they cannot share the line, as a chart
-  // head's unit does on a phone, and beside it where they can (314.5 in a 360 px window's 328).
+  // head's unit does on a phone, and beside it where they can (312.78 in a 360 px window's 328).
   it('keeps the supply figure whole and lets its unit go under it where the line cannot hold both (PA-19)', async () => {
     render(<CkbytesSection />);
     const total = await screen.findByTestId('ckbytes-circulating');
@@ -86,21 +89,39 @@ describe('CkbytesSection', () => {
     const [figure, unit] = [...pair.children] as HTMLElement[];
     expect(figure).toHaveClass('whitespace-nowrap');
     expect(figure).toHaveTextContent(/^49,868,783,034\.50933125$/);
-    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
+    // re-pinned on purpose (the third read's T NOTE-6): the decimals are small below 640, so the
+    // figure alone holds a 320 px window's line (at body, 14 px, it was 288.02 px in 288)
+    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-small');
     // the one break of the pair is the space before its unit
     expect(unit.textContent).toBe(' CKB');
     expect(unit).toHaveClass('text-text-dim', 'text-[0.5em]');
     expect(unit).not.toHaveClass('whitespace-nowrap');
     expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
-    // the arithmetic below 640: 26 px for the integer and 13 for the rest, −0.01 em each glyph
-    const run = (chars: number, px: number) => chars * (px * 0.6 - px * 0.01);
-    const alone = run(14, 26) + run(9, 13);
-    const withUnit = alone + run(4, 13);
-    expect(Math.round(alone * 10) / 10).toBe(283.8);
-    expect(Math.round(withUnit * 10) / 10).toBe(314.5);
-    expect(alone).toBeLessThanOrEqual(320 - 32);
-    expect(withUnit).toBeGreaterThan(320 - 32);
-    expect(withUnit).toBeLessThanOrEqual(360 - 32);
+    // the arithmetic below 640, read from the component's classes and the type scale (the third
+    // read's T NOTE-6: it computed its own 26 px and 13 px, so it could not fail when the page
+    // changed): the row's step below 640 and its tracking, an em of the row's size inherited as a
+    // length by every glyph; the decimals' step below 640; the unit's em of the row's size
+    const step = (classes: string, pattern: RegExp) => {
+      const found = classes
+        .split(/\s+/)
+        .map((c) => pattern.exec(c)?.[1])
+        .find(Boolean);
+      if (!found) throw new Error(`no ${pattern} in "${classes}"`);
+      return found;
+    };
+    const rowPx = fontPx(step(total.className, /^text-(\w+)$/) as TypeStep);
+    const track = Number(step(total.className, /^tracking-\[(-?[\d.]+)em\]$/)) * rowPx;
+    const decimals = within(figure).getByText('.50933125');
+    const decimalsPx = fontPx(step(decimals.className, /^max-sm:text-(\w+)$/) as TypeStep);
+    const unitPx = Number(step(unit.className, /^text-\[([\d.]+)em\]$/)) * rowPx;
+    const run = (text: string, px: number) => textPx(text.length, px) + text.length * track;
+    const alone = run('49,868,783,034', rowPx) + run('.50933125', decimalsPx);
+    const withUnit = alone + run(' CKB', unitPx);
+    expect(Math.round(alone * 100) / 100).toBe(282.62);
+    expect(Math.round(withUnit * 100) / 100).toBe(312.78);
+    expect(alone).toBeLessThanOrEqual(containerContentPx(320));
+    expect(withUnit).toBeGreaterThan(containerContentPx(320));
+    expect(withUnit).toBeLessThanOrEqual(containerContentPx(360));
   });
 
   // A4 Chrome F1: the figure (nowrap) and the label (nowrap) followed each other with no

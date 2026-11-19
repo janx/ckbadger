@@ -49,6 +49,7 @@ import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -93,17 +94,22 @@ const pool = {
   pendingCkbDelta: '-50000000000',
   truncated: false,
 };
-const poolActivity = (): Activity => ({
-  ...addressActivitiesFixture[0],
-  txHash: fixtureHash(900),
-  blockNumber: null,
-  txIndex: null,
-  timestamp: null,
-  poolStatus: 'proposed',
-  timeAddedToPool: new Date(Date.now() - 120000).toISOString(),
-  ckbDelta: '-50000000000',
-  interpretation: { status: 'complete' },
-});
+// a pool row states no item types, null and null, as the route sends it (the third read's T
+// SHOULD-1: it inherited the committed row's [])
+const poolActivity = (): Activity =>
+  activityRead({
+    ...addressActivitiesFixture[0],
+    txHash: fixtureHash(900),
+    blockNumber: null,
+    txIndex: null,
+    timestamp: null,
+    poolStatus: 'proposed',
+    timeAddedToPool: new Date(Date.now() - 120000).toISOString(),
+    ckbDelta: '-50000000000',
+    interpretation: { status: 'complete' },
+    itemTypes: null,
+    itemTypesUnread: null,
+  });
 const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
   balance: '0',
@@ -1159,7 +1165,16 @@ describe('Address v3', () => {
         pageFixture([
           {
             ...addressActivitiesFixture[0],
-            itemDeltas: [{ kind: 'identity', standard, identityId: fixtureHash(77), delta: 1 }],
+            // the route states each item's movement in the whole transaction (the third read's Lb SHOULD 2)
+            itemDeltas: [
+              {
+                kind: 'identity',
+                standard,
+                identityId: fixtureHash(77),
+                delta: 1,
+                movement: 'transfer',
+              },
+            ],
           },
         ])
       );
@@ -1190,8 +1205,15 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           tags: 1,
+          // a transfer in, as the route states it (the third read's Lb SHOULD 2): its direction
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '1', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '1',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
         },
       ])
@@ -1207,7 +1229,13 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '123456789', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '123456789',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
           typeCalls: [
             {
@@ -1690,7 +1718,7 @@ describe('Address board · F2 blocks', () => {
     // Re-pinned on purpose (Gate B's rule, lists lane P3: a run is what was done and the script
     // code, not the parties): the second transaction calls a type script, so the two rows do not
     // fold (another party alone no longer keeps them apart)
-    const second = {
+    const second = activityRead({
       ...addressActivitiesFixture[0],
       txHash: fixtureHash(801),
       ckbDelta: '-5',
@@ -1706,7 +1734,7 @@ describe('Address board · F2 blocks', () => {
       participants: [
         { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [] },
       ],
-    };
+    });
     const page = pageFixture([...addressActivitiesFixture, second]);
     // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the
     // API would, so the feed's two rows do not reach the chip's one-row invariant. Lane

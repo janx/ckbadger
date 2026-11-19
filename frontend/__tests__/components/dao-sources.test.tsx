@@ -6,6 +6,7 @@ import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
 import { api } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
@@ -24,7 +25,7 @@ const party = (n: number, ckbDelta: string, usedDelta: string) => ({
   tags: 16,
 });
 /** A withdrawal request as the board draws it: the request, the fee payer, and a zero-delta party. */
-const activity = {
+const activity = activityRead({
   txHash: tx,
   txIndex: 2,
   blockNumber: 123,
@@ -55,28 +56,30 @@ const activity = {
       metadata: { capacity: '2605000000000', depositBlock: '19695550' },
     },
   ],
-};
+});
 // B4 (re-pinned): three requests by three depositors. Re-pinned on purpose (Gate B's rule, lists
 // lane P3): rows that did the same thing and called the same code fold whoever the parties are, so
 // three requests running are one run; the newest three here are a request, a deposit and a
 // request, which do not (the run is pinned below)
-const request = (i: number) => ({
-  ...activity,
-  txHash: '0x' + String(i + 1).repeat(64),
-  blockNumber: 123 - i,
-  participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
-});
-const deposit = (i: number) => ({
-  ...request(i),
-  protocolActions: [
-    {
-      protocol: 'dao',
-      protocolName: 'Nervos DAO',
-      action: 'deposit',
-      metadata: { capacity: '2605000000000' },
-    },
-  ],
-});
+const request = (i: number) =>
+  activityRead({
+    ...activity,
+    txHash: '0x' + String(i + 1).repeat(64),
+    blockNumber: 123 - i,
+    participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
+  });
+const deposit = (i: number) =>
+  activityRead({
+    ...request(i),
+    protocolActions: [
+      {
+        protocol: 'dao',
+        protocolName: 'Nervos DAO',
+        action: 'deposit',
+        metadata: { capacity: '2605000000000' },
+      },
+    ],
+  });
 const three = [request(0), deposit(1), request(2)];
 
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
@@ -149,9 +152,11 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
         '3'
       )
     );
-    // three depositors, and the two parties every request shares
+    // three depositors, and the two parties every request shares; re-pinned on purpose (the
+    // lead's finding, the exactness lane's B9): the three newest, older DAO activity unread (the
+    // route has more), so the run's counts are so far (it said "all 3 … · 5 participants")
     expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 5 participants$/
+      /^3 transactions so far ↓ · 5 participants so far$/
     );
     expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });

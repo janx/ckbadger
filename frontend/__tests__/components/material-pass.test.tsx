@@ -17,6 +17,7 @@ import { TopicHero } from '@/components/ui/topic-hero';
 import type { ParticipantInfo } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 import tailwindConfig from '@/tailwind.config';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // Material pass v2, citypop edition (review 2026-11-03): six moves on shared pieces. Where a move
 // is CSS only, the test pins the rule in globals.css and the class a component renders for it;
@@ -449,7 +450,7 @@ describe('move 5 on the activity row', () => {
   });
   const sender = party('sendr1', { ckbDelta: '-326700000000', usedDelta: '-323100000000' });
   const receiver = party('hprdnn', { ckbDelta: '326699990000', usedDelta: '323100000000' });
-  const transfer: ActivityRowData = {
+  const transfer: ActivityRowData = activityRead({
     txHash: TX,
     blockNumber: 17627981,
     timestamp: '1761174000000',
@@ -460,7 +461,7 @@ describe('move 5 on the activity row', () => {
     itemTypes: [],
     itemTypesUnread: null,
     participants: [sender, receiver],
-  };
+  });
   const lines = (c: HTMLElement) => [
     ...c.querySelectorAll<HTMLElement>('[data-role="participant"]'),
   ];
@@ -477,7 +478,7 @@ describe('move 5 on the activity row', () => {
       ckbDelta: '-1',
     });
     const { container: named } = render(
-      <ActivityRow activity={{ ...transfer, participants: [joy] }} />
+      <ActivityRow activity={activityRead({ ...transfer, participants: [joy] })} />
     );
     const kind = lines(named)[0].querySelector(
       '[data-role="lock-kind"] [data-lock-kind]'

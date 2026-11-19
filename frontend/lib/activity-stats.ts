@@ -2,6 +2,7 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
+import { sentField } from '@/lib/api-fields';
 import type {
   ActivitySummary24h,
   ScriptCountEntry,
@@ -85,9 +86,12 @@ const SCRIPT_TOP = 5;
 export function scriptShares(
   summary: Pick<ActivitySummary24h, 'scriptCounts' | 'scriptCalls' | 'scriptRest'>
 ): ScriptShares {
-  const total = summary.scriptCalls;
+  // the route's fields this plan added, refused by name where an older API sends none (the third
+  // read's La N6: it read BigInt(undefined))
+  const total = sentField(summary.scriptCalls, 'the 24 h activity summary', 'scriptCalls');
+  const rest = sentField(summary.scriptRest, 'the 24 h activity summary', 'scriptRest');
   const named = summary.scriptCounts.slice(0, SCRIPT_TOP);
-  const parts = [...named.map((e) => e.count), summary.scriptRest?.calls ?? 0];
+  const parts = [...named.map((e) => e.count), rest?.calls ?? 0];
   if (BigInt(total) !== parts.reduce((sum, n) => sum + BigInt(n), BigInt(0)))
     throw new Error(`script calls: the route's ${total} is not its five named and its rest`);
   if (total === 0) return { total: 0, top: [], others: null };

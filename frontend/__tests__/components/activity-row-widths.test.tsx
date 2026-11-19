@@ -3,6 +3,7 @@
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 /** A real JoyID address (RFC 0021 full format): a row names its lock, the default lock it leaves unnamed (B4). */
 const JOYID_ADDRESS =
@@ -31,8 +32,12 @@ const objectArrived: ItemDelta = {
   collection: { name: '.cell deeds' },
 } as ItemDelta;
 
-function activity(participants: ParticipantInfo[]): ActivityRowData {
-  return {
+function activity(
+  participants: ParticipantInfo[],
+  // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+): ActivityRowData {
+  return activityRead({
     txHash: '0x' + 'cd'.repeat(32),
     blockNumber: 20757774,
     timestamp: '1700000000000',
@@ -40,10 +45,11 @@ function activity(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
+
     itemTypesUnread: null,
     participants,
-  };
+    ...over,
+  });
 }
 
 /** Every Tailwind class in the participants box, the box itself included. */
@@ -64,10 +70,13 @@ describe('activity participant lines (A1 → T7: one wrapping line at every widt
   it('draws a flex column of wrapping lines, no grid, no sm:/md: track', () => {
     const { container } = render(
       <ActivityRow
-        activity={activity([
-          party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
-          party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
-        ])}
+        activity={activity(
+          [
+            party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
+            party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
+          ],
+          { itemTypes: [ITEM_TYPE.spore] }
+        )}
       />
     );
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;
@@ -203,18 +212,18 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockHashType: 'type',
       lockArgs: '0x' + String(i).padStart(4, '0') + 'ab'.repeat(20),
       scriptHash: '0x' + String(i).padStart(64, '0'),
-      scriptName: '.bit Lock',
+      lockScriptName: '.bit Lock',
       decoded: null,
       decodeError: null,
     });
-    return {
+    return activityRead({
       ...activity([party()]),
       protocolActions: [
         { protocol: 'dotbit', protocolName: '.bit', action: 'register', metadata: {} },
         ...Array.from({ length: 18 }, (_, i) => confirm(i)),
       ],
       lockCalls: Array.from({ length: 29 }, (_, i) => lock(i)),
-    } as ActivityRowData;
+    }) as ActivityRowData;
   }
 
   it('says a repeated action line once with its count', () => {
@@ -251,7 +260,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockCalls: named.lockCalls.map((l, i) => ({
         ...l,
         lockCodeHash: '0x' + String(i).padStart(64, '0'),
-        scriptName: `Lock ${i}`,
+        lockScriptName: `Lock ${i}`,
       })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={distinct} />);
@@ -293,16 +302,16 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       scriptHash: '0x' + String(i).padStart(64, 'f'),
       scriptName: `Type ${i}`,
     });
-    const row = {
+    const row = activityRead({
       ...named,
       protocolActions: [],
       typeCalls: [typeCall(0), typeCall(1), typeCall(2)],
       lockCalls: named.lockCalls.slice(0, 4).map((l, i) => ({
         ...l,
         lockCodeHash: '0x' + String(i).padStart(64, '0'),
-        scriptName: `Lock ${i}`,
+        lockScriptName: `Lock ${i}`,
       })),
-    } as ActivityRowData;
+    }) as ActivityRowData;
     const { container } = render(<ActivityRow activity={row} />);
     const head = () => container.querySelector('[data-role="head-main"]') as HTMLElement;
     expect(head().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
@@ -329,12 +338,12 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       scriptHash: '0x' + String(i).padStart(64, 'f'),
       scriptName: `Type ${i}`,
     });
-    const row = {
+    const row = activityRead({
       ...named,
       protocolActions: [],
       typeCalls: Array.from({ length: 6 }, (_, i) => typeCall(i)),
-      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, scriptName: 'Lock 0' })),
-    } as ActivityRowData;
+      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, lockScriptName: 'Lock 0' })),
+    }) as ActivityRowData;
     const { container } = render(<ActivityRow activity={row} />);
     const head = container.querySelector('[data-role="head-main"]') as HTMLElement;
     expect(within(head).getByRole('button', { name: /^\+2\smore\sscripts$/ })).toBeInTheDocument();

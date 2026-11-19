@@ -13,7 +13,12 @@ import {
   viewOf,
 } from '@/components/home/section';
 import { activityTypeShares, scriptShares } from '@/lib/activity-stats';
-import { api, type ActivitySummary24h, type DailyActivityStats } from '@/lib/api';
+import {
+  api,
+  dayUserTransactions,
+  type ActivitySummary24h,
+  type DailyActivityStats,
+} from '@/lib/api';
 import { dayLabel } from '@/lib/daily-series';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
@@ -176,7 +181,7 @@ export function dailyActivityView(days: DailyActivityStats[]): DailyView | null 
       throw new Error(`daily activity days out of order: ${days[i - 1].date} then ${days[i].date}`);
     }
   }
-  const totals = days.map((day) => day.userTransactionCount);
+  const totals = days.map(dayUserTransactions);
   const bars = days.map((day, i) => ({
     label: dayLabel(day.date),
     value: totals[i],

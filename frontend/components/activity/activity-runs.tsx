@@ -8,6 +8,7 @@ import {
 import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 import { readable } from '@/components/activity-event-row';
+import { sentField } from '@/lib/api-fields';
 
 /**
  * What a row's part draws, by which its boundary starts again (B4 third round): its transaction and
@@ -54,10 +55,10 @@ export function runSubject(
 ): RunSubject | null {
   if (rowReadFails(activity)) return null;
   const pending = activity.blockNumber === null;
-  // the API states the field on every row (null where it has none): one without it is not this API
-  if (activity.itemTypes === undefined)
-    throw new Error(`transaction ${activity.txHash}: the row states no itemTypes field`);
-  if (!pending && activity.itemTypes === null) {
+  // the API states the field on every row (null where it has none): one without it is older than
+  // this page, refused by name through the one reader
+  const itemTypes = sentField(activity.itemTypes, `transaction ${activity.txHash}`, 'itemTypes');
+  if (!pending && itemTypes === null) {
     if (activity.itemTypesUnread === null)
       throw new Error(
         `transaction ${activity.txHash}: a committed row with no item types says no why`
@@ -71,9 +72,30 @@ export function runSubject(
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
-    itemTypes: activity.itemTypes ?? [],
+    itemTypes: itemTypes ?? [],
     parties,
   };
+}
+
+/**
+ * What the runs carry to the next render (`ActivityRuns`), bound to the rows in the feed now (the
+ * third read's Lb NOTE 9: it kept every row it ever drew, for the feed's life, the shape the stream's
+ * day anchors were bound from in 2e): the rows drawn alone, whole (`drawn`, of the last render's,
+ * those still in the feed, and this render's lone rows), and each row's run head (`heads`, this
+ * render's runs). A row that left the feed is forgotten.
+ */
+export function runMemory(
+  runs: readonly { run: readonly { key: string }[]; head: string | null }[],
+  drawn: ReadonlySet<string>
+): { drawn: Set<string>; heads: Map<string, string> } {
+  const present = new Set(runs.flatMap(({ run }) => run.map((r) => r.key)));
+  const next = new Set([...drawn].filter((key) => present.has(key)));
+  const heads = new Map<string, string>();
+  for (const { run, head } of runs) {
+    if (head === null) next.add(run[0].key);
+    else for (const r of run) heads.set(r.key, head);
+  }
+  return { drawn: next, heads };
 }
 
 /** A run's row's subject: a row in a run of two or more was compared, so it has one. */
@@ -102,10 +124,17 @@ function subjectOf(r: FeedRow): RunSubject {
  */
 export function ActivityRuns({
   rows,
+  more,
   age = false,
   showScriptDetails = true,
 }: {
   rows: readonly FeedRow[];
+  /**
+   * Whether rows older than the last given are unread (a next page, the stream's older pages): the
+   * last run of the rows given is then not final, the next row may continue it, and its counts
+   * say "so far" (the lead's finding, the exactness lane's B9). Every feed that folds says it.
+   */
+  more: boolean;
   age?: boolean;
   showScriptDetails?: boolean;
 }) {
@@ -130,10 +159,9 @@ export function ActivityRuns({
     return { run, head, isOpen };
   });
   useEffect(() => {
-    for (const { run, head } of runs) {
-      if (head === null) drawn.current.add(run[0].key);
-      else for (const r of run) heads.current.set(r.key, head);
-    }
+    const memory = runMemory(runs, drawn.current);
+    drawn.current = memory.drawn;
+    heads.current = memory.heads;
   });
   const toggle = (run: readonly FeedRow[], isOpen: boolean) => {
     if (isOpen) for (const r of run) drawn.current.delete(r.key);
@@ -149,7 +177,7 @@ export function ActivityRuns({
   return (
     // one element in every state, so no row remounts as runs open and fold (a block, as the rows)
     <div id={listId} data-role="feed-rows">
-      {runs.flatMap(({ run, head, isOpen }) => {
+      {runs.flatMap(({ run, head, isOpen }, at) => {
         const [lead] = run;
         // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
         // (a lock the decision refuses) is said where the row stands, the others drawn
@@ -169,6 +197,7 @@ export function ActivityRuns({
             className={lead.className}
             fresh={run.some((r) => r.fresh)}
             open={isOpen}
+            final={!(more && at === runs.length - 1)}
             controls={listId}
             onToggle={() => toggle(run, isOpen)}
           />

@@ -11,7 +11,7 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
-import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
+import { ActivityRuns, runMemory, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
@@ -21,6 +21,7 @@ import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
 import tailwindConfig from '@/tailwind.config';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE, unsentRow } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -62,7 +63,7 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     scriptHash: `0x${code.repeat(31)}${args.slice(2)}`,
     scriptName: name,
   });
-  return {
+  return activityRead({
     txHash: `0x${String(n).padStart(2, '0').repeat(32)}`,
     blockNumber: 21047791 - n,
     txIndex: 1,
@@ -74,10 +75,10 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     itemTypes: [],
     itemTypesUnread: null,
     participants: [oracleParty(seed)],
-  };
+  });
 }
 
-const transfer: GlobalActivity = {
+const transfer: GlobalActivity = activityRead({
   txHash: `0x${'99'.repeat(32)}`,
   blockNumber: 21047700,
   txIndex: 2,
@@ -92,7 +93,7 @@ const transfer: GlobalActivity = {
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
     { ...oracleParty('recvr1'), ckbDelta: '99970000' },
   ],
-};
+});
 
 const page = (data: GlobalActivity[]) =>
   pagedRead({ data, limit: 50, hasMore: false, nextCursor: null });
@@ -227,8 +228,9 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   });
 
   // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
-  // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
-  // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
+  // mainnet stores on 2026-11-19, with itemTypes, and again at the third read's head, 574cb27d, T
+  // NOTE-7; the capture is said in the fixture): the first page of /activities, and the token
+  // feed's sUDT transfers, whose runs name their standard.
   const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
   const said = (el: Element) =>
     el.getAttribute('data-role') === 'activity-run'
@@ -244,22 +246,23 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     );
   };
 
+  // re-pinned on purpose at the recapture (T NOTE-7): the whole feed is the chain's newest page,
+  // #21,057,151 to #21,057,212; each run's rows and parties counted apart in Python from the
+  // fixture's code sets and lock hashes agree with every line here
   it('draws the live feed’s first page, 50 activities, in its runs', async () => {
     expect(await drawnFeed(feeds.all)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 participants',
-      'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
-      'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'CKB Transfer',
-      'Script call',
-      'CKB Transfer | all 5 transactions ↓ · 6 participants',
-      'Script call',
+      'Script call · Bitcoin SPV Type Lock | all 2 transactions ↓ · 2 participants',
       'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
-      'CKB Transfer | all 2 transactions ↓ · 4 participants',
-      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 5 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
+      'Script call · Bitcoin SPV Type Lock | all 2 transactions ↓ · 2 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
+      'CKB Transfer | all 5 transactions ↓ · 6 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 12 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 5 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
     ]);
   });
 
@@ -292,13 +295,15 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   // error showed only when the run was opened. Three deposits by one party, the middle one's
   // metadata unreadable: it stands alone, so no two of them are consecutive and nothing folds.
   it('never folds a row whose protocol action cannot be read: its error stands in its place', async () => {
-    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity => ({
-      ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      typeCalls: [],
-      protocolActions: [
-        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
-      ],
-    });
+    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity =>
+      activityRead({
+        ...oracle(n, 'q3q7ue', '0x00', n * 49),
+        itemTypes: [ITEM_TYPE.dao],
+        typeCalls: [],
+        protocolActions: [
+          { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
+        ],
+      });
     const rows = [
       deposit(1, { capacity: '10200000000' }),
       deposit(2, {}),
@@ -348,7 +353,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     transfer,
   ];
   /** A transfer between seven parties: its row folds two of them under "+2 participants". */
-  const crowd: GlobalActivity = {
+  const crowd: GlobalActivity = activityRead({
     ...transfer,
     txHash: `0x${'77'.repeat(32)}`,
     blockNumber: 21047699,
@@ -357,7 +362,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
       ...oracleParty(`crowd${c}`),
       ckbDelta: String((i + 1) * 100_000_000),
     })),
-  };
+  });
   /** A row newer than all of them, saying something else. */
   const fresh: GlobalActivity = {
     ...transfer,
@@ -554,7 +559,13 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     const first = [transfer, oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
+    // re-pinned on purpose (the lead's finding, the exactness lane's B9): the run cut by the
+    // page's end, older rows unread, is not final ("2 transactions so far"); with the older page
+    // in, the feed's end read, it is all 3 (it said "all 2" over the unread rows)
+    const toggle = await screen.findByRole('button', { name: /^2\stransactions so far ↓$/ });
+    expect(document.querySelector('[data-role="run-count"]')!.textContent).toMatch(
+      /participants? so far$/
+    );
     await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(toggle).toHaveTextContent(/^all 3\stransactions ↓$/));
     expect(toggle.isConnected).toBe(true);
@@ -570,16 +581,18 @@ describe('an older page that continues the last run (B4 fix round)', () => {
 describe('a folded run counts its parties and names none (Gate B)', () => {
   it('counts every party its rows name, once, and draws no party line', async () => {
     const user = userEvent.setup();
-    const crowded = (n: number, seeds: string[]): GlobalActivity => ({
-      ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
-    });
+    const crowded = (n: number, seeds: string[]): GlobalActivity =>
+      activityRead({
+        ...oracle(n, 'q3q7ue', '0x00', n * 49),
+        participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
+      });
     const rows = [
       crowded(1, ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6']),
       crowded(2, ['c0', 'c1', 'd2', 'd3', 'd4', 'd5', 'd6']),
     ];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -661,6 +674,7 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
     const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -708,6 +722,7 @@ describe('a run is set back as its rows are (R4)', () => {
     const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -787,7 +802,7 @@ describe('a called lock on a registered code hash by another hash type (the lock
     lockHashType: 'data',
     lockArgs: '0x' + 'ab'.repeat(20),
     scriptHash: '0x' + 'cd'.repeat(32),
-    scriptName: 'Default Lock',
+    lockScriptName: 'Default Lock',
     decoded: null,
     decodeError: null,
   };
@@ -822,5 +837,134 @@ describe('a called lock on a registered code hash by another hash type (the lock
       expect(row.querySelector('[data-role="head-main"]')).toHaveTextContent(/by data/);
       expect(said(row)).not.toMatch(/Default Lock/);
     }
+  });
+});
+
+// The third read's T MUST-2: the page's half of the item-types ruling. A row whose item types the
+// route could not state ("must not be folded with rows it only resembles") stands alone; a row
+// with no reason, or with no field at all, is refused by name. Each case was checked by hand
+// against its mutation in components/activity/activity-runs.tsx `runSubject`.
+describe('runSubject: a row whose item types are not stated (the item-types ruling)', () => {
+  // only an item's type can be unread (the third read's T SHOULD-1: the oracle's row moved no item,
+  // a row the route cannot send): its party moves the token the reason names
+  const unread = (n: number): GlobalActivity => {
+    const row = oracle(n, 'q3q7ue', '0x00', n * 49);
+    const token = `0x${'5e'.repeat(32)}`;
+    return activityRead({
+      ...row,
+      participants: [
+        {
+          ...row.participants[0],
+          itemDeltas: [{ kind: 'token', typeScriptHash: token, delta: '1' }],
+        },
+      ],
+      itemTypes: null,
+      itemTypesUnread: `token ${token}: no token row`,
+    });
+  };
+
+  // delete the `return null` branch (`if (!pending && activity.itemTypes === null) {…}`): the two
+  // fall through to `itemTypes: []`, one key, and fold into "all 2 transactions ↓": red
+  it('stands an unread row alone: two of one title and one code are two rows, no run', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([unread(1), unread(2)]));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual([unread(1).txHash, unread(2).txHash]);
+  });
+
+  // delete the refusal of a null without a reason: it returns null and stands alone, silently: red
+  it('refuses a committed row whose item types are null with no reason, by name', () => {
+    // a row the route cannot send, on purpose: the page refuses it
+    const row = unsentRow({ ...unread(1), itemTypesUnread: null });
+    expect(() => runSubject(row, 'Script call')).toThrow(
+      `transaction ${row.txHash}: a committed row with no item types says no why`
+    );
+  });
+
+  // delete the refusal of a row without the field: it folds on `itemTypes ?? []`: red
+  it('refuses a row with no itemTypes field at all, by name (not this API)', () => {
+    const { itemTypes: _gone, ...row } = unread(1);
+    expect(() => runSubject(row as GlobalActivity, 'Script call')).toThrow(
+      // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+      `transaction ${row.txHash}: the API sends no itemTypes: it is older than this page`
+    );
+  });
+});
+
+// The third read's Lb NOTE 9: the runs remembered every row they ever drew alone and every row's
+// run head, for the feed's whole life (the shape 2e bounded for the stream's day anchors). What
+// they carry to the next render is bound to the rows in the feed now.
+describe('what the runs remember between renders', () => {
+  const runOf = (...keys: string[]) => ({ run: keys.map((key) => ({ key })), head: null });
+  const folded = (head: string, ...keys: string[]) => ({ run: keys.map((key) => ({ key })), head });
+
+  // keep the old memory instead of the rows present (drawn = union, heads never pruned): red
+  it('holds none of the rows a feed drew and dropped', () => {
+    const first = Array.from({ length: 30 }, (_, i) => runOf(`a${i}`));
+    let memory = runMemory([...first, folded('b0', 'b0', 'b1')], new Set());
+    expect(memory.drawn.size).toBe(30);
+    expect([...memory.heads.keys()]).toEqual(['b0', 'b1']);
+    memory = runMemory([runOf('c0'), folded('b1', 'c1', 'c2')], memory.drawn);
+    expect([...memory.drawn]).toEqual(['c0']);
+    expect([...memory.heads]).toEqual([
+      ['c1', 'b1'],
+      ['c2', 'b1'],
+    ]);
+  });
+
+  it('keeps a row drawn alone that a later row joins, so its run is drawn open', () => {
+    let memory = runMemory([runOf('a0')], new Set());
+    memory = runMemory([folded('a0', 'a0', 'a1')], memory.drawn);
+    expect(memory.drawn.has('a0')).toBe(true);
+    expect(memory.heads.get('a1')).toBe('a0');
+  });
+});
+
+// The lead's finding (in Chrome, the exactness lane's B9): a folded run that reaches the last READ
+// row while the feed has older rows unread said "all 59 transactions ↓ · 918 participants" over
+// "Reading older activities…", and "all 64 … 1,050" once the next page was in. A count that is not
+// final says so: the last run of what is read, while older rows are unread (`more`), states both
+// counts as so far; when the feed's end is read, or the next run begins, it is "all N" again.
+describe('a run whose count is not final (older rows unread)', () => {
+  const asRows = (rows: GlobalActivity[]) =>
+    rows.map((a) => ({
+      key: a.txHash,
+      subject: runSubject(a, activityTitleText(a)),
+      activity: a,
+      title: <ActivityTitle activity={a} />,
+      row: <ActivityRow activity={a} />,
+    }));
+  const said = () =>
+    [...document.querySelectorAll('[data-role="run-count"]')].map((el) =>
+      el.textContent!.replace(/\s+/g, ' ')
+    );
+
+  // drop `more` (every run final): "all 2 …", red
+  it('says so far of a run that ends exactly at the read rows’ end with more unread', () => {
+    render(
+      <ActivityRuns
+        more
+        rows={asRows([
+          transfer,
+          oracle(4, 'q3q7ue', '0x00', 200),
+          oracle(5, 'q3q7ue', '0x00', 250),
+        ])}
+      />
+    );
+    expect(said()).toEqual(['2 transactions so far ↓ · 1 participant so far']);
+  });
+
+  it('says all of a run that ends before the read rows’ last row, and of the last page’s runs', () => {
+    const run = [oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
+    const first = render(<ActivityRuns more rows={asRows([...run, transfer])} />);
+    expect(said()).toEqual(['all 2 transactions ↓ · 1 participant']);
+    first.unmount();
+    render(<ActivityRuns more={false} rows={asRows([transfer, ...run])} />);
+    expect(said()).toEqual(['all 2 transactions ↓ · 1 participant']);
   });
 });

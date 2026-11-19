@@ -15,6 +15,7 @@ import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { AddressActivity } from '@/components/address/address-history';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 
@@ -41,7 +42,7 @@ function row(
   participants: ParticipantInfo[],
   over: Partial<ActivityRowData> = {}
 ): ActivityRowData {
-  return {
+  return activityRead({
     txHash: `0x${'fe'.repeat(32)}`,
     blockNumber: 21047791,
     timestamp: String(Date.now() - 49_000),
@@ -53,7 +54,7 @@ function row(
     itemTypesUnread: null,
     participants,
     ...over,
-  };
+  });
 }
 
 const ckbOf = (c: HTMLElement, i = 0) =>
@@ -116,13 +117,18 @@ describe('a line whose only movement is the fee (B4 item 3)', () => {
       decimals: 8,
     };
     const { container } = render(
-      <ActivityRow activity={row([party('tokenp', '-30000', { itemDeltas: [token] })])} />
+      <ActivityRow
+        activity={row([party('tokenp', '-30000', { itemDeltas: [token] })], {
+          itemTypes: [ITEM_TYPE.xudt],
+        })}
+      />
     );
     expect(ckbOf(container)).not.toHaveAttribute('data-fee');
   });
 
   it('is not the fee where CKB entered: a Nervos DAO withdrawal’s compensation, a cellbase', () => {
     const withdrawal = row([party('daowd1', '-30000')], {
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',
@@ -146,7 +152,10 @@ describe('on an address page, the row lists this address alone', () => {
 
   it('says the fee when the transaction has no other party', () => {
     const { container } = render(
-      <AddressActivity address={addressFixture} activity={{ ...oracle, participants: [] }} />
+      <AddressActivity
+        address={addressFixture}
+        activity={activityRead({ ...oracle, participants: [] })}
+      />
     );
     expect(ckbOf(container)).toHaveTextContent(/^fee 0\.0003 CKB$/);
   });
@@ -159,7 +168,10 @@ describe('on an address page, the row lists this address alone', () => {
       roles: [],
     };
     const { container } = render(
-      <AddressActivity address={addressFixture} activity={{ ...oracle, participants: [other] }} />
+      <AddressActivity
+        address={addressFixture}
+        activity={activityRead({ ...oracle, participants: [other] })}
+      />
     );
     expect(ckbOf(container)).not.toHaveAttribute('data-fee');
     expect(ckbOf(container)).toHaveTextContent(`${MINUS}0.0003 CKB`);

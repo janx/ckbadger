@@ -16,6 +16,7 @@ import { api, type GlobalActivity } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,35 +29,37 @@ const refusal = new RegExp(`address ${SPELLS_ANOTHER} spells the lock code hash`
 
 describe('a refused lock fails its part, in its place', () => {
   it('an activity row: the row says it cannot be read, the others are drawn', () => {
-    const row = (n: number, address: string): GlobalActivity => ({
-      txHash: `0x${String(n).repeat(64)}`,
-      blockNumber: 100 + n,
-      txIndex: 0,
-      timestamp: String(Date.now() - 60_000 * n),
-      isCellbase: false,
-      protocolActions: [],
-      typeCalls: [],
-      lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
-      participants: [
-        {
-          address,
-          lockHash: `0x${String(n + 1).repeat(64)}`,
-          lockHashPrefix: null,
-          lockKind: null,
-          roles: [],
-          tags: 0,
-          ckbDelta: String(-n),
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    const row = (n: number, address: string): GlobalActivity =>
+      activityRead({
+        txHash: `0x${String(n).repeat(64)}`,
+        blockNumber: 100 + n,
+        txIndex: 0,
+        timestamp: String(Date.now() - 60_000 * n),
+        isCellbase: false,
+        protocolActions: [],
+        typeCalls: [],
+        lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
+        participants: [
+          {
+            address,
+            lockHash: `0x${String(n + 1).repeat(64)}`,
+            lockHashPrefix: null,
+            lockKind: null,
+            roles: [],
+            tags: 0,
+            ckbDelta: String(-n),
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      });
     // the second party's address does not decode: the decision refuses it, naming it
     const rows = [row(1, seededAddress('good01')), row(2, 'ckb1qzda0b')];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -76,33 +79,36 @@ describe('a refused lock fails its part, in its place', () => {
   // (a transaction in the pool that commits), rather than standing in its error for good
   it('an activity row: its part starts again when its transaction changes', () => {
     const tx = `0x${'31'.repeat(32)}`;
-    const at = (blockNumber: number | null, address: string): GlobalActivity => ({
-      txHash: tx,
-      blockNumber: blockNumber as number,
-      txIndex: 0,
-      timestamp: (blockNumber === null ? null : String(Date.now() - 60_000)) as string,
-      isCellbase: false,
-      protocolActions: [],
-      typeCalls: [],
-      lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
-      participants: [
-        {
-          address,
-          lockHash: `0x${'32'.repeat(32)}`,
-          lockHashPrefix: null,
-          lockKind: null,
-          roles: [],
-          tags: 0,
-          ckbDelta: '-1',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    const at = (blockNumber: number | null, address: string): GlobalActivity =>
+      activityRead({
+        txHash: tx,
+        blockNumber: blockNumber as number,
+        txIndex: 0,
+        timestamp: (blockNumber === null ? null : String(Date.now() - 60_000)) as string,
+        isCellbase: false,
+        protocolActions: [],
+        typeCalls: [],
+        lockCalls: [],
+        // a pool row states no item types, as the route sends it (the third read's T SHOULD-1)
+        itemTypes: blockNumber === null ? null : [],
+        itemTypesUnread: null,
+        participants: [
+          {
+            address,
+            lockHash: `0x${'32'.repeat(32)}`,
+            lockHashPrefix: null,
+            lockKind: null,
+            roles: [],
+            tags: 0,
+            ckbDelta: '-1',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      });
     const runsOf = (a: GlobalActivity) => (
       <ActivityRuns
+        more={false}
         rows={[
           {
             key: a.txHash,

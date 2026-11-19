@@ -23,7 +23,7 @@ import {
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { LockWordsView, lockNoun, namedLockWords, partyLock } from '@/components/ui/lock-kind';
-import { normalizeScriptRefHashType } from '@/lib/script-ref';
+import { lockCallFacts } from '@/lib/lock-words';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -371,14 +371,7 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
   // type and the API's name together, as a list names locks: a lock on a registered code hash by
   // another hash type is not that lock, so neither its words nor its link take the name (the lead's
   // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
-  const words = namedLockWords(
-    {
-      name: lc.scriptName ?? null,
-      codeHash: lc.lockCodeHash,
-      hashType: normalizeScriptRefHashType(lc.lockHashType),
-    },
-    'column'
-  );
+  const words = namedLockWords(lockCallFacts(lc), 'column');
   const name = lockNoun(words, 'row');
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
@@ -1445,6 +1438,7 @@ export function FoldedActivityRow({
   className,
   fresh = false,
   open,
+  final,
   controls,
   onToggle,
 }: {
@@ -1464,6 +1458,11 @@ export function FoldedActivityRow({
   className?: string;
   fresh?: boolean;
   open: boolean;
+  /**
+   * Whether its counts are the run's whole: false for a feed's last run of the rows read while
+   * older rows are unread (the next row may continue it), whose counts say "so far".
+   */
+  final: boolean;
   /**
    * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
    * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
@@ -1493,12 +1492,15 @@ export function FoldedActivityRow({
     false,
     first.itemTypes
   );
-  const transactions = formatCount(rows.length, 'transaction');
+  // a count of what is read, older rows unread, is not final, and says so (the lead's finding)
+  const soFar = final ? '' : ' so far';
+  const transactions = `${formatCount(rows.length, 'transaction')}${soFar}`;
   const toggle = (
     <FoldToggle
       open={open}
       count={rows.length}
       singular="transaction"
+      soFar={!final}
       controls={controls}
       onToggle={onToggle}
     />
@@ -1530,7 +1532,13 @@ export function FoldedActivityRow({
             becomes that count here once the indexer records, per participant, that its lock holds
             an input (the per-participant input flag, a re-sync; the route then states it and
             `runParties` counts the parties that sent). This is the one place that writes it. */}
-        <Dotted parts={[toggle, open && transactions, formatCount(participants, 'participant')]} />
+        <Dotted
+          parts={[
+            toggle,
+            open && transactions,
+            `${formatCount(participants, 'participant')}${soFar}`,
+          ]}
+        />
       </div>
     </article>
   );

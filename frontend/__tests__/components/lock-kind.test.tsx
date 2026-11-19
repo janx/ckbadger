@@ -10,7 +10,7 @@ import {
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
-import { lockPhrase, partyLockSentence, partyLockWordsText } from '@/lib/lock-words';
+import { lockCallFacts, lockPhrase, partyLockSentence, partyLockWordsText } from '@/lib/lock-words';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
@@ -463,6 +463,34 @@ describe('the article follows the name’s first sound', () => {
     expect(phrase('Omnilock')).toBe('an Omnilock');
     expect(phrase('JoyID')).toBe('a JoyID lock');
     expect(phrase('xUDT')).toBe('an xUDT lock');
+  });
+});
+
+// The third read's T SHOULD-5: a called lock is decided from its code hash, its hash type and its
+// `lockScriptName` (the wire's name for a lock's registry name, as on a party). A lock call from
+// an API one version older carries `scriptName` instead: refused by name, never decided on
+// `undefined` (which wrote "undefined lock").
+describe('lockCallFacts: a called lock as the decision reads it', () => {
+  const call = {
+    lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+    lockHashType: 'data',
+    lockArgs: '0x',
+    scriptHash: '0x' + 'cd'.repeat(32),
+    lockScriptName: 'Default Lock',
+  };
+  it('hands the decision the code hash, the hash type and the name', () => {
+    expect(lockCallFacts(call)).toEqual({
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data',
+    });
+  });
+
+  it('refuses a lock call of an older API by the field it does not send', () => {
+    const { lockScriptName: _gone, ...older } = call;
+    expect(() => lockCallFacts({ ...older, scriptName: 'Default Lock' } as never)).toThrow(
+      "an activity's lock call: the API sends no lockScriptName: it is older than this page"
+    );
   });
 });
 

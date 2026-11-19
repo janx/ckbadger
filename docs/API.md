@@ -69,7 +69,10 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 
 **Responses**
 
-- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas, participants)
+- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas, participants);
+  each of its `itemDeltas` carries `movement`, the item's movement in the whole transaction
+  (`mint` where its net over every party rose, `burn` where it fell, `transfer` where it only
+  changed hands), which the row's own delta cannot tell
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 
@@ -84,7 +87,9 @@ and these codes, never their args)
   match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
   - a token: its row (`CF_TOKENS`), the script itself;
   - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
-    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
+    item in its out point index (`object_outpoint_by_id`) BY KEY, the lowest transaction hash then
+    index, not the first in time (every cell recorded for one item has its one code); a .bit
+    account: the first cell recorded for its account id, by key the same way;
   - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
     (`object_outpoints`, MNFT_TOKEN);
   - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
@@ -96,10 +101,17 @@ and these codes, never their args)
   item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
   and a feed folds such a row with no other.
 
+  Its cost per activity, each item once and each creating transaction once per request: a token,
+  one row read; a spore or an identity, one seek and one payload read, whatever its history; an
+  m-NFT token or a cluster, its creating transaction's one read, its N payloads and, for m-NFT
+  tokens, the N token ids recorded for them (one multi_get each), shared by every item it made (a
+  batch of 1,000 tokens in a 1,000-output transaction: 2,001 reads); a DAO step, none.
+
 - `itemTypesUnread: string | null` — see `itemTypes`.
 - `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
   with their args.
-- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
+- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args;
+  each lock's registry name is `lockScriptName` (as on a party; it was `scriptName`).
   An output's lock does not run: these are not the locks the transaction called. The locks that
   ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
   input flag (a re-sync).
@@ -775,7 +787,8 @@ network store too), no re-sync:
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
 - `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
-  script families by role; `locks` and `types` each count a family used as both
+  script families by role, a family's role its use or, with no cell yet, the
+  registry's declaration; `locks` and `types` each count a family that is both
   (`both`), `neither` the families with no role, so the four make the whole
   (`locks + types - both + neither = all`, checked in the route; the list's
   first sentence says each).

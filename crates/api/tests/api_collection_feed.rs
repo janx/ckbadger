@@ -196,6 +196,24 @@ async fn collection_feed_page_reads_do_not_grow_with_collection_history() {
             reads.push((route, n, store.read_call_counts()));
         }
     }
+    // the third read's T SHOULD-2: the .bit accounts' rows name their AccountCell code (0x96),
+    // read through the account's own index
+    let store = test_store();
+    seed_dotbit_registrations(&store, 2);
+    let app = quiet_router(store);
+    let (status, feed) = get_json(&app, "/assets/identities/dotbit/activity-feed?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    for row in feed["data"].as_array().unwrap() {
+        assert_eq!(
+            row["itemTypes"],
+            serde_json::json!([{
+                "typeCodeHash": format!("0x{}", "96".repeat(32)),
+                "typeHashType": "type",
+                "scriptName": null,
+            }]),
+            "{row}"
+        );
+    }
     for route in ["activity-feed", "transactions"] {
         let counts: Vec<_> = reads
             .iter()

@@ -1,4 +1,5 @@
 import type { CompositionTier } from '@/lib/asset-utils';
+import { sentField } from '@/lib/api-fields';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { color } from '@/lib/palette';
@@ -1332,6 +1333,16 @@ type ItemDelta =
     }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
+/** An item's movement in its whole transaction: its net over every party rose, fell, or held. */
+export type ItemMovement = 'mint' | 'burn' | 'transfer';
+
+/**
+ * One item delta of an address's row (the third read's Lb SHOULD 2): the row carries only its
+ * address's deltas, so the route states the item's movement in the whole transaction beside it,
+ * which the page cannot tell from one party's change.
+ */
+export type RowItemDelta = ItemDelta & { movement: ItemMovement };
+
 interface ActivityTypeCall {
   typeCodeHash: string;
   typeHashType: string;
@@ -1356,7 +1367,12 @@ interface ActivityLockCall {
   lockHashType: string;
   lockArgs: string;
   scriptHash: string;
-  scriptName?: string;
+  /**
+   * The registry's name for the lock's code hash, `lockScriptName` as on a party (the third read's
+   * T SHOULD-5; it was `scriptName`): read through the lock decision's `lockCallFacts`, which
+   * refuses a call of an older API by this field's name.
+   */
+  lockScriptName: string | null;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
   decoded?: LockArgsDecoded | null;
   /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */
@@ -1415,7 +1431,8 @@ interface Activity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
-  itemDeltas: ItemDelta[];
+  /** This address's item deltas, each with its movement in the whole transaction. */
+  itemDeltas: RowItemDelta[];
   typeCalls: ActivityTypeCall[];
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
@@ -4409,12 +4426,21 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
  * round, N7: it read `invalid decimal "undefined"`).
  */
 function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
-  const value = (day as Partial<DailyActivityStats>)[field];
-  if (value === undefined)
-    throw new Error(
-      `daily activities on ${day.date} send no ${field}: the API is older than this page`
-    );
-  return String(value);
+  return String(sentField(day[field], `daily activities on ${day.date}`, field));
+}
+
+/**
+ * A day's user transactions, the route's count (the P3 follow-up's 2b), as every page reads it:
+ * the activities lede, the transactions page's "all" chip and lede, the home daily figure. An API
+ * older than the page sends none, refused by name (the third read's La N6: the lede and the chip
+ * were drawn without it, silently, and the home figure threw a TypeError).
+ */
+export function dayUserTransactions(day: DailyActivityStats): number {
+  return sentField(
+    day.userTransactionCount,
+    `daily activities on ${day.date}`,
+    'userTransactionCount'
+  );
 }
 
 export const api = {

@@ -12,6 +12,7 @@ const textOf = (part: ReactNode): string => (typeof part === 'string' ? part : S
 import { ActivityRow } from '@/components/activity/activity-row';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import type { GlobalActivity } from '@/lib/api';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 it('distinguishes an exact object mint and burn from a transfer', () => {
   const activity = feedSamples.objectTransfer;
@@ -21,8 +22,12 @@ it('distinguishes an exact object mint and burn from a transfer', () => {
   const sender = activity.participants.find((p) =>
     p.itemDeltas.some((d) => d.kind === 'object' && d.delta < 0)
   )!;
-  expect(activityHeadline({ ...activity, participants: [receiver] })).toBe('Object mint');
-  expect(activityHeadline({ ...activity, participants: [sender] })).toBe('Object burn');
+  expect(activityHeadline(activityRead({ ...activity, participants: [receiver] }))).toBe(
+    'Object mint'
+  );
+  expect(activityHeadline(activityRead({ ...activity, participants: [sender] }))).toBe(
+    'Object burn'
+  );
   expect(activityHeadline(activity)).toBe('Object transfer');
 });
 it('does not reinterpret a receiver-only display as a mint', () => {
@@ -34,7 +39,7 @@ it('does not reinterpret a receiver-only display as a mint', () => {
   expect(screen.getByText('Object transfer')).toBeInTheDocument();
 });
 it('uses arbitrary-precision token net movement for supply-changing actions', () => {
-  const activity: GlobalActivity = {
+  const activity: GlobalActivity = activityRead({
     ...feedSamples.tokenTransfer,
     participants: feedSamples.tokenTransfer.participants.map((p, i) => ({
       ...p,
@@ -48,7 +53,7 @@ it('uses arbitrary-precision token net movement for supply-changing actions', ()
         },
       ],
     })),
-  };
+  });
   expect(activityHeadline(activity)).toBe('Token mint');
 });
 
@@ -63,7 +68,7 @@ it.each([
   ).toBe(`RGB++ · ${label}`);
 });
 it('shows exact RGB++ Bitcoin evidence with the lock transition', () => {
-  const activity = {
+  const activity = activityRead({
     ...feedSamples.tokenTransfer,
     protocolActions: [
       {
@@ -73,7 +78,7 @@ it('shows exact RGB++ Bitcoin evidence with the lock transition', () => {
         metadata: { btcTxid: `0x${'a'.repeat(64)}`, outIndex: '2' },
       },
     ],
-  };
+  });
   render(<ActivityRow activity={activity} />);
   expect(screen.getByText('RGB++ · Leap to Bitcoin')).toBeInTheDocument();
   expect(screen.getByText('CKB lock → Bitcoin-controlled lock')).toBeInTheDocument();
@@ -138,8 +143,9 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
   );
 });
 it('shows a register beside the ring_relink it caused in one transaction', () => {
-  const activity: GlobalActivity = {
+  const activity: GlobalActivity = activityRead<GlobalActivity>({
     ...feedSamples.tokenTransfer,
+    itemTypes: [],
     participants: feedSamples.tokenTransfer.participants.map((p) => ({ ...p, itemDeltas: [] })),
     typeCalls: [],
     protocolActions: [
@@ -156,7 +162,7 @@ it('shows a register beside the ring_relink it caused in one transaction', () =>
         metadata: { label: 'apt', name: 'apt.cell', id: '0x' + 'a7'.repeat(20), changes: ['next'] },
       },
     ],
-  };
+  });
   render(<ActivityRow activity={activity} />);
   expect(screen.getByText('.cell · register')).toBeInTheDocument();
   // re-pinned on purpose (NOTE 6): the name in the action's note, not its label

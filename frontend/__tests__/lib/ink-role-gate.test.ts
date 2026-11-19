@@ -70,17 +70,21 @@ interface Tolerated {
 // 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
-  chain: 31,
+  // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
+  // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
+  // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
+  chain: 28,
   assets: 33,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
   // prose site gone with its entry
-  lists: 35,
+  lists: 23,
   topics: 14,
   shared: 9,
 };
-// 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list
-const TOLERATED_FILES = 57;
+// 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
+// 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
+const TOLERATED_FILES = 51;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -109,17 +113,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     sites: { prose: 1 },
     reason: "empty 1: 'This uncle proposed nothing.'",
-  },
-  'app/blocks/page.tsx': {
-    family: 'chain',
-    // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
-    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
-    // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
-    // reward's finality line with its block link, and the compact table's size and cycles are
-    // values, and the error line a statement, all in the reading ink
-    sites: { td: 1, prose: 1 },
-    reason:
-      'decided (the P3 follow-up): the wide table’s cycles state for a block not run yet or a failed replay, an empty value; the loading line',
   },
   // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
   // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
@@ -198,11 +191,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     sites: { prose: 1 },
     reason: "empty 1: 'No registered Type ID version history for this binary.' (lane P1 follow-up)",
-  },
-  'components/home/ckbytes-section.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the CKBytes formula, a note under the figure',
   },
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
@@ -325,19 +313,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // components/identity/identity-records.tsx left the list (lane P2's follow-up, item 4): the records and TTL count line reads in the reading ink
   // ---- lists ----
-  'app/activities/page.tsx': {
-    family: 'lists',
-    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink; prose 2 → 1
-    // (the P3 follow-up's 2d): the statistics error is a statement, the reading ink
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the empty line, no complete statistics for yesterday',
-  },
-  'app/inventory/inventory-page-client.tsx': {
-    family: 'lists',
-    // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the loading line',
-  },
   'app/scripts/[name]/client-page.tsx': {
     // td 3 → 2, prose 6 → 4 (lane P2's follow-up, item 4): the version hash is a value and the two statements (the resolution, the capacity caption) read in the reading ink
     family: 'lists',
@@ -347,26 +322,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
   // the summary sentence, in the reading ink, no quiet label over it)
-  'app/transactions/page.tsx': {
-    family: 'lists',
-    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
-    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
-    // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
-    // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
-    // subtraction (the day's user transactions are its activity row's, the route's count); prose
-    // 8 → 4 (the P3 follow-up's 2d): the three error lines and the truncated pool's line are
-    // statements, the reading ink
-    sites: { td: 2, prose: 4 },
-    reason:
-      'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
-  },
-  'components/activities-stream-explorer.tsx': {
-    family: 'lists',
-    // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
-    sites: { prose: 4 },
-    reason:
-      'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
-  },
   'components/asset/inventory-summary.tsx': {
     family: 'lists',
     sites: { link: 1, prose: 2 },
@@ -913,6 +868,67 @@ function toleratedFailures(
 }
 
 /**
+ * The sites decided to stay quiet, file by file (the third read's T NOTE-3: they stood in
+ * TOLERATED, the work list whose total only falls, so it could never reach zero): a loading line,
+ * an empty line, a note under a figure or a chip row, an empty value's state in a table cell, each
+ * named by kind with a count. They are no work left; the scan holds them as it holds TOLERATED.
+ */
+const DECIDED: Readonly<Record<string, Tolerated>> = {
+  'app/blocks/page.tsx': {
+    family: 'chain',
+    // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
+    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
+    // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
+    // reward's finality line with its block link, and the compact table's size and cycles are
+    // values, and the error line a statement, all in the reading ink
+    sites: { td: 1, prose: 1 },
+    reason:
+      'decided (the P3 follow-up): the wide table’s cycles state for a block not run yet or a failed replay, an empty value; the loading line',
+  },
+  'components/home/ckbytes-section.tsx': {
+    family: 'chain',
+    sites: { prose: 1 },
+    reason: 'decided (the P3 follow-up): the CKBytes formula, a note under the figure',
+  },
+  'app/activities/page.tsx': {
+    family: 'lists',
+    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink; prose 2 → 1
+    // (the P3 follow-up's 2d): the statistics error is a statement, the reading ink
+    sites: { prose: 1 },
+    reason: 'decided (the P3 follow-up): the empty line, no complete statistics for yesterday',
+  },
+  'app/inventory/inventory-page-client.tsx': {
+    family: 'lists',
+    // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
+    sites: { prose: 1 },
+    reason: 'decided (the P3 follow-up): the loading line',
+  },
+  'app/transactions/page.tsx': {
+    family: 'lists',
+    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
+    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
+    // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
+    // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
+    // subtraction (the day's user transactions are its activity row's, the route's count); prose
+    // 8 → 4 (the P3 follow-up's 2d): the three error lines and the truncated pool's line are
+    // statements, the reading ink
+    sites: { td: 2, prose: 4 },
+    reason:
+      'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
+  },
+  'components/activities-stream-explorer.tsx': {
+    family: 'lists',
+    // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
+    sites: { prose: 4 },
+    reason:
+      'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
+  },
+};
+/** The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d. */
+const DECIDED_SITES = 15;
+const DECIDED_FILES = 6;
+
+/**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
  * purpose, so the gate does not count them), by file, with their count and why. The exemption is
  * a decision: a new one fails, and one that went leaves a count behind, as in TOLERATED.
@@ -1211,8 +1227,10 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   });
 
   // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
-  // in 58 files …" on the base): the script hero's companion line left the list
-  it('tolerates 122 sites in 57 files: the pinned totals by family, which only fall', () => {
+  // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
+  // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
+  // sites left the work list for DECIDED, 15 in 6 files
+  it('tolerates 107 sites in 51 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
@@ -1222,8 +1240,18 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
+  it('holds the decided sites apart, 15 in 6 files, none of them also on the work list', () => {
+    const sites = Object.values(DECIDED).reduce(
+      (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
+      0
+    );
+    expect(sites).toBe(DECIDED_SITES);
+    expect(Object.keys(DECIDED)).toHaveLength(DECIDED_FILES);
+    expect(Object.keys(DECIDED).filter((path) => path in TOLERATED)).toEqual([]);
+  });
+
   it('draws no link, amount, table cell or paragraph in the quiet ink but the tolerated list’s', () => {
-    expect(toleratedFailures(found, TOLERATED)).toEqual([]);
+    expect(toleratedFailures(found, { ...TOLERATED, ...DECIDED })).toEqual([]);
   });
 
   it('sets back no element with the quiet class but the pinned list’s', () => {

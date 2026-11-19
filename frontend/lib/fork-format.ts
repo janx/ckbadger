@@ -1,3 +1,4 @@
+import { sentField } from '@/lib/api-fields';
 import type {
   ForkEventRef,
   ForkFirstOrphanStatus,
@@ -121,12 +122,13 @@ export const UNCLE_RATE_TARGET = '2.50%';
 export function uncleRateFigure(
   overview: Pick<ForkOverview, 'unclesInWindow' | 'canonicalBlocksInWindow'>
 ): { rate: string; percent: string; uncles: number; blocks: number } | null {
-  if (overview.canonicalBlocksInWindow === undefined)
-    throw new Error(
-      'Fork overview: the API sends no canonicalBlocksInWindow: it is older than this page'
-    );
   const uncles = overview.unclesInWindow;
-  const blocks = overview.canonicalBlocksInWindow;
+  // this plan's field, through the one reader of a field an older API does not send
+  const blocks = sentField(
+    overview.canonicalBlocksInWindow,
+    'Fork overview',
+    'canonicalBlocksInWindow'
+  );
   if (blocks === 0) {
     if (uncles > 0) throw new Error(`Fork overview: ${uncles} uncles in a window with no blocks`);
     return null;

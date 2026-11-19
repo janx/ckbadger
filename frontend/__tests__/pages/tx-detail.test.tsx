@@ -17,6 +17,7 @@ import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines'
 import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -275,7 +276,7 @@ function createGenesisDepGroupTransactionDetail(): Awaited<
 
 /** Its activity, verbatim from mainnet :8101 (`/transactions/0x71a7…e46c/activity`). */
 const GENESIS_DEP_GROUP_ACTIVITY = JSON.parse(
-  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","scriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
+  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockScriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
 ) as Awaited<ReturnType<typeof api.getTransactionActivity>>;
 
 /** The keys the API omits (never nulls) for a transaction it has not indexed (TX-06). */
@@ -686,16 +687,19 @@ describe('TransactionDetailPage', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const [first, ...rest] = feedSamples.objectTransfer.participants;
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.objectTransfer,
-        txHash: TX_HASH,
-        typeCalls: [],
-        participants: [first, ...rest].map((p, i) => ({
-          ...p,
-          itemDeltas: [],
-          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
-        })),
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.objectTransfer,
+          itemTypes: [],
+          txHash: TX_HASH,
+          typeCalls: [],
+          participants: [first, ...rest].map((p, i) => ({
+            ...p,
+            itemDeltas: [],
+            ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+          })),
+        })
+      );
       render(
         <ErrorBoundary fallback={<p>page-level boundary</p>}>
           <TransactionDetailPage />

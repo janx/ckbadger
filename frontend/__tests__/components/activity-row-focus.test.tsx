@@ -10,6 +10,7 @@ import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const TX = '0xa46efcd8' + 'ef'.repeat(26) + 'dac2e0';
 
@@ -40,8 +41,12 @@ function object(n: number, delta: 1 | -1, composition: CompositionTier | null): 
   };
 }
 
-function row(participants: ParticipantInfo[]): ActivityRowData {
-  return {
+function row(
+  participants: ParticipantInfo[],
+  // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+): ActivityRowData {
+  return activityRead({
     txHash: TX,
     blockNumber: 17627981,
     timestamp: '1761174000000',
@@ -49,10 +54,11 @@ function row(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
+
     itemTypesUnread: null,
     participants,
-  };
+    ...over,
+  });
 }
 
 const sender = party('sendr1', { ckbDelta: '-326700000000', usedDelta: '-323100000000' });
@@ -175,13 +181,16 @@ describe('composition badges: once per participant line when all its items share
   const badges = (el: HTMLElement) => el.querySelectorAll('[data-composition]');
 
   it('says a shared tier once, after the items and before occupied', () => {
-    const batch = row([
-      party('hprdnn', {
-        ckbDelta: '108900000000',
-        usedDelta: '107700000000',
-        itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'btc_ckb'), object(3, 1, 'btc_ckb')],
-      }),
-    ]);
+    const batch = row(
+      [
+        party('hprdnn', {
+          ckbDelta: '108900000000',
+          usedDelta: '107700000000',
+          itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'btc_ckb'), object(3, 1, 'btc_ckb')],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={batch} />);
     const [line] = lines(container);
     expect(badges(line)).toHaveLength(1);
@@ -202,11 +211,14 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('keeps one badge per object when the tiers differ', () => {
-    const mixed = row([
-      party('hprdnn', {
-        itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'pure_ckb'), object(3, 1, null)],
-      }),
-    ]);
+    const mixed = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'pure_ckb'), object(3, 1, null)],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={mixed} />);
     const [line] = lines(container);
     expect(line.querySelector('[data-role="composition"]')).toBeNull();
@@ -217,11 +229,14 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('keeps the shared badge on a folded batch and after it opens', () => {
-    const batch = row([
-      party('hprdnn', {
-        itemDeltas: [1, 2, 3, 4, 5].map((n) => object(n, 1, 'btc_ckb')),
-      }),
-    ]);
+    const batch = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [1, 2, 3, 4, 5].map((n) => object(n, 1, 'btc_ckb')),
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={batch} foldObjects />);
     const [line] = lines(container);
     // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline form, one button
@@ -243,14 +258,22 @@ describe('composition badges: once per participant line when all its items share
   it('keeps the badge on the object when the line also moves a token or an identity, which carry no tier', () => {
     // A .cell mint: the deed object arrives and the name identity departs on one line. A badge at
     // the line's end would read as the identity's tier.
-    const deed = row([
-      party('hprdnn', {
-        itemDeltas: [
-          object(1, 1, 'pure_ckb'),
-          { kind: 'identity', standard: 'dotcell', identityId: '0x' + 'f6'.repeat(20), delta: -1 },
-        ],
-      }),
-    ]);
+    const deed = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [
+            object(1, 1, 'pure_ckb'),
+            {
+              kind: 'identity',
+              standard: 'dotcell',
+              identityId: '0x' + 'f6'.repeat(20),
+              delta: -1,
+            },
+          ],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore, ITEM_TYPE.dotcell] }
+    );
     const { container } = render(<ActivityRow activity={deed} />);
     const [line] = lines(container);
     expect(line.querySelector('[data-role="composition"]')).toBeNull();
@@ -259,9 +282,10 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('draws no badge for objects that carry no tier', () => {
-    const untiered = row([
-      party('hprdnn', { itemDeltas: [object(1, 1, null), object(2, 1, null)] }),
-    ]);
+    const untiered = row(
+      [party('hprdnn', { itemDeltas: [object(1, 1, null), object(2, 1, null)] })],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={untiered} />);
     expect(badges(container)).toHaveLength(0);
     expect(container.querySelector('[data-role="composition"]')).toBeNull();

@@ -56,6 +56,7 @@ export function DaoSources() {
         // B4: consecutive rows that say the same thing fold into one counted run
         <ActivityRuns
           age
+          more={activities.data!.hasMore}
           rows={rows.map((row) => ({
             key: row.txHash,
             subject: runSubject(row, activityTitleText(row)),

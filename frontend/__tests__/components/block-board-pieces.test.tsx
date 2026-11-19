@@ -25,6 +25,7 @@ import {
 } from '@/__tests__/utils/phone-row';
 import { cellFaults } from '@/__tests__/utils/list-table-cells';
 import { containerContentPx, SCREENS } from '@/__tests__/utils/tailwind-box';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const rewardBlock = {
   number: 20_827_932,
@@ -619,7 +620,7 @@ describe('additive shared props (F2 blocks)', () => {
   it('ActivityRow takes its evidence line from the page', () => {
     wrap(
       <ActivityRow
-        activity={{
+        activity={activityRead({
           txHash: `0x${'ab'.repeat(32)}`,
           blockNumber: 7,
           timestamp: '1700000000000',
@@ -630,7 +631,7 @@ describe('additive shared props (F2 blocks)', () => {
           itemTypes: [],
           itemTypesUnread: null,
           participants: [],
-        }}
+        })}
         headline="Cellbase"
         evidence={<>#0 · tx</>}
       />

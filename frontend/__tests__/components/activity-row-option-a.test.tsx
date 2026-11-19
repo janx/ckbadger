@@ -10,6 +10,7 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 const TX = '0x8a39e8e3' + 'ab'.repeat(26) + 'd67305';
@@ -43,7 +44,7 @@ function row(
   participants: ParticipantInfo[],
   over: Partial<ActivityRowData> = {}
 ): ActivityRowData {
-  return {
+  return activityRead({
     txHash: TX,
     blockNumber: 20904081,
     timestamp: String(Date.now() - 13_000),
@@ -55,7 +56,7 @@ function row(
     itemTypesUnread: null,
     participants,
     ...over,
-  };
+  });
 }
 
 /** The board's 1-participant row: a .bit script call. */
@@ -114,6 +115,7 @@ const swap = row(
     zeroParty,
   ],
   {
+    itemTypes: [ITEM_TYPE.xudt],
     blockNumber: 20724160,
     protocolActions: [
       {
@@ -215,7 +217,7 @@ describe('option A: the headline line', () => {
       lockHashType: 'type',
       lockArgs: args,
       scriptHash: '0x' + args.slice(2).padStart(64, '0'),
-      scriptName: '.bit Lock',
+      lockScriptName: '.bit Lock',
       decoded: null,
       decodeError: null,
     });
@@ -382,6 +384,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     metadata: { capacity: `${(n + 1) * 1000}00000000` },
   });
   const batch = row([party('r43nr7', { ckbDelta: '-1000' })], {
+    itemTypes: [ITEM_TYPE.dao],
     protocolActions: Array.from({ length: 51 }, (_, n) => withdraw(n)),
   });
   const headMain = (c: HTMLElement) =>
@@ -449,6 +452,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('names each action on its line when the run is mixed, and heads the count without a total', () => {
     const mixed = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [
         withdraw(0),
         withdraw(1),
@@ -470,7 +474,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   });
 
   it('keeps two actions inline while the head stays one line at 1440', () => {
-    const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
+    const two = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
+      protocolActions: [deposit(0), deposit(1)],
+    });
     const { container } = render(<ActivityRow activity={two} />);
     // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
     // exact value in its title (it was the padded column form in the line)
@@ -506,6 +513,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     // Regression (dCKB 0xfe6f0cd0): a character budget of 130 listed a head that fit one line.
     layOut({});
     const two = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
       // re-pinned on purpose (the P3 follow-up's 2c): the facts are the summary form in a line, so
       // the head keeps its length past 130 characters with larger deposits (it was 545,000 CKB
       // at #6,012,189 in the padded column form)
@@ -526,6 +534,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   it('lists three actions whose inline head wraps (was: three runs inline)', () => {
     layOut({ main: true });
     const three = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [withdraw(0), withdraw(1), withdraw(2)],
     });
     const { container } = render(<ActivityRow activity={three} />);
@@ -543,7 +552,10 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('lists a short run whose evidence the line can no longer hold', () => {
     layOut({ evidence: true });
-    const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
+    const two = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
+      protocolActions: [deposit(0), deposit(1)],
+    });
     const { container } = render(<ActivityRow activity={two} />);
     expect(headMain(container)).toHaveTextContent(
       /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB$/
@@ -554,6 +566,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('lists actions that read alike once with their count, as the inline head does (A12c)', () => {
     const run = row([party('r43nr7')], {
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [...Array.from({ length: 7 }, (_, n) => withdraw(n)), withdraw(6)],
     });
     const { container } = render(<ActivityRow activity={run} />);
@@ -566,7 +579,12 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('keeps one action inline, as before', () => {
     const { container } = render(
-      <ActivityRow activity={row([party('r43nr7')], { protocolActions: [withdraw(0)] })} />
+      <ActivityRow
+        activity={row([party('r43nr7')], {
+          itemTypes: [ITEM_TYPE.dao],
+          protocolActions: [withdraw(0)],
+        })}
+      />
     );
     // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
     // exact value in its title (it was the padded column form in the line)

@@ -333,6 +333,146 @@ async fn test_activity_free_form_json_carries_integers_as_exact_strings() {
     assert_eq!(decoded["protocol"], "fiber", "{json}");
 }
 
+/// `expected` item deltas as an address row states them (the third read's Lb SHOULD 2): each with
+/// its movement in the whole transaction beside it, in order.
+fn with_movements(expected: &serde_json::Value, movements: &[&str]) -> serde_json::Value {
+    let items = expected
+        .as_array()
+        .expect("expected item deltas are an array");
+    assert_eq!(items.len(), movements.len(), "one movement per item delta");
+    serde_json::Value::Array(
+        items
+            .iter()
+            .zip(movements)
+            .map(|(item, movement)| {
+                let mut item = item.clone();
+                item["movement"] = serde_json::json!(movement);
+                item
+            })
+            .collect(),
+    )
+}
+
+/// The third read's Lb SHOULD 2, ruled: an address's row carries only that address's deltas, so
+/// its page headed a burn "Token sent" and folded it with plain sends, and a mint with transfers in.
+/// The address route states each of the row's items' movement in the whole transaction, from its
+/// net over every party as every other feed's head computes it: `mint` where it rose, `burn`
+/// where it fell, `transfer` where it only changed hands (one rule for every kind of item: an
+/// object and an identity by their ids, as a token by its type script hash).
+#[tokio::test]
+async fn address_rows_state_each_items_movement_in_the_whole_transaction() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+    let lock_hash = vec![0x31; 32];
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0xa7; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let party = |id: u8, items: Vec<ItemDelta>| ParticipantDelta {
+        id: ParticipantId::Lock([id; 32]),
+        ckb_delta: 0,
+        used_delta: 0,
+        item_deltas: items,
+        tags: 0,
+        roles: 0,
+    };
+    for (parties, movement) in [
+        // the address's 100 leave and no party gains them
+        (vec![party(0x31, vec![token(100, true)])], "burn"),
+        // its 50 go to another party
+        (
+            vec![
+                party(0x31, vec![token(50, true)]),
+                party(0x32, vec![token(50, false)]),
+            ],
+            "transfer",
+        ),
+        // 10 arrive and no party gave them
+        (vec![party(0x31, vec![token(10, false)])], "mint"),
+    ] {
+        let mut actions = make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 100, 0);
+        actions.participants = parties;
+        let json = address_activities_json(&lock_hash, &actions).await;
+        assert_eq!(
+            json["data"][0]["itemDeltas"][0]["movement"], movement,
+            "{json}"
+        );
+    }
+}
+
+/// The automated security read of the movement (the lead's finding on a3c52252): a token amount
+/// is a u128 on chain, and anyone can mint an xUDT of 2^127 units or more. The movement converted
+/// each delta into an i128 and summed it there, failing the whole page for an amount valid chain
+/// data holds. The amounts received and sent are summed apart, exactly, whatever their size, and
+/// every party's address page answers: a transfer of u128::MAX units, a mint of 2^127 units, two
+/// parties each receiving u128::MAX with no sender (a sum past a u128), and 2^128 received against
+/// 5 sent, which only the sum's carry tells apart from a burn.
+#[tokio::test]
+async fn address_rows_state_the_movement_of_any_amount_a_transaction_holds() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0xa7; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let party = |id: u8, items: Vec<ItemDelta>| ParticipantDelta {
+        id: ParticipantId::Lock([id; 32]),
+        ckb_delta: 0,
+        used_delta: 0,
+        item_deltas: items,
+        tags: 0,
+        roles: 0,
+    };
+    let cases: [(Vec<ParticipantDelta>, &str); 4] = [
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, true)]),
+                party(0x42, vec![token(u128::MAX, false)]),
+            ],
+            "transfer",
+        ),
+        (vec![party(0x41, vec![token(1u128 << 127, false)])], "mint"),
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, false)]),
+                party(0x42, vec![token(u128::MAX, false)]),
+            ],
+            "mint",
+        ),
+        // 2^128 received (its low bits 0, carried once) and 5 sent: only the carry says a mint
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, false)]),
+                party(0x42, vec![token(1, false)]),
+                party(0x43, vec![token(5, true)]),
+            ],
+            "mint",
+        ),
+    ];
+    for (parties, movement) in cases {
+        let locks: Vec<Vec<u8>> = parties
+            .iter()
+            .map(|p| match p.id {
+                ParticipantId::Lock(hash) => hash.to_vec(),
+                _ => unreachable!("the seed's parties are locks"),
+            })
+            .collect();
+        for lock_hash in locks {
+            let mut actions =
+                make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 100, 0);
+            actions.participants = parties.clone();
+            let (status, json) = address_activities_response(&lock_hash, &actions).await;
+            assert_eq!(status, StatusCode::OK, "{json}");
+            assert_eq!(
+                json["data"][0]["itemDeltas"][0]["movement"], movement,
+                "{json}"
+            );
+        }
+    }
+}
+
 /// R-8 ruling: an activity lock call whose args do not fit the lock's
 /// registry layout is served (200) with `decoded: null` and a `decodeError`
 /// naming the script and the length, the same rule as the transaction detail.
@@ -377,6 +517,15 @@ async fn test_activity_lock_call_states_why_its_args_do_not_decode() {
         Some(&serde_json::Value::Null),
         "{json}"
     );
+    // the third read's T SHOULD-5: a called lock's registry name is `lockScriptName` on the wire,
+    // as on a party (null here: the test store imports no script names); the bare `scriptName` it
+    // was is gone
+    assert_eq!(
+        calls[1].get("lockScriptName"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(calls[1].get("scriptName"), None, "{json}");
 }
 
 #[tokio::test]
@@ -2249,6 +2398,23 @@ async fn identity_item_deltas_name_their_standard() {
         global["data"][0]["participants"][0]["itemDeltas"][3]["standard"], "dotcell",
         "{global}"
     );
+    // the third read's T SHOULD-2: each identity's code is its recorded cell's, the .bit account
+    // read through its own index (0xd0), the .bit Cell, did:ckb and `.cell` through the shared
+    // id space's (0xd1, 0xd2, 0xd3), on the address row and the global row alike
+    let codes = |row: &serde_json::Value| -> Vec<String> {
+        row["itemTypes"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the row states its item types: {row}"))
+            .iter()
+            .map(|t| t["typeCodeHash"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let expected: Vec<String> = [0xd0u8, 0xd1, 0xd2, 0xd3]
+        .iter()
+        .map(|c| format!("0x{}", hex::encode([*c; 32])))
+        .collect();
+    assert_eq!(codes(&json["data"][0]), expected, "{json}");
+    assert_eq!(codes(&global["data"][0]), expected, "{global}");
 }
 
 /// A pending `.cell` registration: the name is not in the store yet, and the
@@ -2456,7 +2622,13 @@ async fn object_item_deltas_name_collection_class_and_composition() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): the address row states each item's
+    // movement in the whole transaction; the one party gains the spore and loses the token
+    assert_eq!(
+        json["data"][0]["itemDeltas"],
+        with_movements(&expected, &["mint", "burn"]),
+        "address feed"
+    );
 
     let (status, global) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{global}");
@@ -2564,7 +2736,12 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): the cluster is created, a mint
+    assert_eq!(
+        json["data"][0]["itemDeltas"],
+        with_movements(&expected, &["mint"]),
+        "address feed"
+    );
     let (status, json) = get_json(
         &app,
         &format!("/transactions/0x{}/activity", hex::encode(&tx_hash)),
@@ -2659,6 +2836,8 @@ async fn pending_object_delta_names_what_the_store_knows() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): each item's movement in the whole
+    // pending transaction, its one party gaining the new spore and losing the indexed one
     assert_eq!(
         row["itemDeltas"],
         serde_json::json!([
@@ -2670,6 +2849,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "class": "object",
                 "composition": null,
                 "role": null,
+                "movement": "mint",
             },
             {
                 "kind": "object",
@@ -2679,6 +2859,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "class": "object",
                 "composition": "btc_ckb",
                 "role": "spore",
+                "movement": "burn",
             },
         ]),
         "{json}"
@@ -3592,6 +3773,266 @@ async fn item_types_name_what_the_indexer_classified_not_a_crafted_output() {
             }]),
         ],
         "{json}"
+    );
+}
+
+/// One activity's object row, `n`th of a seed, moving `items` for one party.
+fn items_row(n: u8, items: Vec<ckbadger_store::types::ItemDelta>) -> TxActions {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+    TxActions {
+        tx_hash: vec![0xd0 + n; 32],
+        block_hash: vec![0xc0 + n; 32],
+        block_number: 300 + i64::from(n),
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock([0x30 + n; 32]),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: items,
+            tags: 0,
+            roles: 0,
+        }],
+    }
+}
+
+fn object_item(id: &[u8]) -> ckbadger_store::types::ItemDelta {
+    ckbadger_store::types::ItemDelta {
+        item_id: id.to_vec(),
+        kind: ckbadger_store::types::ItemKind::Object,
+        magnitude: 1,
+        negative: false,
+    }
+}
+
+/// The third read's T SHOULD-2: the resolver's unread branches, each a case. Where the stores
+/// cannot say an item's code, the row states no item types and says why, the page answers:
+/// a spore whose row has no recorded cell; a spore whose recorded cell's payload has no type
+/// script; a cluster whose creating transaction has two outputs under two different registered
+/// Cluster codes (the two testnet deployments, docs/metadata/scripts/spore-cluster.toml) with its
+/// id as args, which `the_one` refuses to choose between.
+#[tokio::test]
+async fn item_types_unread_where_the_stores_hold_no_one_code() {
+    use ckbadger_store::types::{ObjectExtra, ObjectStandard};
+
+    let store = test_store();
+    let spore_extra = || ObjectExtra::Spore {
+        content_type: "image/png".into(),
+        content_length: 10,
+        media_profile: Default::default(),
+    };
+    let (unrecorded, untyped, cluster) = (vec![0x81; 32], vec![0x82; 32], vec![0x83; 32]);
+    let (untyped_mint, cluster_mint) = ([0x92u8; 32], [0x93u8; 32]);
+    let code = |hex_code: &str| -> [u8; 32] { hex::decode(hex_code).unwrap().try_into().unwrap() };
+    let (cluster_v1, cluster_v2) = (
+        code("598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080"),
+        code("0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058"),
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    let sole = Some(ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+    batch.put_spore(
+        &unrecorded,
+        &object_row(
+            ObjectStandard::Spore,
+            spore_extra(),
+            sole.clone(),
+            &[0x91; 32],
+        ),
+    );
+    batch.put_spore(
+        &untyped,
+        &object_row(ObjectStandard::Spore, spore_extra(), sole, &untyped_mint),
+    );
+    batch.put_spore_outpoint(&untyped_mint, 0, &untyped);
+    let mut no_type = typed_cell([0x4a; 32], &untyped);
+    no_type.type_code_hash = None;
+    no_type.type_hash_type = None;
+    no_type.type_args = None;
+    batch
+        .put_cell_payload_by_outpoint(&untyped_mint, 0, &no_type)
+        .unwrap();
+    batch.put_spore(
+        &cluster,
+        &object_row(
+            ObjectStandard::SporeCluster,
+            ObjectExtra::SporeCluster,
+            None,
+            &cluster_mint,
+        ),
+    );
+    seed_creating_tx(
+        &mut batch,
+        3,
+        0,
+        cluster_mint,
+        cluster_v1,
+        &[&cluster, &cluster],
+    );
+    batch
+        .put_cell_payload_by_outpoint(&cluster_mint, 1, &typed_cell(cluster_v2, &cluster))
+        .unwrap();
+    batch.commit().unwrap();
+    for (n, id) in [(1u8, &unrecorded), (2, &untyped), (3, &cluster)] {
+        let actions = items_row(n, vec![object_item(id)]);
+        seed_named_tx(
+            &store,
+            actions.block_number,
+            &actions.tx_hash.clone(),
+            &actions,
+        );
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    // newest first: the cluster, the untyped spore, the unrecorded spore
+    let whys: Vec<&str> = rows
+        .iter()
+        .map(|row| {
+            assert_eq!(row["itemTypes"], serde_json::Value::Null, "{row}");
+            row["itemTypesUnread"].as_str().unwrap()
+        })
+        .collect();
+    assert!(
+        whys[0].contains("2 cluster cell in its creating transactions under different codes"),
+        "{}",
+        whys[0]
+    );
+    assert!(whys[1].contains("has no type script"), "{}", whys[1]);
+    assert!(whys[2].contains("no cell recorded for it"), "{}", whys[2]);
+}
+
+/// The third read's La S1: an m-NFT batch's item types cost K × N reads, one multi_get over the
+/// creating transaction's N outputs PER token. Its recorded token ids are read once per creating
+/// transaction, beside its payloads. Here one activity moves K tokens of one creating transaction
+/// of N = K + 1 outputs: the object outpoint index is read by one multi_get whatever K is (it
+/// was K). For a batch of 1,000 tokens in a 1,000-output transaction that is 1,000 id reads and
+/// 1,000 payload reads, 2,001 reads with the transaction's own (it was 10^6 id reads).
+#[tokio::test]
+async fn item_types_read_a_creating_transactions_token_ids_once() {
+    use ckbadger_store::types::{ObjectExtra, ObjectStandard};
+
+    let mut reads = Vec::new();
+    for k in [1u8, 5] {
+        let store = test_store();
+        let mint = [0x62u8; 32];
+        let tokens: Vec<Vec<u8>> = (0..k)
+            .map(|i| [vec![0x3c; 24], vec![0, 0, 0, i]].concat())
+            .collect();
+        let mut batch = StoreBatch::new(store.as_ref());
+        let other: &[u8] = &[0x01];
+        let ids: Vec<&[u8]> = std::iter::once(other)
+            .chain(tokens.iter().map(Vec::as_slice))
+            .collect();
+        seed_creating_tx(&mut batch, 2, 0, mint, [0x2b; 32], &ids);
+        for (i, token) in tokens.iter().enumerate() {
+            batch.put_mnft(
+                token,
+                &object_row(
+                    ObjectStandard::MnftToken,
+                    ObjectExtra::MnftToken {
+                        token_index: u32::try_from(i).unwrap(),
+                        characteristic: vec![0; 8],
+                        configure: 0,
+                        state: 0,
+                    },
+                    Some(token[..24].to_vec()),
+                    &mint,
+                ),
+            );
+            batch.put_mnft_token_outpoint(&mint, i16::try_from(i + 1).unwrap(), token);
+        }
+        batch.commit().unwrap();
+        let actions = items_row(1, tokens.iter().map(|t| object_item(t)).collect());
+        seed_named_tx(
+            &store,
+            actions.block_number,
+            &actions.tx_hash.clone(),
+            &actions,
+        );
+        let app = create_router(test_config(store.clone())).await;
+        store.reset_read_call_counters();
+        let (status, json) = get_json(&app, "/activities").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["data"][0]["itemTypes"],
+            serde_json::json!([{
+                "typeCodeHash": format!("0x{}", "2b".repeat(32)),
+                "typeHashType": "type",
+                "scriptName": null,
+            }]),
+            "{json}"
+        );
+        reads.push((k, store.multi_gets(ckbadger_store::CF_OBJECT_OUTPOINTS)));
+    }
+    assert_eq!(
+        reads[0].1, reads[1].1,
+        "token id reads grew with the batch: {reads:?}"
+    );
+}
+
+/// The third read's La S1: an item's first recorded cell was a list of its whole out point
+/// history (anyone can lengthen it with cheap self-transfers); it is one seek. The rows the
+/// item outpoint index yields for one activity do not grow with the spore's history. First is by
+/// key, the lowest transaction hash (the third read's La N2).
+#[tokio::test]
+async fn item_types_read_an_items_first_cell_by_one_seek() {
+    use ckbadger_store::types::{ObjectExtra, ObjectStandard};
+
+    let mut reads = Vec::new();
+    for history in [2u8, 40] {
+        let store = test_store();
+        let spore = vec![0x51; 32];
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_spore(
+            &spore,
+            &object_row(
+                ObjectStandard::Spore,
+                ObjectExtra::Spore {
+                    content_type: "image/png".into(),
+                    content_length: 10,
+                    media_profile: Default::default(),
+                },
+                Some(ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION.to_vec()),
+                &[0x10; 32],
+            ),
+        );
+        for h in 0..history {
+            let tx = [0x10 + h; 32];
+            batch.put_spore_outpoint(&tx, 0, &spore);
+            batch
+                .put_cell_payload_by_outpoint(&tx, 0, &typed_cell([0x4a; 32], &spore))
+                .unwrap();
+        }
+        batch.commit().unwrap();
+        let actions = items_row(1, vec![object_item(&spore)]);
+        seed_named_tx(
+            &store,
+            actions.block_number,
+            &actions.tx_hash.clone(),
+            &actions,
+        );
+        let app = create_router(test_config(store.clone())).await;
+        store.reset_read_call_counters();
+        let (status, json) = get_json(&app, "/activities").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["data"][0]["itemTypes"][0]["typeCodeHash"],
+            format!("0x{}", "4a".repeat(32)),
+            "{json}"
+        );
+        reads.push((
+            history,
+            store.iterated_rows(ckbadger_store::CF_OBJECT_OUTPOINT_BY_ID),
+        ));
+    }
+    assert_eq!(
+        reads[0].1, reads[1].1,
+        "the first cell's read grew with history: {reads:?}"
     );
 }
 

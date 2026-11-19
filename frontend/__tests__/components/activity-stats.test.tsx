@@ -171,3 +171,16 @@ describe('dailyActivityView', () => {
     expect(dailyActivityView([])).toBeNull();
   });
 });
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('dailyActivityView on an older API', () => {
+  // it drew a TypeError on the day's count
+  it('refuses a day without userTransactionCount by name', () => {
+    const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+    expect(() => dailyActivityView([older as (typeof dailyActivities)[0]])).toThrow(
+      `daily activities on ${dailyActivities[0].date}: the API sends no userTransactionCount: it is older than this page`
+    );
+  });
+});

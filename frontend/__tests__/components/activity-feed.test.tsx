@@ -18,6 +18,7 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const API = '/api/:network/v1';
 
@@ -257,7 +258,7 @@ describe('ActivityFeed', () => {
   });
 
   it('shows an unreadable DAO step as an error in its row, naming the tx', async () => {
-    const broken = {
+    const broken = activityRead({
       ...feedSamples.daoWithdrawRequest,
       protocolActions: [
         {
@@ -267,7 +268,7 @@ describe('ActivityFeed', () => {
           metadata: { capacity: '1' },
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([broken])));
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
@@ -404,8 +405,9 @@ describe('ActivityFeed', () => {
   });
 
   it('shows token item deltas on the party line', async () => {
-    const token: GlobalActivity = {
+    const token: GlobalActivity = activityRead({
       ...latestActivities[2],
+      itemTypes: [ITEM_TYPE.xudt],
       participants: [
         {
           ...latestActivities[2].participants[0],
@@ -420,7 +422,7 @@ describe('ActivityFeed', () => {
           ],
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([token])));
     render(<ActivityFeed />);
     const link = await screen.findByRole('link', { name: /SEAL/ });

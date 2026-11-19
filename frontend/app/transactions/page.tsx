@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
-import { api } from '@/lib/api';
+import { api, dayUserTransactions } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
@@ -497,7 +497,7 @@ export default function TransactionsPage() {
   const day = daily ? completedYesterdayActivities(daily) : undefined;
   // yesterday's user transactions: the route's count, the day's committed transactions less its
   // cellbases (the activities page states the same figure; no page subtracts)
-  const users = day?.userTransactionCount;
+  const users = day === undefined ? undefined : dayUserTransactions(day);
   const counts: Partial<Record<TransactionKind, number>> = day
     ? activityFilterCounts(day, users)
     : {};
