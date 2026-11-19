@@ -14,6 +14,7 @@ import {
   TransactionEvidence,
 } from '@/components/cell/cell-transactions';
 import type { Cell } from '@/lib/api';
+import { ErrorBoundary } from '@/components/error-boundary';
 import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import { LONG_TX_HASH, LONG_TX_PREV, LONG_TX_SENDER, longDeposit } from '@/__tests__/utils/long-tx';
 
@@ -130,5 +131,42 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
     expect(section.querySelectorAll('button')).toHaveLength(0);
     expect(section).toHaveTextContent('attached, runs when spent');
     expect(section).not.toHaveTextContent(/not executed|executed/);
+  });
+});
+
+// Review of phases C and D, SHOULD 7 (lane P1): the embed fails as the same tiles do on the
+// transaction page. It waited for, and failed on, the cell-dep read that only the developer tier's
+// script groups use; and it built its tiles outside the part read, so a cell the lock decision
+// refuses, which fails only the Cells section on /tx/<hash>, crashed the whole cell page.
+describe('the embed fails as the transaction page’s tiles do (P1)', () => {
+  it('draws the cell’s tile without the cell-dep read, which only the script groups need', async () => {
+    getTransactionCellDeps.mockRejectedValue(new Error('503 the node is busy'));
+    view(<CellTransactions cell={deposit} />);
+    const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
+    expect(sheet(structure, 'created').tiles).toEqual(['out:0']);
+    expect(screen.queryByText(/evidence unavailable/)).toBeNull();
+  });
+
+  it('says in its place that a refused cell fails the tiles, and the page stands', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const tx = longDeposit();
+      // input 3's address spells another lock than its own: the lock decision refuses it
+      tx.inputs![3] = { ...tx.inputs![3], address: tx.outputs![0].address };
+      getTransactionDetail.mockResolvedValue(tx);
+      view(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <CellTransactions cell={deposit} />
+        </ErrorBoundary>
+      );
+      const error = await screen.findByText(/^Could not draw the cells \(transaction /);
+      expect(error).toHaveAttribute('role', 'alert');
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(screen.queryByLabelText(`Transaction ${LONG_TX_HASH} structure`)).toBeNull();
+      // the line and its link to the transaction stand above the failed part
+      expect(screen.getByTestId('cell-transaction-line')).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });
