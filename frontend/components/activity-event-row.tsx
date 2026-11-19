@@ -11,6 +11,7 @@ import {
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
+import { dotcellActionLabel } from '@/lib/feed-headlines';
 import type {
   ItemDelta,
   ActivityTypeCall,
@@ -85,22 +86,10 @@ function getFiberActionLabel(action: string): string {
 }
 
 /** The label of a protocol action (`DAO Deposit`, `Fiber · Channel Open`, `UTXOSwap · swap`). */
-/**
- * A `.cell` action in words. `ring_relink` is the indexer's own record of a ring pointer rewrite
- * nothing else in the tx explains; it names the neighbour whose pointer changed when known.
- */
-export function dotcellActionLabel(action: string, name: string | null = null): string {
-  if (action === 'ring_relink')
-    return name ? `ring pointer changed for ${name}` : 'ring pointer changed';
-  return formatProtocolAction(action);
-}
-
 export function protocolActionLabel(pa: ActivityProtocolAction): string {
   if (pa.protocol === 'dao') return daoActionLabel(pa.action);
-  if (pa.protocol === 'dotcell') {
-    const name = pa.metadata?.name;
-    return `${pa.protocolName} \u00B7 ${dotcellActionLabel(pa.action, typeof name === 'string' ? name : null)}`;
-  }
+  if (pa.protocol === 'dotcell')
+    return `${pa.protocolName} \u00B7 ${dotcellActionLabel(pa.action)}`;
   if (pa.protocol === 'rgbpp') {
     const labels: Record<string, string> = {
       leap_to_btc: 'Leap to Bitcoin',
@@ -455,6 +444,13 @@ export function protocolActionNoteFacts(
         </>
       ),
     });
+  }
+  // a `.cell` ring relink's name, the neighbour whose pointer changed: a fact, not its label
+  if (pa.protocol === 'dotcell' && pa.action === 'ring_relink') {
+    const name = pa.metadata?.name;
+    if (name !== undefined && typeof name !== 'string')
+      throw new Error(`.cell ring_relink metadata.name is not a name: ${JSON.stringify(name)}`);
+    if (name) facts.push({ kind: 'other', node: `for ${name}` });
   }
   if (pa.protocol === 'rgbpp') {
     const transitions: Record<string, string> = {
