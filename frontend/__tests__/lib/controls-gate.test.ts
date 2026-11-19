@@ -83,11 +83,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { select: 1, tab: 1, pager: 2 },
     reason: 'the kind select, the committed / pool tabs, the two lists’ pagers',
   },
-  'components/activities-stream-explorer.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the activities stream’s boxed “Older” button',
-  },
   // ---- c2-chain: block, transaction, cell, address, script pages ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'c2-chain',
@@ -196,7 +191,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 38;
+const TOLERATED_TOTAL = 37;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
