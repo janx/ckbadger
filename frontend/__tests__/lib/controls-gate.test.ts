@@ -215,12 +215,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { fold: 1 },
     reason: 'the media dependencies at 12 px, an inner disclosure (a form the component lacks)',
   },
-  'components/asset/protocol-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 3 },
-    reason:
-      'the decoded fields, all the bytes as hex, and a reading’s bytes at 12 px: inner disclosures with no rule (a form the component lacks)',
-  },
   'components/scripts/script-code-evidence.tsx': {
     lane: 'p-assets',
     sites: { fold: 1 },
@@ -268,7 +262,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 21 (the disclosure sweep: asset-history's supply changes are SectionDisclosure's section form)
 // → 19 (the description and the issuer info as stored are SectionDisclosure's inner form)
 // → 17 (the DNA as hex and every gene one row each are SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 17;
+// → 14 (the decoded fields, all the bytes as hex and a reading's bytes are SectionDisclosure's inner form)
+const TOLERATED_TOTAL = 14;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
