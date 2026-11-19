@@ -92,10 +92,13 @@ const LABEL = 'text-text-dim text-meta md:text-small';
 /** A vital's value, in the strip's bright voice; its link (the inline look) takes the ink. */
 const VALUE = 'text-text-bright text-body font-medium tabular-nums transition-colors';
 /**
- * The epoch's position and time left: values, the reading ink at 13 px, on the 18 px line they had
- * at 12 px, so the home page's second epoch row below md does not grow.
+ * The epoch's position and time left: values, in the reading ink (the time left was quiet), at 13 px
+ * from md and 12 px below it. At 13 px the home page's epoch line at 360 does not hold its two groups
+ * with a usual position: "320 / 1,471" and "≈ 3h 19m left" are 193.2 px, the line 333.6 of 328, and
+ * it wraps, the strip 22 px taller (measured in Chrome); at 12 px they are 178.8, the line 319.2.
+ * The strip's height holds (the lead's condition), so below md they keep the label's step.
  */
-const POSITION = 'text-text text-small leading-[18px] tabular-nums';
+const POSITION = 'text-text text-meta md:text-small tabular-nums';
 
 /**
  * A vital: its label and its value, which flares when it changes (material pass v2, move 4). The

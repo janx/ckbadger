@@ -192,9 +192,7 @@ export function epochGroupsPx(
   return {
     bar:
       runPx('Epoch', step) + gap + runPx(content.epoch, 'body') + gap + textPx(cells, fontPx(step)),
-    // the position and the time left are values, at the small step at every width (the shared
-    // lane's ruling, the ink and size round: they were at the label's step below md)
-    position: runPx(content.position, 'small') + gap + runPx(content.left, 'small'),
+    position: runPx(content.position, step) + gap + runPx(content.left, step),
   };
 }
 

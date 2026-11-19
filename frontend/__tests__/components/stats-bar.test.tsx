@@ -183,7 +183,8 @@ describe('VitalsStrip', () => {
   // The label is a label (quiet, 12 px below md, decided: the label of a value) and stands beside
   // the link; the value alone is the link, in the inline look, so a reader sees it is one at rest,
   // in the strip's bright ink; its accessible name still says what it is. The epoch's position and
-  // time left are values: the reading ink at 13 px.
+  // time left are values: the reading ink, at 13 px from md (12 below it, where 13 would wrap the home
+  // page's epoch line at 360 and grow the strip).
   it('makes each vital’s value its link, in the inline look; its label a label beside it', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
@@ -211,7 +212,7 @@ describe('VitalsStrip', () => {
     expect(epoch).toHaveTextContent(/^15,168$/);
     expect(epoch).toHaveClass('underline');
     for (const value of [screen.getByText('246 / 1,590'), screen.getByText('≈ 3h 8m left')]) {
-      expect(value).toHaveClass('text-small');
+      expect(value).toHaveClass('text-meta', 'md:text-small');
       expect(inkOf(value)).toBe(READING);
     }
   });
