@@ -648,16 +648,15 @@ impl TokenRowThroughBatch<'_> {
                 }
             }
         };
-        // The token's first block: the stored row's, or the block of the
-        // cell that creates it in this batch.
-        let first_block = match &self.base {
-            TokenRowBase::Stored(stored) => stored.first_seen_block,
-            TokenRowBase::CreatedBy {
-                block_number: created_at,
-                ..
-            } => *created_at,
-        };
-        if let Some(claim) = token_max_supply_claim(self.max_supply, first_block, block_number) {
+        // The token's row says whose claims count: its owner (type args) and
+        // its first block (the stored row's, or the block of the cell that
+        // creates it in this batch).
+        if let Some(claim) = token_max_supply_claim(
+            self.max_supply,
+            &row.type_args,
+            row.first_seen_block,
+            block_number,
+        ) {
             apply_observed_max_supply(self.type_hash, &mut row, claim.max_supply, report);
         }
         if let Some(bound) = self
@@ -774,6 +773,7 @@ pub(crate) fn apply_onchain_token_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync::token_helpers::MaxSupplyClaimant;
     use std::sync::Arc;
 
     use ckbadger_store::batch::StoreBatch;
@@ -1158,7 +1158,7 @@ mod tests {
         let token = TokenInfo {
             type_code_hash: vec![0xCD; 32],
             hash_type: 1,
-            type_args: vec![0x11; 20],
+            type_args: vec![0x11; 32],
             standard: "sudt".to_string(),
             name: None,
             symbol: None,
@@ -1177,7 +1177,7 @@ mod tests {
             type_script_hash: type_hash.clone(),
             type_code_hash: vec![0xCD; 32],
             type_hash_type: 1,
-            type_args: vec![0x11; 20],
+            type_args: vec![0x11; 32],
             from_lock_hash: None,
             to_lock_hash: vec![0x22; 32],
             amount: 123u128,
@@ -1198,6 +1198,8 @@ mod tests {
                 block_number: 100,
                 tx_index: 1,
                 output_index: 0,
+                // the token's owner lock (its type args) claims
+                claimant: MaxSupplyClaimant::SupplyOmnilock([0x11; 32]),
             }],
         );
 
@@ -1718,7 +1720,7 @@ mod tests {
         let token = TokenInfo {
             type_code_hash: vec![0xCD; 32],
             hash_type: 1,
-            type_args: vec![0x11; 20],
+            type_args: vec![0x11; 32],
             standard: "sudt".to_string(),
             name: None,
             symbol: None,
@@ -1743,6 +1745,8 @@ mod tests {
                 block_number: 100,
                 tx_index: 1,
                 output_index: 0,
+                // the token's owner lock (its type args) claims
+                claimant: MaxSupplyClaimant::SupplyOmnilock([0x11; 32]),
             }],
         );
 

@@ -14153,43 +14153,98 @@ mod tests {
             assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
         }
 
-        /// An Omnilock supply-info cell naming the issued token: the cell
-        /// claims the token's max supply (`TOKEN_MAX_SUPPLY`). Spends the
-        /// issuance's change output (0xe1:1); with `with_transfer` it also
-        /// moves the token (0xe1:0) to lock B in the same transaction.
-        fn omnilock_claim_block(with_transfer: bool) -> BlockResponseWithCycles {
-            let info_type = Script {
+        /// The type script of supply token `seed`'s supply-info cell.
+        fn supply_info_type(seed: u8) -> Script {
+            Script {
                 code_hash: format!("0x{}", hex::encode([0x55; 32])),
                 hash_type: "type".to_string(),
-                args: format!("0x{}", hex::encode([0x66; 32])),
-            };
-            let info_type_hash = crate::parser::ScriptParser::compute_script_hash(&info_type);
+                args: format!("0x{}", hex::encode([seed; 32])),
+            }
+        }
+
+        /// The supply-mode Omnilock of supply token `seed`: its args name the
+        /// info cell's type script (RFC 0042: auth, flags 0x08, the type
+        /// script hash for supply).
+        fn supply_omnilock(seed: u8) -> Script {
             let mut args = vec![0u8; 21];
             args.push(0b0000_1000);
-            args.extend_from_slice(&info_type_hash);
-            let mut data = vec![0u8];
-            data.extend_from_slice(&100u128.to_le_bytes());
-            data.extend_from_slice(&TOKEN_MAX_SUPPLY.to_le_bytes());
-            data.extend_from_slice(&ext_type_hash());
-            // above the info cell's occupied capacity (225 CKB)
-            const INFO_CAPACITY: u64 = 300_00000000;
-            let omnilock = Script {
+            args.extend_from_slice(&crate::parser::ScriptParser::compute_script_hash(
+                &supply_info_type(seed),
+            ));
+            Script {
                 code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2.to_string(),
                 hash_type: "type".to_string(),
                 args: format!("0x{}", hex::encode(&args)),
-            };
-            let mut inputs = vec![input(0xe1, 1)];
-            let mut outputs = vec![(
-                output(INFO_CAPACITY, omnilock, Some(info_type)),
+            }
+        }
+
+        /// Supply token `seed`: an xUDT whose owner lock IS
+        /// `supply_omnilock(seed)` (its args are that lock's script hash), so
+        /// it is minted only under that lock and its info cell's claims are
+        /// its own.
+        fn supply_token_type(seed: u8) -> Script {
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!(
+                    "0x{}",
+                    hex::encode(crate::parser::ScriptParser::compute_script_hash(
+                        &supply_omnilock(seed)
+                    ))
+                ),
+            }
+        }
+
+        fn supply_token_hash(seed: u8) -> Vec<u8> {
+            ScriptParser::compute_script_hash(&supply_token_type(seed))
+        }
+
+        /// A supply-info cell under `supply_omnilock(lock_seed)` naming the
+        /// token `names` with `max_supply`, and its data.
+        fn supply_info_cell(lock_seed: u8, names: &[u8], max_supply: u128) -> (CellOutput, String) {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u128.to_le_bytes());
+            data.extend_from_slice(&max_supply.to_le_bytes());
+            data.extend_from_slice(names);
+            // above the info cell's occupied capacity (225 CKB)
+            (
+                output(
+                    300_00000000,
+                    supply_omnilock(lock_seed),
+                    Some(supply_info_type(lock_seed)),
+                ),
                 format!("0x{}", hex::encode(&data)),
-            )];
+            )
+        }
+
+        /// Supply token 1's issuance in block 101: its cell at 0xe1:0, the
+        /// change at 0xe1:1.
+        fn supply_issuance_block() -> BlockResponseWithCycles {
+            claim_rule_block(
+                101,
+                vec![issue_tx(
+                    0xe1,
+                    input(0xc0, 0),
+                    FUNDING_CAPACITY,
+                    supply_token_type(1),
+                )],
+            )
+        }
+
+        /// Supply token 1's genuine claim (`TOKEN_MAX_SUPPLY`) in block 102.
+        /// Spends the issuance's change (0xe1:1); with `with_transfer` it also
+        /// moves the token (0xe1:0) to lock B in the same transaction.
+        fn omnilock_claim_block(with_transfer: bool) -> BlockResponseWithCycles {
+            const INFO_CAPACITY: u64 = 300_00000000;
+            let mut inputs = vec![input(0xe1, 1)];
+            let mut outputs = vec![supply_info_cell(1, &supply_token_hash(1), TOKEN_MAX_SUPPLY)];
             if with_transfer {
                 inputs.insert(0, input(0xe1, 0));
                 outputs.push((
                     output(
                         EXT_CELL_CAPACITY,
                         lock_script_b(),
-                        Some(xudt_ext_type_script()),
+                        Some(supply_token_type(1)),
                     ),
                     amount_data(TOKEN_AMOUNT),
                 ));
@@ -14217,14 +14272,15 @@ mod tests {
             for with_transfer in [false, true] {
                 let blocks = vec![
                     funding_block(),
-                    ext_issuance_block(),
+                    supply_issuance_block(),
                     omnilock_claim_block(with_transfer),
                 ];
                 for plan in [
                     per_block(&blocks),
                     vec![vec![funding_block()], blocks[1..].to_vec()],
                 ] {
-                    let row = assert_bulk_row_equals_live(&blocks, &plan, &ext_type_hash()).await;
+                    let row =
+                        assert_bulk_row_equals_live(&blocks, &plan, &supply_token_hash(1)).await;
                     assert_eq!(
                         row.max_supply,
                         Some(TOKEN_MAX_SUPPLY),
@@ -14241,7 +14297,7 @@ mod tests {
             let store = write_batches_live(
                 &[
                     vec![funding_block()],
-                    vec![ext_issuance_block()],
+                    vec![supply_issuance_block()],
                     vec![omnilock_claim_block(false)],
                 ],
                 None,
@@ -14249,7 +14305,7 @@ mod tests {
             .await;
             assert_eq!(
                 store
-                    .get_token(&ext_type_hash())
+                    .get_token(&supply_token_hash(1))
                     .unwrap()
                     .unwrap()
                     .max_supply,
@@ -14259,55 +14315,38 @@ mod tests {
 
             rollback_to(&store, 101);
 
-            let reference =
-                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
-                    .await;
-            let expected = token_state(&reference, &ext_type_hash());
+            let reference = write_batches_live(
+                &[vec![funding_block()], vec![supply_issuance_block()]],
+                None,
+            )
+            .await;
+            let expected = token_state(&reference, &supply_token_hash(1));
             assert_eq!(expected.0.as_ref().unwrap().max_supply, None, "reference");
-            assert_eq!(token_state(&store, &ext_type_hash()), expected);
+            assert_eq!(token_state(&store, &supply_token_hash(1)), expected);
         }
 
         // ── The one claim rule: the first claim at or after the token's first
         // block, in chain order, whatever path and batching wrote the blocks ──
 
-        /// A transaction claiming `max_supply` for the issued token with an
-        /// Omnilock supply-info cell, spending `spent` (`available` shannons):
-        /// output 0 the info cell, output 1 the change.
+        /// A transaction claiming `max_supply` for the token `names` with a
+        /// supply-info cell under `supply_omnilock(lock_seed)`, spending
+        /// `spent` (`available` shannons): output 0 the info cell, output 1
+        /// the change.
         fn claim_tx(
             hash: u8,
             spent: CellInput,
             available: u64,
             max_supply: u128,
+            lock_seed: u8,
+            names: &[u8],
         ) -> TransactionView {
-            let info_type = Script {
-                code_hash: format!("0x{}", hex::encode([0x55; 32])),
-                hash_type: "type".to_string(),
-                args: format!("0x{}", hex::encode([hash; 32])),
-            };
-            let info_type_hash = crate::parser::ScriptParser::compute_script_hash(&info_type);
-            let mut args = vec![0u8; 21];
-            args.push(0b0000_1000);
-            args.extend_from_slice(&info_type_hash);
-            let mut data = vec![0u8];
-            data.extend_from_slice(&100u128.to_le_bytes());
-            data.extend_from_slice(&max_supply.to_le_bytes());
-            data.extend_from_slice(&ext_type_hash());
-            const INFO_CAPACITY: u64 = 300_00000000;
-            let omnilock = Script {
-                code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2.to_string(),
-                hash_type: "type".to_string(),
-                args: format!("0x{}", hex::encode(&args)),
-            };
             d3_tx(
                 hash,
                 vec![spent],
                 vec![
+                    supply_info_cell(lock_seed, names, max_supply),
                     (
-                        output(INFO_CAPACITY, omnilock, Some(info_type)),
-                        format!("0x{}", hex::encode(&data)),
-                    ),
-                    (
-                        output(available - INFO_CAPACITY, lock_script(), None),
+                        output(available - 300_00000000, lock_script(), None),
                         "0x".to_string(),
                     ),
                 ],
@@ -14315,19 +14354,25 @@ mod tests {
             )
         }
 
-        /// The token's issuance, spending `spent` (`available` shannons):
-        /// output 0 the token cell, output 1 the change.
-        fn issue_tx(hash: u8, spent: CellInput, available: u64) -> TransactionView {
+        /// Supply token 1's own claim (its owner's info cell).
+        fn genuine_claim_tx(
+            hash: u8,
+            spent: CellInput,
+            available: u64,
+            max_supply: u128,
+        ) -> TransactionView {
+            claim_tx(hash, spent, available, max_supply, 1, &supply_token_hash(1))
+        }
+
+        /// The issuance of the token `token`, spending `spent` (`available`
+        /// shannons): output 0 the token cell, output 1 the change.
+        fn issue_tx(hash: u8, spent: CellInput, available: u64, token: Script) -> TransactionView {
             d3_tx(
                 hash,
                 vec![spent],
                 vec![
                     (
-                        output(
-                            EXT_CELL_CAPACITY,
-                            lock_script(),
-                            Some(xudt_ext_type_script()),
-                        ),
+                        output(EXT_CELL_CAPACITY, lock_script(), Some(token)),
                         amount_data(TOKEN_AMOUNT),
                     ),
                     (
@@ -14352,13 +14397,16 @@ mod tests {
         /// The token row of `blocks` written by bulk build, by live sync one
         /// block a batch, and by live sync in one batch after the funding
         /// block: byte-equal rows, the one returned.
-        async fn token_row_on_every_path(blocks: &[BlockResponseWithCycles]) -> TokenInfo {
+        async fn token_row_on_every_path(
+            blocks: &[BlockResponseWithCycles],
+            type_hash: &[u8],
+        ) -> TokenInfo {
             let per_block_row =
-                assert_bulk_row_equals_live(blocks, &per_block(blocks), &ext_type_hash()).await;
+                assert_bulk_row_equals_live(blocks, &per_block(blocks), type_hash).await;
             let one_batch_row = assert_bulk_row_equals_live(
                 blocks,
                 &[blocks[..1].to_vec(), blocks[1..].to_vec()],
-                &ext_type_hash(),
+                type_hash,
             )
             .await;
             assert_eq!(per_block_row, one_batch_row);
@@ -14375,7 +14423,12 @@ mod tests {
                 funding_block(),
                 claim_rule_block(
                     101,
-                    vec![claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700)],
+                    vec![genuine_claim_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        7700,
+                    )],
                 ),
                 claim_rule_block(
                     102,
@@ -14383,10 +14436,16 @@ mod tests {
                         0xa2,
                         input(0xa1, 1),
                         FUNDING_CAPACITY - 300_00000000,
+                        supply_token_type(1),
                     )],
                 ),
             ];
-            assert_eq!(token_row_on_every_path(&blocks).await.max_supply, None);
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                None
+            );
         }
 
         /// A claim in the token's first block counts, before or after the
@@ -14398,8 +14457,13 @@ mod tests {
                 claim_rule_block(
                     101,
                     vec![
-                        claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700),
-                        issue_tx(0xa2, input(0xa1, 1), FUNDING_CAPACITY - 300_00000000),
+                        genuine_claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700),
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - 300_00000000,
+                            supply_token_type(1),
+                        ),
                     ],
                 ),
             ];
@@ -14408,8 +14472,8 @@ mod tests {
                 claim_rule_block(
                     101,
                     vec![
-                        issue_tx(0xa2, input(0xc0, 0), FUNDING_CAPACITY),
-                        claim_tx(
+                        issue_tx(0xa2, input(0xc0, 0), FUNDING_CAPACITY, supply_token_type(1)),
+                        genuine_claim_tx(
                             0xa1,
                             input(0xa2, 1),
                             FUNDING_CAPACITY - EXT_CELL_CAPACITY,
@@ -14420,7 +14484,9 @@ mod tests {
             ];
             for blocks in [claim_first, issue_first] {
                 assert_eq!(
-                    token_row_on_every_path(&blocks).await.max_supply,
+                    token_row_on_every_path(&blocks, &supply_token_hash(1))
+                        .await
+                        .max_supply,
                     Some(7700)
                 );
             }
@@ -14433,11 +14499,22 @@ mod tests {
             let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
             let blocks = vec![
                 funding_block(),
-                claim_rule_block(101, vec![issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY)]),
-                claim_rule_block(102, vec![claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)]),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
                 claim_rule_block(
                     103,
-                    vec![claim_tx(
+                    vec![genuine_claim_tx(
                         0xa3,
                         input(0xa2, 1),
                         after_issue - 300_00000000,
@@ -14446,7 +14523,9 @@ mod tests {
                 ),
             ];
             assert_eq!(
-                token_row_on_every_path(&blocks).await.max_supply,
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
                 Some(7700)
             );
             // a claim before the token, then two after: still the first after
@@ -14454,17 +14533,22 @@ mod tests {
                 funding_block(),
                 claim_rule_block(
                     100 + 1,
-                    vec![claim_tx(0xa0, input(0xc0, 0), FUNDING_CAPACITY, 6600)],
+                    vec![genuine_claim_tx(
+                        0xa0,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        6600,
+                    )],
                 ),
             ];
             let left = FUNDING_CAPACITY - 300_00000000;
             with_early_claim.push(claim_rule_block(
                 102,
-                vec![issue_tx(0xa1, input(0xa0, 1), left)],
+                vec![issue_tx(0xa1, input(0xa0, 1), left, supply_token_type(1))],
             ));
             with_early_claim.push(claim_rule_block(
                 103,
-                vec![claim_tx(
+                vec![genuine_claim_tx(
                     0xa2,
                     input(0xa1, 1),
                     left - EXT_CELL_CAPACITY,
@@ -14472,7 +14556,9 @@ mod tests {
                 )],
             ));
             assert_eq!(
-                token_row_on_every_path(&with_early_claim).await.max_supply,
+                token_row_on_every_path(&with_early_claim, &supply_token_hash(1))
+                    .await
+                    .max_supply,
                 Some(7700)
             );
         }
@@ -14484,11 +14570,22 @@ mod tests {
             let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
             let blocks = vec![
                 funding_block(),
-                claim_rule_block(101, vec![issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY)]),
-                claim_rule_block(102, vec![claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)]),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
                 claim_rule_block(
                     103,
-                    vec![claim_tx(
+                    vec![genuine_claim_tx(
                         0xa3,
                         input(0xa2, 1),
                         after_issue - 300_00000000,
@@ -14501,15 +14598,173 @@ mod tests {
                 rollback_to(&store, keep as i64);
                 let reference = write_batches_live(&per_block(&blocks[..=keep - 100]), None).await;
                 assert_eq!(
-                    token_state(&store, &ext_type_hash()),
-                    token_state(&reference, &ext_type_hash()),
+                    token_state(&store, &supply_token_hash(1)),
+                    token_state(&reference, &supply_token_hash(1)),
                     "rolled back to {keep}"
                 );
             }
             // the issuance's block rolled back: no token
             let store = write_batches_live(&per_block(&blocks), None).await;
             rollback_to(&store, 100);
-            assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
+            assert_eq!(token_state(&store, &supply_token_hash(1)), (None, None));
+        }
+
+        // ── The owner rule: an Omnilock claim is the token's only when the
+        // token's owner lock IS the claiming supply-mode Omnilock ──
+
+        /// A forged claim: a supply-info cell anyone can write, naming a token
+        /// whose owner is another lock (the RGB++-style token, owner
+        /// `EXT_OWNER`). No max supply, on every path and batching.
+        #[tokio::test]
+        async fn a_claim_on_a_token_another_lock_owns_is_not_its() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        xudt_ext_type_script(),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                        7700,
+                        1,
+                        &ext_type_hash(),
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &ext_type_hash())
+                    .await
+                    .max_supply,
+                None
+            );
+        }
+
+        /// A forged claim after the issuance (another Omnilock names supply
+        /// token 1), then the token's own: the genuine one stands.
+        #[tokio::test]
+        async fn a_forged_claim_before_the_genuine_one_does_not_stand() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        after_issue,
+                        6600,
+                        2,
+                        &supply_token_hash(1),
+                    )],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        7700,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+        }
+
+        /// The token's own claim alone counts, as before.
+        #[tokio::test]
+        async fn the_tokens_own_claim_alone_counts() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                        7700,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+        }
+
+        /// Supply token 1's owner Omnilock writes an info cell naming supply
+        /// token 2: it is not token 1's (it names another), nor token 2's
+        /// (another lock owns token 2). Nothing for either.
+        #[tokio::test]
+        async fn an_owners_claim_naming_another_token_counts_for_neither() {
+            let after_two = FUNDING_CAPACITY - 2 * EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, supply_token_type(1)),
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                            supply_token_type(2),
+                        ),
+                    ],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_two,
+                        7700,
+                        1,
+                        &supply_token_hash(2),
+                    )],
+                ),
+            ];
+            for token in [supply_token_hash(1), supply_token_hash(2)] {
+                assert_eq!(
+                    token_row_on_every_path(&blocks, &token).await.max_supply,
+                    None,
+                    "token 0x{}",
+                    hex::encode(&token)
+                );
+            }
         }
 
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback

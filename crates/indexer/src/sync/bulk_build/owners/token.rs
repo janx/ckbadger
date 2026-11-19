@@ -96,6 +96,7 @@ impl TokenOwner {
         &mut self,
         token_type_hash: &[u8],
         max_supply: u128,
+        claimant: crate::sync::token_helpers::MaxSupplyClaimant,
         tx: &ResolvedTxFacts<'_>,
         cell: &CellFacts,
     ) {
@@ -104,24 +105,27 @@ impl TokenOwner {
             block_number: tx.block_number,
             tx_index: tx.tx_index,
             output_index: cell.outpoint.index,
+            claimant,
         };
         let claims = self
             .max_supply_observations
             .entry(token_type_hash.to_vec())
             .or_default();
-        // Once the token exists and a claim at or after its first block
-        // precedes this one, the rule can never pick this one: it is not kept
-        // (an Omnilock supply-info cell is claimed again by every mint).
-        if let Some(first_block) = self
-            .tokens
-            .get(token_type_hash)
-            .map(|token| token.first_seen_block)
-        {
-            if crate::sync::token_helpers::token_max_supply_claim(claims, first_block, i64::MAX)
-                .is_some_and(|first| {
-                    (first.block_number, first.tx_index, first.output_index)
-                        < (claim.block_number, claim.tx_index, claim.output_index)
-                })
+        // Once the token exists, a claim the rule can never pick is not kept
+        // (an Omnilock supply-info cell is claimed again by every mint): one
+        // the rule refuses alone (not the token's), or one after the claim
+        // the rule already picks.
+        if let Some(token) = self.tokens.get(token_type_hash) {
+            let picks = |claims: &[crate::sync::token_helpers::MaxSupplyObservation]| {
+                crate::sync::token_helpers::token_max_supply_claim(
+                    claims,
+                    &token.type_args,
+                    token.first_seen_block,
+                    i64::MAX,
+                )
+            };
+            if picks(std::slice::from_ref(&claim)).is_none()
+                || picks(claims).is_some_and(|first| first.place() < claim.place())
             {
                 return;
             }
@@ -158,7 +162,10 @@ impl TokenOwner {
             return;
         };
         // Every claim is kept; the rule picks the token's at finalize.
-        self.record_max_supply_claim(&token_type_hash, max_supply, tx, cell);
+        let claimant = crate::sync::token_helpers::supply_omnilock_claimant(
+            ctx.resolve_identity(cell.lock_script_hash_id),
+        );
+        self.record_max_supply_claim(&token_type_hash, max_supply, claimant, tx, cell);
     }
 
     fn observe_unique_cell_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
@@ -213,7 +220,13 @@ impl TokenOwner {
             };
             if let Some(total_supply) = info.total_supply {
                 let token_type_hash = token_type_hash.to_vec();
-                self.record_max_supply_claim(&token_type_hash, total_supply, tx, cell);
+                self.record_max_supply_claim(
+                    &token_type_hash,
+                    total_supply,
+                    crate::sync::token_helpers::MaxSupplyClaimant::TokenExtension,
+                    tx,
+                    cell,
+                );
             }
             self.token_onchain_info.insert(
                 token_type_hash.to_vec(),
@@ -650,6 +663,7 @@ impl TokenOwner {
                 .and_then(|claims| {
                     crate::sync::token_helpers::token_max_supply_claim(
                         claims,
+                        &info.type_args,
                         info.first_seen_block,
                         i64::MAX,
                     )
