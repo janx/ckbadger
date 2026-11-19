@@ -165,6 +165,39 @@ beforeEach(() => {
 });
 
 describe('Address v3', () => {
+  // Lane D2 (PA-13; gate D0′'s strip, with the address's own four facts): the lock, the live
+  // cells, the transactions and the holdings stand in the status strip under the id line. They
+  // were said twice: on the kind line and again in the metrics row under the balance.
+  it('states the lock, live cells, transactions and holdings in one strip under the id line (lane D2)', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    const strip = await screen.findByRole('group', { name: 'Address status' });
+    await waitFor(() =>
+      expect(factsOf(strip).map(([label]) => label)).toEqual([
+        'lock',
+        'live cells',
+        'transactions',
+        'holdings',
+      ])
+    );
+    expect(factsOf(strip).map(([, value]) => value)).toEqual([
+      'JoyID · type · 22-byte args',
+      '40',
+      '1,021',
+      '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+    ]);
+    expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/scripts/JoyID')
+    );
+    // under the stone and the plate; the kind line holds the kind word alone
+    const { kindLine, below } = expectNamePlate(container, 'Address');
+    expect(below!.firstElementChild).toBe(strip);
+    expect(kindLine).toHaveTextContent(/^Address$/);
+    // said once: no metrics row repeats them
+    expect(screen.queryByRole('region', { name: 'Metrics' })).toBeNull();
+  });
+
   it('renders the real address Fiber endpoint empty array without a page crash', async () => {
     vi.mocked(api.getAddressFiberChannels).mockResolvedValue([]);
     render(<AddressDetailPage />);
@@ -235,18 +268,22 @@ describe('Address v3', () => {
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
   });
 
-  // The name plate (seals by kind, C10): beside the lock script's stone, the kind line "Address"
-  // with the page's status (the lock, the live cells and transactions), the short address, then the
-  // full address and its copy button; nothing under them (the address page has no lede).
-  it('stands the address’s name plate beside the stone: Address and its status, the short address, the full one', async () => {
+  // The name plate (seals by kind, C10): beside the lock script's stone, the kind line "Address",
+  // the short address, then the full address and its copy button. Re-pinned on purpose (lane D2;
+  // renamed, it was "…: Address and its status, the short address, the full one"): the page's
+  // status (the lock, the live cells, the transactions) is the status strip under them, with the
+  // holdings, so the kind line holds the kind word alone and the strip stands under the plate
+  // (nothing stood there; the address page has no lede).
+  it('stands the address’s name plate beside the stone: Address, the short address, the full one', async () => {
     const { container } = render(<AddressDetailPage />);
     await loaded();
     const { stone, kindLine, nameBox, title, below } = expectNamePlate(container, 'Address');
     expect(stone).toHaveAttribute('data-seal', 'script');
-    expect(below).toBeNull();
-    expect(kindLine.children).toHaveLength(2);
-    expect(kindLine).toHaveTextContent(/^Addresslock JoyID40 live cells · 1,021 transactions$/);
-    expect(within(kindLine).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+    expect(below!.children).toHaveLength(1);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Address status' }));
+    expect(kindLine.children).toHaveLength(1);
+    expect(kindLine).toHaveTextContent(/^Address$/);
+    expect(within(below!).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
       'href',
       expect.stringContaining('/scripts/JoyID')
     );
@@ -542,12 +579,16 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    // Lane P: the name heads the page's status line and the Lock metric, both to the script.
+    // Lane P: the name links to the script. Re-pinned on purpose (lane D2): said once, as the
+    // status strip's lock (it headed the status line and the Lock metric, two links), and the
+    // deprecation is the lock's note, lowercase in the warning's ink (it was "Deprecated" on the
+    // kind line)
     const links = screen.getAllByRole('link', { name: 'JoyID' });
-    expect(links).toHaveLength(2);
+    expect(links).toHaveLength(1);
     for (const link of links)
       expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
-    expect(screen.getByText('Deprecated')).toBeInTheDocument();
+    const strip = screen.getByRole('group', { name: 'Address status' });
+    expect(within(strip).getByText('deprecated')).toHaveClass('text-negative');
   });
   it('shows raw script identity when no registered name is present', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -1624,19 +1665,22 @@ describe('Address · consistency round (C13, C14)', () => {
   });
 
   // Lane P (Address.dc.html): the balance hero, then the four metrics, then Holdings.
-  it('leads with the balance figure and its partition, then the four metrics, then Holdings', async () => {
+  // Re-pinned on purpose (lane D2; renamed, it was "leads with the balance figure and its
+  // partition, then the four metrics, then Holdings"): the four metrics are the head's status
+  // strip, under the id line and before the balance, said once; tier 1 leads with the balance and
+  // its partition, then Holdings.
+  it('leads with the balance figure and its partition, then Holdings; the four facts are the strip above them', async () => {
     const { container } = render(<AddressDetailPage />);
     await loaded();
     const tier1 = container.querySelector('[data-tier="1"]')!;
     expect(tier1.querySelector('section')).toHaveAttribute('aria-label', 'Balance');
     const balance = screen.getByRole('region', { name: 'Balance' });
-    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    const strip = screen.getByRole('group', { name: 'Address status' });
+    expect(screen.queryByRole('region', { name: 'Metrics' })).toBeNull();
     const holdings = screen.getByRole('heading', { name: 'Holdings 40 cells' });
+    expect(strip.compareDocumentPosition(balance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      balance.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      metrics.compareDocumentPosition(holdings) & Node.DOCUMENT_POSITION_FOLLOWING
+      balance.compareDocumentPosition(holdings) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     // the summary form (R5, re-pinned on purpose: was "9,651,178.35338057 CKB")
     expect(balance.querySelector('[data-role="balance-figure"]')).toHaveTextContent(
@@ -1646,11 +1690,11 @@ describe('Address · consistency round (C13, C14)', () => {
       'title',
       '9,651,178.35338057 CKB'
     );
-    expect([...metrics.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
-      'Holdings',
-      'Live cells',
-      'Transactions',
-      'Lock',
+    expect([...strip.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
+      'lock',
+      'live cells',
+      'transactions',
+      'holdings',
     ]);
   });
   // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0

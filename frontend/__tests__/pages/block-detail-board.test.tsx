@@ -437,8 +437,11 @@ describe('Block board · first tier', () => {
     expect(plate).not.toContainElement(summary);
     // re-pinned with readability R4 (lane B7): the summary stands in the lede's one holder, which
     // sets it on the measure (it was below's own child, at no width of its own)
-    expect(below!.children).toHaveLength(1);
-    const holder = below!.firstElementChild!;
+    // re-pinned on purpose (lane D2): the status strip stands first under the stone and the plate,
+    // the lede's holder after it (the holder was below's one child)
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Block status' }));
+    const holder = below!.lastElementChild!;
     expect(holder).toHaveAttribute('data-detail-lede');
     expect(holder).toHaveClass('max-w-measure');
     expect(holder.children).toHaveLength(1);

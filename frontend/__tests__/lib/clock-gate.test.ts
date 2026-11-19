@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  * wall clock is written once and stands still between data updates ("20s ago" for minutes).
  *
  * The gate is exact because the age formatters take no default time: `formatTimeAgo`,
- * `formatAgeOneUnit`, `formatAgeTwoUnits`, `ageInOneUnit` and `ageSeconds` need their `now`, so
+ * `formatAgeOneUnit`, `ageInOneUnit` and `ageSeconds` need their `now`, so
  * the compiler finds every caller, and a caller's time can only come from the clock's hooks or a
  * read of the wall clock. So, in the TypeScript of every file under app/ and components/ (the
  * TypeScript parser reads code, not comments or strings):

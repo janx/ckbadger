@@ -6,6 +6,7 @@ import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { factsOf } from '@/__tests__/utils/facts';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -68,6 +69,36 @@ describe('Cell page against the Cell board', () => {
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
     mockObjectReads();
+  });
+
+  // Lane D2 (PA-13; gate D0′'s strip, with the cell's own four facts): its state, when it was
+  // created, the block that created it and its capacity stand in the status strip under the id
+  // line (the state was on the kind line, the rest in the facts after the lede); the other facts
+  // stay in the cell's facts section, none deleted.
+  it('states status, created, block and capacity in one strip under the id line (lane D2)', async () => {
+    const { container } = view();
+    const strip = await screen.findByRole('group', { name: 'Cell status' });
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'created', 'block', 'capacity']);
+    expect(facts[0][1]).toBe('live');
+    expect(facts[1][1]).toMatch(/^2026-10-22 22:43:55 UTC\+8 · \S+ ago$/);
+    expect(facts[2][1]).toBe('#20,801,533');
+    expect(facts[3][1]).toBe('320 CKB');
+    expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
+      'var(--c-jade)'
+    );
+    // under the stone and the plate, before the lede
+    const { kindLine, below } = expectNamePlate(container, 'Cell');
+    expect(below!.firstElementChild).toBe(strip);
+    expect(below!.lastElementChild).toHaveAttribute('data-detail-lede');
+    // the state is said once: the kind line holds the kind word alone
+    expect(kindLine).toHaveTextContent(/^Cell$/);
+    // the rest stay in the facts section
+    const rest = screen.getByRole('region', { name: 'Cell facts' });
+    expect(rest).not.toHaveTextContent('Capacity');
+    expect(rest).toHaveTextContent('Occupied320 B · 0 free');
+    expect(rest).toHaveTextContent('Epoch15,157 · 112/1800');
+    expect(rest).toHaveTextContent('Unspent for3d 10h');
   });
 
   // A4 review 3: the out point's copy button copies through the one copy path (hooks/useCopy):
@@ -147,8 +178,11 @@ describe('Cell page against the Cell board', () => {
     const { plate, below } = expectNamePlate(container, 'Cell');
     // re-pinned with readability R4 (lane B7): the lede stands in one holder that sets it on the
     // measure (it was below's own child)
-    expect(below!.children).toHaveLength(1);
-    const holder = below!.firstElementChild!;
+    // re-pinned on purpose (lane D2): the status strip first under the plate, the lede's holder
+    // after it (the holder was below's one child)
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Cell status' }));
+    const holder = below!.lastElementChild!;
     expect(holder).toHaveAttribute('data-detail-lede');
     expect(holder).toHaveClass('max-w-measure');
     expect(holder.firstElementChild!.firstElementChild).toBe(line);
@@ -159,16 +193,18 @@ describe('Cell page against the Cell board', () => {
     expectBefore(outpointLine, line);
   });
 
-  // The name plate (C10): the kind line "Cell" with its status, the h1 the short out point alone
-  // (the dim "Cell" that opened it is the kind line now), the id line the full out point and its
-  // copy; under both, the inventory line, the origin line and the "only name" sentence, in order.
-  it('stands the cell’s name plate beside its stone: Cell and its status, the short out point, the full one', async () => {
+  // The name plate (C10): the kind line "Cell", the h1 the short out point alone (the dim "Cell"
+  // that opened it is the kind line now), the id line the full out point and its copy; under both,
+  // the status strip, then the inventory line, the origin line and the "only name" sentence, in
+  // order. Re-pinned on purpose (lane D2; renamed, it was "…: Cell and its status, the short out
+  // point, the full one"): the state is the strip's first fact, said once, so the kind line holds
+  // the kind word alone (it held "Cell" and the live dot and "live").
+  it('stands the cell’s name plate beside its stone: Cell, the short out point, the full one', async () => {
     const { container } = view();
     await screen.findByTestId('cell-inventory');
     const { kindLine, nameBox, title, below } = expectNamePlate(container, 'Cell');
-    // the kind word, then the status: the live dot (no text) and "live"
-    expect(kindLine.children).toHaveLength(2);
-    expect(kindLine).toHaveTextContent(/^Celllive$/);
+    expect(kindLine.children).toHaveLength(1);
+    expect(kindLine).toHaveTextContent(/^Cell$/);
     expect(title).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
     // U-09, the lead's question 2 (re-pinned on purpose): the h1 holds one thing, the out point as
     // TitleId writes it (the row form until its line is measured), where it held the bare text
@@ -404,12 +440,16 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
     mockObjectReads();
   });
 
-  it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {
+  // Re-pinned on purpose (lane D2; renamed, it was "…: epoch under Created, …"): the capacity,
+  // the created time and block went to the status strip under the id line, so the epoch it was
+  // created in is a fact of its own (it was the Created fact's second line, under the time)
+  it('keeps the board facts on one strip: the epoch its own fact, "0 free", no Owner (SC-C9)', async () => {
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
-    // the epoch takes its own line under the time, so the seven facts fit one row at 1440
-    expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8epoch 15,157 · 112/1800');
-    expect(within(facts).getByText(/^epoch 15,157/)).toHaveClass('block');
+    expect(within(facts).getByText('Epoch').parentElement).toHaveTextContent(
+      /^Epoch15,157 · 112\/1800$/
+    );
+    expect(facts).not.toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(facts).toHaveTextContent('Occupied320 B · 0 free');
     expect(within(facts).queryByText('Owner')).toBeNull();
   });

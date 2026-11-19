@@ -62,6 +62,21 @@ describe('Wordmark', () => {
     expect(css).toMatch(/\.wordmark\s*\{\s*font-size: 15px;/);
   });
 
+  // Lane D2 (U-11): the home page has an h1 for the outline, visually the wordmark's line: the
+  // name in the wordmark is the h1 there, no new visible words; on every other page it is not a
+  // heading (the page's own h1 is).
+  it('makes the name the page’s h1 where it heads the home page, and no heading elsewhere', () => {
+    const { unmount } = render(<Wordmark heading />);
+    const h1 = screen.getByRole('heading', { level: 1, name: 'ckbadger' });
+    expect(h1).toHaveClass('wordmark');
+    const link = screen.getByRole('link', { name: 'CKBadger home' });
+    expect(link).toContainElement(h1);
+    expect(link).toHaveTextContent(/^ckbadger$/);
+    unmount();
+    render(<Wordmark />);
+    expect(screen.queryByRole('heading')).toBeNull();
+  });
+
   it('leaves no trace of the badge in the styles', () => {
     expect(css).not.toMatch(/\.logo-image|logo-breathe|neon-flicker/);
   });

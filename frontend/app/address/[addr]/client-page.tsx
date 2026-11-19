@@ -13,7 +13,7 @@ import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import {
   AddressBalance,
-  AddressMetrics,
+  addressStripFacts,
   AddressHoldingsSection,
   AddressLoadState,
   AddressStaleNotice,
@@ -44,7 +44,6 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
-import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
 
 const activityFilters = [
@@ -261,38 +260,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             // one) of the lock script's hash, which the address read already carries; nothing else
             // is fetched for the seal. Its name plate (seals by kind, C10) opens on "Address".
             seal={{ id: { kind: 'script', hash: a.lockScriptHash }, kind: 'Address' }}
-            // on the kind line, after "Address"
-            status={
-              <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
-                {a.lockScript && (
-                  <span>
-                    lock{' '}
-                    <Link
-                      href={getScriptDetailHref({
-                        name: a.lockScriptInfo?.name,
-                        codeHash: a.lockScript.codeHash,
-                        hashType: a.lockScript.hashType,
-                        scriptKind: 'lock',
-                      })}
-                      className="text-text-bright"
-                    >
-                      {a.lockScriptInfo?.name ?? (
-                        <Hash hash={a.lockScript.codeHash} size="row" className="text-small" />
-                      )}
-                    </Link>
-                  </span>
-                )}
-                {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
-                <span>
-                  {unitNode(
-                    holdings.data
-                      ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
-                      : ''
-                  )}
-                  {unitNode(formatCount(a.transactionsCount, 'transaction'))}
-                </span>
-              </span>
-            }
+            // The status strip under the id line (lane D2, PA-13): the lock, the live cells, the
+            // transactions and the holdings, said once (they stood on the kind line and again in
+            // the metrics row under the balance)
+            strip={{ label: 'Address status', facts: addressStripFacts(a, holdings.data) }}
             tier2={
               // Lane E (C6, Address board tier 2): the lock script as its bytes, then its two names.
               <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
@@ -338,11 +309,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {a && <AddressStaleNotice error={address.error} label="address metadata" />}
             {holdings.data && <AddressStaleNotice error={holdings.error} label="holdings" />}
             {holdings.data ? (
-              <>
-                {/* Lane P (Address.dc.html): the balance hero, then the four metrics. */}
-                <AddressBalance holdings={holdings.data} />
-                <AddressMetrics holdings={holdings.data} address={a} />
-              </>
+              // Lane P (Address.dc.html): the balance hero (its four metrics are the head's status
+              // strip since lane D2)
+              <AddressBalance holdings={holdings.data} />
             ) : (
               <AddressLoadState
                 label="holdings and balance partition"

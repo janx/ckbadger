@@ -12,10 +12,9 @@ import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { decodeDaoHeader } from '@/lib/dao-header';
-import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
-import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 
 const INDEX = /^(0|[1-9]\d*)$/;
@@ -119,41 +118,71 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
       title={`Uncle ${formatBlockNumber(uncle.number)}`}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
       identity={<HeadId value={uncle.hash} kind="hash" copy="copy uncle hash" />}
-      facts={[
-        {
-          label: 'Included by',
-          value: (
+      // The status strip under the id line (lane D2; PA-13, PA-06): the block that included it
+      // (the dot in the dead ink: an uncle is no longer in force), its time with its age and the
+      // delay to its sibling, the canonical block at its height and its epoch; its sentence
+      // follows as the lede, where every entity page's does (the facts stood before it).
+      strip={{
+        label: 'Uncle status',
+        facts: [
+          {
+            label: 'included by',
+            value: (
+              <Link look="inline" href={`/blocks/${uncle.includedBy.number}`}>
+                {formatBlockNumber(uncle.includedBy.number)}
+              </Link>
+            ),
+            dot: 'text-dim',
+            note: `uncle ${index}`,
+          },
+          {
+            label: 'time',
+            value: <Utc8DateTime timestamp={uncle.timestamp} />,
+            note: [
+              <Utc8Age key="age" timestamp={uncle.timestamp} />,
+              delay && `${delay} its sibling`,
+            ],
+          },
+          {
+            label: 'canonical',
+            value: (
+              <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+              </Link>
+            ),
+          },
+          { label: 'epoch', value: epoch },
+        ],
+      }}
+      lede={
+        <p className="text-body leading-relaxed">
+          Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
+          {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
+          chain is{' '}
+          <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+            <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+          </Link>
+          {delay ? (
             <>
-              {blockLink(uncle.includedBy.number)}
-              <span className="text-text-dim"> · uncle {index}</span>
+              , its sibling: both were mined on parent{' '}
+              <Link href={`/blocks/${uncle.parentHash}`}>
+                {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
+              </Link>
+              , and this uncle came {delay} it.
             </>
-          ),
-        },
-        {
-          label: `Canonical ${formatBlockNumber(uncle.number)}`,
-          value: (
-            <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-              <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
-            </Link>
-          ),
-        },
-        {
-          label: 'Time',
-          value: (
+          ) : (
             <>
-              <Utc8DateTime timestamp={uncle.timestamp} />
-              <span className="text-text-dim text-meta block">
-                <ClockText text={(now) => formatTimeAgo(uncle.timestamp, now)} />
-              </span>
-              {delay && <span className="text-text-dim text-meta block">{delay} its sibling</span>}
+              , which has another parent; this uncle was mined on parent{' '}
+              <Link href={`/blocks/${uncle.parentHash}`}>
+                <Hash hash={uncle.parentHash} size="row" />
+              </Link>
+              .
             </>
-          ),
-        },
-        {
-          label: 'Epoch',
-          value: epoch,
-        },
-      ]}
+          )}{' '}
+          It is not part of the canonical chain: its transactions never ran, but the proposals it
+          carried count toward the proposal window.
+        </p>
+      }
       tier2={
         <>
           <DetailSection title={`Proposals it carried (${uncle.proposalIds.length})`}>
@@ -205,33 +234,8 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         </>
       }
     >
-      <p className="text-body max-w-measure leading-relaxed">
-        Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
-        {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
-        chain is{' '}
-        <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-          <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
-        </Link>
-        {delay ? (
-          <>
-            , its sibling: both were mined on parent{' '}
-            <Link href={`/blocks/${uncle.parentHash}`}>
-              {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
-            </Link>
-            , and this uncle came {delay} it.
-          </>
-        ) : (
-          <>
-            , which has another parent; this uncle was mined on parent{' '}
-            <Link href={`/blocks/${uncle.parentHash}`}>
-              <Hash hash={uncle.parentHash} size="row" />
-            </Link>
-            .
-          </>
-        )}{' '}
-        It is not part of the canonical chain: its transactions never ran, but the proposals it
-        carried count toward the proposal window.
-      </p>
+      {/* its first content is the head's strip and sentence; its evidence is tier 2 */}
+      {null}
     </DetailLayout>
   );
 }

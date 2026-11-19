@@ -24,8 +24,12 @@ vi.mock('@/components/search-bar', () => ({
   SearchBar: (props: { variant?: 'default' | 'compact' | 'home' }) => searchBarMock(props),
 }));
 
+const wordmarkProps = vi.hoisted(() => vi.fn());
 vi.mock('@/components/layout/wordmark', () => ({
-  Wordmark: () => <div data-testid="wordmark">Wordmark</div>,
+  Wordmark: (props: { heading?: boolean }) => {
+    wordmarkProps(props);
+    return <div data-testid="wordmark">Wordmark</div>;
+  },
 }));
 
 vi.mock('@/components/stats-bar', () => ({
@@ -113,6 +117,21 @@ describe('Header', () => {
     expect(wordmark.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
     expect(screen.queryByTestId('header-logo-notch')).toBeNull();
     expect(screen.queryByTestId('vitals-logo-notch')).toBeNull();
+  });
+
+  // Lane D2 (U-11): the home page's outline opens on an h1, the wordmark's own line (no new
+  // visible words); every other page's h1 is its own, so the wordmark heads only the home page.
+  it('makes the wordmark the h1 of the home page alone', () => {
+    usePathnameMock.mockReturnValue('/');
+    const { unmount } = render(<Header />);
+    expect(wordmarkProps.mock.lastCall?.[0]).toMatchObject({ heading: true });
+    unmount();
+    for (const path of ['/blocks', '/tx/0x01', '/dao']) {
+      usePathnameMock.mockReturnValue(path);
+      const view = render(<Header />);
+      expect(wordmarkProps.mock.lastCall?.[0]).toMatchObject({ heading: false });
+      view.unmount();
+    }
   });
 
   // PA-04 / PB-26 (UI review 2026-11-14): the celadon section word stood between the menu button

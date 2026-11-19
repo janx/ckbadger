@@ -28,6 +28,7 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink, SentenceNodes, type SentencePart } from '@/components/ui/block-link';
@@ -358,6 +359,20 @@ interface BlockRow {
   fate: ReactNode;
 }
 
+/**
+ * A block row's stone (lane D2; the UI review's U-03 and ruling R8): its hash and the transactions
+ * it held, the API's count; a block on the main chain pressed in the cinnabar, a dropped one (an
+ * uncle, an orphan, a branch adopted then dropped) in the dead ink, as a consumed cell's is.
+ */
+function BlockRowStone({ row }: { row: BlockRow }) {
+  return (
+    <RowSeal
+      id={{ kind: 'block', hash: row.hash, txs: row.transactionsCount }}
+      state={row.dropped ? 'ink' : 'pressed'}
+    />
+  );
+}
+
 function blockRows(data: ReorgDetail): BlockRow[] {
   const orphans = new Map(data.orphanedBlocks.map((block) => [block.hash, block]));
   const canonical = new Set(data.canonicalBranch.map((block) => block.hash));
@@ -596,10 +611,18 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               {
                 key: 'height',
                 label: 'Height',
-                // a dropped height and its prime (12 characters, 93.6) and the gap; it was 120
-                minWidth: columnPx(cell(DROPPED_HEIGHT.length) + CELL_GAP_PX),
-                render: (row) =>
-                  row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number),
+                // the block's row stone and its gap (ROW_SEAL.block.footprint, 24; lane D2), a
+                // dropped height and its prime (12 characters, 93.6) and the gap: 134; it was 120,
+                // then 110 without the stone
+                minWidth: columnPx(
+                  ROW_SEAL.block.footprint + cell(DROPPED_HEIGHT.length) + CELL_GAP_PX
+                ),
+                render: (row) => (
+                  <span className="flex items-start">
+                    <BlockRowStone row={row} />
+                    {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number)}
+                  </span>
+                ),
               },
               {
                 key: 'hash',
@@ -661,6 +684,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             mobileRow={(row) => (
               <PhoneRow
                 testId="fork-block-row-mobile"
+                mark={<BlockRowStone row={row} />}
                 lines={[
                   {
                     key: 'identity',

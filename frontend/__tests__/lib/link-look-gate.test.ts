@@ -58,30 +58,37 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- p-chain ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 5, ink: 2, raw: 1 },
-    reason: '5 without a look; inks by hand (text-text-bright); 1 raw <a>',
+    // look 5 → 4, ink 2 → 1 (lane D2): the kind line's lock link went to the status strip
+    sites: { look: 4, ink: 1, raw: 1 },
+    reason: '4 without a look; inks by hand (text-text-bright); 1 raw <a>',
   },
   'app/blocks/[id]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 22, ink: 7, raw: 1 },
+    // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look
+    sites: { look: 20, ink: 7, raw: 1 },
     reason:
-      '22 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
+      '20 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 6 },
-    reason: '6 without a look',
+    // look 6 → 5 (lane D2): the facts' canonical-hash link is the status strip's, its look stated
+    sites: { look: 5 },
+    reason: '5 without a look',
   },
   'app/cell/[outpoint]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 15, ink: 8 },
-    reason: '15 without a look; inks by hand (text-text-bright, text-text, hover:text-text-bright)',
+    // look 15 → 14, ink 8 → 7 (lane D2): the Created fact's block link (text-text-bright) went to
+    // the status strip, whose link states its look
+    sites: { look: 14, ink: 7 },
+    reason: '14 without a look; inks by hand (text-text-bright, text-text, hover:text-text-bright)',
   },
   'app/tx/[hash]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 17, ink: 16, raw: 2 },
+    // look 17 → 16 (lane D2): the facts rail's block link went with the rail; the strip's states
+    // its look
+    sites: { look: 16, ink: 16, raw: 2 },
     reason:
-      '17 without a look; inks by hand (hover:text-jade, text-text-bright, text-text); 2 raw <a>',
+      '16 without a look; inks by hand (hover:text-jade, text-text-bright, text-text); 2 raw <a>',
   },
   'components/address/address-history.tsx': {
     lane: 'p-chain',
@@ -90,8 +97,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/address/address-holdings.tsx': {
     lane: 'p-chain',
-    sites: { look: 11, ink: 6, raw: 1 },
-    reason: '11 without a look; inks by hand (text-text-bright, hover:text-jade); 1 raw <a>',
+    // look 11 → 10, ink 6 → 5 (lane D2): the Lock metric's link is the status strip's, its look
+    // stated
+    sites: { look: 10, ink: 5, raw: 1 },
+    reason: '10 without a look; inks by hand (text-text-bright, hover:text-jade); 1 raw <a>',
   },
   'components/blocks/block-position.tsx': {
     lane: 'p-chain',
@@ -286,8 +295,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/identity/identity-overview.tsx': {
     lane: 'p-assets',
-    sites: { look: 6 },
-    reason: '6 without a look',
+    // look 6 → 5 (lane D2, PB-22): the owner line, one form on the four identity pages, states
+    // its look (the Owner fact's address; a .cell party's is the same Address now)
+    sites: { look: 5 },
+    reason: '5 without a look',
   },
   'components/identity/identity-records.tsx': {
     lane: 'p-assets',
@@ -494,7 +505,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 586;
+// 610 → 588 (lane D1: the chart pages' 22 sites state their look) → 577 (lane D2, 11 more): the
+// transaction page's facts rail and its block link went (1), the block page's facts aside and its
+// two links (2), the cell page's Created block link (2: look, ink), the address page's kind-line
+// lock link and its Lock metric's (4: two looks, two inks), the uncle page's canonical-hash link
+// (1), the identity owner line's address (1) → 575 (lane c2-finish, rulings round 1: the .cell
+// party's lock-hash link states `block` and its hand-written underline went, 2)
+const TOLERATED_TOTAL = 575;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

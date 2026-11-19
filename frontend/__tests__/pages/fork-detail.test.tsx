@@ -12,6 +12,7 @@ import multiFixture from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncl
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
+import { expectOneRowSeal } from '@/__tests__/utils/seals';
 
 const route = { height: '10', orphan: '17404795' };
 vi.mock('@/src/navigation', () => ({
@@ -109,6 +110,54 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(tree.closest('.overflow-x-auto')).toBeNull();
   });
 
+  // Lane D2 (U-03, the UI review's ruling R8): a block row leads with its row stone, drawn from its
+  // hash and the transactions it held; the dropped block's in the dead ink, the main chain's
+  // pressed. In the table and in the phone rows.
+  it('leads every block row with its stone, the dropped block’s in the dead ink (lane D2, R8)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const table = await screen.findByRole('table', { name: 'Blocks' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    const byHeight = (text: string) => rows.find((r) => within(r).queryByText(text) !== null)!;
+    const dropped = uncleFixture.orphanedBlocks[0];
+    const [main11, main12] = uncleFixture.canonicalBranch;
+    expectOneRowSeal(
+      byHeight('#11′'),
+      { kind: 'block', hash: dropped.hash, txs: dropped.transactionsCount },
+      'ink'
+    );
+    expectOneRowSeal(
+      byHeight('#11'),
+      { kind: 'block', hash: main11.hash, txs: main11.transactionsCount },
+      'pressed'
+    );
+    expectOneRowSeal(
+      byHeight('#12'),
+      { kind: 'block', hash: main12.hash, txs: main12.transactionsCount },
+      'pressed'
+    );
+  });
+
+  it('leads every phone block row with its stone, the dropped block’s in the dead ink (lane D2, R8)', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const rows = await screen.findAllByTestId('fork-block-row-mobile');
+    const dropped = uncleFixture.orphanedBlocks[0];
+    const row = rows.find((r) => r.textContent!.includes('#11′'))!;
+    expectOneRowSeal(
+      row,
+      { kind: 'block', hash: dropped.hash, txs: dropped.transactionsCount },
+      'ink'
+    );
+    for (const other of rows.filter((r) => r !== row))
+      expect(other.querySelector('[data-seal]')).toHaveAttribute('data-seal-state', 'pressed');
+  });
+
   it('lists the blocks in one table with miner, transactions and fate, and the uncle sentence (FF-D5, FF-D6)', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     render(<ForkDetailPage />);
@@ -142,8 +191,10 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     const w = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const blocks = [
-      // a dropped height and its prime, eight digits
-      ceil(w('#99,999,999′', 13) + 16),
+      // the block's 16 px row stone and its 8 px gap (lane D2, R8), a dropped height and its
+      // prime, eight digits. Re-pinned on purpose (lane D2): the Height column leads with the
+      // stone, so it is 24 px wider (110 → 134) and the table falls to its rows at 799 (775)
+      ceil(24 + w('#99,999,999′', 13) + 16),
       // the hash at the row size
       ceil(w('0x12345678…abcdef', 13) + 16),
       // the block's clock to the millisecond, wider than the head's "(UTC+8)"
@@ -165,10 +216,10 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       // an output under a billion CKB with its unit, or "Unavailable"; the last column
       ceil(Math.max(w('999,999,999.99999999', 13) + w(' CKB', 12), w('Unavailable', 13))),
     ];
-    expect(blocks).toEqual([110, 149, 110, 118, 55, 234]);
+    expect(blocks).toEqual([134, 149, 110, 118, 55, 234]);
     expect(dropped).toEqual([274, 110, 243, 102, 185]);
     const sum = (budgets: number[]) => budgets.reduce((s, x) => s + x, 0);
-    expect([sum(blocks), sum(dropped)]).toEqual([776, 914]);
+    expect([sum(blocks), sum(dropped)]).toEqual([800, 914]);
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
     const { unmount } = render(<ForkDetailPage />);
     for (const [label, budgets, flexible] of [
@@ -182,14 +233,14 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       expect(Number.parseFloat(table.style.minWidth)).toBe(sum([...budgets]));
     }
     unmount();
-    for (const width of [1232, 914, 913, 776, 775, 608, 358]) {
+    for (const width of [1232, 914, 913, 800, 799, 608, 358]) {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
       vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
       atContainerWidth(width);
       const { unmount: drop } = render(<ForkDetailPage />);
       for (const [label, min] of [
-        ['Blocks', 776],
+        ['Blocks', 800],
         ['Dropped branch transactions', 914],
       ] as const) {
         const form = width >= min ? 'table' : 'rows';

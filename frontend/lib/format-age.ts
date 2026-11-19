@@ -98,17 +98,6 @@ function timeMs(timestamp: string | number | Date): number {
 }
 
 /**
- * A fact rail's relative age in its two largest units (Transaction board: "2d 20h ago"), from a
- * year on in years and days ("6y 363d ago"). Feed rows take `formatAgeOneUnit`.
- */
-export function formatAgeTwoUnits(timestamp: string | number | Date, now: number): string {
-  const age = ageSeconds(timestamp, now);
-  if (age.kind === 'clock-behind') return CLOCK_BEHIND;
-  const years = calendarYears(timeMs(timestamp), now);
-  return `${years ?? formatSpan(age.seconds)} ago`;
-}
-
-/**
  * A time's age in its largest unit, "5m", "3h" (from a year on, years and days: "6y 363d"), the
  * notation of the one form; null when the time is further ahead than consensus allows, as this
  * device's clock is behind the chain's. A pool entry's wait reads it ("in pool for 5m").
