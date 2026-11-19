@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
-import { LockKind } from '@/components/ui/lock-kind';
+import { cellLockFacts, cellOwnerLock, LockKind } from '@/components/ui/lock-kind';
 import { rowTagClass } from '@/components/ui/row-tag';
-import { JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
+import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 
 /** A lock the registry does not name (made up). */
@@ -128,5 +128,60 @@ describe('LockKind (R-2)', () => {
       render(<LockKind size="row" lockKind="JoyID" lockCodeHash={JOYID} address={address} />)
     ).toThrow(/spells the lock code hash 0x9bd7e06f.*the row says 0xd00c84f0/);
     log.mockRestore();
+  });
+});
+
+// Lane B4 third round (review-rules-fixes2, the coordinator's item 5): the tile's refusal clause by
+// clause. A cell's address must spell its lock whole: the code hash, the hash type and the args;
+// each clause refuses on its own, so deleting any one of them goes red here.
+describe('cellLockFacts: an address that spells another lock is refused, clause by clause', () => {
+  const args = `0x${'ab'.repeat(20)}`;
+  const lock = { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args };
+  const where = 'Transaction 0x77 output 0';
+  const ok = { lock, name: 'Default Lock', address: ckbAddress({ codeHash: lock.codeHash, args }) };
+
+  it('takes an address that spells the cell’s lock whole', () => {
+    expect(cellLockFacts(ok, where)).toEqual({
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'type',
+    });
+  });
+
+  it('refuses the same code hash and hash type with other args', () => {
+    const other = `0x${'cd'.repeat(20)}`;
+    const address = ckbAddress({ codeHash: lock.codeHash, args: other });
+    expect(() => cellLockFacts({ ...ok, address }, where)).toThrow(
+      `${where}: address ${address} spells the lock ${DEFAULT_LOCK_CODE_HASH} by type, args ${other}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type, args ${args}`
+    );
+  });
+
+  it('refuses the same code hash and args by another hash type', () => {
+    const address = ckbAddress({ codeHash: lock.codeHash, hashType: 'data1', args });
+    expect(() => cellLockFacts({ ...ok, address }, where)).toThrow(
+      `${where}: address ${address} spells the lock ${DEFAULT_LOCK_CODE_HASH} by data1, args ${args}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type, args ${args}`
+    );
+  });
+
+  it('refuses another code hash with the same hash type and args', () => {
+    const address = ckbAddress({ codeHash: JOYID, args });
+    expect(() => cellLockFacts({ ...ok, address }, where)).toThrow(
+      `${where}: address ${address} spells the lock ${JOYID} by type, args ${args}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type, args ${args}`
+    );
+  });
+
+  it('refuses a cell owner whose address spells another lock, named by its cell', () => {
+    const address = ckbAddress({ codeHash: lock.codeHash, hashType: 'data', args });
+    expect(() =>
+      cellOwnerLock({
+        lock,
+        lockName: 'Default Lock',
+        ownerAddress: address,
+        txHash: '0x88',
+        outputIndex: 3,
+      })
+    ).toThrow(
+      `cell 0x88:3: address ${address} spells the lock ${DEFAULT_LOCK_CODE_HASH} by data, args ${args}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type, args ${args}`
+    );
   });
 });
