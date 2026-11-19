@@ -48,11 +48,20 @@ const NONE_WITH: Record<EntityKind, string> = {
 };
 
 /**
- * An entity the page names but the local index does not hold: the index was asked (the facts say
- * which endpoint answered 404), so the route's second line would not be true here.
+ * An entity the page names but the local index does not hold: the index was asked (the note says
+ * which endpoint answered 404), so the route's second line would not be true here. The second line
+ * is the concrete reason in plain words where a search found one (the readability plan's P3: "this
+ * hash is a block's.", "no block has this hash either."), else what the index says.
  */
-export function entityVerse(entity: NotFoundEntity): readonly string[] {
-  return [NONE_WITH[entity.kind], 'the local index was asked; it holds none.', ROUTE_VERSE[2]];
+export function entityVerse(
+  entity: NotFoundEntity,
+  reason: string | null = null
+): readonly string[] {
+  return [
+    NONE_WITH[entity.kind],
+    reason ?? 'the local index was asked; it holds none.',
+    ROUTE_VERSE[2],
+  ];
 }
 
 /** What a page's id must be, by kind: the first line of the verse when it is not one (R11). */
@@ -145,8 +154,8 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
   const kind = entity?.kind ?? notAnId?.kind;
   const back = kind ? RETURNS[kind] : undefined;
 
-  // One line of facts under the verse: for a 404, what was asked and what /search said; for an
-  // id that is not one, why.
+  // One line of facts under the verse, the note: for a 404, the routes asked (the reason they gave
+  // is the verse's second line, in plain words); for an id that is not one, why.
   let facts: ReactNode = null;
   if (notAnId) {
     facts = <span className="min-w-0 [overflow-wrap:anywhere]">{notAnId.reason}</span>;
@@ -161,18 +170,15 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
             <span role="status">checking /search for an exact match…</span>
           </>
         )}
-        {lookup.status === 'checked' && lookup.evidence.finding !== null && (
+        {lookup.status === 'checked' && lookup.evidence.searchEndpoint !== null && (
           <>
-            {' · '}
-            {lookup.evidence.finding}
+            {' · and '}
+            <CheckedEndpoint path={lookup.evidence.searchEndpoint} />
             {lookup.evidence.alternative && (
               <>
-                {' '}
-                <Link
-                  href={lookup.evidence.alternative.href}
-                  className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
-                >
-                  → open {lookup.evidence.alternative.label}
+                {' · '}
+                <Link href={lookup.evidence.alternative.href} look="onward">
+                  open {lookup.evidence.alternative.label}
                 </Link>
               </>
             )}
@@ -192,37 +198,31 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
     <ErrorPageShell
       status={notAnId ? 'Not an id · 400' : 'Not found · 404'}
       path={pathname}
-      verse={notAnId ? notAnIdVerse(notAnId.kind) : entity ? entityVerse(entity) : ROUTE_VERSE}
+      verse={
+        notAnId
+          ? notAnIdVerse(notAnId.kind)
+          : entity
+            ? entityVerse(entity, lookup.status === 'checked' ? lookup.evidence.reason : null)
+            : ROUTE_VERSE
+      }
       standalone={standalone}
     >
       {facts}
+      {/* the ways on, each a way onward (its arrow the look's; the link-look gate: no typed "←") */}
       <nav aria-label="Find another route" className="flex flex-wrap gap-x-4 gap-y-1">
-        <Link
-          href="/"
-          className="text-jade focus-visible:outline-jade underline-offset-4 hover:underline focus-visible:outline"
-        >
-          <span className="whitespace-nowrap">← </span>back to the explorer
+        <Link href="/" look="onward">
+          back to the explorer
         </Link>
         {back ? (
-          <Link
-            href={back.href}
-            className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
-          >
-            <span className="whitespace-nowrap">← </span>
+          <Link href={back.href} look="onward">
             {back.label}
           </Link>
         ) : (
           <>
-            <Link
-              href="/blocks"
-              className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
-            >
+            <Link href="/blocks" look="onward">
               browse blocks
             </Link>
-            <Link
-              href="/inventory/tokens"
-              className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
-            >
+            <Link href="/inventory/tokens" look="onward">
               inventory
             </Link>
           </>

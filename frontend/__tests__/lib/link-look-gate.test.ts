@@ -181,26 +181,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 4, ink: 4 },
     reason: '4 without a look; inks by hand (hover:text-jade, text-text-dim, hover:text-text)',
   },
-  'components/crash-page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text, hover:text-jade)',
-  },
-  'components/error-page-shell.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text)',
-  },
+  // 'components/crash-page.tsx' left the list (lane P3: look 1, ink 1 → 0; the way on a way onward)
+  // 'components/error-page-shell.tsx' left the list (lane P3: look 1, ink 1 → 0; the seal caption's block inline)
   // 'components/home/activity-feed.tsx' left the list (lane P3: look 1, ink 1 → 0; "view all" a way onward)
   // 'components/home/activity-stats.tsx' left the list (lane P3: look 1, ink 1 → 0; "charts" a way onward)
   // 'components/home/ckbytes-section.tsx' left the list (lane P3: look 3, ink 2 → 0; "supply" the heading's key, its block inline, "DAO details" a way onward)
   // 'components/home/mini-chart.tsx' left the list (lane P3: look 1, ink 1 → 0; a card's title its key)
   // 'components/home/ranked-bars.tsx' left the list (lane P3: look 2, ink 1 → 0; the title its key, a row one block)
-  'components/not-found-page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (text-text, hover:text-jade, text-jade)',
-  },
+  // 'components/not-found-page.tsx' left the list (lane P3: look 5, ink 5 → 0; the ways on and the alternative ways onward)
   'components/pipeline/pipeline-panel.tsx': {
     lane: 'p-lists',
     sites: { look: 3, ink: 2 },
@@ -286,8 +274,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
-// (lane P3: the home page's five files, 14)
-const TOLERATED_TOTAL = 91;
+// (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14)
+const TOLERATED_TOTAL = 77;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
