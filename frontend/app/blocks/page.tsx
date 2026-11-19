@@ -278,16 +278,19 @@ export default function BlocksPage() {
                 onForm={setForm}
               />
               {/* The controls board's cursor in time: newest first, the page of the pages the
-                  served total makes at the served page size. */}
-              <Pager
-                mode="time"
-                label="blocks"
-                order="newest first"
-                page={page}
-                pages={pageCount(blocksTotal(data.total), data.limit)}
-                onNewer={hasPrevious ? goToPrevious : undefined}
-                onOlder={data.hasMore ? () => goToNext(data.nextCursor) : undefined}
-              />
+                  served total makes at the served page size. A list with no row has no page to
+                  be on, and draws none. */}
+              {data.data.length > 0 && (
+                <Pager
+                  mode="time"
+                  label="blocks"
+                  order="newest first"
+                  page={page}
+                  pages={pageCount(blocksTotal(data.total), data.limit)}
+                  onNewer={hasPrevious ? goToPrevious : undefined}
+                  onOlder={data.hasMore ? () => goToNext(data.nextCursor) : undefined}
+                />
+              )}
             </>
           )}
         </DetailLayout>
