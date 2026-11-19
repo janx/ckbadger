@@ -164,9 +164,22 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `NftCollectionDetailResponse` — counts, composition, class/issuer summary
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
 - `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts, each with its lock's
-  `lockKind` and `lockHashType`: the lock is named by its pair (code hash, hash type), never by its
-  code hash alone (lane rd/api-lock-names; the same on identity, token and cluster holders, an
-  item's owner lock, a token's supply events and issuer)
+  `lockKind`, `lockKindBy` and `lockHashType`: the lock is named by the code its pair (code hash,
+  hash type) runs, never by its code hash alone (lane rd/api-lock-names; the same on identity,
+  token and cluster holders, an item's owner lock, a token's supply events and issuer). The one
+  naming rule (`utils::ScriptNamer`): a pseudo deployment (Zero Lock, Type ID: no code cell) is
+  named by the registry's label of its own pair; every other pair is named by the family of the
+  one deployment it resolves to (by `type`: the binary its Type ID is bound to; by `data*`: the
+  binary whose data hash it is), and has no name where it resolves to none. Where the named pair
+  is not the registry's reference for that code (another data hash type; a Type ID where the
+  registry registers the data hash, or the reverse), `lockKindBy` is the pair's hash type, which a
+  page writes beside the name ("xUDT · by data2"); `null` otherwise. Every route that names a
+  script carries the same pair of fields: `lockKind`/`lockKindBy` (holders, owners, issuer, supply
+  events, gallery rows, activity participants), `scriptName`/`scriptNameBy` (activity calls,
+  identity parties), `lockScriptName`/`lockScriptNameBy` and `typeScriptName`/`typeScriptNameBy`
+  (cells, Fiber parties), `lockName`/`lockNameBy` and `typeName`/`typeNameBy` (cell versions),
+  `name`/`nameBy` (the lookup, an address's `lockScriptInfo`, a code cell's `codeCellOf`, the
+  daily `scriptCounts`); a resolved dependency's `scriptNames` writes "Name · by data1" itself
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
 - `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
@@ -414,7 +427,15 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
   - `display: TransactionCellDisplay | null` — the token / object / identity / file display the
     transaction detail serves for this cell (`transaction_cells::from_parts`), `null` when its
     type script has none.
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`, the registry's label of the lock's pair (code hash, hash type): a lock whose pair the registry does not name has none, whatever another hash type of its code hash is named (`deprecated` reflects the pair's label, e.g. an address on a superseded ACP deployment reports `true`).
+  - `codeCellOf: CodeCellScript[] | null` — the scripts that run this cell's code: `null` unless
+    its data is code (`keys::is_code_cell`, the ELF magic). Otherwise the pairs that resolve to
+    THIS cell: its type script hash by `type` (a Type ID deployment), and its data hash by `data`,
+    `data1` and `data2`, each listed where the chain has used it or the registry registers it (in
+    that order). Each carries `name` (the one naming rule; "Unknown" where it names none),
+    `nameBy` (the pair's hash type where it is not the registry's reference for this code),
+    `codeHash`, `hashType`, `deploymentTypeHash` (omitted for a cell with no type script) and
+    `deploymentDataHash`.
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`, the name of the code the lock's pair (code hash, hash type) runs, with its `nameBy`: a lock whose pair runs no code the registry names has none, whatever another hash type of its code hash is named (`deprecated` reflects the pair's label, e.g. an address on a superseded ACP deployment reports `true`).
   `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
   network — never the raw input echoed back. `pendingSummary` is described below
 - `CursorPaginatedResponse<PrefixTransactionResponse>` — `txHash`, `blockNumber`, `txIndex`,
@@ -1048,9 +1069,12 @@ disabled or empty state. A point lookup still returns not found.
 
 - `ListParams` — `limit`, `cursor`, `network`, `decoder_type` (unused), `search`, `sort_key`, `sort_direction`
 - `LookupScriptsRequest` (POST body via `Json<>`, unknown fields refused) — `scripts: [{codeHash, hashType}]`
-  (a script is its pair; a code hash alone is no script, and a body of `codeHashes` is a 400; a
-  `hashType` that is not `data` \| `type` \| `data1` \| `data2` is a 400, before anything is read),
-  optional `tx_hash` (its `cell_deps` resolve only the pairs of the form they serve)
+  (a script is its pair; a code hash alone is no script). Every fault of the request is a 400 with
+  the route's JSON error naming it, before anything is read: a body that is not this request (the
+  old `codeHashes`, a pair without `hashType`, an unknown field, no JSON content type), a
+  `hashType` that is not `data` \| `type` \| `data1` \| `data2`, more than 100 pairs, a pair asked
+  twice (the answer holds one entry per pair). Optional `tx_hash` (its `cell_deps` resolve only the
+  pairs of the form they serve)
 - `CodeCellQuery` — `code_hash`, optional `hash_type` (`data` \| `type` \| `data1` \| `data2`). With
   `hash_type` the lookup resolves the exact observed reference form (a data-family form only
   resolves when a code cell with that data hash exists on chain); without it the whole deployment
@@ -1066,9 +1090,11 @@ disabled or empty state. A point lookup still returns not found.
   per pair asked that the registry names or the chain has used (a pair with neither is absent);
   `hashType` is the pair's. Each entry has `resolutionState` (`resolved`: one binary; `ambiguous`:
   several live binaries; `unresolved`: no binary resolves the pair, its name and usage stand) and
-  optional `ambiguity: ScriptResolutionAmbiguityResponse`. `name` is the registry's label of the
-  pair (`script_info` by the pair), "Unknown" when it names none — never the name of the code
-  hash by another hash type, and no other pair is tried.
+  optional `ambiguity: ScriptResolutionAmbiguityResponse`. `name` is the name of the code the
+  pair runs, by the one naming rule (see the holders' `lockKind` above), "Unknown" when it runs
+  none the registry names — never the name of the code hash by another hash type, and no other
+  pair is tried; `nameBy` is the pair's hash type where the pair is not the registry's reference
+  for that code, `null` otherwise.
   Every deployment-scoped field describes **the queried pair**, never a sibling deployment
   that happens to share the same bytecode, nor the code hash by another hash type:
   `cellsCount`/`liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum` (cells ever and live whose

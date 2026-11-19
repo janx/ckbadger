@@ -311,6 +311,31 @@ async fn token_supply_events_carry_each_party_lock_code_hash() {
     }
 }
 
+/// Lane rd/api-lock-names (T SHOULD-3): a supply event's party is named by the
+/// code its lock pair runs. The burn came from 0x31, the default lock's code
+/// hash by `data` (runs no code: no name); the mint went to 0x32, the default
+/// lock's binary by `data1` (the default lock's code by another reference than
+/// the registry's: its name, with "data1" beside it).
+#[tokio::test]
+async fn by_pair_token_supply_events_name_each_party_lock_by_its_pair() {
+    let path = format!("/tokens/0x{}/supply-events", hex::encode(TOKEN));
+    let store = fixture();
+    seed_default_lock_three_pairs(&store, &[0x3f; 32], &[0x31; 32], &[0x32; 32]);
+    let app = create_router(test_config(store)).await;
+    let (status, body) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let burn = &body["data"][0];
+    assert_eq!(burn["kind"], "burn", "{body}");
+    assert_eq!(burn["lockHashType"], "data", "{body}");
+    assert!(burn["lockKind"].is_null(), "{body}");
+    assert!(burn["lockKindBy"].is_null(), "{body}");
+    let mint = &body["data"][1];
+    assert_eq!(mint["kind"], "mint", "{body}");
+    assert_eq!(mint["lockHashType"], "data1", "{body}");
+    assert_eq!(mint["lockKind"], "Default Lock", "{body}");
+    assert_eq!(mint["lockKindBy"], "data1", "{body}");
+}
+
 /// A4b review: a supply event's party whose lock has no address form (args
 /// longer than an RFC-0021 full address can carry; unbounded on chain) is
 /// named by its lock hash, code hash and kind, with a null address — not a

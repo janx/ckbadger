@@ -125,7 +125,20 @@ function useScriptNames(cell: Cell | undefined) {
     const found = lookup.data?.[scriptLookupKey(script.codeHash, script.hashType)]?.name;
     return found && found.toLowerCase() !== 'unknown' ? found : null;
   };
-  return { lock: name(cell?.lock), type: name(cell?.type), lookup };
+  // the hash type the lookup writes beside a name: a pair that runs a family's code by another
+  // reference than the registry's (lane rd/api-lock-names)
+  const nameBy = (script: { codeHash: string; hashType: string } | null | undefined) =>
+    script && name(script) !== null && !isTypeId(script)
+      ? (lookup.data?.[scriptLookupKey(script.codeHash, script.hashType)]?.nameBy ?? null)
+      : null;
+  const typeName = name(cell?.type);
+  const typeBy = nameBy(cell?.type);
+  return {
+    lock: name(cell?.lock),
+    lockBy: nameBy(cell?.lock),
+    type: typeName === null || typeBy === null ? typeName : `${typeName} · by ${typeBy}`,
+    lookup,
+  };
 }
 
 function Fact({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
@@ -376,7 +389,12 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
   const lock = cell.lock
     ? lockWords(
         cellLockFacts(
-          { lock: cell.lock, name: names.lock, address: cell.address ?? null },
+          {
+            lock: cell.lock,
+            name: names.lock,
+            nameBy: names.lockBy,
+            address: cell.address ?? null,
+          },
           `cell ${outpoint}`
         ),
         'column'

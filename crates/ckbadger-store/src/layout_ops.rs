@@ -17,8 +17,10 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 /// One number for every layout change that needs a re-sync, raised by the
 /// change that needs it:
 ///
-/// - 1: a script is its pair (code hash, hash type). `script_info` is keyed
-///   `code_hash ‖ hash_type` and holds labels only, no usage;
+/// - 1: a script is its pair (code hash, hash type), named by the code it
+///   runs. `script_info` is keyed `code_hash ‖ hash_type` and holds the
+///   labels of the registry's pseudo deployments only (Zero Lock, Type ID),
+///   no usage;
 ///   `DailyActivityStats.script_counts` is keyed
 ///   `"<code hash hex>:<hash type label>"`. A store from before carries no
 ///   stamp: its `script_info` rows are keyed by the code hash alone and sum

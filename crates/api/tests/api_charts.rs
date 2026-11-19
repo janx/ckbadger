@@ -624,9 +624,12 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
         used_series[0]["label"],
         format!("0x{} (type)", hex::encode(&code_hash_unknown))
     );
-    assert_eq!(used_series[1]["label"], "Script A (type)");
-    assert_eq!(used_series[2]["label"], "Script A (type)");
-    assert_eq!(used_series[3]["label"], "Script B (type)");
+    // re-pinned (lane rd/api-lock-names, fix round ruling 2): a seeded name is
+    // a registered family's, the code each reference runs; a family bucket is
+    // labelled by its family's name, two families of one name stay two
+    assert_eq!(used_series[1]["label"], "Script A");
+    assert_eq!(used_series[2]["label"], "Script A");
+    assert_eq!(used_series[3]["label"], "Script B");
     assert_eq!(used_series[4]["label"], "Others");
 
     let used_data = used_share["data"].as_array().unwrap();
@@ -641,13 +644,13 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let capacity_share = &json["capacityShare"];
     let capacity_series = capacity_share["series"].as_array().unwrap();
     assert_eq!(capacity_series.len(), 5);
-    assert_eq!(capacity_series[0]["label"], "Script B (type)");
-    assert_eq!(capacity_series[1]["label"], "Script A (type)");
+    assert_eq!(capacity_series[0]["label"], "Script B");
+    assert_eq!(capacity_series[1]["label"], "Script A");
     assert_eq!(
         capacity_series[2]["label"],
         format!("0x{} (type)", hex::encode(&code_hash_unknown))
     );
-    assert_eq!(capacity_series[3]["label"], "Script A (type)");
+    assert_eq!(capacity_series[3]["label"], "Script A");
     assert_eq!(capacity_series[4]["label"], "Others");
 
     let capacity_data = capacity_share["data"].as_array().unwrap();
@@ -754,7 +757,8 @@ async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
         // third round, M2): the day's total less the rest
         let drawn = if scope == "usedShare" { "2500" } else { "7500" };
         assert_eq!(chart["data"][0]["values"]["drawnTotal"], drawn, "{scope}");
-        assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
+        // re-pinned (lane rd/api-lock-names): a registered family's bucket
+        assert_eq!(chart["bands"][0]["label"], "Script 1", "{scope}");
         // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
         assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
         // the whole the page's shares divide by: the day's total, the route's own figure

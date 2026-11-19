@@ -1994,7 +1994,7 @@ impl ActivityStatsAccumulator {
                     tx_actions.tx_index
                 )
             })?;
-            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut open.stats);
+            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut open.stats)?;
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
@@ -11632,12 +11632,14 @@ mod tests {
                 .daily_stats
                 .entry(date.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx)
+                .unwrap();
             oracle
                 .hourly_stats
                 .entry(hour.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx)
+                .unwrap();
             if !tx.is_cellbase {
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(lock_hash) = participant.id {

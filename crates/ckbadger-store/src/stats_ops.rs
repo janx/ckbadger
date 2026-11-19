@@ -2412,7 +2412,7 @@ mod daily_activity_stats_tests {
             participants: vec![],
         };
         let mut day = DailyActivityStats::default();
-        day.accumulate_from_tx_actions(&actions);
+        day.accumulate_from_tx_actions(&actions).unwrap();
         let hex = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
         assert_eq!(
             day.script_counts,
@@ -2432,6 +2432,106 @@ mod daily_activity_stats_tests {
             "{refused}"
         );
         assert!(script_count_key(&secp, 3).is_err());
+    }
+
+    /// T N8 (lane rd/api-lock-names): the label row writers label import
+    /// uses cannot reach the append-only store: `script_info` is a domain CF,
+    /// and the append-only store's handle refuses it (a panic naming the CF and
+    /// the store class) before any write, so `CF_CELLS` is never touched; the
+    /// cell payload a test put there is unchanged.
+    #[test]
+    fn the_label_row_writers_cannot_reach_the_append_only_store() {
+        let dir = TempDir::new().unwrap();
+        let cells = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let outpoint = crate::keys::encode_outpoint(&[0xcc; 32], 0);
+        cells
+            .put_cf(cells.cf_cells(), &outpoint, b"payload")
+            .unwrap();
+        let label = ScriptInfo {
+            name: "Zero Lock".to_string(),
+            ..Default::default()
+        };
+        let put = || cells.put_script_info_direct(&[0; 32], 0, &label);
+        let delete = || cells.delete_script_info_direct(&[0; 32], 0);
+        for (what, panic) in [
+            (
+                "put",
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(put)).err(),
+            ),
+            (
+                "delete",
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(delete)).err(),
+            ),
+        ] {
+            let panic = panic.unwrap_or_else(|| panic!("{what} was not refused"));
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .unwrap_or_default();
+            assert!(
+                message.contains("CF 'script_info' is not allowed in"),
+                "{what}: {message}"
+            );
+        }
+        assert_eq!(
+            cells.get_cf(cells.cf_cells(), &outpoint).unwrap(),
+            Some(b"payload".to_vec())
+        );
+    }
+
+    /// T N6 (lane rd/api-lock-names): a day's script count key that is not a
+    /// pair is refused, each fault named: bad hex, a code hash of 31 bytes, a
+    /// hash type label the chain does not have.
+    #[test]
+    fn a_script_count_key_that_is_not_a_pair_is_refused_named() {
+        let short = "ab".repeat(31);
+        for (key, fault) in [
+            (
+                format!("{}:type", "zz".repeat(32)),
+                "not a 32-byte code hash",
+            ),
+            (format!("{short}:type"), "not a 32-byte code hash"),
+            (format!("{}:Type", "ab".repeat(32)), "not a CKB hash type"),
+            (format!("{}:data3", "ab".repeat(32)), "not a CKB hash type"),
+        ] {
+            let refused = decode_script_count_key(&key).unwrap_err().to_string();
+            assert!(
+                refused.contains(fault) && refused.contains(&key),
+                "{key}: {refused}"
+            );
+        }
+    }
+
+    /// L N3 (lane rd/api-lock-names): a stored transaction whose call names a
+    /// hash type outside 0/1/2/4 is an error naming the block and transaction,
+    /// not a panic: the API reads stored rows through this accumulator
+    /// (`activity_window`).
+    #[test]
+    fn a_call_of_another_hash_type_is_an_error_naming_its_transaction() {
+        let actions = TxActions {
+            tx_hash: vec![0xa1; 32],
+            block_hash: vec![0xba; 32],
+            block_number: 5,
+            tx_index: 1,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 3,
+                lock_args: vec![0x12; 20],
+            }],
+            participants: vec![],
+        };
+        let refused = DailyActivityStats::default()
+            .accumulate_from_tx_actions(&actions)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("lock call of block=5") && refused.contains(&hex::encode([0xa1; 32])),
+            "{refused}"
+        );
     }
 
     #[test]

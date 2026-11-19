@@ -830,6 +830,8 @@ interface DepGroupItem {
 
 interface CodeCellScript {
   name: string;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   codeHash: string;
   hashType: string;
   deploymentTypeHash?: string | null;
@@ -1103,7 +1105,11 @@ interface Cell {
   // group scripts (F2-5), contract R6: list rows of /cells and /cells/by-script name their
   // references from the script registry (null = unregistered); absent on the single-cell detail.
   lockScriptName?: string | null;
+  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
   typeScriptName?: string | null;
+  /** The type's hash type beside its name, as `lockScriptNameBy`. */
+  typeScriptNameBy?: string | null;
   // group scripts (F2-5), R2b-b: single-cell detail only.
   createdEpoch?: { number: number; index: number; length: number };
   /** CKB data hash of the cell data (32 zero bytes for empty data); null without the cell bytes. */
@@ -1149,6 +1155,8 @@ interface CellDep {
 interface LockScriptInfo {
   codeHash: string;
   name: string;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   scriptKind?: string;
   deprecated: boolean;
 }
@@ -1323,6 +1331,8 @@ interface ActivityTypeCall {
   typeArgs: string;
   scriptHash: string;
   scriptName?: string;
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  scriptNameBy?: string | null;
 }
 
 interface ActivityLockCall {
@@ -1331,6 +1341,8 @@ interface ActivityLockCall {
   lockArgs: string;
   scriptHash: string;
   scriptName?: string;
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  scriptNameBy?: string | null;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
   decoded?: LockArgsDecoded | null;
   /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */
@@ -1405,8 +1417,10 @@ interface Activity {
  * rendered as its prefix, never as a made-up address.
  */
 interface ParticipantRef {
-  /** Registered display name of the participant lock, if resolved. */
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind?: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
   address: string | null;
   lockHash: string | null;
   lockHashPrefix: string | null;
@@ -1447,7 +1461,10 @@ interface ScriptCountEntry {
   codeHash: string;
   /** The script's hash type: a count is one script's, by its pair (code hash, hash type). */
   hashType: string;
+  /** The name of the code the pair runs; null when it runs no registered family's code. */
   name: string | null;
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   count: number;
 }
 
@@ -1618,8 +1635,12 @@ export interface TokenSupplyEvent {
   address: string | null;
   /** U-15: the party lock's code hash; null only when the lock script is not indexed. */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 export interface TokenDistribution {
   holdersCount: number;
@@ -1654,7 +1675,11 @@ export interface ItemCellVersion {
   anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };
   dataHash: string | null;
   lockName: string | null;
+  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockNameBy?: string | null;
   typeName: string | null;
+  /** The type's hash type beside its name, as `lockNameBy`. */
+  typeNameBy?: string | null;
 }
 export type ItemKind = 'spore' | 'mnft' | 'dotbit' | 'bit-cell' | 'did' | 'dotcell';
 export interface ItemCellVersions {
@@ -1749,8 +1774,12 @@ export interface GalleryObject extends SporeNft {
   chainTime: string;
   /** Round 3 (contracts R-A · R-2): the live cell's lock code hash (the owner in `ownerAddress`). */
   lockCodeHash: string;
-  /** Round 3 (contracts R-A · R-2): registry name for `lockCodeHash`; null = unnamed (show the hash). */
+  /** The lock's hash type beside its code hash (lane rd/api-lock-names). */
+  lockHashType?: string;
+  /** Round 3 (contracts R-A · R-2): The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 /** Who rewrote this item's cell as a ring neighbour, when the tx had no action of its own. */
 export interface ItemRingRelink {
@@ -1981,8 +2010,12 @@ interface Token {
     address: string | null;
     /** U-15: the issuer lock's code hash; null only when the lock script is not indexed. */
     lockCodeHash: string | null;
-    /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+    /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+    lockHashType?: string | null;
+    /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
     lockKind: string | null;
+    /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+    lockKindBy?: string | null;
   } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;
@@ -1994,8 +2027,12 @@ interface TokenHolder {
   balance: string;
   /** U-15: the holder lock's code hash; null only when the lock script is not indexed. */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 
 export interface TokenHoldersResponse extends CursorPaginatedResponse<TokenHolder> {
@@ -2235,6 +2272,8 @@ interface DaoOwner {
   lockCodeHash: string;
   lockHashType: string;
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
   depositCount: number;
   capacity: string;
   sharePercent: string;
@@ -2571,8 +2610,12 @@ interface CollectionHolder {
    * not indexed (then `address` is null too; `.cell`: also when the prefix resolves to no lock).
    */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 
 // ── `.cell` (DotCell) names ────────────────────────────────────────────────
@@ -2587,6 +2630,8 @@ interface DotCellPartyRef {
   lockHash: string | null;
   address: string | null;
   scriptName: string | null;
+  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  scriptNameBy?: string | null;
 }
 
 interface DotCellDecodedAddress {
@@ -3198,9 +3243,12 @@ interface ScriptPair {
 interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
-  /** The registry's name of the pair; "Unknown" when it names none. */
+  /** The name of the code the pair runs (the family of the binary it resolves to); "Unknown"
+   *  when it runs no registered family's code — never a name across hash kinds. */
   name: string;
-  /** The pair's own label description; null when it has none. */
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
+  /** The named family's (or pseudo deployment's) description; null when it has none. */
   description?: string | null;
   deprecated?: boolean;
   scriptKind: string | null;
@@ -3635,6 +3683,7 @@ interface FiberChannel {
     lockScriptHash: string;
     address: string | null;
     lockScriptName: string | null;
+    lockScriptNameBy?: string | null;
   }[];
   observedLifetimeMs: string | null;
   lifetimeAnchorBlock: number | null;
@@ -3689,8 +3738,10 @@ interface FiberStats {
 interface FiberParty {
   lockScriptHash: string;
   address: string | null;
-  /** R2b-b: the script registry's name for the party's lock; null when unindexed or unregistered. */
+  /** R2b-b: the name of the code the party's lock runs; null when unindexed or unnamed. */
   lockScriptName: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
   channels: number;
   openChannels: number;
   cooperativelyClosedChannels: number;

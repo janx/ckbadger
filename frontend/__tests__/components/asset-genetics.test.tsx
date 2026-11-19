@@ -404,14 +404,16 @@ describe('Per-version raw protocol and item context', () => {
 
   // Lane P2's follow-up (item 6): the lock script's name is the one decision's, off the cell's lock
   // and its owner's address: a lock on the default lock's code hash by data is not the default
-  // lock, whose name the registry sends for that code hash (no cell's data hashes to it)
+  // lock (no cell's data hashes to its code hash, so the API sends no name for that pair)
   it('names the lock script through the decision, never the default lock’s name for a by-data lock', () => {
     const protocol: ItemProtocol = structuredClone(didProtocolProducer);
     const cell = protocol.versions[0].cell;
     const args = `0x${'01'.repeat(20)}`;
     Object.assign(cell, {
       lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
-      lockName: 'Default Lock',
+      // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+      // and a lock on the default lock's code hash by data runs none, so it sends no name
+      lockName: null,
       ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
     });
     const { unmount } = render(<ItemEvidence protocol={protocol} />);
@@ -419,6 +421,7 @@ describe('Per-version raw protocol and item context', () => {
     unmount();
     Object.assign(cell, {
       lock: { ...cell.lock, hashType: 'type' },
+      lockName: 'Default Lock',
       ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
     });
     render(<ItemEvidence protocol={protocol} />);

@@ -67,7 +67,9 @@ describe('an activity row names a lock on the default code hash by data as anoth
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      participants: [party(BY_DATA_ADDRESS, 'Default Lock', '01', '-100000000')],
+      // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+      // and a lock on the default lock's code hash by data runs none, so it sends no name for it
+      participants: [party(BY_DATA_ADDRESS, null, '01', '-100000000')],
     };
     const { container } = render(<ActivityRow activity={row} />);
     const kind = container.querySelector('[data-role="participant"] [data-role="lock-kind"]');
@@ -97,12 +99,14 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     return { cells, minWidth: Number.parseFloat(col.style.minWidth) };
   }
 
+  // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs, and
+  // a lock on the default lock's code hash by data runs none, so it sends no name for it
   const tokenHolder = (n: string, address: string | null, lockCodeHash: string | null) => ({
     lockScriptHash: `0x${n.repeat(32)}`,
     address,
     balance: '100',
     lockCodeHash,
-    lockKind: lockCodeHash === null ? null : 'Default Lock',
+    lockKind: lockCodeHash === null || address === BY_DATA_ADDRESS ? null : 'Default Lock',
   });
 
   it('in the token holders: default by its name, by data as another lock, not indexed in words', async () => {
@@ -174,10 +178,13 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
           lockKind: 'Default Lock',
         }),
         holder('22', {}),
+        // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+        // runs, and a lock on the default lock's code hash by data runs none, so it sends no name
+        // for it
         holder('33', {
           address: BY_DATA_ADDRESS,
           lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
+          lockKind: null,
         }),
       ],
       limit: 10,
@@ -289,7 +296,9 @@ describe('the by-data words fit the columns that write them', () => {
     const base = feedSamples.objectTransfer;
     const a: GlobalActivity = {
       ...base,
-      participants: [...base.participants, party(BY_DATA_ADDRESS, 'Default Lock', '0d')],
+      // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+      // and a lock on the default lock's code hash by data runs none, so it sends no name for it
+      participants: [...base.participants, party(BY_DATA_ADDRESS, null, '0d')],
     };
     render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     const table = screen.getByRole('table', { name: 'Balance changes by participant' });

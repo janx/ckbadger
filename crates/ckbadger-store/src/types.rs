@@ -3089,44 +3089,40 @@ impl DailyActivityStats {
     ///
     /// This is the **single calculation path** for activity stats accumulation,
     /// shared by both live sync (indexer) and reorg rollback (store).
-    pub fn accumulate_from_tx_actions(&mut self, tx_actions: &TxActions) {
+    ///
+    /// A stored or chain fact it cannot count (a call's hash type outside
+    /// 0/1/2/4, an overflow) is an error naming the block and transaction,
+    /// never a panic: the API reads stored rows through it (L N3, lane
+    /// rd/api-lock-names).
+    pub fn accumulate_from_tx_actions(&mut self, tx_actions: &TxActions) -> anyhow::Result<()> {
+        let at = || {
+            format!(
+                "block={} tx=0x{}",
+                tx_actions.block_number,
+                hex::encode(&tx_actions.tx_hash)
+            )
+        };
         // Coinbase transactions are counted but excluded from all other metrics
         if tx_actions.is_cellbase {
             self.coinbase_count += 1;
-            return;
+            return Ok(());
         }
 
         self.total_ckb_moved = self
             .total_ckb_moved
             .checked_add(tx_actions.ckb_moved())
-            .unwrap_or_else(|| {
-                panic!(
-                    "total_ckb_moved overflow: block={} tx=0x{}",
-                    tx_actions.block_number,
-                    hex::encode(&tx_actions.tx_hash)
-                )
-            });
+            .ok_or_else(|| anyhow::anyhow!("total_ckb_moved overflow: {}", at()))?;
 
         // Count each involved script, by its pair, from type_calls and
         // lock_calls — excludes coinbase
         for tc in &tx_actions.type_calls {
-            let key = script_count_key(&tc.type_code_hash, tc.type_hash_type).unwrap_or_else(|e| {
-                panic!(
-                    "type call of block={} tx=0x{}: {e}",
-                    tx_actions.block_number,
-                    hex::encode(&tx_actions.tx_hash)
-                )
-            });
+            let key = script_count_key(&tc.type_code_hash, tc.type_hash_type)
+                .map_err(|e| anyhow::anyhow!("type call of {}: {e}", at()))?;
             *self.script_counts.entry(key).or_insert(0) += 1;
         }
         for lc in &tx_actions.lock_calls {
-            let key = script_count_key(&lc.lock_code_hash, lc.lock_hash_type).unwrap_or_else(|e| {
-                panic!(
-                    "lock call of block={} tx=0x{}: {e}",
-                    tx_actions.block_number,
-                    hex::encode(&tx_actions.tx_hash)
-                )
-            });
+            let key = script_count_key(&lc.lock_code_hash, lc.lock_hash_type)
+                .map_err(|e| anyhow::anyhow!("lock call of {}: {e}", at()))?;
             *self.script_counts.entry(key).or_insert(0) += 1;
         }
 
@@ -3202,6 +3198,7 @@ impl DailyActivityStats {
                 self.unknown_count += 1;
             }
         }
+        Ok(())
     }
 
     /// Add another accumulation of the same bucket — the transactions it
@@ -3622,15 +3619,15 @@ mod tests {
         ];
         let mut all = DailyActivityStats::default();
         for tx in &txs {
-            all.accumulate_from_tx_actions(tx);
+            all.accumulate_from_tx_actions(tx).unwrap();
         }
         let mut first = DailyActivityStats::default();
         let mut second = DailyActivityStats::default();
         for tx in &txs[..2] {
-            first.accumulate_from_tx_actions(tx);
+            first.accumulate_from_tx_actions(tx).unwrap();
         }
         for tx in &txs[2..] {
-            second.accumulate_from_tx_actions(tx);
+            second.accumulate_from_tx_actions(tx).unwrap();
         }
         first.unique_address_count = 7;
         second.unique_address_count = 9;
@@ -4049,11 +4046,11 @@ mod tests {
                 .collect(),
         };
         let mut stats = DailyActivityStats::default();
-        stats.accumulate_from_tx_actions(&actions);
+        stats.accumulate_from_tx_actions(&actions).unwrap();
         assert_eq!(stats.total_ckb_moved, 100, "exclude sender, change and fee");
         assert_eq!(actions.ckb_moved(), 100);
         actions.is_cellbase = true;
-        stats.accumulate_from_tx_actions(&actions);
+        stats.accumulate_from_tx_actions(&actions).unwrap();
         assert_eq!(stats.total_ckb_moved, 100, "issuance is not movement");
     }
 

@@ -271,7 +271,7 @@ fn broadcast_latest_activities(
             return;
         }
     };
-    let mut script_info_cache = HashMap::new();
+    let mut script_info_cache = crate::utils::ScriptNamer::new(store, ao_store);
     let mut address_cache = HashMap::new();
     let activities = items
         .iter()

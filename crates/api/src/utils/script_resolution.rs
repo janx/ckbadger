@@ -15,27 +15,6 @@ pub fn is_known_script_name(name: Option<&str>) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
 }
 
-/// The script registry's name for the script (`code_hash`, `hash_type`): the
-/// name label import recorded for that pair — the registry's and Scripts
-/// page's name, so a COTA or JoyID reference is named even though no protocol
-/// parser covers it. CKB identifies a script by the pair: the same code hash
-/// by another hash type is another script, which this names only when the
-/// registry names that pair too (lane rd/api-lock-names; there is no read by
-/// the code hash alone, and no fall back to another pair). `None` when the
-/// registry does not name the pair. A hash type CKB does not define is an
-/// error, named.
-pub fn registered_script_name(
-    store: &CkbadgerStore,
-    code_hash: &[u8],
-    hash_type: i16,
-) -> anyhow::Result<Option<String>> {
-    let hash_type = script_hash_type(code_hash, hash_type)?;
-    Ok(store
-        .get_script_info(code_hash, hash_type)?
-        .map(|info| info.name.trim().to_string())
-        .filter(|name| is_known_script_name(Some(name))))
-}
-
 /// A script's hash type as stored (`i16`), checked to be one CKB defines
 /// (data 0, type 1, data1 2, data2 4); anything else names the script.
 pub fn script_hash_type(code_hash: &[u8], hash_type: i16) -> anyhow::Result<u8> {

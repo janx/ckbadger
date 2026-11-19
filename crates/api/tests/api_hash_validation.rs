@@ -188,6 +188,72 @@ async fn test_scripts_lookup_rejects_malformed_code_hash_in_batch() {
     }
 }
 
+/// Lane rd/api-lock-names (L S3, T SHOULD-5): every fault of a lookup
+/// request is the route's 400 in its JSON error, naming the fault: the old
+/// body of code hashes (a cached old bundle sends it), a pair without its
+/// hash type, a hash type the chain does not have, 101 pairs, a pair asked
+/// twice. axum answered the first two with a plain-text 422.
+#[tokio::test]
+async fn test_scripts_lookup_refuses_each_malformed_request_with_its_json_400() {
+    let app = test_app().await;
+    let code_hash = format!("0x{}", "11".repeat(32));
+    let pair =
+        |hash_type: &str| serde_json::json!({ "codeHash": code_hash, "hashType": hash_type });
+    let many: Vec<_> = (0..101u32)
+        .map(|n| {
+            let mut bytes = [0u8; 32];
+            bytes[..4].copy_from_slice(&n.to_be_bytes());
+            serde_json::json!({ "codeHash": format!("0x{}", hex::encode(bytes)), "hashType": "type" })
+        })
+        .collect();
+    for (body, fault) in [
+        (
+            serde_json::json!({ "codeHashes": [code_hash] }),
+            "unknown field `codeHashes`",
+        ),
+        (
+            serde_json::json!({ "scripts": [{ "codeHash": code_hash }] }),
+            "missing field `hashType`",
+        ),
+        (
+            serde_json::json!({ "scripts": [pair("bogus")] }),
+            "Invalid hashType 'bogus'",
+        ),
+        (
+            serde_json::json!({ "scripts": [pair("Type")] }),
+            "Invalid hashType 'Type'",
+        ),
+        (
+            serde_json::json!({ "scripts": many }),
+            "Too many scripts: 101 asked, maximum is 100",
+        ),
+        (
+            serde_json::json!({ "scripts": [pair("data"), pair("type"), pair("data")] }),
+            "is asked twice",
+        ),
+    ] {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/scripts/lookup")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            panic!(
+                "{body}: a JSON error body, got {}",
+                String::from_utf8_lossy(&bytes)
+            )
+        });
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {json}");
+        assert_eq!(json["error"], "bad_request", "{body}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.contains(fault), "{body}: {message}");
+    }
+}
+
 #[tokio::test]
 async fn test_scripts_lookup_rejects_malformed_tx_hash_hint() {
     let app = test_app().await;

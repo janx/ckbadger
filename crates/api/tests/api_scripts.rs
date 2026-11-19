@@ -1801,9 +1801,23 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     let reference_hash = [0x77; 32];
     let code_cell_tx_hash = vec![0xce; 32];
 
-    // The registry's label of the pair (reference, data), as label import
-    // writes it: the lookup names a pair by its own label only.
-    seed_script_label(&store, &reference_hash, 0, "UniqueScript");
+    // The original input (lane rd/api-lock-names, fix round, T MUST-1): no
+    // label row; the binary is a version of the family "UniqueScript", as
+    // label import records every registered version. The pair (binary, data)
+    // runs that code, so it is named by the family; it is no registered
+    // reference of it (the registry registers none here), so the hash type
+    // stands beside the name.
+    store
+        .put_script_family_direct(
+            "unique-script",
+            &ScriptFamilyInfo {
+                family_id: "unique-script".to_string(),
+                name: "UniqueScript".to_string(),
+                versions_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     store
         .put_script_reference_info_direct(
             0,
@@ -1828,6 +1842,7 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
         &ScriptVersionInfo {
             version_hash: reference_hash.to_vec(),
             name: Some("UniqueScript".to_string()),
+            family_id: Some("unique-script".to_string()),
             category: Some("lock".to_string()),
             lock_cells_count: 3,
             lock_live_cells_count: 1,
@@ -1882,6 +1897,11 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     assert_eq!(
         json[&format!("{reference_hash_hex}:data")]["name"],
         "UniqueScript"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:data")]["nameBy"],
+        "data",
+        "the binary by data is no reference the registry registers"
     );
     assert_eq!(
         json[&format!("{reference_hash_hex}:data")]["codeHash"],
@@ -3935,19 +3955,48 @@ async fn test_scripts_list_reads_from_derived_store() {
 async fn test_deprecated_script_labels_resolve_by_name_and_api_flag() {
     let store = test_store();
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
+
+    // The PW Lock binary's code cell on chain, and its Type ID bound to it, as
+    // the indexer records them.
+    let pw_lock = "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc";
+    let pw_lock_data_hash = "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee";
+    let binary = hex::decode(&pw_lock_data_hash[2..]).unwrap();
+    let code_cell_tx = vec![0xa7; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &code_cell_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_code_hash: [0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 32,
+            udt_amount: None,
+            data_hash: Some(binary.clone().try_into().unwrap()),
+        },
+        77,
+    );
+    batch.put_cell_by_data_hash(&binary, 77, &code_cell_tx, 0);
+    seed_tx_at(&mut batch, &code_cell_tx, 77, 0);
+    batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(77, 1_700_000_000_000)]);
+    store
+        .put_script_reference_to_version_direct(1, &hex::decode(&pw_lock[2..]).unwrap(), &binary)
+        .unwrap();
 
     let app = create_router(test_config(store)).await;
-    // The registry names PW Lock by its pair (its type id reference by
-    // `type`), not by its binary's data hash (lane rd/api-lock-names).
-    let pw_lock = "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc";
-
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}}]}}"#,
-            pw_lock
+            r#"{{"scripts":[{{"codeHash":"{pw_lock_data_hash}","hashType":"data"}},{{"codeHash":"{pw_lock}","hashType":"type"}},{{"codeHash":"{pw_lock}","hashType":"data"}}]}}"#
         )))
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -3955,20 +4004,33 @@ async fn test_deprecated_script_labels_resolve_by_name_and_api_flag() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    let entry = &json[&format!("{pw_lock}:type")];
-    assert_eq!(entry["name"], "PW Lock", "{json}");
-    assert_eq!(entry["deprecated"], true, "{json}");
-    // Label import alone: no code cell resolves the type id here.
-    assert_eq!(entry["resolutionState"], "unresolved", "{json}");
+    // The original input (lane rd/api-lock-names, fix round, T MUST-1, the
+    // lead's ruling): PW Lock's binary by its data hash runs PW Lock's code,
+    // so it is named PW Lock, resolved, and it is not the reference the
+    // registry registers (its Type ID): its hash type stands beside the name.
+    let by_data = &json[&format!("{pw_lock_data_hash}:data")];
+    assert_eq!(by_data["name"], "PW Lock", "{json}");
+    assert_eq!(by_data["nameBy"], "data", "{json}");
+    assert_eq!(by_data["deprecated"], true, "{json}");
+    assert_eq!(by_data["resolutionState"], "resolved", "{json}");
+    // its registered reference, the Type ID: named, nothing beside the name
+    let by_type = &json[&format!("{pw_lock}:type")];
+    assert_eq!(by_type["name"], "PW Lock", "{json}");
+    assert!(by_type["nameBy"].is_null(), "{json}");
+    assert_eq!(by_type["deprecated"], true, "{json}");
+    // a Type ID hash by data names a cell whose data hashes to a type hash:
+    // no code runs, no name, no answer
+    assert!(json.get(format!("{pw_lock}:data")).is_none(), "{json}");
 
     let request = Request::builder()
         .uri("/api/v1/scripts/PW%20Lock")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status, StatusCode::OK, "{json}");
     let items = json["versions"].as_array().unwrap();
 
     assert!(!items.is_empty());
@@ -4483,6 +4545,28 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
     );
 }
 
+/// Lane rd/api-lock-names, fix round ruling 2 (L S2, T SHOULD-1): the xUDT
+/// binary, registered by `data1`, run by `data2` (VM2) is the same code: it
+/// is named xUDT with its hash type beside the name; by `data1` it is the
+/// registered reference and nothing stands beside the name. The bundled
+/// registry alone, no chain.
+#[tokio::test]
+async fn by_pair_xudt_binary_by_data2_is_xudt_by_another_reference() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let app = create_router(test_config(store)).await;
+    let xudt = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95";
+    let (status, json) =
+        post_script_lookup_pairs(&app, &[(xudt, "data1"), (xudt, "data2"), (xudt, "type")]).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json[&format!("{xudt}:data1")]["name"], "xUDT", "{json}");
+    assert!(json[&format!("{xudt}:data1")]["nameBy"].is_null(), "{json}");
+    assert_eq!(json[&format!("{xudt}:data2")]["name"], "xUDT", "{json}");
+    assert_eq!(json[&format!("{xudt}:data2")]["nameBy"], "data2", "{json}");
+    // its data hash by type is no type script's hash: nothing runs, no answer
+    assert!(json.get(format!("{xudt}:type")).is_none(), "{json}");
+}
+
 #[tokio::test]
 async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
     let store = test_store();
@@ -4492,10 +4576,9 @@ async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
         hex::decode("bfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc").unwrap();
     let binary =
         hex::decode("50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95").unwrap();
-    assert_eq!(
-        store.get_script_info(&reference, 1).unwrap().unwrap().name,
-        "xUDT"
-    );
+    // a version's pair has no label row (lane rd/api-lock-names, fix round
+    // ruling 2): it is named by the code it runs, the family below
+    assert_eq!(store.get_script_info(&reference, 1).unwrap(), None);
     let version = store.get_script_version(&binary).unwrap().unwrap();
     assert_eq!(version.family_id.as_deref(), Some("xudt"));
     assert_eq!(version.canonical_reference_hash, Some(binary.clone()));
@@ -5384,6 +5467,8 @@ async fn post_script_lookup_pairs(
 async fn by_pair_lookup_answers_each_pair_with_its_own_name_and_figures() {
     let store = test_store();
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
     let secp = default_lock_code_hash();
     for (hash_type, live, capacity) in [(1u8, 7i64, 700_00000000i128), (0, 2, 200_00000000)] {
         store
@@ -5423,10 +5508,13 @@ async fn by_pair_lookup_answers_each_pair_with_its_own_name_and_figures() {
     let by_data = &json[format!("{TEST_SECP_LOCK_CODE_HASH}:data")];
     assert_eq!(by_data["referenceHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
     assert_eq!(by_data["hashType"], "data", "{json}");
-    assert_ne!(
-        by_data["name"], "Default Lock",
+    // T N1: exactly "Unknown" (the pair runs no code the registry names),
+    // not merely another name than the default lock's.
+    assert_eq!(
+        by_data["name"], "Unknown",
         "the default lock's name does not reach the script by data: {json}"
     );
+    assert!(by_data["nameBy"].is_null(), "{json}");
     assert_eq!(by_data["liveCellsCount"], 2, "{json}");
     assert_eq!(by_data["ownedCapacitySum"], "20000000000", "{json}");
 }

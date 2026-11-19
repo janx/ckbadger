@@ -42,8 +42,11 @@ fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -
 /// - CKB moved: sum |participant.ckb_delta| for non-cellbase
 /// - Transfer count: participant has no asset/protocol/script flags
 /// - Coinbase: tx_actions.is_cellbase
-fn accumulate_tx_actions_stats(tx_actions: &TxActions, stats: &mut DailyActivityStats) {
-    stats.accumulate_from_tx_actions(tx_actions);
+fn accumulate_tx_actions_stats(
+    tx_actions: &TxActions,
+    stats: &mut DailyActivityStats,
+) -> anyhow::Result<()> {
+    stats.accumulate_from_tx_actions(tx_actions)
 }
 
 /// Pre-computed DAO deposit statistics for daily snapshots.
@@ -676,8 +679,11 @@ impl BatchWriter {
 
     /// Accumulate activity stats from a TxActions into DailyActivityStats.
     /// Call once per TxActions from build_tx_actions_for_block().
-    pub fn accumulate_tx_activity_stats(tx_actions: &TxActions, stats: &mut DailyActivityStats) {
-        accumulate_tx_actions_stats(tx_actions, stats);
+    pub fn accumulate_tx_activity_stats(
+        tx_actions: &TxActions,
+        stats: &mut DailyActivityStats,
+    ) -> anyhow::Result<()> {
+        accumulate_tx_actions_stats(tx_actions, stats)
     }
 
     /// Apply one block's activity counts to its bucket of `kind` (the
@@ -4006,7 +4012,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
         assert_eq!(stats.total_ckb_moved, 0);
@@ -4022,7 +4028,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.coinbase_count, 0);
         assert_eq!(stats.total_ckb_moved, 0);
@@ -4041,7 +4047,7 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4059,7 +4065,7 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.dao_withdraw_request_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4077,7 +4083,7 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.dao_withdraw_complete_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4100,7 +4106,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4123,7 +4129,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.object_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4146,7 +4152,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.identity_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -4169,7 +4175,7 @@ mod activity_stats_tests {
             vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
@@ -4187,7 +4193,8 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        );
+        )
+        .unwrap();
         accumulate_tx_actions_stats(
             &make_tx_actions(
                 false,
@@ -4196,7 +4203,8 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        );
+        )
+        .unwrap();
         accumulate_tx_actions_stats(
             &make_tx_actions(
                 true,
@@ -4205,7 +4213,8 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        );
+        )
+        .unwrap();
         assert_eq!(stats.transfer_count, 2);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.total_ckb_moved, 30_00000000);
@@ -4220,7 +4229,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.total_ckb_moved, 0);
     }
 
@@ -4237,7 +4246,7 @@ mod activity_stats_tests {
                 type_args: vec![0xEE; 20],
             }],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(stats.script_call_count, 1);
         assert_eq!(stats.transfer_count, 0);
         assert_eq!(stats.unknown_count, 0);
@@ -4256,7 +4265,7 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
         assert_eq!(
             *stats
                 .protocol_action_counts

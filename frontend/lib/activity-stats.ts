@@ -74,10 +74,12 @@ export interface ScriptShares {
  * A script is its pair (lane rd/api-lock-names), so an unnamed one is never its code hash alone.
  */
 export function scriptLabel(
-  entry: Pick<ScriptCountEntry, 'name' | 'codeHash' | 'hashType'>
+  entry: Pick<ScriptCountEntry, 'name' | 'nameBy' | 'codeHash' | 'hashType'>
 ): string {
   const name = entry.name?.trim();
-  return name ? name : `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
+  if (!name) return `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
+  // the code the pair runs, by another reference than the registry's: "xUDT · by data2"
+  return entry.nameBy ? `${name} · by ${entry.nameBy}` : name;
 }
 
 /** Script calls ranked by count: the `limit` largest, then everything else as one row. */

@@ -168,7 +168,7 @@ pub(crate) fn project_actions(
     state: &AppState,
     actions: &[TxActions],
 ) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
-    let mut scripts = HashMap::new();
+    let mut scripts = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut addresses = HashMap::new();
     actions
         .iter()

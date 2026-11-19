@@ -85,7 +85,9 @@ describe('ClusterCellEvidence names the holder’s lock by the one decision', ()
         ownerAddress:
           'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl',
         lock: { codeHash: DEFAULT, hashType: 'data', args },
-        lockName: 'SECP256K1/blake160',
+        // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+        // runs, and a lock on the default lock's code hash by data runs none, so it sends no name
+        lockName: null,
       })
     ).toHaveTextContent(/^ckb1…eqvguktl · lock 0x9bd7e06f…a3cce8 by data$/);
   });

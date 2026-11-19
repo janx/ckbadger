@@ -25,6 +25,7 @@
           "lockHash": "0xbf7373a319dce28331dfdf2b158db8b67ba213c61a19d7a6cab5e6c23c11ff4b",
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
+          "lockKindBy": null,
           "roles": []
         }
       ],
@@ -62,6 +63,7 @@
           "lockHash": "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0",
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
+          "lockKindBy": null,
           "roles": []
         }
       ],
@@ -99,6 +101,7 @@
           "lockHash": "0xc7f452d9580bd9e6d031614261265af1c85ed2aee7627a2a1338c1e6c8381d4d",
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
+          "lockKindBy": null,
           "roles": []
         }
       ],

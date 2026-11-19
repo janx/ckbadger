@@ -3295,7 +3295,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity);
+                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity)?;
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {

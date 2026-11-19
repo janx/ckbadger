@@ -11,6 +11,7 @@
         "lockHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
         "lockHashPrefix": null,
         "lockKind": "Default Lock",
+        "lockKindBy": null,
         "roles": [],
         "tags": 0,
         "usedDelta": "-6100000000"
@@ -22,6 +23,7 @@
         "lockHash": "0xe283d25800772fa5df7552b9e1e60bc7a34848acb7d329b0c94f1ffe767c46e7",
         "lockHashPrefix": null,
         "lockKind": "Default Lock",
+        "lockKindBy": null,
         "roles": [],
         "tags": 0,
         "usedDelta": "6100000000"

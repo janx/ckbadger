@@ -588,35 +588,39 @@ pub struct CollectionHolderResponse {
     /// The holder lock's hash type beside its code hash (the pair names the
     /// lock: lane rd/api-lock-names); `None` when its script is not indexed.
     pub lock_hash_type: Option<String>,
-    /// The scripts registry's name for the lock's pair (OB-C7); `None` when
-    /// the registry names none — never a label guessed from the args, never
-    /// the name of the code hash by another hash type.
+    /// The name of the code the lock's pair runs (OB-C7; `utils::ScriptNamer`,
+    /// the one rule); `None` when it runs no registered family's code —
+    /// never a label guessed from the args, never a name across hash kinds.
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code (`utils::ScriptName::by`), written beside the
+    /// name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
     pub item_count: i64,
 }
 
 /// A holder's or object owner's lock as one row shows it: its address, its
-/// pair (code hash, hash type) and the scripts registry's name for the pair.
+/// pair (code hash, hash type) and the name of the code the pair runs.
 pub(super) struct OwnerLock {
     /// `None` when the lock has no address form (`encode_lock_address`).
     pub(super) address: Option<String>,
     pub(super) lock_code_hash: String,
     pub(super) lock_hash_type: String,
     pub(super) lock_kind: Option<String>,
+    pub(super) lock_kind_by: Option<String>,
 }
 
-/// The lock kind of a lock script (`code_hash`, `hash_type`): the scripts
-/// registry's name for that pair, through `utils::registered_script_name`
-/// (the one name rule `/cells` and the activity participants use). `None`
-/// when the registry names none.
+/// The name of a lock script (`code_hash`, `hash_type`): the one rule
+/// (`utils::ScriptNamer`, the code the pair runs) every route reads. `None`
+/// when it runs no registered family's code.
 pub(super) fn lock_kind(
-    store: &CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     code_hash: &[u8],
     hash_type: i16,
-) -> Result<Option<String>, ApiRouteError> {
-    crate::utils::registered_script_name(store, code_hash, hash_type).map_err(|e| {
+) -> Result<Option<crate::utils::ScriptName>, ApiRouteError> {
+    names.name_stored(code_hash, hash_type).map_err(|e| {
         ApiError::internal(format!(
-            "lock 0x{} by hash type {hash_type} registry name: {e:#}",
+            "lock 0x{} by hash type {hash_type} name: {e:#}",
             hex::encode(code_hash)
         ))
     })
@@ -644,6 +648,7 @@ pub(super) fn lock_hash_type_label(
 /// the lock's script is not indexed.
 pub(super) fn owner_lock(
     store: &CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     lock_hash: &[u8],
     network: &str,
 ) -> Result<Option<OwnerLock>, ApiRouteError> {
@@ -657,8 +662,10 @@ pub(super) fn owner_lock(
     else {
         return Ok(None);
     };
+    let name = lock_kind(names, &resolved.entry.code_hash, resolved.entry.hash_type)?;
     Ok(Some(OwnerLock {
-        lock_kind: lock_kind(store, &resolved.entry.code_hash, resolved.entry.hash_type)?,
+        lock_kind_by: name.as_ref().and_then(|name| name.by()),
+        lock_kind: name.map(|name| name.name),
         lock_hash_type: lock_hash_type_label(&resolved.entry.code_hash, resolved.entry.hash_type)?,
         lock_code_hash: format!("0x{}", hex::encode(&resolved.entry.code_hash)),
         address: resolved.address,
@@ -668,17 +675,19 @@ pub(super) fn owner_lock(
 /// The wire holder row of a holder named by its full lock hash.
 pub(super) fn holder_row(
     store: &CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     lock_hash: &[u8],
     item_count: i64,
     network: &str,
 ) -> Result<CollectionHolderResponse, ApiRouteError> {
-    let owner = owner_lock(store, lock_hash, network)?;
+    let owner = owner_lock(store, names, lock_hash, network)?;
     Ok(CollectionHolderResponse {
         lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
         owner_hash_prefix: None,
         address: owner.as_ref().and_then(|owner| owner.address.clone()),
         lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
         lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+        lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
         lock_kind: owner.and_then(|owner| owner.lock_kind),
         item_count,
     })
@@ -3484,7 +3493,8 @@ pub(crate) fn list_identity_items_inner(
             });
         }
     } else if identity_standard == IdentityStandard::DotCell {
-        let resolver = super::identities::DotCellPartyResolver { store, network };
+        let resolver =
+            super::identities::DotCellPartyResolver::new(store, append_only_store, network);
         let live_identity_ids: Vec<Vec<u8>> = page_items
             .iter()
             .filter(|(_, entry)| entry.is_live)
@@ -4099,10 +4109,17 @@ async fn list_object_collection_holders(
         None
     };
 
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
         .map(|(lock_hash, count)| {
-            holder_row(state.store.as_ref(), lock_hash, *count, &state.ckb_network)
+            holder_row(
+                state.store.as_ref(),
+                &mut names,
+                lock_hash,
+                *count,
+                &state.ckb_network,
+            )
         })
         .collect::<Result<_, ApiRouteError>>()?;
 

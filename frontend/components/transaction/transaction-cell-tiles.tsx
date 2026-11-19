@@ -68,6 +68,24 @@ export function registeredName(
   return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 
+/**
+ * The hash type the lookup writes beside a pair's name (`nameBy`, lane rd/api-lock-names, the fix
+ * round's ruling): the named pair runs a registered family's code but is not the registry's
+ * reference for it. Null where it is that reference or has no name.
+ */
+export function registeredNameBy(
+  lookup: ScriptLookupResponse | undefined,
+  codeHash: string,
+  hashType: string
+): string | null {
+  return lookup?.[scriptLookupKey(codeHash, hashType)]?.nameBy ?? null;
+}
+
+/** A script's name and, where its pair is not the registry's reference, its hash type: "xUDT · by data2". */
+export function withNameBy(name: string, by: string | null): string {
+  return by === null ? name : `${name} · by ${by}`;
+}
+
 /** An output's state once a later transaction spent it (lane P1): the widest state a tile writes. */
 export const OUTPUT_SPENT = 'spent later';
 
@@ -104,7 +122,12 @@ export function cellTiles(
     const address = cell.address ?? null;
     const words = lockWords(
       cellLockFacts(
-        { lock, name: registeredName(lookup, lock.codeHash, lock.hashType), address },
+        {
+          lock,
+          name: registeredName(lookup, lock.codeHash, lock.hashType),
+          nameBy: registeredNameBy(lookup, lock.codeHash, lock.hashType),
+          address,
+        },
         `Transaction ${tx.hash} ${context}`
       ),
       'inline'
@@ -136,7 +159,7 @@ export function cellTiles(
     const kind = kindOf(cell);
     const name = cell.type ? registeredName(lookup, cell.type.codeHash, cell.type.hashType) : null;
     return name !== null
-      ? name
+      ? withNameBy(name, registeredNameBy(lookup, cell.type!.codeHash, cell.type!.hashType))
       : kind === 'ckb'
         ? 'CKB'
         : kind === 'tokens'

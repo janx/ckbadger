@@ -36,6 +36,12 @@ export interface LockFacts {
   name: string | null;
   codeHash: string | null;
   hashType: ScriptRefHashType | null;
+  /**
+   * The hash type the API writes beside a name (lane rd/api-lock-names, the fix round's ruling):
+   * the named pair runs a registered family's code but is not the registry's reference for it
+   * (`xUDT · by data2`). Null for a registered reference; absent where the place has no API name.
+   */
+  nameBy?: ScriptRefHashType | null;
 }
 
 /** What a lock is called where it stands, or null where nothing is written (see `lockWords`). */
@@ -63,9 +69,12 @@ export type LockWords =
  * - The default lock is the pair (its code hash, `type`). Beside a party it is silent: a shortened
  *   address is `ckb1…` and its tail, so no name beside an address means the default lock. In a
  *   column headed "Lock" a cell is never empty: the default lock is its name in quiet words.
- * - A lock on the default lock's code hash by `data`, `data1` or `data2` is another lock (no cell's
- *   data hashes to that code hash): the registry names locks by code hash, so the name it sends is
- *   the default lock's and not this lock's; it is written by its code hash and its hash type.
+ * - A name is the API's: the name of the code the lock's pair runs (lane rd/api-lock-names, the
+ *   fix round's ruling). Where that pair is not the registry's reference for the code, the hash
+ *   type the API sends (`nameBy`) stands beside the name ("xUDT · by data2").
+ * - A lock without a name is its code hash, and its hash type where that is not `type`: a lock on
+ *   the default lock's code hash by `data`, `data1` or `data2` runs no code (no cell's data hashes
+ *   to a type hash), so the API names it nothing, and it is "lock 0x9bd7…cce8 by data".
  * - A place that knows only a bare code hash cannot tell; it names the lock as the API does, never
  *   silent, since silence says "the default lock".
  * - A lock that is not indexed (no code hash, no name) is silent beside a party and "not indexed"
@@ -98,14 +107,15 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
   if (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType))
     return { form: 'default', name, codeHash, place };
   if (codeHash === null && name === null) return { form: 'not-indexed' };
-  const notTheDefault =
-    codeHash !== null &&
-    hashType !== null &&
-    isDefaultLock(codeHash, 'type') &&
-    hashType !== 'type';
-  return notTheDefault
-    ? { form: 'lock', name: null, codeHash, hashType, byHashType: hashType }
-    : { form: 'lock', name, codeHash, hashType, byHashType: null };
+  if (name !== null)
+    return { form: 'lock', name, codeHash, hashType, byHashType: facts.nameBy ?? null };
+  return {
+    form: 'lock',
+    name: null,
+    codeHash,
+    hashType,
+    byHashType: hashType !== null && hashType !== 'type' ? hashType : null,
+  };
 }
 
 /**
@@ -117,11 +127,14 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
  */
 export function rowLockFacts({
   lockKind,
+  lockKindBy,
   lockCodeHash,
   lockHashType,
   address,
 }: {
   lockKind: string | null;
+  /** The hash type the API writes beside the name (`LockFacts.nameBy`), where the row sends it. */
+  lockKindBy?: string | null;
   lockCodeHash: string | null;
   /** The lock's hash type, where the row sends one. */
   lockHashType?: string | null;
@@ -133,7 +146,11 @@ export function rowLockFacts({
     lockHashType === undefined || lockHashType === null
       ? null
       : hashTypeOf(lockHashType, `lock ${lockCodeHash}`);
-  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType };
+  const nameBy =
+    lockKindBy === undefined || lockKindBy === null
+      ? null
+      : hashTypeOf(lockKindBy, `lock ${lockCodeHash} name`);
+  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType, nameBy };
   const script = addressScript(address);
   if (lockCodeHash !== null && lockCodeHash.toLowerCase() !== script.codeHash)
     throw new Error(
@@ -143,7 +160,7 @@ export function rowLockFacts({
     throw new Error(
       `address ${address} spells the lock ${script.codeHash} by ${script.hashType}, the row says by ${hashType}`
     );
-  return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType };
+  return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType, nameBy };
 }
 
 /** A lock's hash type as the chain writes it; any other word is a contract break, named. */
@@ -164,11 +181,17 @@ export function cellLockFacts(
   cell: {
     lock: { codeHash: string; hashType: string; args: string };
     name: string | null;
+    /** The hash type the API writes beside the name (`LockFacts.nameBy`), where it sends one. */
+    nameBy?: string | null;
     address: string | null;
   },
   where: string
 ): LockFacts {
   const { lock, name, address } = cell;
+  const nameBy =
+    cell.nameBy === undefined || cell.nameBy === null
+      ? null
+      : hashTypeOf(cell.nameBy, `${where} lock name`);
   const hashType = hashTypeOf(lock.hashType, where);
   if (address !== null) {
     const spelled = addressScript(address);
@@ -181,7 +204,7 @@ export function cellLockFacts(
         `${where}: address ${address} spells the lock ${spelled.codeHash} by ${spelled.hashType}, args ${spelled.args}; the cell's lock is ${lock.codeHash} by ${hashType}, args ${lock.args}`
       );
   }
-  return { name, codeHash: lock.codeHash.toLowerCase(), hashType };
+  return { name, codeHash: lock.codeHash.toLowerCase(), hashType, nameBy };
 }
 
 /**
@@ -192,9 +215,13 @@ export function cellLockFacts(
  */
 export function partyLockFacts(party: ParticipantRef): LockFacts {
   const name = party.lockKind ?? null;
-  if (party.address === null) return { name, codeHash: null, hashType: null };
+  const nameBy =
+    party.lockKindBy === undefined || party.lockKindBy === null
+      ? null
+      : hashTypeOf(party.lockKindBy, `party ${party.lockHash} lock name`);
+  if (party.address === null) return { name, codeHash: null, hashType: null, nameBy };
   const { codeHash, hashType } = addressScript(party.address);
-  return { name, codeHash, hashType };
+  return { name, codeHash, hashType, nameBy };
 }
 
 /**
@@ -253,9 +280,12 @@ export function lockPhrase(words: LockWords, size: ShortSize): string {
   if (words.form === 'not-indexed') return 'a lock not indexed';
   // a lock without a name is "lock 0x…", its hash type after it where it has one
   if (words.name === null) return `a ${lockWordsText(words, size)}`;
-  // a named lock never carries a hash type: the decision drops a name it does not cover
+  // a named lock by another reference than the registry's carries its hash type after the noun
+  const by = words.form === 'lock' && words.byHashType ? ` · by ${words.byHashType}` : '';
   const article = /^[aeio]/i.test(words.name) ? 'an' : 'a';
-  return /lock$/i.test(words.name) ? `${article} ${words.name}` : `${article} ${words.name} lock`;
+  return /lock$/i.test(words.name)
+    ? `${article} ${words.name}${by}`
+    : `${article} ${words.name} lock${by}`;
 }
 
 /**
@@ -296,7 +326,8 @@ export function partyLock(party: ParticipantRef): LockWords | null {
 export function lockWordsText(words: LockWords, size: ShortSize): string {
   if (words.form === 'not-indexed') return 'not indexed';
   const by = words.form === 'lock' && words.byHashType ? ` by ${words.byHashType}` : '';
-  if (words.name !== null) return `${words.name}${by}`;
+  // a name by another reference than the registry's: "xUDT · by data2"
+  if (words.name !== null) return `${words.name}${by && ` ·${by}`}`;
   if (words.codeHash === null) throw new Error('a lock with neither a name nor a code hash');
   return `lock ${shortenHash(words.codeHash, size)}${by}`;
 }
@@ -340,7 +371,7 @@ export function LockWordsView({
       {name !== null ? (
         <>
           {name}
-          {by && <span className="whitespace-normal">{by}</span>}
+          {by && <span className="whitespace-normal"> ·{by}</span>}
         </>
       ) : (
         <>
@@ -377,6 +408,7 @@ export function LockWordsView({
  */
 export function LockKind({
   lockKind,
+  lockKindBy,
   lockCodeHash,
   address,
   size,
@@ -384,6 +416,8 @@ export function LockKind({
   place = 'inline',
 }: {
   lockKind: string | null;
+  /** The hash type the API writes beside the name, where the row sends it (`LockFacts.nameBy`). */
+  lockKindBy?: string | null;
   lockCodeHash: string | null;
   /** The row's address, which spells its lock: it decides the default lock. */
   address: string | null;
@@ -392,6 +426,6 @@ export function LockKind({
   className?: string;
   place?: LockPlace;
 }) {
-  const words = lockWords(rowLockFacts({ lockKind, lockCodeHash, address }), place);
+  const words = lockWords(rowLockFacts({ lockKind, lockKindBy, lockCodeHash, address }), place);
   return words && <LockWordsView words={words} size={size} className={className} />;
 }

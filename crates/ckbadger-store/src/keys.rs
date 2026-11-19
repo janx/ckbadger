@@ -2533,6 +2533,48 @@ mod tests {
 
     /// C-2 (narrowed in the fix round, findings 7 + 9): code is ELF data and
     /// nothing else — a Type ID cell whose data is not ELF is state.
+    /// T N6 (lane rd/api-lock-names): the `script_info` key's edges. A pair
+    /// round-trips; a hash type outside 0/1/2/4 is refused on the way in (a
+    /// panic naming the code hash: no caller passes a stored byte) and on the
+    /// way out (an error naming the key); a 32-byte key, the layout before,
+    /// says the remedy.
+    #[test]
+    fn script_info_key_round_trips_a_pair_and_refuses_its_edges() {
+        let code_hash = [0x5au8; 32];
+        for hash_type in [0u8, 1, 2, 4] {
+            let key = encode_script_info_key(&code_hash, hash_type);
+            assert_eq!(
+                decode_script_info_key(&key).unwrap(),
+                (code_hash.to_vec(), hash_type)
+            );
+        }
+        let panic = std::panic::catch_unwind(|| encode_script_info_key(&code_hash, 3))
+            .expect_err("hash type 3 is refused");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("hash_type 3 is not a CKB hash type")
+                && message.contains(&hex::encode(code_hash)),
+            "{message}"
+        );
+        let mut bad = encode_script_info_key(&code_hash, 1).to_vec();
+        bad[32] = 3;
+        let refused = decode_script_info_key(&bad).unwrap_err().to_string();
+        assert!(
+            refused.contains("names hash type 3, not a CKB hash type")
+                && refused.contains(&hex::encode(&bad)),
+            "{refused}"
+        );
+        let refused = decode_script_info_key(&code_hash).unwrap_err().to_string();
+        assert!(
+            refused.contains("is 32 bytes, not 33")
+                && refused.contains("delete RocksDB and re-sync from genesis"),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn is_code_cell_is_elf_data_only() {
         let elf = b"\x7fELF\x02\x01\x01rest";

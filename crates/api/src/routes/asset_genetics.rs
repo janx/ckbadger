@@ -475,6 +475,7 @@ fn gallery_read(
         .store
         .get_block_headers_batch(&mint_blocks)
         .map_err(|e| ApiError::internal(format!("gallery minting headers: {e:#}")))?;
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut data = Vec::new();
     for (item_id, entry, traits) in selected {
         let mint_header = headers.get(&entry.created_at_block).ok_or_else(|| {
@@ -514,14 +515,16 @@ fn gallery_read(
                 current.cell.lock_hash_type
             )?),
         );
+        let lock_name = super::assets::lock_kind(
+            &mut names,
+            &current.cell.lock_code_hash,
+            current.cell.lock_hash_type,
+        )?;
         object.insert(
-            "lockKind".into(),
-            json!(super::assets::lock_kind(
-                &state.store,
-                &current.cell.lock_code_hash,
-                current.cell.lock_hash_type
-            )?),
+            "lockKindBy".into(),
+            json!(lock_name.as_ref().and_then(|name| name.by())),
         );
+        object.insert("lockKind".into(), json!(lock_name.map(|name| name.name)));
         object.insert(
             "chainTime".into(),
             json!(mint_header.chain_time_ms.to_string()),

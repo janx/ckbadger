@@ -456,6 +456,13 @@ async fn pinned_app() -> Pinned {
         first,
         winning,
     } = fixture();
+    // The fixture chain holds no code cell of a registered Type ID deployment
+    // (the default lock's, did:ckb's): bind each registered Type ID to its
+    // binary as the indexer records it on a real chain (before the indexer's
+    // journal discipline), so each script is named by the code it runs (lane
+    // rd/api-lock-names).
+    run_label_import_bundled(domain.as_ref(), "mainnet").unwrap();
+    observe_registered_type_deployments(domain.as_ref());
     let indexer = restart(domain.clone(), append.clone(), "mainnet").unwrap();
     for block in &first {
         write_live_batch(&indexer, vec![block.clone()])

@@ -206,7 +206,9 @@ it('titles a Newest row with its owner’s lock as its tag writes it', async () 
     'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl';
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
-      { ...base, ownerAddress: byData },
+      // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+      // and a lock on the default lock's code hash by data runs none, so it sends no name
+      { ...base, ownerAddress: byData, lockKind: null },
       { ...base, sporeId: `0x${'03'.repeat(32)}` },
     ])
   );

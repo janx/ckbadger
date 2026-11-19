@@ -10,6 +10,7 @@ pub mod hash;
 pub mod http;
 pub mod miner;
 pub mod params;
+pub mod script_naming;
 pub mod script_resolution;
 pub mod stats_bucket;
 pub mod supply;
@@ -35,11 +36,14 @@ pub use params::{
     parse_optional_block_cursor_start, parse_optional_block_tx_cursor, parse_output_index,
     validate_block_number, MAX_OUTPUT_INDEX,
 };
+pub use script_naming::{
+    reference_form_family, ReferenceFormFamily, ScriptName, ScriptNamer, ScriptRegistry,
+};
 pub use script_resolution::{
     hash_type_to_string, hash_type_to_u8, historical_family_member_candidate, is_known_script_name,
     list_version_code_cells, observed_type_id_references_from_versions, pair_deployment_hashes,
     reference_form_member_version, reference_form_member_version_with_lineage,
-    registered_script_name, resolve_script_by_hash, resolve_script_form_by_hash, script_hash_type,
+    resolve_script_by_hash, resolve_script_form_by_hash, script_hash_type,
     CurrentScriptVersionResolution, VersionCodeCell,
 };
 pub use supply::{dao_supply, dao_treasury, protocol_circulating, DaoSupply};

@@ -2,7 +2,12 @@ import Link from '@/components/ui/link';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { formatStandard } from '@/components/activity-event-row';
-import { kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
+import {
+  kindOf,
+  registeredName,
+  registeredNameBy,
+  withNameBy,
+} from '@/components/transaction/transaction-cell-tiles';
 import { cellLockFacts, lockWords } from '@/components/ui/lock-kind';
 import type { MatrixColumn, MatrixGroup } from '@/components/transaction/script-group-matrix';
 import type {
@@ -55,12 +60,16 @@ function groupNaming(
   lookup: ScriptLookupResponse | undefined
 ): { label: string; href: string } {
   const registered = registeredName(lookup, g.script.codeHash, g.script.hashType);
+  const nameBy = registeredNameBy(lookup, g.script.codeHash, g.script.hashType);
   let name = registered;
-  let by = '';
+  // a name by another reference than the registry's is "xUDT · by data2"; a script without a name
+  // is its code hash and its hash type (lane rd/api-lock-names, T SHOULD-4: two unnamed groups on
+  // one code hash by two hash types read apart)
+  let by = name !== null ? (nameBy && ` · by ${nameBy}`) || '' : ` by ${g.script.hashType}`;
   if (g.kind === 'lock') {
     const lock = lockWords(
       cellLockFacts(
-        { lock: g.script, name: registered, address: null },
+        { lock: g.script, name: registered, nameBy, address: null },
         `lock group ${g.scriptHash}`
       ),
       'column'
@@ -68,7 +77,10 @@ function groupNaming(
     if (lock === null)
       throw new Error(`lock group ${g.scriptHash}: a column's lock words are never empty`);
     name = lock.form === 'not-indexed' ? null : lock.name;
-    by = lock.form === 'lock' && lock.byHashType ? ` by ${lock.byHashType}` : '';
+    by =
+      lock.form === 'lock' && lock.byHashType
+        ? `${name !== null ? ' ·' : ''} by ${lock.byHashType}`
+        : '';
   }
   return {
     label: `${name ?? shortenHash(g.script.codeHash, 'row')}${by}`,
@@ -153,7 +165,13 @@ export function scriptGroupRows(
         : kind === 'dao'
           ? 'DAO'
           : cell.type
-            ? (registeredName(lookup, cell.type.codeHash, cell.type.hashType) ?? 'typed')
+            ? ((name) =>
+                name === null
+                  ? 'typed'
+                  : withNameBy(
+                      name,
+                      registeredNameBy(lookup, cell.type!.codeHash, cell.type!.hashType)
+                    ))(registeredName(lookup, cell.type.codeHash, cell.type.hashType))
             : 'plain';
     // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
     // spends; an output is a cell only once the transaction is committed.

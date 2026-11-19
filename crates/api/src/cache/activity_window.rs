@@ -122,7 +122,7 @@ impl ActivityWindow {
                         activity_count: 0,
                         addresses: HashSet::new(),
                     });
-                block.stats.accumulate_from_tx_actions(tx);
+                block.stats.accumulate_from_tx_actions(tx)?;
                 if !tx.is_cellbase {
                     block.activity_count =
                         block.activity_count.checked_add(1).ok_or_else(|| {
@@ -399,9 +399,11 @@ mod tests {
             assert_eq!(stats.coinbase_count, 1);
             assert_eq!(stats.transfer_count, 0);
             assert_eq!(stats.total_ckb_moved, 7);
+            // re-pinned (lane rd/api-lock-names): a count is one script's,
+            // keyed by its pair (`script_count_key`); aa64e305 left this red
             assert_eq!(
                 stats.script_counts,
-                BTreeMap::from([(hex::encode([script; 32]), 1)])
+                BTreeMap::from([(format!("{}:type", hex::encode([script; 32])), 1)])
             );
             assert_eq!(
                 stats.protocol_action_counts,

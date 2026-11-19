@@ -6,6 +6,7 @@ import {
   cellOwnerLock,
   LockKind,
   lockPhrase,
+  lockWordsText,
   lockWords,
   LockWordsView,
   namedLockWords,
@@ -155,6 +156,9 @@ describe('cellLockFacts: an address that spells another lock is refused, clause 
       name: 'Default Lock',
       codeHash: DEFAULT_LOCK_CODE_HASH,
       hashType: 'type',
+      // re-pinned (lane rd/api-lock-names): the facts carry the hash type the API writes beside a
+      // name; none here, the registered reference
+      nameBy: null,
     });
   });
 
@@ -217,7 +221,9 @@ describe('rowLock: a row’s own hash type', () => {
     expect(
       decide(
         {
-          lockKind: 'SECP256K1/blake160',
+          // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+          // runs, and the default lock's code hash by data runs none, so it sends no name
+          lockKind: null,
           lockCodeHash: DEFAULT_LOCK_CODE_HASH,
           lockHashType: 'data',
           address: null,
@@ -303,10 +309,38 @@ describe('the decision’s sentence form', () => {
 
   it('writes a lock the registry does not name by its code hash, a by-data lock with its hash type', () => {
     expect(cellLockSentence(cell(CODE, 'type', null), 'row')).toBe('a lock 0x9b9b9b9b…9b9b9b');
-    // the registry's name is the default lock's, not this lock's (B4 fix round)
-    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'data', 'Default Lock'), 'row')).toBe(
+    // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API sends no name for the default
+    // lock's code hash by data (it runs no code), and the lock is written by its code hash and type
+    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'data', null), 'row')).toBe(
       'a lock 0x9bd7e06f…a3cce8 by data'
     );
+  });
+
+  // Lane rd/api-lock-names, the fix round's ruling: a name the API gives a pair that runs a
+  // family's code by another reference than the registry's carries that hash type beside it.
+  it('writes a name by another reference with its hash type beside it', () => {
+    const facts = {
+      name: 'xUDT',
+      codeHash: CODE,
+      hashType: 'data2' as const,
+      nameBy: 'data2' as const,
+    };
+    const words = namedLockWords(facts, 'sentence');
+    expect(lockWordsText(words, 'row')).toBe('xUDT · by data2');
+    expect(lockPhrase({ ...words, name: 'JoyID' } as typeof words, 'row')).toBe(
+      'a JoyID lock · by data2'
+    );
+    expect(lockWordsText(namedLockWords({ ...facts, nameBy: null }, 'column'), 'row')).toBe('xUDT');
+    // an unnamed lock by a data hash type is its code hash and its hash type; by type, its code hash
+    expect(
+      lockWordsText(namedLockWords({ ...facts, name: null, nameBy: null }, 'column'), 'row')
+    ).toBe('lock 0x9b9b9b9b…9b9b9b by data2');
+    expect(
+      lockWordsText(
+        namedLockWords({ ...facts, name: null, nameBy: null, hashType: 'type' }, 'column'),
+        'row'
+      )
+    ).toBe('lock 0x9b9b9b9b…9b9b9b');
   });
 
   it('says a lock that is not indexed in words, never silent', () => {

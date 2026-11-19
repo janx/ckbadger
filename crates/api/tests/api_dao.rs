@@ -2274,6 +2274,8 @@ async fn dao_calculator_states_the_free_capacity_it_assumed() {
 async fn by_pair_dao_depositors_name_a_lock_by_its_pair() {
     let store = dao_evidence_fixture_underived_with(|lock| if lock == 0x11 { 0 } else { 1 });
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
     derive(&store);
     let app = create_router(test_config(store)).await;
 

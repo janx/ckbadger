@@ -19,6 +19,7 @@
         "hashType": "type"
       },
       "lockName": "Default Lock",
+      "lockNameBy": null,
       "occupiedCapacity": "12900000000",
       "outputIndex": 0,
       "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvps2zahxe",
@@ -31,7 +32,8 @@
         "codeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
         "hashType": "type"
       },
-      "typeName": "did:ckb"
+      "typeName": "did:ckb",
+      "typeNameBy": null
     },
     {
       "anatomy": {
@@ -52,6 +54,7 @@
         "hashType": "type"
       },
       "lockName": "Default Lock",
+      "lockNameBy": null,
       "occupiedCapacity": "12900000000",
       "outputIndex": 0,
       "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqg8qurswpc8qurswpc8qurswpc8qurswpc92gx9u",
@@ -64,7 +67,8 @@
         "codeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
         "hashType": "type"
       },
-      "typeName": "did:ckb"
+      "typeName": "did:ckb",
+      "typeNameBy": null
     }
   ],
   "total": 2

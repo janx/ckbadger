@@ -2911,11 +2911,16 @@ async fn test_cells_by_script_rows_name_registered_type_and_lock_references() {
     let store = test_store();
     seed_genesis_baseline(&store);
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
     let joyid =
         hex::decode("d00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323").unwrap();
     let cota =
         hex::decode("1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df").unwrap();
     let unregistered = vec![0x9c; 32];
+    // JoyID's and COTA's Type IDs bound to their binaries, as the indexer
+    // records them: the code a pair runs names it (lane rd/api-lock-names)
+    observe_registered_type_deployments(store.as_ref());
     insert_by_script_cell(&store, &[0x41; 32], 10, &joyid, 1, Some(&cota), Some(1));
     insert_by_script_cell(
         &store,
@@ -3136,6 +3141,216 @@ async fn test_code_cell_whose_elf_does_not_parse_is_served_with_the_reason() {
         })
     );
     assert_eq!(json["codeCell"]["versionHash"], json["dataHash"]);
+}
+
+/// A family `name` whose one version is `binary`, registered by `reference`
+/// with `hash_type` (as label import writes the registry), and, for a `type`
+/// reference, the binding the indexer records when it sees the code cell.
+fn register_code_cell_family(
+    batch: &mut StoreBatch,
+    family_id: &str,
+    name: &str,
+    binary: &[u8],
+    reference: &[u8],
+    hash_type: u8,
+) {
+    batch.put_script_family(
+        family_id,
+        &ckbadger_store::types::ScriptFamilyInfo {
+            family_id: family_id.to_string(),
+            name: name.to_string(),
+            versions_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        binary,
+        &ckbadger_store::types::ScriptVersionInfo {
+            version_hash: binary.to_vec(),
+            registered_references: vec![(reference.to_vec(), hash_type)],
+            name: Some(name.to_string()),
+            family_id: Some(family_id.to_string()),
+            ..Default::default()
+        },
+    );
+    batch.put_script_version_by_family(family_id, binary);
+    if hash_type == 1 {
+        batch.put_script_reference_to_version(1, reference, binary);
+    }
+}
+
+/// `cells` cells observed under the pair (`reference`, `hash_type`) as a lock.
+fn observe_pair_usage(batch: &mut StoreBatch, reference: &[u8], hash_type: u8, cells: i64) {
+    batch.put_script_reference_info(
+        hash_type,
+        reference,
+        &ckbadger_store::types::ScriptReferenceInfo {
+            reference_hash: reference.to_vec(),
+            hash_type,
+            lock_cells_count: cells,
+            lock_live_cells_count: cells,
+            ..Default::default()
+        },
+    );
+}
+
+/// A whole RISC-V-free ELF64 header: code by `keys::is_code_cell`, its bytes
+/// distinct per `tag`.
+fn code_cell_bytes(tag: u8) -> Vec<u8> {
+    let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+    data.resize(64, 0);
+    data.push(tag);
+    data
+}
+
+/// Lane rd/api-lock-names, T MUST-2: what `codeCellOf` lists for a code cell
+/// deployed under a Type ID. The registry registers the Type ID by `type`; the
+/// chain also runs the binary by `data1`. Both pairs are listed, each named by
+/// the code it runs: the registered pair plainly, the data1 pair with its hash
+/// type beside the name. The binary by `data` and by `data2` is neither used
+/// nor registered and is not listed.
+#[tokio::test]
+async fn code_cell_of_a_type_id_deployment_lists_its_type_pair_and_its_used_data1_pair() {
+    use ckb_types::core::ScriptHashType;
+    use ckb_types::prelude::*;
+    let data = code_cell_bytes(0x31);
+    let binary = fixture_data_hash(&data);
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x31; 20],
+    );
+    let type_id = fixture_script(
+        &hex::encode(ckbadger_store::keys::TYPE_ID_CODE_HASH),
+        ScriptHashType::Type,
+        &[0x5a; 32],
+    );
+    let deployment: [u8; 32] = type_id.calc_script_hash().unpack();
+    let (binary_in, deployment_in) = (binary.clone(), deployment);
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, Some(type_id), data, 200_000_000_000, move |batch| {
+            register_code_cell_family(
+                batch,
+                "item3-type-id",
+                "Item Three Lock",
+                &binary_in,
+                &deployment_in,
+                1,
+            );
+            observe_pair_usage(batch, &binary_in, 2, 7);
+        })
+        .await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(
+        json["codeCellOf"],
+        serde_json::json!([
+            {
+                "name": "Item Three Lock",
+                "nameBy": null,
+                "codeHash": format!("0x{}", hex::encode(deployment)),
+                "hashType": "type",
+                "deploymentTypeHash": format!("0x{}", hex::encode(deployment)),
+                "deploymentDataHash": format!("0x{}", hex::encode(&binary)),
+            },
+            {
+                "name": "Item Three Lock",
+                "nameBy": "data1",
+                "codeHash": format!("0x{}", hex::encode(&binary)),
+                "hashType": "data1",
+                "deploymentTypeHash": format!("0x{}", hex::encode(deployment)),
+                "deploymentDataHash": format!("0x{}", hex::encode(&binary)),
+            },
+        ])
+    );
+}
+
+/// Lane rd/api-lock-names, T MUST-2: a code cell with no type script is
+/// referenced by its data hash only. Its registered pair (by `data`) is listed
+/// though no cell uses it yet, and a pair the chain uses by `data2` is listed
+/// with its hash type beside the family's name; neither carries a deployment
+/// type hash.
+#[tokio::test]
+async fn code_cell_of_a_data_only_code_cell_lists_its_registered_and_used_data_pairs() {
+    use ckb_types::core::ScriptHashType;
+    let data = code_cell_bytes(0x32);
+    let binary = fixture_data_hash(&data);
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x32; 20],
+    );
+    let binary_in = binary.clone();
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, None, data, 200_000_000_000, move |batch| {
+            register_code_cell_family(
+                batch,
+                "item3-data",
+                "Item Three Data",
+                &binary_in,
+                &binary_in,
+                0,
+            );
+            observe_pair_usage(batch, &binary_in, 4, 3);
+        })
+        .await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let code_hash = format!("0x{}", hex::encode(&binary));
+    assert_eq!(
+        json["codeCellOf"],
+        serde_json::json!([
+            {
+                "name": "Item Three Data",
+                "nameBy": null,
+                "codeHash": code_hash,
+                "hashType": "data",
+                "deploymentDataHash": code_hash,
+            },
+            {
+                "name": "Item Three Data",
+                "nameBy": "data2",
+                "codeHash": code_hash,
+                "hashType": "data2",
+                "deploymentDataHash": code_hash,
+            },
+        ])
+    );
+}
+
+/// Lane rd/api-lock-names, T MUST-2: a cell whose data is not code serves no
+/// script, even where a script by its data hash is used and registered: the
+/// chain resolves no script to state data.
+#[tokio::test]
+async fn code_cell_of_a_cell_that_is_no_code_cell_is_null() {
+    use ckb_types::core::ScriptHashType;
+    let data = b"{\"state\":1}".to_vec();
+    let data_hash = fixture_data_hash(&data);
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x33; 20],
+    );
+    let hash_in = data_hash.clone();
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, None, data, 200_000_000_000, move |batch| {
+            register_code_cell_family(
+                batch,
+                "item3-state",
+                "Item Three State",
+                &hash_in,
+                &hash_in,
+                0,
+            );
+            observe_pair_usage(batch, &hash_in, 0, 5);
+        })
+        .await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert!(json["codeCellOf"].is_null(), "got {}", json["codeCellOf"]);
 }
 
 /// Lane B (B3): the cell page of an xUDT-typed cell whose data holds no amount
@@ -3359,6 +3574,8 @@ async fn by_pair_cells_by_script_rows_name_a_lock_by_its_pair() {
     let store = test_store();
     seed_genesis_baseline(&store);
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
     let secp = default_lock_code_hash();
     insert_by_script_cell(&store, &[0x51; 32], 10, &secp, 1, None, None);
     insert_by_script_cell(&store, &[0x52; 32], 11, &secp, 0, None, None);
@@ -3407,6 +3624,8 @@ async fn by_pair_cells_by_script_rows_name_a_lock_by_its_pair() {
 async fn by_pair_address_lock_info_names_only_the_registered_pair() {
     let store = test_store();
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
     let secp = default_lock_code_hash();
     let args = vec![0x46; 20];
     let mut batch = StoreBatch::new(store.as_ref());

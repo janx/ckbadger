@@ -482,7 +482,9 @@ pub fn resolved_dependencies(
     tx: &ckb_types::core::TransactionView,
     reader: &ckb_store_reader::CkbChainReader,
     store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
 ) -> anyhow::Result<Vec<super::transactions::CellDepResponse>> {
+    let mut names = crate::utils::ScriptNamer::new(store, cells_store);
     let mut scripts = BTreeMap::<String, packed::Script>::new();
     for input in tx
         .inputs()
@@ -577,15 +579,16 @@ pub fn resolved_dependencies(
                             .get(hash)
                             .or_else(|| output_locks.get(hash))
                             .expect("matched hash is a key of its set");
-                        // Named by its pair (code hash, hash type): lane
-                        // rd/api-lock-names.
+                        // Named by the code its pair runs, the one rule
+                        // (`utils::ScriptNamer`); where the pair is not the
+                        // registry's reference for that code, its hash type is
+                        // written beside the name.
                         let hash_type: u8 = script.hash_type().into();
-                        if let Some(name) = crate::utils::script_resolution::registered_script_name(
-                            store,
-                            script.code_hash().as_slice(),
-                            i16::from(hash_type),
-                        )? {
-                            script_names.insert(name);
+                        if let Some(name) = names.name(script.code_hash().as_slice(), hash_type)? {
+                            script_names.insert(match name.by {
+                                Some(by) => format!("{} · by {by}", name.name),
+                                None => name.name,
+                            });
                         }
                     }
                     Ok(ResolvedDependencyCell {

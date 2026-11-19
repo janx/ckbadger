@@ -2016,6 +2016,58 @@ async fn by_pair_token_holders_name_a_lock_by_its_pair() {
     assert_eq!(rows[1]["lockHashType"], "data", "{json}");
 }
 
+/// Lane rd/api-lock-names (T SHOULD-3): a token's issuer is named by the code
+/// its lock pair runs: the default lock by its name; its code hash by `data`
+/// (runs no code) by none; the default lock's binary by `data1` by the
+/// default lock's name with "data1" beside it, the pair not being the
+/// registry's reference.
+#[tokio::test]
+async fn by_pair_token_issuer_names_its_lock_by_its_pair() {
+    let store = test_store();
+    let (by_type, by_data, by_binary) = ([0x44u8; 32], [0x45u8; 32], [0x46u8; 32]);
+    seed_default_lock_three_pairs(&store, &by_type, &by_data, &by_binary);
+    // Plain xUDT: the 32-byte args are the owner lock hash the script proves.
+    for owner in [by_type, by_data, by_binary] {
+        let mut token = placeholder_token_without_metadata();
+        token.type_args = owner.to_vec();
+        store
+            .put_token_direct(&[owner[0] + 0x20; 32], &token)
+            .unwrap();
+    }
+    for (owner, kind, by, hash_type) in [
+        (
+            by_type,
+            serde_json::json!("Default Lock"),
+            serde_json::Value::Null,
+            "type",
+        ),
+        (
+            by_data,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            "data",
+        ),
+        (
+            by_binary,
+            serde_json::json!("Default Lock"),
+            serde_json::json!("data1"),
+            "data1",
+        ),
+    ] {
+        let (status, json) = token_detail(store.clone(), &[owner[0] + 0x20; 32]).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let issuer = &json["issuer"];
+        assert_eq!(
+            issuer["lockHash"],
+            format!("0x{}", hex::encode(owner)),
+            "{json}"
+        );
+        assert_eq!(issuer["lockHashType"], hash_type, "{json}");
+        assert_eq!(issuer["lockKind"], kind, "{json}");
+        assert_eq!(issuer["lockKindBy"], by, "{json}");
+    }
+}
+
 /// lane exactness, part A, A3: a holders page states the rank of its first row (`firstRank`), counted in the
 /// request's view; the page computed it from the rows it had read, which is wrong once the list
 /// moves between two reads. Holders of 100 (0x01), 100 (0x02) and 50 (0x03): page one is 0x01 at

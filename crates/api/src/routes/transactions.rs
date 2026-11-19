@@ -286,7 +286,7 @@ pub(crate) fn transaction_response(
                 &state.append_only_store,
                 &state.ckb_network,
                 actions,
-                &mut std::collections::HashMap::new(),
+                &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
                 &mut std::collections::HashMap::new(),
             )
             .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -2631,6 +2631,7 @@ async fn get_cell_deps(
             &tx_view,
             store,
             &state.store,
+            &state.append_only_store,
         )
         .map_err(|e| ApiError::internal(format!("cell deps for {hash}: {e}")))?);
     }

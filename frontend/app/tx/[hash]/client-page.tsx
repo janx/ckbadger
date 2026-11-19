@@ -45,6 +45,7 @@ import {
   CellTilesError,
   readCellTiles,
   registeredName,
+  registeredNameBy,
 } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import {
@@ -506,6 +507,7 @@ function WitnessRow({
           {
             lock: witness.lock,
             name: registeredName(lookup, witness.lock.codeHash, witness.lock.hashType),
+            nameBy: registeredNameBy(lookup, witness.lock.codeHash, witness.lock.hashType),
             address: null,
           },
           `Transaction ${tx.hash} cellbase witness`
@@ -1856,6 +1858,7 @@ export default function TransactionDetailPage() {
                       {
                         lock: out.lock,
                         name: registeredName(lookup, out.lock.codeHash, out.lock.hashType),
+                        nameBy: registeredNameBy(lookup, out.lock.codeHash, out.lock.hashType),
                         address: out.address ?? null,
                       },
                       `Transaction ${tx.hash} output ${at}`
