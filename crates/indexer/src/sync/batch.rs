@@ -7684,6 +7684,64 @@ mod tests {
             vec![block_100, block_101, block_102]
         }
 
+        /// The lead's ruling (resync/protocol-pairs): the Nervos DAO is its
+        /// consensus reference alone, by `type`. A cell under the DAO binary's
+        /// data hash by data1 runs the DAO's code but earns no compensation and
+        /// is no deposit: live and bulk write no deposit row and no DAO action
+        /// for it, while the same deposit under the DAO reference does.
+        #[tokio::test]
+        async fn a_cell_under_the_dao_binary_by_data1_is_no_deposit() {
+            let dao_binary = Script {
+                code_hash: "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923"
+                    .to_string(),
+                hash_type: "data1".to_string(),
+                args: "0x".to_string(),
+            };
+            for (type_script, deposit) in [(dao_type_script(), true), (dao_binary, false)] {
+                let mut blocks = phase_setup_blocks()[..2].to_vec();
+                let deposit_tx = &mut blocks[1].block.transactions[1];
+                deposit_tx.outputs[0].type_ = Some(type_script.clone());
+                let deposit_outpoint = ckbadger_store::keys::encode_outpoint(&[0xd1; 32], 0);
+
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(store.clone());
+                for block in blocks.clone() {
+                    write_live_block(&indexer, block).await.unwrap();
+                }
+                assert_eq!(
+                    store.get_dao_deposit(&deposit_outpoint).unwrap().is_some(),
+                    deposit,
+                    "live deposit row under {}",
+                    type_script.hash_type
+                );
+                let actions = store.get_tx_actions(101, 1, &[0xd1; 32]).unwrap().unwrap();
+                assert_eq!(
+                    actions
+                        .protocol_actions
+                        .iter()
+                        .any(|a| a.protocol == "dao" && a.action == "deposit"),
+                    deposit,
+                    "live DAO action under {}: {:?}",
+                    type_script.hash_type,
+                    actions.protocol_actions
+                );
+
+                let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).unwrap();
+                assert_eq!(
+                    bulk.stats_dao_rows
+                        .iter()
+                        .any(|(cf, key, _)| *cf == ckbadger_store::CF_DAO_DEPOSITS
+                            && *key == deposit_outpoint),
+                    deposit,
+                    "bulk deposit row under {}",
+                    type_script.hash_type
+                );
+            }
+        }
+
         fn stored_fee(store: &CkbadgerStore, tx_hash: [u8; 32]) -> i64 {
             let (_, _, entry) = store
                 .get_tx_by_hash(&tx_hash)
