@@ -43,7 +43,9 @@ describe('PeersTable', () => {
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
-    fireEvent.change(screen.getByLabelText('Filter by crawler dial state'), {
+    // re-pinned (lane C2 topics): the controls board's select, named by the label it stands after
+    // (it was a bare select named "Filter by crawler dial state")
+    fireEvent.change(screen.getByLabelText('crawler dial state'), {
       target: { value: 'advertisedUnverified' },
     });
 
@@ -56,7 +58,11 @@ describe('PeersTable', () => {
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
-    const select = screen.getByLabelText('Filter by address observation');
+    // re-pinned (lane C2 topics): the select after its label "address observation", its first
+    // choice the board's "all" (it was a bare select named "Filter by address observation",
+    // opening on "All address observations")
+    const select = screen.getByLabelText('address observation');
+    expect(within(select).getAllByRole('option')[0]).toHaveTextContent(/^all$/);
     expect(
       within(select)
         .getAllByRole('option')
@@ -117,7 +123,10 @@ describe('PeersTable', () => {
           : HttpResponse.json({ items: [peer('d')], nextCursor: 'after-d' });
       })
     );
-    const more = () => screen.getByRole('button', { name: 'Load more' });
+    // re-pinned (lane C2 topics): the controls board's short-list form, "next 50 ↓", and the
+    // select after its label (they were the button "Load more" and a bare select named "Filter by
+    // crawler dial state")
+    const more = () => screen.getByRole('button', { name: 'next 50 ↓' });
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
     expect(asked).toEqual([{ cursor: null, limit: '5', state: null }]);
@@ -125,10 +134,11 @@ describe('PeersTable', () => {
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
     expect(asked.at(-1)).toEqual({ cursor: 'after-d', limit: '50', state: null });
     // the first page's peer stays, the next one under it, and the list has no more to load
-    expect(screen.getByText(rowId('d'.repeat(64)))).toBeInTheDocument();
-    expect(screen.getByText(rowId('e'.repeat(64)))).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
-    fireEvent.change(screen.getByLabelText('Filter by crawler dial state'), {
+    const [first, next] = screen.getAllByTestId('peer-row');
+    expect(within(first).getByText(rowId('d'.repeat(64)))).toBeInTheDocument();
+    expect(within(next).getByText(rowId('e'.repeat(64)))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'next 50 ↓' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('crawler dial state'), {
       target: { value: 'reachable' },
     });
     await waitFor(() =>
@@ -417,9 +427,12 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(button).toHaveAttribute('aria-expanded', 'false');
     const panel = document.getElementById(button.getAttribute('aria-controls')!)!;
     expect(panel).toHaveClass('hidden', 'md:flex');
+    // re-pinned (lane C2 topics): the two selects are named by the labels they stand after (they
+    // were "Filter by crawler dial state" and "Filter by address observation"); the two fields
+    // keep their names, the board's text field has no visible label
     for (const label of [
-      'Filter by crawler dial state',
-      'Filter by address observation',
+      'crawler dial state',
+      'address observation',
       'Filter by country',
       'Filter by version',
     ])

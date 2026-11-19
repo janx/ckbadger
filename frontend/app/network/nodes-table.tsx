@@ -7,6 +7,9 @@ import { TerminalRow } from '@/components/ui/terminal-panel';
 import { RowTag, type RowTagVariant } from '@/components/ui/row-tag';
 import { WIDE_ROW_MIN_WIDTH } from '@/components/ui/list-table';
 import { DetailSection } from '@/components/ui/detail-layout';
+import { Pager } from '@/components/ui/pager';
+import { Select, type SelectOption } from '@/components/ui/select';
+import { TextField } from '@/components/ui/text-field';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   api,
@@ -50,7 +53,9 @@ const COLUMNS = [
   'RTT',
 ];
 
-const STATE_OPTIONS: Array<{ value: NetworkPeerDisplayState; label: string }> = [
+/** The filters' choices, `all` (no filter: the empty value) first, as the board's select writes it. */
+const STATE_OPTIONS: SelectOption<'' | NetworkPeerDisplayState>[] = [
+  { value: '', label: 'all' },
   { value: 'reachable', label: 'Same-network Identify completed' },
   { value: 'verifiedUnavailable', label: 'Latest aliases exhausted · previously verified' },
   { value: 'advertisedUnverified', label: 'Aliases exhausted · no retained verification' },
@@ -58,7 +63,8 @@ const STATE_OPTIONS: Array<{ value: NetworkPeerDisplayState; label: string }> = 
   { value: 'noCompletedObservation', label: 'Not dialed by this crawler' },
 ];
 
-const OBSERVATION_OPTIONS: Array<{ value: NetworkAddressProbeResult; label: string }> = [
+const OBSERVATION_OPTIONS: SelectOption<'' | NetworkAddressProbeResult>[] = [
+  { value: '', label: 'all' },
   { value: 'dialRequestFailed', label: 'Dial request failed' },
   {
     value: 'noAuthenticatedSessionBeforeDeadline',
@@ -627,63 +633,35 @@ export function PeersTable() {
               filtersOpen ? 'flex' : 'hidden md:flex'
             )}
           >
-            <select
+            {/* The controls board's select after its label and its text field in the well; each
+                filter starts the list again from its first five. On a phone the select, its
+                label and its well shrink to the panel's line (every box min-w-0): the label 18
+                characters at 13 px (140.4 px) and 10 px, the well what is left of 296 px at 360. */}
+            <Select
+              label="crawler dial state"
               value={filters.state ?? ''}
-              onChange={(event) =>
-                applyFilters({
-                  ...filters,
-                  state: (event.target.value || undefined) as NetworkPeerDisplayState | undefined,
-                })
-              }
-              aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
-            >
-              <option value="">All crawler dial states</option>
-              {STATE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={filters.observation ?? ''}
-              onChange={(event) =>
-                applyFilters({
-                  ...filters,
-                  observation: (event.target.value || undefined) as
-                    | NetworkAddressProbeResult
-                    | undefined,
-                })
-              }
-              aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
-            >
-              <option value="">All address observations</option>
-              {OBSERVATION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={filters.country ?? ''}
-              onChange={(event) =>
-                applyFilters({ ...filters, country: event.target.value || undefined })
-              }
-              placeholder="country"
-              aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
+              options={STATE_OPTIONS}
+              onChange={(value) => applyFilters({ ...filters, state: value || undefined })}
             />
-            <input
-              type="text"
-              value={filters.version ?? ''}
-              onChange={(event) =>
-                applyFilters({ ...filters, version: event.target.value || undefined })
-              }
+            <Select
+              label="address observation"
+              value={filters.observation ?? ''}
+              options={OBSERVATION_OPTIONS}
+              onChange={(value) => applyFilters({ ...filters, observation: value || undefined })}
+            />
+            <TextField
+              label="Filter by country"
+              placeholder="country"
+              value={filters.country ?? ''}
+              onChange={(value) => applyFilters({ ...filters, country: value || undefined })}
+              className="w-[200px]"
+            />
+            <TextField
+              label="Filter by version"
               placeholder="version"
-              aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
+              value={filters.version ?? ''}
+              onChange={(value) => applyFilters({ ...filters, version: value || undefined })}
+              className="w-[200px]"
             />
           </div>
 
@@ -721,16 +699,14 @@ export function PeersTable() {
           </div>
         </div>
 
+        {/* The controls board's short-list form: "next 50 ↓", the peers the next load asks for
+            (the API sends no total and no page size; the cursor is the last peer shown). */}
         {data?.nextCursor != null && (
           <div className="border-row-rule flex justify-center border-t px-4 py-2">
-            <button
-              type="button"
-              onClick={() => setCursor(data.nextCursor ?? undefined)}
-              disabled={isFetching}
-              className="text-text-dim hover:text-interactive text-small font-mono transition-colors disabled:opacity-50"
-            >
-              {isFetching ? 'Loading…' : 'Load more'}
-            </button>
+            <Pager
+              mode="more"
+              next={{ count: MORE_PEERS, onShow: () => setCursor(data.nextCursor ?? undefined) }}
+            />
           </div>
         )}
       </div>

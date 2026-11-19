@@ -554,8 +554,15 @@ describe('Network board (F2 charts)', () => {
 
   it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
     render(wrap(<PeersTable />));
-    const select = await screen.findByLabelText('Filter by address observation');
-    expect(select).toHaveClass('max-w-full');
-    expect(screen.getByLabelText('Filter by crawler dial state')).toHaveClass('max-w-full');
+    // re-pinned (lane C2 topics): the filters are the controls board's selects, each after its
+    // label in the field's well; every box from the filter row's item down to the native select
+    // may shrink (min-w-0), so the well takes what the label leaves of the line (they were bare
+    // selects named "Filter by …", capped at the line by max-w-full)
+    for (const name of ['address observation', 'crawler dial state']) {
+      const select = await screen.findByLabelText(name);
+      const well = select.parentElement!;
+      const item = well.parentElement!;
+      for (const box of [select, well, item]) expect(box, name).toHaveClass('min-w-0');
+    }
   });
 });
