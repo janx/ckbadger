@@ -207,9 +207,9 @@ describe('PeersTable', () => {
 
     expect(await screen.findByText('Last completed round #5')).toBeInTheDocument();
     const evidence = screen.getByTestId('peer-evidence-row');
-    expect(
-      within(evidence).getByText('No authenticated session before deadline')
-    ).toBeInTheDocument();
+    // re-pinned (lane C2 topics): the observation in words that hold a phone's select, which
+    // offers the same words (it was "No authenticated session before deadline", 40 glyphs)
+    expect(within(evidence).getByText('No authenticated session in time')).toBeInTheDocument();
     expect(within(evidence).getByText('2 consecutive exhausted rounds')).toBeInTheDocument();
     expect(within(evidence).getByText(/first advertised/)).toHaveTextContent(/last advertised/);
     expect(within(evidence).getByText('Advertised by')).toBeInTheDocument();
