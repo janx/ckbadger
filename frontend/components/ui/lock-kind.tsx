@@ -293,7 +293,8 @@ export function LockWordsView({
               scriptKind: 'lock',
             })}
             title={codeHash ?? undefined}
-            className="hover:text-jade transition-colors"
+            look="inline"
+            className="transition-colors"
           >
             <ShortId value={codeHash!} kind="hash" size={size} />
           </Link>

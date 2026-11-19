@@ -7,19 +7,23 @@
  * before any page uses them. Development only: the dev server serves it, `vite build` never reads
  * it. Each control is live: a click, a key or a narrower window shows what it does there (the tab
  * row's counts leave at 360, a filter whose chips do not fit a 360 px phone's line becomes a
- * select below 640).
+ * select below 640). Its last item is the links (lane c2-links): the board's three lines on the
+ * page's ground, in a row and in a well, each link reachable by the keyboard.
  */
 import { StrictMode, useState, type CSSProperties, type ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
+import { BlockLink } from '@/components/ui/block-link';
 import { CopyButton } from '@/components/ui/copy-button';
+import { ExternalLink } from '@/components/ui/external-link';
 import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
 import { HelpPopover } from '@/components/ui/help-popover';
+import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Select } from '@/components/ui/select';
 import { Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
-import { themeDeclarations } from '@/lib/palette';
+import { color, themeDeclarations } from '@/lib/palette';
 import '@/app/globals.css';
 
 /** One control of the board, its name in the quiet ink beside it, its states under one another. */
@@ -250,6 +254,73 @@ function CopyAndHelp() {
   );
 }
 
+/** The board's three lines of links: a row's key, links inside a line, ways onward. */
+function LinkLines() {
+  return (
+    <div className="text-small text-text flex flex-col gap-1.5">
+      <span>
+        <Link look="key" href="/tx/0xccf9a9ab95091f">
+          0xccf9a9ab…95091f
+        </Link>
+      </span>
+      <span>
+        paid by{' '}
+        <Link look="inline" href="/address/ckb1dcratvu9">
+          ckb1…dcratvu9
+        </Link>{' '}
+        in <BlockLink number={21009104} look="inline" />
+      </span>
+      <span className="flex flex-wrap gap-x-4">
+        <Link look="onward" href="/tokens/0xccf9a9ab95091f/holders">
+          all 522 holders
+        </Link>
+        <ExternalLink look="onward" href="https://ckb2021.example">
+          ckb2021 overview
+        </ExternalLink>
+      </span>
+    </div>
+  );
+}
+
+function Links() {
+  return (
+    <Item name="links">
+      <LinkLines />
+      <Note>on the page’s ground; tab through them: focus turns each celadon, as hover does</Note>
+      <div className="border-row-rule border-y py-[11px]">
+        <LinkLines />
+      </div>
+      <Note>in a row, between its rules</Note>
+      <div className="bg-base-void border-base-border border p-2.5 shadow-[inset_0_1px_3px_var(--m-well-inset)]">
+        <LinkLines />
+      </div>
+      <Note>in a well</Note>
+      <span className="text-small text-text flex flex-wrap gap-x-6">
+        <span>
+          ruled:{' '}
+          <Link look="inline" href="/address/ckb1dcratvu9">
+            ckb1…dcratvu9
+          </Link>
+        </span>
+        <span>
+          board:{' '}
+          <span
+            className="underline decoration-1 underline-offset-[3px]"
+            style={{ textDecorationColor: color('slate-other') }}
+          >
+            ckb1…dcratvu9
+          </span>
+        </span>
+      </span>
+      <Note>
+        a link inside a line, underlined as ruled (the muted ink: 5.40–6.57 : 1 on the night
+        grounds, 3.84–4.70 : 1 by day) beside the board’s slate-other line, drawn on a plain span
+        and not a link (1.37–1.66 : 1 by night, 1.50–1.84 : 1 by day), for the owner to compare
+      </Note>
+    </Item>
+  );
+}
+
 function Board({ theme }: { theme: string }) {
   return (
     <section className="py-8">
@@ -260,6 +331,7 @@ function Board({ theme }: { theme: string }) {
       <Pagers />
       <Fields />
       <CopyAndHelp />
+      <Links />
     </section>
   );
 }

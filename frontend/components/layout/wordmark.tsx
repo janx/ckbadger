@@ -33,7 +33,7 @@ export function Wordmark({ plain = false }: { plain?: boolean }) {
       </a>
     );
   return (
-    <Link href="/" aria-label="CKBadger home" className={WORDMARK_CLASS}>
+    <Link look="nav" href="/" aria-label="CKBadger home" className={WORDMARK_CLASS}>
       <Mark />
     </Link>
   );

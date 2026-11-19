@@ -1,5 +1,7 @@
 'use client';
 
+import Link from '@/components/ui/link';
+
 /** The frame's hold of the page (src/routes/router.tsx): the skip link's target. */
 export const PAGE_CONTENT_ID = 'page-content';
 
@@ -8,10 +10,12 @@ export const PAGE_CONTENT_ID = 'page-content';
  * goes past the header and the vitals to the page. Drawn only while it has the focus, at the top
  * left over the header, as a command line: the prompt square, then the words in lowercase. The
  * focus moves without touching the URL's fragment, which the router would read as a navigation.
+ * A link of the shell's navigation (`look="nav"`, components/ui/link.tsx): its own design.
  */
 export function SkipLink() {
   return (
-    <a
+    <Link
+      look="nav"
       href={`#${PAGE_CONTENT_ID}`}
       onClick={(event) => {
         event.preventDefault();
@@ -23,6 +27,6 @@ export function SkipLink() {
     >
       <span aria-hidden="true" className="prompt-square" />
       skip to content
-    </a>
+    </Link>
   );
 }
