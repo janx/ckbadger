@@ -407,7 +407,7 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
   'app/scripts/page.tsx': [phoneRow("shortenHash(s.codeHash, 'tight')")],
   'app/transactions/page.tsx': [phoneRow('hash={tx.hash}')],
   'components/address/address-history.tsx': [
-    phoneRow('<TxHash tx={tx} size="tight" />'),
+    phoneRow('hash={tx.txHash}'),
     phoneRow('<CellOutPoint cell={c} size="tight" />'),
     phoneRow('<CellContains cell={c} size="tight" />'),
   ],
