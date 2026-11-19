@@ -423,22 +423,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // 'app/forks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
   // 'app/hardforks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
   // 'app/network/client-page.tsx' left the list (lane P4: ink 1, raw 1 → 0)
-  'components/dao/dao-board.tsx': {
-    lane: 'p-topics',
-    sites: { look: 13, ink: 8, raw: 1 },
-    reason:
-      '13 without a look; inks by hand (hover:underline, hover:text-text-bright, text-text); 1 raw <a>',
-  },
-  'components/dao/dao-grows.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/dao/dao-sources.tsx': {
-    lane: 'p-topics',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
-  },
+  // the DAO page's board, its growth section and its sources left the list (lane P4: look 13,
+  // ink 8, raw 1; look 1; look 2, ink 2 → 0)
   // 'components/deep-fork-alert.tsx' left the list (lane P4: look 1, ink 1 → 0, the button the
   // block look, its words' ink on a span inside it)
   // the Fiber board, step and graph left the list (lane P4: look 11, ink 11 → 0)
@@ -478,8 +464,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // list's channel `key`, its parties `inline` in the table and the phone row, the lede's way
 // down `onward` (the raw anchor and its typed arrow gone), 8, the graph's party and block
 // links, 8; the network page, 2: its lede's "How it works" a Link of the onward look, one
-// ink and one raw <a>)
-const TOLERATED_TOTAL = 475;
+// ink and one raw <a>) → 448 (lane P4, the DAO page, 27: its blocks inline, a depositor its
+// row's key, the ways onward (the lede's, the charts', every depositor's, the activity lists',
+// the source block's and the anchor's) onward with no typed arrow and no raw <a>, the DAO
+// script's code hash a key)
+const TOLERATED_TOTAL = 448;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

@@ -461,15 +461,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
     // the reading ink; link 3 → 2 (B4 second fix round): a depositor's lock is written by the one
     // decision (LockWordsView, components/ui/lock-kind.tsx), its link no longer this file's
-    sites: { link: 2, td: 2, prose: 1 },
+    // td 2 → 0, prose 1 → 0 (lane P4): a holder's rank and share read in the reading ink, the
+    // amounts line under the icicle reads, its labels quiet
+    sites: { link: 2 },
     reason:
-      "the exact amounts line, the block links in the readout and anchor lines, a holder's rank and share in table cells",
+      'the block links in the capacity-use caption and the 365-day anchor line, notes under a figure',
   },
-  'components/dao/dao-grows.tsx': {
-    family: 'topics',
-    sites: { link: 1 },
-    reason: "the block link in the cycle readout's idle line",
-  },
+  // 'components/dao/dao-grows.tsx' left the list (lane P4): the deposit reading reads in the
+  // reading ink, its block link with it
   // 'components/dao/dao-history.tsx' left the list (lane P4): the not-enough-days sentence, an
   // empty state, reads in the reading ink
   'components/fiber/fiber-channel-step.tsx': {
