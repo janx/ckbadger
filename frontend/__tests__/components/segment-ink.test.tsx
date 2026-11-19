@@ -19,6 +19,7 @@ import {
   type ThemeName,
 } from '@/lib/palette';
 import { resetThemeForTests } from '@/lib/theme';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -156,24 +157,26 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     stubChartWidth(1232);
     server.use(
       http.get('/api/:network/v1/network/distributions', () =>
-        HttpResponse.json({
-          verifiedRetained: 78,
-          sameNetworkReachable: 57,
-          verifiedUnavailable: 21,
-          versions: [],
-          countries: [{ label: 'United States', count: 40 }],
-          asns: [
-            { label: 'AS16509 Amazon.com, Inc.', count: 48 },
-            { label: 'AS24940 Hetzner Online GmbH', count: 5 },
-            { label: 'AS14061 DigitalOcean, LLC', count: 5 },
-            { label: 'AS16276 OVH SAS', count: 5 },
-            { label: 'AS63949 Akamai Connected Cloud', count: 4 },
-            { label: 'AS1 a', count: 4 },
-            { label: 'AS2 b', count: 4 },
-            { label: 'AS3 c', count: 3 },
-          ],
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 78,
+            sameNetworkReachable: 57,
+            verifiedUnavailable: 21,
+            versions: [],
+            countries: [{ label: 'United States', count: 40 }],
+            asns: [
+              { label: 'AS16509 Amazon.com, Inc.', count: 48 },
+              { label: 'AS24940 Hetzner Online GmbH', count: 5 },
+              { label: 'AS14061 DigitalOcean, LLC', count: 5 },
+              { label: 'AS16276 OVH SAS', count: 5 },
+              { label: 'AS63949 Akamai Connected Cloud', count: 4 },
+              { label: 'AS1 a', count: 4 },
+              { label: 'AS2 b', count: 4 },
+              { label: 'AS3 c', count: 3 },
+            ],
+            protocols: [],
+          })
+        )
       )
     );
     render(<HostingBar />);
@@ -197,18 +200,20 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     stubChartWidth(1232);
     server.use(
       http.get('/api/:network/v1/network/distributions', () =>
-        HttpResponse.json({
-          verifiedRetained: 80,
-          sameNetworkReachable: 80,
-          verifiedUnavailable: 0,
-          versions: [],
-          countries: [{ label: 'United States', count: 80 }],
-          asns: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((org, i) => ({
-            label: `AS${i + 1} ${org}`,
-            count: i < 5 ? 12 : 10,
-          })),
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 80,
+            sameNetworkReachable: 80,
+            verifiedUnavailable: 0,
+            versions: [],
+            countries: [{ label: 'United States', count: 80 }],
+            asns: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((org, i) => ({
+              label: `AS${i + 1} ${org}`,
+              count: i < 5 ? 12 : 10,
+            })),
+            protocols: [],
+          })
+        )
       )
     );
     render(<HostingBar />);

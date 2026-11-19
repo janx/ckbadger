@@ -502,6 +502,8 @@ interface ForkOverview {
   throughDate: string | null;
   days: { date: string; canonicalBlocks: number; uncles: number; nodeSwitches: number }[];
   unclesInWindow: number;
+  /** The window's canonical blocks, the route's (lane exactness, part A). */
+  canonicalBlocksInWindow: number;
   nodeSwitchesInWindow: number;
   nodeSwitchesAllTime: number;
   /** R2b-b: this node's switch history as a whole (FF-L1). */
@@ -2164,6 +2166,8 @@ interface DaoStatistics {
   activeDeposits: number;
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
+  /** The live DAO cells, deposits and withdrawal requests, the route's (lane exactness, part A). */
+  liveCellsCount: number;
   pendingWithdrawalCapacity: string;
   pendingWithdrawalCapacityCkb: string;
   daoCapacity: string;
@@ -2186,6 +2190,8 @@ interface DaoStatistics {
   depositCompensationCkb: string;
   burnt: string;
   burntCkb: string;
+  /** Secondary issuance since genesis, shannons: the three parts' whole, the route's (lane exactness, part A). */
+  secondaryIssuance: string;
   depositChange24h: string | null;
   depositorsChange24h: number | null;
   claimedCompensationChange24h: string | null;
@@ -2785,6 +2791,8 @@ export interface NominalApcTodayF2 {
  */
 interface UncleRateChartResponse extends ChartResponse {
   orphanRateTarget: { numerator: number; denominator: number };
+  /** Each day's uncles and canonical blocks, one per point of `data` in its order (lane exactness, part A). */
+  counts: { date: string; uncles: number; blocks: number }[];
 }
 
 /**
@@ -2845,6 +2853,8 @@ interface MinerDistributionResponse {
   data: MinerDistributionDataPoint[];
   title: string;
   totalBlocks: number;
+  /** The window's blocks found by every miner after the five largest, the card's "Others" (lane exactness, part A). */
+  restBlocks: number;
   windowDays: number;
   fromDate: string;
   toDate: string;
@@ -4071,6 +4081,17 @@ export interface NetworkDistributions {
   countries: LabelCount[];
   asns: LabelCount[];
   protocols: LabelCount[];
+  /** The verified nodes by hosting organisation: the five largest and the rest (lane exactness, part A). */
+  hosting: { organisations: LabelCount[]; rest: number; restOrganisations: number };
+  /** The client versions by release, each release's nodes and builds, largest first (lane exactness, part A). */
+  releases: ReleaseCount[];
+}
+
+/** A client release and its builds, the route's. */
+export interface ReleaseCount {
+  release: string;
+  count: number;
+  builds: LabelCount[];
 }
 
 export interface NetworkMap {

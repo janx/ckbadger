@@ -226,6 +226,7 @@ describe('shared chart detail', () => {
         },
       ],
       totalBlocks: 66477,
+      restBlocks: 0,
       windowDays: 7,
       fromDate: '2026-10-21',
       toDate: '2026-10-27',

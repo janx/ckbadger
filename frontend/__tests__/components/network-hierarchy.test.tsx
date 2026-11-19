@@ -23,6 +23,7 @@ import {
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
 // title row, one short lede, one display figure with its companion, the picture right under it,
@@ -116,7 +117,7 @@ const map: NetworkMap = {
   ],
 };
 
-const distributions = {
+const distributions = withGroupings({
   verifiedRetained: 66,
   sameNetworkReachable: 62,
   verifiedUnavailable: 4,
@@ -136,7 +137,7 @@ const distributions = {
     { label: 'Unknown', count: 10 },
   ],
   protocols: [{ label: '/ckb/2', count: 66 }],
-};
+});
 
 function serveRound(activeRound: unknown = null) {
   server.use(
@@ -552,21 +553,23 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     stubChartWidth(1232);
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          ...distributions,
-          verifiedRetained: 80,
-          asns: [
-            { label: 'AS16509 Amazon.com, Inc.', count: 50 },
-            { label: 'AS24940 Hetzner Online GmbH', count: 5 },
-            { label: 'AS14061 DigitalOcean, LLC', count: 5 },
-            { label: 'AS4134 Chinanet', count: 5 },
-            { label: 'AS63949 Akamai Connected Cloud', count: 4 },
-            { label: 'AS1 a', count: 3 },
-            { label: 'AS2 b', count: 3 },
-            { label: 'AS3 c', count: 3 },
-            { label: 'AS4 d', count: 2 },
-          ],
-        })
+        HttpResponse.json(
+          withGroupings({
+            ...distributions,
+            verifiedRetained: 80,
+            asns: [
+              { label: 'AS16509 Amazon.com, Inc.', count: 50 },
+              { label: 'AS24940 Hetzner Online GmbH', count: 5 },
+              { label: 'AS14061 DigitalOcean, LLC', count: 5 },
+              { label: 'AS4134 Chinanet', count: 5 },
+              { label: 'AS63949 Akamai Connected Cloud', count: 4 },
+              { label: 'AS1 a', count: 3 },
+              { label: 'AS2 b', count: 3 },
+              { label: 'AS3 c', count: 3 },
+              { label: 'AS4 d', count: 2 },
+            ],
+          })
+        )
       )
     );
     render(wrap(<HostingBar />));

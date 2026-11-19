@@ -15,6 +15,7 @@ import type { NetworkMap } from '@/lib/api';
 import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
 import { descentPx, textPx } from '@/lib/type-metrics';
 import { expectApart, expectInside } from '@/__tests__/utils/svg-text-boxes';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 // F2 charts group: the Network board (V70, "no edges, not centred on this node").
 
@@ -263,24 +264,26 @@ describe('Network board (F2 charts)', () => {
   it('merges one provider’s ASNs into a hosting bar with one sentence (CH-52)', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 66,
-          sameNetworkReachable: 62,
-          verifiedUnavailable: 4,
-          versions: [{ label: '0.204.0', count: 66 }],
-          countries: [
-            { label: 'US', count: 40 },
-            { label: 'DE', count: 20 },
-            { label: 'Unknown', count: 6 },
-          ],
-          asns: [
-            { label: 'AS16509 Amazon.com', count: 31 },
-            { label: 'AS24940 Hetzner Online GmbH', count: 20 },
-            { label: 'AS14618 Amazon.com', count: 5 },
-            { label: 'Unknown', count: 10 },
-          ],
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 66,
+            sameNetworkReachable: 62,
+            verifiedUnavailable: 4,
+            versions: [{ label: '0.204.0', count: 66 }],
+            countries: [
+              { label: 'US', count: 40 },
+              { label: 'DE', count: 20 },
+              { label: 'Unknown', count: 6 },
+            ],
+            asns: [
+              { label: 'AS16509 Amazon.com', count: 31 },
+              { label: 'AS24940 Hetzner Online GmbH', count: 20 },
+              { label: 'AS14618 Amazon.com', count: 5 },
+              { label: 'Unknown', count: 10 },
+            ],
+            protocols: [],
+          })
+        )
       )
     );
     render(wrap(<HostingBar />));
@@ -297,18 +300,20 @@ describe('Network board (F2 charts)', () => {
   it('keeps only the version bars in tier 1, in the data hue (CH-54)', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 7,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 2,
-          versions: [
-            { label: '0.204.0', count: 5 },
-            { label: '0.203.0', count: 2 },
-          ],
-          countries: [{ label: 'US', count: 7 }],
-          asns: [{ label: 'AS1 Example', count: 7 }],
-          protocols: [{ label: '/ckb/2', count: 7 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 7,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 2,
+            versions: [
+              { label: '0.204.0', count: 5 },
+              { label: '0.203.0', count: 2 },
+            ],
+            countries: [{ label: 'US', count: 7 }],
+            asns: [{ label: 'AS1 Example', count: 7 }],
+            protocols: [{ label: '/ckb/2', count: 7 }],
+          })
+        )
       )
     );
     render(wrap(<NetworkDistributions />));
@@ -333,22 +338,24 @@ describe('Network board (F2 charts)', () => {
   it('keeps a release’s builds together, each bar beside its name, nothing totalled (P4)', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 65,
-          sameNetworkReachable: 65,
-          verifiedUnavailable: 0,
-          versions: [
-            { label: '0.210.0 (2592ddf 2026-09-17)', count: 37 },
-            { label: '0.209.0 (d166e28 2026-07-29)', count: 10 },
-            { label: '0.210.0 (a1b2c3d 2026-10-01)', count: 6 },
-            { label: '0.5.3', count: 5 },
-            { label: '0.210.0 (e4f5a6b 2026-10-20)', count: 4 },
-            { label: '0.210.0 (c7d8e9f 2026-11-02)', count: 3 },
-          ],
-          countries: [{ label: 'US', count: 65 }],
-          asns: [{ label: 'AS1 Example', count: 65 }],
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 65,
+            sameNetworkReachable: 65,
+            verifiedUnavailable: 0,
+            versions: [
+              { label: '0.210.0 (2592ddf 2026-09-17)', count: 37 },
+              { label: '0.209.0 (d166e28 2026-07-29)', count: 10 },
+              { label: '0.210.0 (a1b2c3d 2026-10-01)', count: 6 },
+              { label: '0.5.3', count: 5 },
+              { label: '0.210.0 (e4f5a6b 2026-10-20)', count: 4 },
+              { label: '0.210.0 (c7d8e9f 2026-11-02)', count: 3 },
+            ],
+            countries: [{ label: 'US', count: 65 }],
+            asns: [{ label: 'AS1 Example', count: 65 }],
+            protocols: [],
+          })
+        )
       )
     );
     render(wrap(<NetworkDistributions />));

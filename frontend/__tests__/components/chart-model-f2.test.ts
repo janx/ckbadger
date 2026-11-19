@@ -317,6 +317,7 @@ describe('Charts index encodings (F2 charts)', () => {
       title: 'Miners',
       windowDays: 7,
       totalBlocks: 67791,
+      restBlocks: 0,
       fromDate: '2026-10-23',
       toDate: '2026-10-29',
       data: [
