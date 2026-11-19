@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import {
@@ -788,6 +788,30 @@ export default function TransactionDetailPage() {
   const fragment = searchAndHash.includes('#')
     ? searchAndHash.slice(searchAndHash.indexOf('#'))
     : '';
+  // The cell the URL's anchor names, brought into view once its tile is drawn (lane P1, lane D3's
+  // note): the browser's own jump to an anchor comes before the cells are read, so it finds
+  // nothing; the page scrolls to the tile once, per anchor, when it stands.
+  const scrolledTo = useRef<string | null>(null);
+  useEffect(() => {
+    const anchored = anchoredOutPoint(fragment.slice(1));
+    const t = read.data;
+    if (anchored === null || !t || scrolledTo.current === anchored) return;
+    const at = (side: 'in' | 'out', i: number) => `[data-cell-id="${side}:${i}"]`;
+    const input = (t.inputs ?? []).findIndex(
+      (c) =>
+        c.previousOutput !== undefined &&
+        `${c.previousOutput.txHash.toLowerCase()}-${c.previousOutput.index}` === anchored
+    );
+    const output = (t.outputs ?? []).findIndex(
+      (_, i) => `${t.hash.toLowerCase()}-${i}` === anchored
+    );
+    const selector = input >= 0 ? at('in', input) : output >= 0 ? at('out', output) : null;
+    const tile = selector === null ? null : document.querySelector(selector);
+    // every browser scrolls an element; jsdom, the tests' document, has no scrollIntoView
+    if (!tile || typeof tile.scrollIntoView !== 'function') return;
+    tile.scrollIntoView({ block: 'center' });
+    scrolledTo.current = anchored;
+  });
   /** This page's URL with `next` as its query, its anchor kept. */
   const urlWith = (next: URLSearchParams) => `${pathname}${next.size ? `?${next}` : ''}${fragment}`;
   const select = (index: number | null, group: string | null) => {
