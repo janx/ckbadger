@@ -1182,7 +1182,7 @@ export function Chart({
       {markers.length > 0 && !hideMarkerLegend && (
         <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-4">
           {markers.map((m) => (
-            <Link key={`${m.index}:${m.label}`} href={m.href} className="hover:text-jade">
+            <Link key={`${m.index}:${m.label}`} href={m.href} look="inline">
               {m.label} · {data[m.index].label}
             </Link>
           ))}

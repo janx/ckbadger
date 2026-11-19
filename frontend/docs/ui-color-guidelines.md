@@ -91,7 +91,7 @@ text grade ("The ghost ink" below).
 | the figure scanned first | a page's h1, a hero or display figure, the height that names a block's row                                                                           | bright  |
 | label                    | a `dt`, a column head, a figure's eyebrow, a kind word ("Block"), a prompt heading's args, "occupied" before its bytes, a lock's kind, a `RowTag`    | quiet   |
 | value                    | a hash, an address, an out point, a name, a state ("live", "consumed"), a full id under its h1                                                       | reading |
-| link                     | every link wherever it stands: a block height in a sentence, an out point in a tile, a menu's entry; it turns jade on hover                          | reading |
+| link                     | by job (`components/ui/link.tsx`): a row's key bright, in a line its line's ink underlined muted, onward jade with its arrow; jade on hover, focus   | by job  |
 | date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
 | number                   | a count, a percentage, a size in bytes, where a pager is (`page 3 of 37`) (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
 | pager                    | where you are (`page 3 of 37`) reading; a way to go (`next →`) jade; the count line (`41–60 of 727`) and an end that cannot be taken quiet           | by part |
@@ -104,6 +104,16 @@ text grade ("The ghost ink" below).
 A note and an explaining sentence differ by where they stand: a note qualifies the figure right
 above it and is read with it; a sentence that explains stands on its own (the head's lede, a
 section's paragraph, a banner). A link stays a link inside a quiet line: it takes the reading ink.
+
+A link names its job, never its classes (the controls board, item "links"; `look` on `Link`,
+`ExternalLink`, `BlockLink`, `Address`): `key`, `inline`, `onward`, and two that draw no link ink of
+their own, `block` (a tile, a card, a mark) and `nav` (the shell's navigation). A way onward writes
+its own arrow. A link inside a line keeps the line's ink and is underlined, 1 px and 3 px under the
+text, in the muted ink (`ink-muted`, a shape: the ruling of 2026-11-19, the board's `slate-other`
+line being 1.37–1.66 : 1 by night and 1.50–1.84 : 1 by day): 5.40–6.57 : 1 on the four grounds by
+night and 3.84–4.70 : 1 by day, pinned at 3 : 1 in `palette.test.ts`, and quieter than its words.
+Under hover and focus the line follows its words into the celadon.
+`__tests__/lib/link-look-gate.test.ts` holds every link to a look.
 
 `__tests__/lib/ink-role-gate.test.ts` holds the rule where the source shows it: a link renderer
 (`<a>`, `Address`, a `…Link`), a CKB or token amount that takes its parent's ink, a table cell (a

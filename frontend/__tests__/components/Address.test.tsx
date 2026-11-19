@@ -52,4 +52,41 @@ describe('Address', () => {
       expect(link.textContent).toBe(shortAddress);
     });
   });
+
+  // Lane c2-links: an address's look is where it stands, which its caller says.
+  describe('its look', () => {
+    const inks = (el: Element) =>
+      [...el.classList].filter((c) => /^text-text|underline|decoration/.test(c));
+
+    // Re-pinned with the coordinator's ruling: inline was "no ink of its own"; it is the line's
+    // ink with the muted underline now.
+    it('is a row’s key in the bright ink, or a name inside a line in its ink, underlined', () => {
+      render(
+        <>
+          <Address address={testAddress} size="row" look="key" />
+          <Address address={testAddress} size="row" look="inline" />
+        </>
+      );
+      const [key, inline] = screen.getAllByRole('link');
+      expect(inks(key)).toEqual(['text-text-bright']);
+      expect(inks(inline)).toEqual([
+        'underline',
+        'decoration-1',
+        'underline-offset-[3px]',
+        'decoration-[color:var(--c-ink-muted)]',
+      ]);
+      // a look sets no size: the address keeps its own step and face
+      expect(key).toHaveClass('text-body', 'font-mono');
+    });
+
+    it('keeps the look it had before for a caller that states none', () => {
+      render(<Address address={testAddress} size="row" />);
+      expect(inks(screen.getByRole('link'))).toEqual([
+        'text-text-bright',
+        'decoration-aqua/35',
+        'underline',
+        'underline-offset-[3px]',
+      ]);
+    });
+  });
 });

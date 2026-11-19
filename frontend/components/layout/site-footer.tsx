@@ -31,22 +31,22 @@ export function SiteFooter() {
     <footer className="border-base-border bg-base-void/95 border-t">
       <div className="text-small container mx-auto flex flex-wrap items-center gap-x-6 gap-y-2 py-[18px] font-mono leading-relaxed">
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-1">
-          <Link href="/hardforks" className={LINK}>
+          <Link look="nav" href="/hardforks" className={LINK}>
             Hardforks
           </Link>
-          <Link href="/network" className={LINK}>
+          <Link look="nav" href="/network" className={LINK}>
             Network
           </Link>
-          <Link href="/fiber/channels" className={LINK}>
+          <Link look="nav" href="/fiber/channels" className={LINK}>
             Fiber channels
           </Link>
-          <ExternalLink href="https://dashboard.fiber.channel/" className={LINK}>
+          <ExternalLink look="nav" href="https://dashboard.fiber.channel/" className={LINK}>
             Fiber dashboard
           </ExternalLink>
-          <ExternalLink href="https://cknerv.web5.info" className={LINK}>
+          <ExternalLink look="nav" href="https://cknerv.web5.info" className={LINK}>
             cknerv
           </ExternalLink>
-          <ExternalLink href="https://web5.info" className={LINK}>
+          <ExternalLink look="nav" href="https://web5.info" className={LINK}>
             Web5
           </ExternalLink>
           <button

@@ -106,25 +106,31 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         </span>
         <TileText>
           <span className="min-w-0">
-            {/* R3: the label ("input 0") is quiet; the out point, the tile's link, reads */}
+            {/* R3: the label ("input 0") is quiet; the out point, the tile's link, reads: a link
+                inside the line (components/ui/link.tsx), the line's ink the reading ink */}
             {cell.outPoint ? (
               <>
                 <span className="text-text-dim">{cell.label}</span>{' '}
                 {/* an out point with its index is one unit, never broken; tight: a tile's text
                     column is under 200 px (U-09) */}
-                <Link
-                  href={cell.href}
-                  title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
-                  className="text-text hover:text-jade whitespace-nowrap"
-                >
-                  <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
-                  <OutpointIndex index={cell.outPoint.index} />
-                </Link>
+                <span className="text-text">
+                  <Link
+                    href={cell.href}
+                    look="inline"
+                    title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
+                    className="whitespace-nowrap"
+                  >
+                    <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
+                    <OutpointIndex index={cell.outPoint.index} />
+                  </Link>
+                </span>
               </>
             ) : (
-              <Link href={cell.href} className="text-text hover:text-jade">
-                {cell.label}
-              </Link>
+              <span className="text-text">
+                <Link href={cell.href} look="inline">
+                  {cell.label}
+                </Link>
+              </span>
             )}
           </span>
         </TileText>

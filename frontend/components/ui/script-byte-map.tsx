@@ -120,7 +120,9 @@ export function ScriptByteMap({
         >
           <dt style={{ color: SCRIPT_INKS.codeHash }}>code_hash</dt>
           <dd className="text-text max-w-measure m-0 min-w-0 [overflow-wrap:anywhere]">
-            <AppLink href={href}>{script.codeHash}</AppLink>
+            <AppLink href={href} look="inline">
+              {script.codeHash}
+            </AppLink>
             {name && (
               <span className="text-text-dim">
                 {' · '}
