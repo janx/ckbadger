@@ -250,8 +250,8 @@ const columns: ListColumn<AddressTransaction>[] = [
     minWidth: columnPx(cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT}`.length) + CELL_GAP_PX),
     render: (tx) => (
       <span>
-        {tx.isCellbase ? 0 : tx.inputsCount} <span className="text-text-dim">→</span>{' '}
-        {tx.outputsCount.toLocaleString('en-US')}
+        {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')}{' '}
+        <span className="text-text-dim">→</span> {tx.outputsCount.toLocaleString('en-US')}
       </span>
     ),
   },
@@ -422,7 +422,8 @@ function AddressTxPhoneRow({ tx, wide }: { tx: AddressTransaction; wide: boolean
   ];
   const figures = [
     <span key="cells" className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
+      {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')} →{' '}
+      {formatCount(tx.outputsCount, 'cell')}
     </span>,
     <Labelled key="change" label="this address">
       <CkbAmount form="summary" shannons={BigInt(tx.capacityChange)} />

@@ -1704,7 +1704,7 @@ export default function TransactionDetailPage() {
                     {tx.index !== undefined && lifecycle?.commitmentWindow && (
                       <span className="text-text-dim">
                         {' '}
-                        · position {tx.index}
+                        · position {tx.index.toLocaleString('en-US')}
                         {lifecycle.commitmentDistance !== null &&
                           lifecycle.commitmentDistance !== undefined && (
                             <>
