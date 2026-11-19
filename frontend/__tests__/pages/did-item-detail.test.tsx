@@ -1,7 +1,7 @@
-import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { expectHeadId } from '@/__tests__/utils/head-id';
 import Page from '@/app/identities/did/[identityId]/client-page';
-import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { api, ApiRequestError, type ItemCellVersion, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import {
   didProtocolProducer as evidence,
@@ -226,4 +226,82 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   expect(among).toHaveTextContent('this one');
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('Expiry');
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('none');
+});
+
+/**
+ * Versions of one cell, oldest first, the last live: the same capacity, byte counts and lock
+ * address throughout, each given its own data hash (and its own type, where `types` says so), as a
+ * name's cell is recreated under one lock by a transfer, a renewal or an edit of the same length.
+ */
+function sameShapeVersions(
+  base: ItemCellVersion,
+  dataHashes: readonly string[],
+  types: readonly (ItemCellVersion['type'] | undefined)[] = []
+): ItemCellVersions {
+  const data = dataHashes.map((dataHash, i): ItemCellVersion => {
+    const last = i === dataHashes.length - 1;
+    return {
+      ...base,
+      txHash: `0x${String(i + 1)
+        .padStart(2, '0')
+        .repeat(32)}`,
+      outputIndex: 0,
+      blockNumber: 100 + i,
+      txIndex: 0,
+      dataHash,
+      type: types[i] ?? base.type,
+      isLive: last,
+      consumedByTx: last
+        ? null
+        : `0x${String(i + 2)
+            .padStart(2, '0')
+            .repeat(32)}`,
+      consumedAtBlock: last ? null : 101 + i,
+    };
+  });
+  return { data, total: data.length };
+}
+const hashOf = (b: string) => `0x${b.repeat(32)}`;
+
+// Lane P2's fifth round (item 1, MUST): a did:ckb document edited to the same length keeps the
+// cell's capacity, byte counts and lock, and changes its data: never folded as "the same bytes".
+it('never folds a document edited to the same length', async () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(
+    sameShapeVersions(base, [hashOf('d1'), hashOf('d2'), hashOf('d3'), hashOf('d4')])
+  );
+  render(<Page identityId={evidence.itemId} />);
+  const list = await screen.findByLabelText(/cell versions$/);
+  expect(within(list).getAllByRole('article')).toHaveLength(4);
+  expect(list.querySelector('[data-versions-fold]')).toBeNull();
+});
+
+// Lane P2's fifth round (NOTE 8): an activity feed opened at a URL cursor on its oldest page (no
+// more after it) drew no pager, so it had no way back to the newest page; "← newer" stands there,
+// taking the feed to its newest page, and "older →" is an end that cannot be taken.
+it('keeps the way to the newest page on a feed opened at a URL cursor on its oldest page', async () => {
+  query = 'activity_cursor=10:0';
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
+  render(<Page identityId={evidence.itemId} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: '10:0',
+    })
+  );
+  fireEvent.click(await screen.findByRole('button', { name: '← newer' }));
+  expect(screen.queryByRole('button', { name: 'older →' })).toBeNull();
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: undefined,
+    })
+  );
 });

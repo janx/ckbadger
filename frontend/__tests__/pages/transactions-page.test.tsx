@@ -27,7 +27,7 @@ import {
 } from '@/components/transaction/transaction-list-table';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
-import { pagedRead } from '@/__tests__/utils/paged-read';
+import { pagedRead, poolPagedRead } from '@/__tests__/utils/paged-read';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -45,7 +45,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const emptyPool = {
+const emptyPool = poolPagedRead({
   summary: { size: '0', cycles: '0', minFeeRate: null, maxFeeRate: null, newestSeenAt: null },
   data: [],
   total: 0,
@@ -54,7 +54,7 @@ const emptyPool = {
   totals: { pending: 0, proposed: 0, awaitingIndex: 0 },
   truncated: false,
   lastPolledAt: null,
-};
+});
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getPoolTransactions).mockResolvedValue(emptyPool);
@@ -814,37 +814,39 @@ describe('Transactions pool view', () => {
         nextCursor: null,
       })
     );
-    vi.mocked(api.getPoolTransactions).mockResolvedValue({
-      summary: {
-        size: '226',
-        cycles: '1709221',
-        minFeeRate: '54623',
-        maxFeeRate: '54623',
-        newestSeenAt: '1792886400000',
-      },
-      data: [
-        {
-          hash: `0x${'ab'.repeat(32)}`,
-          status: 'proposed',
-          value: null,
-          fee: '12345',
-          feeRate: '54623',
-          txSize: 226,
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(
+      poolPagedRead({
+        summary: {
+          size: '226',
           cycles: '1709221',
-          inputsCount: 2,
-          outputsCount: 3,
-          timestamp: '1792886400000',
-          interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
-          activity: null,
+          minFeeRate: '54623',
+          maxFeeRate: '54623',
+          newestSeenAt: '1792886400000',
         },
-      ],
-      total: 1,
-      limit: 50,
-      nextCursor: null,
-      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
-      truncated: false,
-      lastPolledAt: '2026-10-25T00:00:00Z',
-    });
+        data: [
+          {
+            hash: `0x${'ab'.repeat(32)}`,
+            status: 'proposed',
+            value: null,
+            fee: '12345',
+            feeRate: '54623',
+            txSize: 226,
+            cycles: '1709221',
+            inputsCount: 2,
+            outputsCount: 3,
+            timestamp: '1792886400000',
+            interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
+            activity: null,
+          },
+        ],
+        total: 1,
+        limit: 50,
+        nextCursor: null,
+        totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+        truncated: false,
+        lastPolledAt: '2026-10-25T00:00:00Z',
+      })
+    );
     render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     expect(
@@ -906,37 +908,39 @@ describe('Transactions pool view', () => {
         nextCursor: null,
       })
     );
-    vi.mocked(api.getPoolTransactions).mockResolvedValue({
-      summary: {
-        size: '226',
-        cycles: '1709221',
-        minFeeRate: '54623',
-        maxFeeRate: '54623',
-        newestSeenAt: '1792886400000',
-      },
-      data: [
-        {
-          hash: `0x${'ab'.repeat(32)}`,
-          status: 'proposed',
-          value: null,
-          fee: '12345',
-          feeRate: '54623',
-          txSize: 226,
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(
+      poolPagedRead({
+        summary: {
+          size: '226',
           cycles: '1709221',
-          inputsCount: 2,
-          outputsCount: 3,
-          timestamp: '1792886400000',
-          interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
-          activity: null,
+          minFeeRate: '54623',
+          maxFeeRate: '54623',
+          newestSeenAt: '1792886400000',
         },
-      ],
-      total: 1,
-      limit: 50,
-      nextCursor: null,
-      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
-      truncated: false,
-      lastPolledAt: '2026-10-25T00:00:00Z',
-    });
+        data: [
+          {
+            hash: `0x${'ab'.repeat(32)}`,
+            status: 'proposed',
+            value: null,
+            fee: '12345',
+            feeRate: '54623',
+            txSize: 226,
+            cycles: '1709221',
+            inputsCount: 2,
+            outputsCount: 3,
+            timestamp: '1792886400000',
+            interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
+            activity: null,
+          },
+        ],
+        total: 1,
+        limit: 50,
+        nextCursor: null,
+        totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+        truncated: false,
+        lastPolledAt: '2026-10-25T00:00:00Z',
+      })
+    );
     render(<TransactionsPage />);
     // the view through the row's form on this line: a stubbed 358 px line under a viewport from
     // 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
@@ -1502,13 +1506,22 @@ describe('Transactions paging and kind (what the controls ask for)', () => {
       interpretation: { status: 'complete' as const },
       activity: null,
     });
-    vi.mocked(api.getPoolTransactions).mockImplementation(async ({ cursor } = {}) => ({
-      ...emptyPool,
-      data: cursor === 'p2' ? [poolRow(2)] : [poolRow(1)],
-      total: 2,
-      nextCursor: cursor === 'p2' ? null : 'p2',
-      totals: { pending: 2, proposed: 0, awaitingIndex: 0 },
-    }));
+    // the pool's pages as its route sends them: full at the 50 asked where more follow, 51 in
+    // all (lane cd-fixes-controls, review-fix-tests SHOULD-3: page one was one row at 50 a page that
+    // named a next cursor, a page the route cannot send: it pages by its limit)
+    vi.mocked(api.getPoolTransactions).mockImplementation(async ({ cursor } = {}) =>
+      poolPagedRead(
+        {
+          ...emptyPool,
+          data:
+            cursor === 'p2' ? [poolRow(51)] : Array.from({ length: 50 }, (_, i) => poolRow(i + 1)),
+          total: 51,
+          nextCursor: cursor === 'p2' ? null : 'p2',
+          totals: { pending: 51, proposed: 0, awaitingIndex: 0 },
+        },
+        cursor === 'p2' ? 50 : 0
+      )
+    );
     render(<TransactionsPage />);
     fireEvent.click(await screen.findByRole('tab', { name: /^in the pool/ }));
     const pool = await screen.findByRole('table', { name: 'Transactions in the pool' });
@@ -1520,7 +1533,7 @@ describe('Transactions paging and kind (what the controls ask for)', () => {
     await waitFor(() =>
       expect(
         within(screen.getByRole('table', { name: 'Transactions in the pool' })).getAllByTitle(
-          poolRow(2).hash
+          poolRow(51).hash
         ).length
       ).toBeGreaterThan(0)
     );
@@ -1561,40 +1574,41 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  const pool = (value: string | null) => ({
-    summary: {
-      size: '226',
-      cycles: '1709221',
-      minFeeRate: '54623',
-      maxFeeRate: '54623',
-      newestSeenAt: '1792886400000',
-    },
-    data: [
-      {
-        hash: `0x${'ab'.repeat(32)}`,
-        status: 'proposed' as const,
-        value,
-        fee: '12345',
-        feeRate: '54623',
-        txSize: 226,
+  const pool = (value: string | null) =>
+    poolPagedRead({
+      summary: {
+        size: '226',
         cycles: '1709221',
-        inputsCount: 2,
-        outputsCount: 3,
-        timestamp: '1792886400000',
-        interpretation:
-          value === null
-            ? { status: 'partial' as const, reasons: [{ code: 'unresolved_input' as const }] }
-            : { status: 'complete' as const, reasons: [] },
-        activity: null,
+        minFeeRate: '54623',
+        maxFeeRate: '54623',
+        newestSeenAt: '1792886400000',
       },
-    ],
-    total: 1,
-    limit: 50,
-    nextCursor: null,
-    totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
-    truncated: false,
-    lastPolledAt: '2026-10-25T00:00:00Z',
-  });
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'proposed' as const,
+          value,
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation:
+            value === null
+              ? { status: 'partial' as const, reasons: [{ code: 'unresolved_input' as const }] }
+              : { status: 'complete' as const, reasons: [] },
+          activity: null,
+        },
+      ],
+      total: 1,
+      limit: 50,
+      nextCursor: null,
+      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+      truncated: false,
+      lastPolledAt: '2026-10-25T00:00:00Z',
+    });
 
   it('is three parts at 358 px: hash and status, what it does, then cells · value · fee · rate', async () => {
     atContainerWidth(358);

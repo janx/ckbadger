@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { SealedHead, type SealedHeadOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { StatusStrip, type StatusStripProps } from '@/components/ui/status-strip';
 import { cn } from '@/lib/utils';
 import {
@@ -244,12 +245,9 @@ export function DetailLayout({
         <DetailTier2>
           {tier2}
           {rawData && (
-            <details open={rawOpen} className="border-row-rule border-t pt-4">
-              <summary className="text-text-dim hover:text-text text-small cursor-pointer">
-                Raw data
-              </summary>
-              <div className="text-small mt-4 min-w-0 overflow-x-auto">{rawData}</div>
-            </details>
+            <SectionDisclosure summary="Raw data" open={rawOpen}>
+              {rawData}
+            </SectionDisclosure>
           )}
         </DetailTier2>
       )}

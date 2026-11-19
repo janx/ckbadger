@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
@@ -931,5 +932,40 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     await waitFor(() => expect(cell).toHaveTextContent('96,760 B · first deployed into multisig'));
     expect(cell.lastElementChild!.textContent).toMatch(/^0x[0-9a-f]{64}$/);
     expect(first.querySelectorAll('td')[3]).toHaveTextContent('consumed by v2');
+  });
+});
+
+// Lane P2's fifth round (item 3): a day of the script's history states the whole its cells hold
+// (`capacity`) from this plan on; a day from an API older than this page sends none and is
+// refused by name (it read `undefined` as the held CKB, "expected a non-negative decimal integer").
+describe('the JoyID page on an API older than this page', () => {
+  beforeEach(() => {
+    stubLayoutWidths({ chart: 900, list: 1248 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    const chart = structuredClone(fixture.chart);
+    for (const point of chart.data) delete (point.values as Record<string, string>).capacity;
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('refuses a history day without its capacity by name', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(
+      <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+        <ScriptDetailPage name="JoyID" />
+      </ErrorBoundary>
+    );
+    expect(
+      await screen.findByText(/: the API sends no capacity: it is older than this page$/)
+    ).toBeInTheDocument();
+    log.mockRestore();
   });
 });

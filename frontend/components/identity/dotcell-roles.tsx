@@ -1,5 +1,5 @@
 import type { ItemProtocol, DotCellPartyRef } from '@/lib/api';
-import { partyLockWordsText } from '@/components/ui/lock-kind';
+import { PartyLockWords } from '@/components/ui/lock-kind';
 import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -139,8 +139,14 @@ export function DotcellRoles({
                 )}
               </span>
               <span className="text-text-dim text-meta">
-                {/* the party's lock by the one decision (lane P2's third round, item 12) */}
-                {party.lockHash ? partyLockWordsText(party, 'row') : 'no uniquely resolved lock'}
+                {/* the party's lock by the one decision (lane P2's third round, item 12), its
+                    refusal in its place (item 3 of the fifth round); a prefix no lock answers
+                    uniquely, in the words of its fact (NOTE 7) */}
+                {party.lockHash ? (
+                  <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+                ) : (
+                  'lock not uniquely resolved'
+                )}
               </span>
             </li>
           );

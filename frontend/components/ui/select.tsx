@@ -14,6 +14,14 @@ export interface SelectOption<V extends string> {
 interface SelectProps<V extends string> {
   /** The label it stands after (`sorted by`, `standard`), in the quiet ink. */
   label: string;
+  /**
+   * Its name for a screen reader where its label does not say which choice it is (a tab row's
+   * narrow form stands after "showing": lane cd-fixes-controls, review-fix-logic-pages NOTE 4); the
+   * label stays the word it stands after. Absent, the label names it.
+   */
+  name?: string;
+  /** The id of the panel its choice shows, where it has one (a tab row's narrow form). */
+  controls?: string;
   value: V;
   options: readonly SelectOption<V>[];
   onChange: (value: V) => void;
@@ -54,6 +62,8 @@ function useLineWidth(ref: RefObject<HTMLElement | null>): number | null {
  */
 export function Select<V extends string>({
   label,
+  name,
+  controls,
   value,
   options,
   onChange,
@@ -86,6 +96,8 @@ export function Select<V extends string>({
       <span className={cn(FIELD_WELL, 'relative shrink-0 px-0')}>
         <select
           id={id}
+          aria-label={name}
+          aria-controls={controls}
           value={value}
           onChange={(event) => onChange(event.target.value as V)}
           className="text-small text-text h-full shrink-0 appearance-none bg-transparent pl-2.5 pr-[25px] font-mono focus-visible:outline-none"

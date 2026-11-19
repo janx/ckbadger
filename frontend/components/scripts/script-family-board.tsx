@@ -21,7 +21,7 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -475,8 +475,12 @@ export function ScriptHistoryFigure({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   // the held bands by the routes' names, an older API's used and unused refused by name (lane exactness, part B, the third read's S4)
   assertHeldSeries(chart.series, `${family.name} capacity history`);
-  const data = chart.data.map((point) => {
-    const held = heldPoint(point.values, `${family.name} capacity history ${point.date}`);
+  // each day's three figures, read once (the route states the whole beside its parts)
+  const helds = chart.data.map((point) =>
+    heldPoint(point.values, `${family.name} capacity history ${point.date}`)
+  );
+  const data = chart.data.map((point, i) => {
+    const held = helds[i];
     return {
       label: point.date,
       values: {
@@ -521,9 +525,9 @@ export function ScriptHistoryFigure({
   } as const;
   // R7: the sentence over the plots, from the series' own points: CKB held is each day's
   // `capacity`, which the route states beside its parts (the page sums nothing)
-  const days = chart.data.map((point) => ({
+  const days = chart.data.map((point, i) => ({
     date: point.date,
-    held: exactUnsignedInteger(point.values.capacity, `${family.name} ${point.date}: capacity`),
+    held: BigInt(helds[i].capacity),
   }));
   return (
     <div className="min-w-0">
@@ -589,9 +593,7 @@ export function ScriptHistoryReading({
   const used = parts ? BigInt(parts.occupiedCapacity) : null;
   const unused = parts ? BigInt(parts.freeCapacity) : null;
   // the whole the day's cells hold, as the route states it (the page sums nothing)
-  const held = point
-    ? exactUnsignedInteger(point.values.capacity, `history ${point.date}: capacity`)
-    : null;
+  const held = parts ? BigInt(parts.capacity) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
   // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)

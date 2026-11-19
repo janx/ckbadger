@@ -32,7 +32,8 @@ describe('heldPoint', () => {
 
   it('names a figure the route did not send, and refuses one that is not an integer', () => {
     expect(() => heldPoint({ capacity: '2', occupiedCapacity: '1' }, 'Day')).toThrow(
-      'Day: free (freeCapacity) is missing'
+      // the other readers' words for a field an older API does not send (lib/api-fields.ts)
+      'Day: the API sends no freeCapacity: it is older than this page'
     );
     expect(() =>
       heldPoint({ capacity: '2', occupiedCapacity: '1.5', freeCapacity: '0.5' }, 'Day')

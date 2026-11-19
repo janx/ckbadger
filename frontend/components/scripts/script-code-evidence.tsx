@@ -1,4 +1,5 @@
 import { Fragment, useState } from 'react';
+import { sentField } from '@/lib/api-fields';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
@@ -344,7 +345,13 @@ function CodeCellLink({ outpoint }: { outpoint: string }) {
  * route states the code cell with the transaction; one without the other is refused.
  */
 function signedSpendHref(custody: ScriptCustodyApi): string | null {
-  const { verifiedByTx: tx, verifiedCodeCell: cell } = custody;
+  const tx = custody.verifiedByTx;
+  // sent beside the transaction from this plan on; an older API sends no code cell (item 3)
+  const cell = sentField(
+    custody.verifiedCodeCell,
+    `custody ${custody.lockArgs}`,
+    'verifiedCodeCell'
+  );
   if (tx === null && cell === null) return null;
   if (tx === null || cell === null)
     throw new Error(

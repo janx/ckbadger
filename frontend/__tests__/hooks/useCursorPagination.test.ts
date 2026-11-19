@@ -1,6 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import type { Asked, CursorWalk } from '@/lib/pagination';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 /**
  * A walk through a cursor-paged list. Re-pinned on purpose (lane cd-fixes-controls, item 1): the
@@ -8,11 +9,24 @@ import type { Asked, CursorWalk } from '@/lib/pagination';
  * page size it was asked at) and moves on by a response (`goToNext(read)`), where
  * it moved on by a cursor a caller handed it; the behaviours it had are kept, each below.
  */
-type Page = { data: number[]; nextCursor: string | null };
+type Page = { data: number[]; limit: number; hasMore: boolean; nextCursor: string | null };
+
+/**
+ * A page as the API answers the walk: full at the size the walk asks (one row where it asks for no
+ * size), with `next` as its next cursor where more follow (lane cd-fixes-controls, review-fix-tests
+ * SHOULD-3: the walk reads only the next cursor, and its pages were that alone, outside the checker).
+ */
+const pageAt = (size: number | undefined, next: string | null): Page =>
+  pagedRead({
+    data: Array.from({ length: size ?? 1 }, (_, i) => i + 1),
+    limit: size ?? 1,
+    hasMore: next !== null,
+    nextCursor: next,
+  });
 
 /** Ask the walk for its current page: the API answers with `next` as the page's next cursor. */
 async function askPage(walk: CursorWalk, next: string | null): Promise<Asked<Page>> {
-  return walk.ask(async () => ({ data: [1], nextCursor: next }))();
+  return walk.ask(async () => pageAt(walk.size, next))();
 }
 
 describe('useCursorPagination', () => {
@@ -28,13 +42,13 @@ describe('useCursorPagination', () => {
     const asked: (string | undefined)[] = [];
     const first = await result.current.ask(async (cursor) => {
       asked.push(cursor);
-      return { data: [1], nextCursor: 'c1' };
+      return pageAt(20, 'c1');
     })();
     expect(first.asked).toEqual({ page: 1, cursor: undefined, size: 20, list: '[]' });
     act(() => result.current.goToNext(first));
     const second = await result.current.ask(async (cursor) => {
       asked.push(cursor);
-      return { data: [2], nextCursor: null };
+      return pageAt(20, null);
     })();
     expect(asked).toEqual([undefined, 'c1']);
     expect(second.asked).toMatchObject({ page: 2, cursor: 'c1' });
@@ -183,10 +197,9 @@ describe('useCursorPagination', () => {
       expect(result.current.size).toBe(20);
       // the response of page 1 at 50 a page, kept while the walk's own answers, moves nothing:
       // its next cursor was taken at the other size
-      const old = await renderHook(() => useCursorPagination(50)).result.current.ask(async () => ({
-        data: [1],
-        nextCursor: 'old-50',
-      }))();
+      const old = await renderHook(() => useCursorPagination(50)).result.current.ask(async () =>
+        pageAt(50, 'old-50')
+      )();
       act(() => result.current.goToNext(old));
       expect(result.current.page).toBe(1);
       // the same size keeps the walk

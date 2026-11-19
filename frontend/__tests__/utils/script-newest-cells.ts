@@ -1,3 +1,4 @@
+import { pagedRead } from '@/__tests__/utils/paged-read';
 import type { Cell, CursorPaginatedResponse } from '@/lib/api';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 
@@ -15,7 +16,10 @@ interface ByScriptParams {
  * Lane S: the script page also asks `GET /cells/by-script?order=desc` for its "Newest cells". A
  * test that serves a fixture page of the oldest-first list answers that request as the API does
  * for a universe of just those rows: the same rows newest first, each marked with the index it
- * came from (`matchedScriptKind`, which the API sets on every by-script row), at most `limit`.
+ * came from (`matchedScriptKind`, which the API sets on every by-script row), at most `limit`, a
+ * page as the API sends one: at the size asked, naming the cursor after it where more follow (lane
+ * cd-fixes-controls, review-fix-tests SHOULD-3: it kept the oldest-first page's size and its null
+ * cursor beside its own "more", which the checker refuses).
  */
 export function byScript(
   oldestFirst: (params: ByScriptParams) => Page | Promise<Page>
@@ -26,11 +30,21 @@ export function byScript(
     if (params.scriptKind !== 'lock' && params.scriptKind !== 'type')
       throw new Error(`order=desc needs script_kind lock or type, got ${params.scriptKind}`);
     const kind = params.scriptKind;
+    const limit = params.limit ?? page.limit;
     const rows = [...page.data]
       .reverse()
-      .slice(0, params.limit ?? page.data.length)
+      .slice(0, limit)
       .map((cell) => ({ ...cell, matchedScriptKind: kind }));
-    return { ...page, data: rows, hasMore: rows.length < page.data.length };
+    const hasMore = rows.length < page.data.length;
+    // the route's cursor: its phase and the last row's key (crates/api/src/routes/cells.rs)
+    const last = rows.at(-1);
+    return pagedRead({
+      ...page,
+      data: rows,
+      limit,
+      hasMore,
+      nextCursor: hasMore && last ? `${kind}:${last.txHash.slice(2)}${last.outputIndex}` : null,
+    });
   };
 }
 

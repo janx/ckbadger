@@ -22,6 +22,7 @@ import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
 import { RetryAction } from '@/components/ui/retry-action';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { Select } from '@/components/ui/select';
 import { TabLinks, Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
@@ -377,6 +378,36 @@ function CopyAndHelp() {
   );
 }
 
+/**
+ * A section of the evidence tier a reader opens (lane cd-fixes-controls, the lead's ruling on
+ * review-fix-tests SHOULD-4): the one place a `<details>` is written. Shut, and drawn open.
+ */
+function Disclosures() {
+  const raw = JSON.stringify(
+    { hash: `0x${'5e'.repeat(32)}`, cellDeps: 2, inputs: 1, outputs: 2 },
+    null,
+    2
+  );
+  return (
+    <Item name="disclosure">
+      <SectionDisclosure summary="Raw data">
+        <pre className="whitespace-pre">{raw}</pre>
+      </SectionDisclosure>
+      <Note>
+        shut: the browser’s own disclosure under the tier’s rule, its words quiet at 13 px, the
+        reading ink under the pointer; a click or Enter on its words opens it
+      </Note>
+      <SectionDisclosure summary="Raw data" open>
+        <pre className="whitespace-pre">{raw}</pre>
+      </SectionDisclosure>
+      <Note>
+        drawn open where its page opens it (the block page’s raw data): its content 13 px under it,
+        scrolling sideways where it is wider than its line
+      </Note>
+    </Item>
+  );
+}
+
 function Retry() {
   const [tries, setTries] = useState(0);
   return (
@@ -471,6 +502,7 @@ function Board({ theme }: { theme: string }) {
       <Fields />
       <CopyAndHelp />
       <Retry />
+      <Disclosures />
       <Links />
     </section>
   );

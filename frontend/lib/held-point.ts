@@ -1,3 +1,4 @@
+import { sentField } from '@/lib/api-fields';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 
 /**
@@ -22,11 +23,10 @@ export function heldPoint(
     throw new Error(
       `${context}: the API sends used and unused, not occupiedCapacity and freeCapacity: it is older than this page`
     );
-  const read = (key: keyof HeldPoint, word: string) => {
-    const raw = values[key];
-    if (raw === undefined) throw new Error(`${context}: ${word} (${key}) is missing`);
-    return exactUnsignedInteger(raw, `${context}: ${word}`).toString();
-  };
+  // a figure the route sends that is missing is from an API older than this page, refused by name
+  // (lib/api-fields.ts `sentField`, the other readers' words)
+  const read = (key: keyof HeldPoint, word: string) =>
+    exactUnsignedInteger(sentField(values[key], context, key), `${context}: ${word}`).toString();
   return {
     capacity: read('capacity', 'capacity'),
     occupiedCapacity: read('occupiedCapacity', 'occupied'),
@@ -52,7 +52,8 @@ export function assertHeldSeries(series: readonly { key: string }[], context: st
  * this page sends none, and is refused by name, never read as `BigInt(undefined)`.
  */
 export function versionFree(version: { freeCapacity?: string }, context: string): bigint {
-  if (version.freeCapacity === undefined)
-    throw new Error(`${context}: the API sends no freeCapacity: it is older than this page`);
-  return exactUnsignedInteger(version.freeCapacity, `${context}: free`);
+  return exactUnsignedInteger(
+    sentField(version.freeCapacity, context, 'freeCapacity'),
+    `${context}: free`
+  );
 }

@@ -6,6 +6,7 @@
  * components/ui/lock-kind.tsx, which re-exports this half; agent-renderer-imports.test keeps the
  * renderer's import graph free of React.
  */
+import { sentField } from '@/lib/api-fields';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
@@ -102,13 +103,15 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
  * A named party's lock (a .cell name's owner, manager, a sale's seller; lane P2's third round,
  * item 12): the registry's name the API sends for its lock code hash (`lockScriptName`) and, where
  * the party has an address, the lock read off it, which decides (a lock on the default lock's code
- * hash by data is not the default lock). A party with no address keeps the name alone.
+ * hash by data is not the default lock). A party with no address keeps the name alone. A party
+ * from an API older than this page sends no `lockScriptName` (it sent `scriptName`) and is refused
+ * by name (lane P2's fifth round, item 3: it read "an undefined lock").
  */
 export function namedPartyLockFacts(party: {
   lockScriptName: string | null;
   address: string | null;
 }): LockFacts {
-  const name = party.lockScriptName;
+  const name = sentField(party.lockScriptName, 'a .cell party', 'lockScriptName');
   if (party.address === null) return { name, codeHash: null, hashType: null };
   const { codeHash, hashType } = addressScript(party.address);
   return { name, codeHash, hashType };
