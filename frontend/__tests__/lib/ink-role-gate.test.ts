@@ -408,12 +408,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { td: 1, prose: 2 },
     reason: "a channel row's time in a table cell; the loading lines",
   },
-  'app/forks/[height]/[orphan]/client-page.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (B7): the node-store sentence explains, in the reading ink
-    sites: { link: 1, td: 1, prose: 1 },
-    reason: "the breadcrumb link, a row's clock in a table cell, the uncle sentence",
-  },
+  // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4): the breadcrumb link
+  // takes its look, a row's clock and the uncle sentence read in the reading ink
   'app/forks/page.tsx': {
     family: 'topics',
     sites: { prose: 2 },

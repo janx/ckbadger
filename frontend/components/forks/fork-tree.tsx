@@ -93,7 +93,11 @@ function TreeSvg({
   );
 }
 
-/** A tile's title: everything the API says of the block, the whole hash and miner among it. */
+/**
+ * A tile's title: everything the API says of the block, the whole hash and miner among it — a
+ * pool's whole name too, which the tile may cut to its room (PAGE-LANE-NOTES F3-e: a cut pool name
+ * showed nowhere whole, the miner's link titled by its address alone).
+ */
 function TileTitle({ t }: { t: ForkTreeTile }) {
   return (
     <title>
@@ -102,7 +106,8 @@ function TileTitle({ t }: { t: ForkTreeTile }) {
         t.hash,
         t.timestamp && formatUtc8DateTime(t.timestamp),
         t.transactionsCount !== null && `${t.transactionsCount} tx`,
-        t.minerAddress && `miner ${t.minerAddress}`,
+        t.minerAddress &&
+          `miner ${t.minerPool === null ? '' : `${t.minerPool}, `}${t.minerAddress}`,
       ]
         .filter(Boolean)
         .join(' · ')}
@@ -288,27 +293,27 @@ function WideTree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeWid
         const main = at.row < 0;
         const cx = (main ? at.x + 4 : at.x + TW - 4) + before * MARK_STEP * (main ? 1 : -1);
         const cy = main ? at.y + TH + MARK_OVERHANG : at.y - MARK_OVERHANG;
-        return (
-          <TipMark key={mark.n} n={mark.n} cx={cx} cy={cy} r={W.markR} size={SVG_TEXT.label} />
-        );
+        return <TipMark key={mark.n} n={mark.n} cx={cx} cy={cy} r={W.markR} role="label" />;
       })}
     </TreeSvg>
   );
 }
 
+/** A tip mark, ① ② ③: its digit at the role its tree sets (the label in the wide tree, the tick in the column). */
 function TipMark({
   n,
   cx,
   cy,
   r,
-  size,
+  role,
 }: {
   n: 1 | 2 | 3;
   cx: number;
   cy: number;
   r: number;
-  size: number;
+  role: 'label' | 'tick';
 }) {
+  const size = SVG_TEXT[role];
   return (
     <g data-tip-mark={n}>
       <circle
@@ -323,7 +328,7 @@ function TipMark({
         x={cx}
         y={cy + centreShift(size)}
         textAnchor="middle"
-        fontSize={size}
+        fontSize={SVG_TEXT[role]}
         fill={FORK_COLORS.ink}
       >
         {n}
@@ -491,7 +496,7 @@ function ColumnTree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeC
             cx={laneX[at.lane] + TW - C.markR - before * C.markStep}
             cy={at.y - C.markLift}
             r={C.markR}
-            size={SVG_TEXT.tick}
+            role="tick"
           />
         );
       })}
