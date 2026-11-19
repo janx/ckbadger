@@ -170,6 +170,7 @@ export function NavMenu({
                     <div role="separator" className="border-base-border/70 mx-1 my-1 border-t" />
                   )}
                   <Link
+                    look="nav"
                     ref={(node) => {
                       itemRefs.current[i] = node;
                     }}

@@ -182,6 +182,7 @@ export function Header() {
                 const current = isLinkActive(item.href);
                 return (
                   <Link
+                    look="nav"
                     key={item.href}
                     href={item.href}
                     aria-current={current ? 'page' : undefined}
@@ -260,6 +261,7 @@ export function Header() {
             <nav className="container mx-auto py-4">
               <div className="flex flex-col gap-1">
                 <Link
+                  look="nav"
                   href="/"
                   onClick={() => setIsMenuOpen(false)}
                   className={`text-body block border px-3 py-2.5 font-mono lowercase transition ${
@@ -292,6 +294,7 @@ export function Header() {
                         </span>
                       ) : (
                         <Link
+                          look="nav"
                           href={item.href}
                           onClick={() => setIsMenuOpen(false)}
                           className={`text-body block border px-3 py-2.5 font-mono lowercase transition ${
@@ -306,6 +309,7 @@ export function Header() {
                       <div className="border-base-border/40 ml-3 flex flex-col gap-1 border-l pl-3 pt-1">
                         {item.children.map((child) => (
                           <Link
+                            look="nav"
                             key={child.href}
                             href={child.href}
                             onClick={() => setIsMenuOpen(false)}
@@ -322,6 +326,7 @@ export function Header() {
                     </div>
                   ) : (
                     <Link
+                      look="nav"
                       key={item.href}
                       href={item.href}
                       onClick={() => setIsMenuOpen(false)}

@@ -1,27 +1,27 @@
 import { Fragment, type ReactNode } from 'react';
-import Link from '@/components/ui/link';
+import Link, { type LinkLook } from '@/components/ui/link';
 import { formatBlockNumber } from '@/lib/format-block';
-import { cn } from '@/lib/utils';
 import { unitText } from '@/components/ui/units';
 
 /**
  * Lane L (L2): a block height written as text is the block's name, so it links to the block's
- * page — `#20,894,845` → `/blocks/20894845`. The link keeps the surrounding ink (it is a name in
- * a sentence, not a button) and turns jade on hover, as the site's other inline links do.
+ * page — `#20,894,845` → `/blocks/20894845`. Its look is where it stands, which its caller says
+ * (components/ui/link.tsx): a row's key (`key`, the bright ink), or a name inside a line (`inline`,
+ * the line's ink). Hover and focus turn it celadon, as every link.
  */
 export function BlockLink({
   number,
+  look,
   className,
 }: {
   number: number | bigint | string;
+  /** Optional only while the link-look gate's TOLERATED list holds call sites that state none. */
+  look?: Extract<LinkLook, 'key' | 'inline'>;
   className?: string;
 }) {
   const name = formatBlockNumber(number);
   return (
-    <Link
-      href={`/blocks/${name.slice(1).replace(/,/g, '')}`}
-      className={cn('hover:text-jade', className)}
-    >
+    <Link href={`/blocks/${name.slice(1).replace(/,/g, '')}`} look={look} className={className}>
       {name}
     </Link>
   );
@@ -43,7 +43,7 @@ export function SentenceNodes({ parts }: { parts: readonly SentencePart[] }): Re
     typeof p === 'string' ? (
       <Fragment key={i}>{unitText(p)}</Fragment>
     ) : (
-      <BlockLink key={i} number={p.block} />
+      <BlockLink key={i} number={p.block} look="inline" />
     )
   );
 }
