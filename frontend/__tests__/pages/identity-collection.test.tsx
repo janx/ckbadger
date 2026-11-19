@@ -30,8 +30,9 @@ it('shows identities, exact created/live counts, capacity history and parallel r
   await screen.findByRole('heading', { name: '.bit' });
   // Phase 5 (A12): the items run on the live count (the one live .bit the page reads) and status.
   expect(await screen.findByRole('heading', { name: 'Identities 1 live' })).toBeInTheDocument();
-  // C7: the rail is the metrics row; "minted / created" is the Live metric's note.
-  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+  // C7: the rail is the metrics row. Re-pinned on purpose (lane D2, PB-13): "minted / created" is
+  // the head's figure's note, beside the live count (it was the Live metric's note)
+  expect(screen.getByText('identities live').closest('[data-role="figure"]')).toHaveTextContent(
     'of 2 minted / created'
   );
   // re-pinned (PB-28, lane c2-assets): the two layers open from the last five, in place (the page
