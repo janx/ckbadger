@@ -101,8 +101,7 @@ and these codes, never their args)
   with their args.
 - `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
   An output's lock does not run: these are not the locks the transaction called. The locks that
-  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
-  input flag (a re-sync).
+  ran, its inputs', are the parties that sent (`sent`, below).
 
 **Participants**
 
@@ -114,7 +113,8 @@ response shapes describe a party the same way:
   "address": "ckb1q...",
   "lockHash": "0x...",
   "lockHashPrefix": null,
-  "roles": []
+  "roles": [],
+  "sent": true
 }
 ```
 
@@ -130,8 +130,14 @@ response shapes describe a party the same way:
   empty for a plain cell participant.
 - A named party that held no cell has `ckbDelta` and `usedDelta` of exactly `"0"` — that zero is
   what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
+- `sent` is `true` exactly when the party's lock is the lock of at least one input of the
+  transaction (one of its cells was consumed): the indexer's per-participant input flag
+  (`TAG_INPUT`, bit 8 of `tags`), set as the activity is built, the same on live sync and bulk
+  build; an input of zero capacity counts. A cellbase has no sender; a party a protocol only named
+  never sent. The folded feed row counts these parties as its "senders". Every participant states
+  it, the global activity's and the address activity's other parties alike.
 - `ActivityResponse.participants` are the OTHER parties; `ActivityResponse.roles` are this
-  participant's own roles.
+  participant's own roles and `ActivityResponse.sent` whether this participant sent.
 
 **Item deltas**
 

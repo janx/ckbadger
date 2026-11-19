@@ -80,6 +80,9 @@ pub struct ParticipantRef {
     pub lock_hash_prefix: Option<String>,
     pub lock_kind: Option<String>,
     pub roles: Vec<&'static str>,
+    /// This party sent: its lock is the lock of at least one input of the
+    /// transaction (the indexer's `TAG_INPUT`, [`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 pub(crate) fn participant_lock_kind(
@@ -107,6 +110,7 @@ fn participant_ref(
     cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<ParticipantRef> {
     let roles = participant_roles::names(participant.roles);
+    let sent = participant.sent();
     match participant.id {
         ParticipantId::Lock(hash) => Ok(ParticipantRef {
             address: resolve_party_address(store, network, &hash, pool_record, cache)?,
@@ -114,6 +118,7 @@ fn participant_ref(
             lock_hash_prefix: None,
             lock_kind: participant_lock_kind(store, &hash, pool_record)?,
             roles,
+            sent,
         }),
         // A protocol-named prefix resolves at read time through the chain
         // view (spec §3), and only when exactly one known lock has it.
@@ -130,6 +135,7 @@ fn participant_ref(
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
                 lock_kind: registered_script_name(store, &entry.code_hash)?,
                 roles,
+                sent,
             }),
             None => Ok(ParticipantRef {
                 address: None,
@@ -137,6 +143,7 @@ fn participant_ref(
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
                 lock_kind: None,
                 roles,
+                sent,
             }),
         },
     }
@@ -207,6 +214,9 @@ pub struct ActivityResponse {
     /// Roles the protocol gave THIS participant, if any.
     pub roles: Vec<&'static str>,
     pub tags: u16,
+    /// THIS participant sent: its lock is the lock of at least one input of
+    /// the transaction ([`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 /// Item delta response — tagged enum keyed on `kind`.
@@ -330,6 +340,9 @@ pub struct ParticipantResponse {
     pub used_delta: String,
     pub item_deltas: Vec<ItemDeltaResponse>,
     pub tags: u16,
+    /// This party sent: its lock is the lock of at least one input of the
+    /// transaction ([`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1242,6 +1255,7 @@ pub(crate) fn build_activity_response(
         participants,
         roles: participant_roles::names(participant.roles),
         tags: participant.tags,
+        sent: participant.sent(),
     })
 }
 
@@ -1298,6 +1312,7 @@ pub(crate) fn build_global_activity_response_with_pool(
                 used_delta: p.used_delta.to_string(),
                 item_deltas,
                 tags: p.tags,
+                sent: reference.sent,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
