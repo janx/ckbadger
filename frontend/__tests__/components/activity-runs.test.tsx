@@ -11,7 +11,7 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
-import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
+import { ActivityRuns, runMemory, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
@@ -864,5 +864,34 @@ describe('runSubject: a row whose item types are not stated (the item-types ruli
     expect(() => runSubject(row as GlobalActivity, 'Script call')).toThrow(
       `transaction ${row.txHash}: the row states no itemTypes field`
     );
+  });
+});
+
+// The third read's Lb NOTE 9: the runs remembered every row they ever drew alone and every row's
+// run head, for the feed's whole life (the shape 2e bounded for the stream's day anchors). What
+// they carry to the next render is bound to the rows in the feed now.
+describe('what the runs remember between renders', () => {
+  const runOf = (...keys: string[]) => ({ run: keys.map((key) => ({ key })), head: null });
+  const folded = (head: string, ...keys: string[]) => ({ run: keys.map((key) => ({ key })), head });
+
+  // keep the old memory instead of the rows present (drawn = union, heads never pruned): red
+  it('holds none of the rows a feed drew and dropped', () => {
+    const first = Array.from({ length: 30 }, (_, i) => runOf(`a${i}`));
+    let memory = runMemory([...first, folded('b0', 'b0', 'b1')], new Set());
+    expect(memory.drawn.size).toBe(30);
+    expect([...memory.heads.keys()]).toEqual(['b0', 'b1']);
+    memory = runMemory([runOf('c0'), folded('b1', 'c1', 'c2')], memory.drawn);
+    expect([...memory.drawn]).toEqual(['c0']);
+    expect([...memory.heads]).toEqual([
+      ['c1', 'b1'],
+      ['c2', 'b1'],
+    ]);
+  });
+
+  it('keeps a row drawn alone that a later row joins, so its run is drawn open', () => {
+    let memory = runMemory([runOf('a0')], new Set());
+    memory = runMemory([folded('a0', 'a0', 'a1')], memory.drawn);
+    expect(memory.drawn.has('a0')).toBe(true);
+    expect(memory.heads.get('a1')).toBe('a0');
   });
 });

@@ -76,6 +76,27 @@ export function runSubject(
   };
 }
 
+/**
+ * What the runs carry to the next render (`ActivityRuns`), bound to the rows in the feed now (the
+ * third read's Lb NOTE 9: it kept every row it ever drew, for the feed's life, the shape the stream's
+ * day anchors were bound from in 2e): the rows drawn alone, whole (`drawn`, of the last render's,
+ * those still in the feed, and this render's lone rows), and each row's run head (`heads`, this
+ * render's runs). A row that left the feed is forgotten.
+ */
+export function runMemory(
+  runs: readonly { run: readonly { key: string }[]; head: string | null }[],
+  drawn: ReadonlySet<string>
+): { drawn: Set<string>; heads: Map<string, string> } {
+  const present = new Set(runs.flatMap(({ run }) => run.map((r) => r.key)));
+  const next = new Set([...drawn].filter((key) => present.has(key)));
+  const heads = new Map<string, string>();
+  for (const { run, head } of runs) {
+    if (head === null) next.add(run[0].key);
+    else for (const r of run) heads.set(r.key, head);
+  }
+  return { drawn: next, heads };
+}
+
 /** A run's row's subject: a row in a run of two or more was compared, so it has one. */
 function subjectOf(r: FeedRow): RunSubject {
   if (r.subject === null) throw new Error(`transaction ${r.key}: a row in a run has no subject`);
@@ -130,10 +151,9 @@ export function ActivityRuns({
     return { run, head, isOpen };
   });
   useEffect(() => {
-    for (const { run, head } of runs) {
-      if (head === null) drawn.current.add(run[0].key);
-      else for (const r of run) heads.current.set(r.key, head);
-    }
+    const memory = runMemory(runs, drawn.current);
+    drawn.current = memory.drawn;
+    heads.current = memory.heads;
   });
   const toggle = (run: readonly FeedRow[], isOpen: boolean) => {
     if (isOpen) for (const r of run) drawn.current.delete(r.key);
