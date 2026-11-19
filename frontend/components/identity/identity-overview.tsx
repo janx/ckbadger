@@ -441,8 +441,7 @@ export function IdentitySummary({
       break;
     }
     case 'bit_cell': {
-      const d = protocol.versions.at(-1)!.decoded,
-        mint = protocol.versions[0].cell;
+      const mint = protocol.versions[0].cell;
       const owners = ownerRun(
         protocol.versions.map((v) => v.cell),
         (c) => c.ownerLockHash
