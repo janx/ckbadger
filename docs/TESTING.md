@@ -81,15 +81,20 @@ names neither a live nor a consumed cell. A store built before C-2 filed every c
 one built before the fix round filed Type ID cells holding state; both fail until re-synced.
 
 `script_names_by_pair` (F9, needs `--rpc-url`) holds the one rule of a script's name: a script is
-its pair (code hash, hash type), and the registry's label is the pair's (`script_info` keyed by the
-pair, lane rd/api-lock-names). For every output of the node's genesis block deployed under Type ID
-whose data is code, it asks `POST /scripts/lookup` for all eight pairs on the binary's two hashes.
-Four of them are no script — the Type ID hash by `data`, `data1` or `data2` (a Type ID hash is no
-code's data hash) and the code's data hash by `type` (it is no type script's hash) — so the
-registry names none of them and the lookup must answer each "Unknown" (or not at all). Every pair
-must be answered as itself (its `hashType`), and no pair that was not asked. It reads the
-lookup's names: it does not see the store's layout (a store from before the lane is refused by
-the indexer and the API at start, and named by the next check).
+named by the code its pair (code hash, hash type) runs (lane rd/api-lock-names). For every output
+of the node's genesis block deployed under Type ID whose data is code, it asks
+`POST /scripts/lookup` for all eight pairs on the binary's two hashes. Four of them are no script —
+the Type ID hash by `data`, `data1` or `data2` (a Type ID hash is no code's data hash) and the
+code's data hash by `type` (it is no type script's hash) — so they run no code and the lookup must
+answer each "Unknown" (or not at all). Four run the binary: where the lookup names the Type ID by
+`type`, it must answer the data hash by `data`, `data1` and `data2` with the same name, with no
+hash type beside the name but the pair's own (`nameBy`). Every pair must be answered as itself (its
+`hashType`), no pair that was not asked, and at least one binary must be named by its Type ID: a
+lookup that answers `{}` names nothing to hold to the rule and fails (it passed before the fix
+round, saying the eight pairs were "answered as themselves"). What it cannot see: a genesis binary
+the registry does not register is named by nothing, and the check then holds only its four
+impossible pairs; and it reads the lookup's names, not the store's layout (a store from before the
+lane is refused by the indexer and the API at start, and named by the next check).
 
 `store_layout_matches_build` (F10) holds the store the API serves to this build's layout
 (`ckbadger_store::STORE_LAYOUT`): `/statistics/network` states the domain store's `store_layout`
@@ -105,7 +110,10 @@ every code hash in `/stats/activity-summary-24h` `scriptCounts`, by each of its 
 lookup's `liveCellsCount` of the pair (its `script_reference_info` row, as lock plus as type) must
 equal the live cells `/cells/by-script` lists by that pair as lock and as type, walked to the end;
 past 1,000 rows of one kind the walk stops and the figure is held only to the rows walked (the
-result line names those pairs). A difference is a finding only when the API's view stood at one
+result line names those pairs). For such a pair the check proves only that `liveCellsCount` is at
+least the rows walked: it cannot see an overcount, and the by-script route's `total` is the same
+per-pair counter the lookup reads (`script_reference_info`), so there is no independent exact
+figure to compare with short of walking every row. A difference is a finding only when the API's view stood at one
 block before and after the reads; one never read at one block, after re-reads for up to the settle
 budget, leaves the check inconclusive. A store built before the lane counted every hash type of a
 code hash in one row and answered (X, data) with the cells of (X, type) as well.

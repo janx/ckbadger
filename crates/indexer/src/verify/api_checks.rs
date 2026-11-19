@@ -1669,6 +1669,10 @@ const SCRIPT_HASH_TYPE_LABELS: [&str; 4] = ["type", "data", "data1", "data2"];
 #[serde(rename_all = "camelCase")]
 struct ScriptLookupRecord {
     name: String,
+    /// The pair's hash type where the pair is not the registry's reference
+    /// for the code it runs; `None` otherwise.
+    #[serde(default)]
+    name_by: Option<String>,
     hash_type: String,
     live_cells_count: i64,
 }
@@ -1844,15 +1848,23 @@ impl Check for StoreLayoutMatchesBuild {
     }
 }
 
-/// F9 (lane rd/api-lock-names): a script is named by its pair (code hash, hash
-/// type), never by its code hash alone. Each genesis binary deployed under
-/// Type ID gives four pairs no script can be: its Type ID hash by `data`,
-/// `data1` or `data2` (a Type ID hash is no code's data hash) and its code's
-/// data hash by `type` (it is no type script's hash). The registry names none
-/// of them, so the lookup answers each "Unknown" — the store that kept one
-/// label row per code hash named a cell on (Type ID hash, data) after the
-/// script of (Type ID hash, type). Every pair asked is answered as itself
-/// (its `hashType`), and no pair is answered that was not asked.
+/// F9 (lane rd/api-lock-names): a script is named by the code its pair (code
+/// hash, hash type) runs, never by its code hash alone. Each genesis binary
+/// deployed under Type ID gives eight pairs on its two hashes:
+///
+/// - four no script can be: its Type ID hash by `data`, `data1` or `data2` (a
+///   Type ID hash is no code's data hash) and its code's data hash by `type`
+///   (it is no type script's hash). They run no code, so the lookup names
+///   none of them — the store that kept one label row per code hash named a
+///   cell on (Type ID hash, data) after the script of (Type ID hash, type);
+/// - four that run the binary: its Type ID hash by `type` and its data hash by
+///   `data`, `data1` and `data2`. Where the lookup names the Type ID pair, it
+///   names each data pair the same (the same code), with no other hash type
+///   beside the name than the pair's own.
+///
+/// Every pair asked is answered as itself (its `hashType`), no pair is answered
+/// that was not asked, and at least one binary must be named by its Type ID:
+/// a lookup that names none (answering `{}`, say) proves nothing and fails.
 pub struct ScriptNamesByPair;
 
 impl Check for ScriptNamesByPair {
@@ -1860,8 +1872,9 @@ impl Check for ScriptNamesByPair {
         "script_names_by_pair"
     }
     fn description(&self) -> &'static str {
-        "A script is named by its pair: each genesis Type ID binary's Type ID hash by data and \
-         its data hash by type are named by none, and every pair asked is answered as itself"
+        "A script is named by the code its pair runs: each genesis Type ID binary's Type ID \
+         hash by data and its data hash by type are named by none, its data hash by data* as \
+         its Type ID, and every pair asked is answered as itself"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
@@ -1964,14 +1977,72 @@ impl Check for ScriptNamesByPair {
                 });
             }
         }
+        // The pairs that run each binary: named alike where its Type ID is.
+        let mut named_binaries = 0u64;
+        let mut runs_named = 0u64;
+        for binary in &binaries {
+            let Some(type_answer) = answers
+                .get(&format!("{}:type", binary.type_id_hash))
+                .filter(|answer| answer.name != "Unknown")
+            else {
+                continue;
+            };
+            named_binaries += 1;
+            for hash_type in SCRIPT_HASH_TYPE_LABELS.iter().filter(|ht| **ht != "type") {
+                let entity = format!("script ({}, {hash_type})", binary.data_hash);
+                let mut details = Vec::new();
+                match answers.get(&format!("{}:{hash_type}", binary.data_hash)) {
+                    None => details.push(format!(
+                        "runs genesis {}'s code, which ({}, type) names {:?}, and the lookup \
+                         did not answer it",
+                        binary.outpoint, binary.type_id_hash, type_answer.name
+                    )),
+                    Some(answer) => {
+                        if answer.name != type_answer.name {
+                            details.push(format!(
+                                "named {:?}, but it runs genesis {}'s code, which ({}, type) \
+                                 names {:?}",
+                                answer.name, binary.outpoint, binary.type_id_hash, type_answer.name
+                            ));
+                        }
+                        if answer.name_by.as_deref().is_some_and(|by| by != *hash_type) {
+                            details.push(format!(
+                                "named {:?} by {:?}, not by its own hash type",
+                                answer.name, answer.name_by
+                            ));
+                        }
+                    }
+                }
+                if details.is_empty() {
+                    runs_named += 1;
+                } else {
+                    findings.push(Finding { entity, details });
+                }
+            }
+        }
+        if named_binaries == 0 {
+            findings.push(Finding {
+                entity: "script lookup".to_string(),
+                details: vec![format!(
+                    "answered {} of the {} pairs asked and named none of the {} genesis Type ID \
+                     binaries by its Type ID: no name to hold to the rule",
+                    answers.len(),
+                    asked.len(),
+                    binaries.len()
+                )],
+            });
+        }
         let checked = asked.len() as u64;
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 checked,
                 format!(
-                    "{} genesis Type ID binaries: {checked} pairs answered as themselves, the \
+                    "{} genesis Type ID binaries ({named_binaries} named by their Type ID): \
+                     {checked} pairs asked, {} answered, each as itself; the {runs_named} that \
+                     run a named binary by its data hash named as its Type ID; the \
                      {impossible_pairs} that no script can be named by none",
-                    binaries.len()
+                    binaries.len(),
+                    answers.len()
                 ),
             ))
         } else {
@@ -7555,7 +7626,9 @@ impl Check for ScriptReferenceLiveCellsConsistency {
         }
         if !walked_in_part.is_empty() {
             notes.push(format!(
-                "walked to {SCRIPT_WALK_CAP} rows a kind only, the figure held to a lower bound: \
+                "walked to {SCRIPT_WALK_CAP} rows a kind only: for these pairs the check proves \
+                 liveCellsCount is at least the rows walked and cannot see an overcount (the \
+                 by-script route's total is the same per-pair counter, no independent figure): \
                  {}",
                 walked_in_part.join(", ")
             ));
@@ -11797,6 +11870,14 @@ mod tests {
         json!({"name": name, "hashType": hash_type, "liveCellsCount": live, "cellsCount": live})
     }
 
+    /// The answer to the binary's data hash by `hash_type`, which runs the
+    /// binary's code by another reference than the registry's (its Type ID):
+    /// named as the Type ID pair, its hash type beside the name.
+    fn data_pair_answer(name: &str, hash_type: &str) -> serde_json::Value {
+        json!({"name": name, "nameBy": hash_type, "hashType": hash_type,
+            "liveCellsCount": 0, "cellsCount": 0})
+    }
+
     /// The node answers its genesis; the API answers the lookup with `answers`.
     fn run_script_names_check(answers: serde_json::Value) -> (CheckResult, Vec<serde_json::Value>) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -11830,23 +11911,29 @@ mod tests {
         (result, asked)
     }
 
-    /// The registry names the binary by its Type ID (the type pair); the
-    /// other three pairs on that hash and the type pair on its data hash are
-    /// no script, and the lookup names none of them: the check passes, having
-    /// asked every pair on both hashes.
+    /// The registry names the binary by its Type ID (the type pair); its data
+    /// hash by data, data1 and data2 runs the same code and is named the same,
+    /// its hash type beside the name; the other three pairs on the Type ID
+    /// hash and the type pair on its data hash are no script, and the lookup
+    /// names none of them: the check passes, having asked every pair on both
+    /// hashes.
     #[test]
     fn script_names_by_pair_passes_when_each_pair_is_named_as_itself() {
         let (type_id_hash, data_hash) = genesis_binary_hashes();
         let (result, asked) = run_script_names_check(json!({
             format!("{type_id_hash}:type"): lookup_answer("SECP256K1/blake160", "type", 2),
             format!("{type_id_hash}:data"): lookup_answer("Unknown", "data", 1),
+            format!("{data_hash}:data"): data_pair_answer("SECP256K1/blake160", "data"),
+            format!("{data_hash}:data1"): data_pair_answer("SECP256K1/blake160", "data1"),
+            format!("{data_hash}:data2"): data_pair_answer("SECP256K1/blake160", "data2"),
         }));
         assert!(result.passed(), "{:?}", result.findings);
         assert_eq!(result.items_checked, 8);
         assert!(
             result.detail.as_deref().unwrap_or_default().contains(
-                "1 genesis Type ID binaries: 8 pairs answered as themselves, the 4 that no \
-                 script can be named by none"
+                "1 genesis Type ID binaries (1 named by their Type ID): 8 pairs asked, 5 \
+                 answered, each as itself; the 3 that run a named binary by its data hash named \
+                 as its Type ID; the 4 that no script can be named by none"
             ),
             "{:?}",
             result.detail
@@ -11874,6 +11961,9 @@ mod tests {
             format!("{type_id_hash}:type"): lookup_answer("Default Lock", "type", 3),
             format!("{type_id_hash}:data"): lookup_answer("Default Lock", "data", 3),
             format!("{data_hash}:type"): lookup_answer("Default Lock", "type", 0),
+            format!("{data_hash}:data"): data_pair_answer("Default Lock", "data"),
+            format!("{data_hash}:data1"): data_pair_answer("Default Lock", "data1"),
+            format!("{data_hash}:data2"): data_pair_answer("Default Lock", "data2"),
         }));
         assert!(!result.passed());
         let entities: Vec<&str> = result.findings.iter().map(|f| f.entity.as_str()).collect();
@@ -11905,8 +11995,12 @@ mod tests {
     /// type that says another, or an answer to a pair never asked, fails.
     #[test]
     fn script_names_by_pair_fails_on_a_pair_answered_as_another() {
-        let (type_id_hash, _) = genesis_binary_hashes();
+        let (type_id_hash, data_hash) = genesis_binary_hashes();
         let (result, _) = run_script_names_check(json!({
+            format!("{type_id_hash}:type"): lookup_answer("Default Lock", "type", 3),
+            format!("{data_hash}:data"): data_pair_answer("Default Lock", "data"),
+            format!("{data_hash}:data1"): data_pair_answer("Default Lock", "data1"),
+            format!("{data_hash}:data2"): data_pair_answer("Default Lock", "data2"),
             format!("{type_id_hash}:data1"): lookup_answer("Unknown", "type", 3),
             format!("0x{}:type", "ab".repeat(32)): lookup_answer("Unknown", "type", 0),
         }));
@@ -11927,6 +12021,74 @@ mod tests {
                     "ab".repeat(32)
                 ),
             ]
+        );
+    }
+
+    /// T SHOULD-2 (fix round): a lookup that answers nothing named none of
+    /// the genesis binaries, and the check that asked eight pairs fails rather
+    /// than saying they were answered as themselves.
+    #[test]
+    fn script_names_by_pair_fails_on_a_lookup_that_names_no_binary() {
+        let (result, _) = run_script_names_check(json!({}));
+        assert!(!result.passed());
+        let details: Vec<String> = result
+            .findings
+            .iter()
+            .map(|f| format!("{}: {}", f.entity, f.details.join("; ")))
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                "script lookup: answered 0 of the 8 pairs asked and named none of the 1 genesis \
+                 Type ID binaries by its Type ID: no name to hold to the rule"
+                    .to_string()
+            ]
+        );
+    }
+
+    /// Ruling 2 (fix round): the binary's data hash by a data hash type runs
+    /// the code its Type ID names, so it is named the same, and its hash type
+    /// is the one beside the name; one unanswered, one named otherwise and one
+    /// written by another hash type are each a finding.
+    #[test]
+    fn script_names_by_pair_fails_where_a_data_pair_is_not_named_as_its_type_id() {
+        let (type_id_hash, data_hash) = genesis_binary_hashes();
+        let (result, _) = run_script_names_check(json!({
+            format!("{type_id_hash}:type"): lookup_answer("Default Lock", "type", 3),
+            format!("{data_hash}:data1"): data_pair_answer("Other Lock", "data1"),
+            format!("{data_hash}:data2"): data_pair_answer("Default Lock", "data"),
+        }));
+        assert!(!result.passed());
+        let details: Vec<String> = result
+            .findings
+            .iter()
+            .map(|f| format!("{}: {}", f.entity, f.details.join("; ")))
+            .collect();
+        assert_eq!(details.len(), 4, "{details:?}");
+        assert_eq!(
+            details[0],
+            format!("script ({data_hash}, data2): asked by data2, answered as hash type \"data\"")
+        );
+        assert!(
+            details[1].starts_with(&format!("script ({data_hash}, data): runs genesis "))
+                && details[1].ends_with(&format!(
+                    "which ({type_id_hash}, type) names \"Default Lock\", and the lookup did not \
+                     answer it"
+                )),
+            "{details:?}"
+        );
+        assert!(
+            details[2].starts_with(&format!(
+                "script ({data_hash}, data1): named \"Other Lock\", but it runs genesis "
+            )),
+            "{details:?}"
+        );
+        assert_eq!(
+            details[3],
+            format!(
+                "script ({data_hash}, data2): named \"Default Lock\" by Some(\"data\"), not by \
+                 its own hash type"
+            )
         );
     }
 
