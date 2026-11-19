@@ -85,10 +85,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/tx/[hash]/client-page.tsx': {
     lane: 'p-chain',
     // look 17 → 16 (lane D2): the facts rail's block link went with the rail; the strip's states
-    // its look
-    sites: { look: 16, ink: 16, raw: 2 },
-    reason:
-      '16 without a look; inks by hand (hover:text-jade, text-text-bright, text-text); 2 raw <a>',
+    // its look. Look 16 → 14, ink 16 → 12, raw 2 → 0 (lane D3): the script groups' code links
+    // moved to components/transaction/script-group-rows.tsx, each stating its look
+    sites: { look: 14, ink: 12 },
+    reason: '14 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
   },
   'components/address/address-history.tsx': {
     lane: 'p-chain',
@@ -510,7 +510,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // two links (2), the cell page's Created block link (2: look, ink), the address page's kind-line
 // lock link and its Lock metric's (4: two looks, two inks), the uncle page's canonical-hash link
 // (1), the identity owner line's address (1)
-const TOLERATED_TOTAL = 577;
+const TOLERATED_TOTAL = 569;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

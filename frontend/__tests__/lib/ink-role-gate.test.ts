@@ -95,7 +95,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/tx/[hash]/client-page.tsx': {
     family: 'chain',
-    sites: { link: 6, prose: 12 },
+    // link 6 → 3 (lane D3): the script groups' code links moved to
+    // components/transaction/script-group-rows.tsx, in the reading ink
+    sites: { link: 3, prose: 12 },
     reason:
       'cell and dep links, the waiting and empty lines, the witness and dep notes in the quiet ink',
   },

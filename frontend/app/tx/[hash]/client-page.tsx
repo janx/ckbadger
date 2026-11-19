@@ -27,8 +27,16 @@ import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
-import { cellTiles, kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
-import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
+import { cellTiles, registeredName } from '@/components/transaction/transaction-cell-tiles';
+import { ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
+import {
+  groupCells,
+  groupHref,
+  groupKey,
+  groupLabel,
+  scriptGroupRows,
+  witnessKindLabel,
+} from '@/components/transaction/script-group-rows';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
@@ -41,7 +49,6 @@ import {
   isNotFoundApiError,
   isServiceUnavailableError,
   type TransactionDetail,
-  type TransactionScriptGroup,
   type TransactionWitness,
   type ScriptLookupResponse,
   type GlobalActivity,
@@ -53,18 +60,16 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { txComment } from '@/lib/tx-comment';
 import {
-  getScriptDetailHref,
   getIdentityItemDetailHref,
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { shortenHash } from '@/lib/shorten';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import {
   capacityEquation,
-  shortCkb,
   txLinks,
   txMovements,
   type TxHover,
@@ -102,12 +107,6 @@ function required<T>(value: T | null | undefined, hash: string, field: string): 
     throw new Error(`Transaction ${hash} missing required field "${field}"`);
   return value;
 }
-function groupKey(group: TransactionScriptGroup): string {
-  return `${group.kind}:${group.ran ? 'run' : 'attached'}:${group.scriptHash}`;
-}
-function groupCells(g: TransactionScriptGroup): string[] {
-  return [...g.inputIndices.map((i) => `in:${i}`), ...g.outputIndices.map((i) => `out:${i}`)];
-}
 function indexParam(value: string | null): number | null {
   if (value === null) return null;
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
@@ -116,18 +115,6 @@ function indexParam(value: string | null): number | null {
 }
 function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
-}
-/** The registry's name for a code hash, or null when it has none. */
-function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
-}
-function groupHref(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return getScriptDetailHref({
-    name: lookup?.[g.script.codeHash]?.name,
-    codeHash: g.script.codeHash,
-    hashType: g.script.hashType,
-    scriptKind: g.kind,
-  });
 }
 /** Total DAO compensation the transaction's completed withdrawals pay, from their metadata. */
 function daoCompensation(activity: GlobalActivity): bigint | null {
@@ -279,24 +266,6 @@ function TxSummary({ activity }: { activity: GlobalActivity }) {
         ))}
     </p>
   );
-}
-
-/** `pubkey hash 0x11111111…111111`: the API's decoded lock args, as words. */
-function witnessKindLabel(kind: TransactionWitness['kind']): string {
-  switch (kind) {
-    case 'witness_args':
-      return 'WitnessArgs';
-    case 'ckbfs':
-      return 'CKBFS content';
-    case 'cobuild':
-      return 'CoBuild message';
-    case 'cellbase':
-      return 'Cellbase witness';
-    case 'empty':
-      return 'empty';
-    case 'opaque':
-      return 'opaque bytes';
-  }
 }
 
 const OVERHEAD_FIELD = /header|length|union|offset/i;
@@ -801,135 +770,13 @@ export default function TransactionDetailPage() {
   }));
 
   // ---- script-group matrix ----
-  const column = (
-    side: 'in' | 'out',
-    i: number,
-    cell: NonNullable<TransactionDetail['inputs']>[number]
-  ) => {
-    const display = cell.display;
-    const kind = kindOf(cell);
-    const top = display
-      ? display.kind === 'file'
-        ? display.standard.toUpperCase()
-        : formatStandard(display.standard)
-      : kind === 'ckb'
-        ? 'plain'
-        : kind === 'dao'
-          ? 'DAO'
-          : cell.type
-            ? (registeredName(lookup, cell.type.codeHash) ?? 'typed')
-            : 'plain';
-    // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
-    // spends; an output is a cell only once the transaction is committed.
-    const outPoint =
-      side === 'in'
-        ? required(cell.previousOutput, hash, `input ${i} outpoint`)
-        : isProvisional
-          ? null
-          : { txHash: hash, index: i };
-    return {
-      id: `${side}:${i}`,
-      top,
-      label: `${side} #${i}`,
-      ...(outPoint
-        ? {
-            href: `/cell/${outPoint.txHash}-${outPoint.index}`,
-            title: `${outPoint.txHash}:${outPoint.index}`,
-          }
-        : { title: 'not a cell until the transaction is committed' }),
-      cap:
-        cell.capacity === undefined
-          ? null
-          : shortCkb(exactUnsignedInteger(cell.capacity, `${hash}: ${side} ${i} capacity`)),
-    };
-  };
-  const matrixInputs = tx.isCellbase ? [] : (tx.inputs ?? []).map((c, i) => column('in', i, c));
-  const matrixOutputs = (tx.outputs ?? []).map((c, i) => column('out', i, c));
-  const matrixGroups: MatrixGroup[] = groups.map((g) => {
-    const key = groupKey(g);
-    const codeDeps = (deps ?? []).flatMap((d, i) =>
-      d.scriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
-    );
-    const attachedDeps = (deps ?? []).flatMap((d, i) =>
-      !g.ran && d.outputLockScriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
-    );
-    const w = g.witnessIndex === null ? null : witnesses.find((x) => x.index === g.witnessIndex);
-    const firstCell = g.inputIndices.length
-      ? tx.inputs?.[g.inputIndices[0]]
-      : tx.outputs?.[g.outputIndices[0]];
-    const mark = g.kind === 'type' && firstCell ? kindOf(firstCell) : null;
-    return {
-      id: key,
-      kind: g.kind,
-      name: groupLabel(g, lookup),
-      href: groupHref(g, lookup),
-      mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
-      sub: (size: ShortSize) => {
-        const line =
-          g.kind === 'lock' && firstCell
-            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError, size)
-            : null;
-        return line ?? `args ${shortenHash(g.script.args, size)}`;
-      },
-      ran: g.ran,
-      cellIds: groupCells(g),
-      cycles: g.cycles,
-      status: isProvisional && g.ran ? 'will run when committed' : undefined,
-      focusTestId: `tx-script-group-focus-${g.witnessIndex ?? 'none'}-${g.kind}`,
-      onFocus: () => (selectedGroup === key ? select(null, null) : select(g.witnessIndex, key)),
-      witness:
-        g.witnessIndex === null
-          ? null
-          : {
-              index: g.witnessIndex,
-              detail: w ? { kind: witnessKindLabel(w.kind), size: w.size } : null,
-              onSelect: () => select(g.witnessIndex, selectedGroup === key ? null : key),
-            },
-      code: (size: ShortSize) =>
-        !g.ran ? (
-          attachedDeps.length > 0 ? (
-            attachedDeps.map(({ d, i }) => (
-              <span key={i} className="text-text-dim block">
-                <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                  code
-                </a>{' '}
-                <Link
-                  href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                  className="hover:text-jade"
-                >
-                  <ShortId value={d.outPointTxHash} kind="hash" size={size} />
-                  <OutpointIndex index={d.outPointIndex} />
-                </Link>{' '}
-                · not run here
-              </span>
-            ))
-          ) : null
-        ) : isProvisional ? (
-          <span className="text-text-dim">read once committed</span>
-        ) : depsError ? (
-          <span className="text-text-dim">cell deps unreadable</span>
-        ) : !deps ? (
-          <span className="text-text-dim">Resolving code…</span>
-        ) : codeDeps.length === 0 ? (
-          <span className="text-text-dim">No matching dep</span>
-        ) : (
-          // The kind jumps to the dep row's evidence below; the out point opens the code cell.
-          codeDeps.map(({ d, i }) => (
-            <span key={i} className="block">
-              <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                {d.depType === 'dep_group' ? 'dep group' : 'code'}
-              </a>{' '}
-              <Link
-                href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                className="text-text-dim hover:text-jade"
-              >
-                <ShortId value={d.outPointTxHash} kind="hash" size={size} />
-                <OutpointIndex index={d.outPointIndex} />
-              </Link>
-            </span>
-          ))
-        ),
-    };
+  const matrix = scriptGroupRows(tx, {
+    lookup,
+    deps,
+    depsError,
+    provisional: isProvisional,
+    depHref: (i) => `#tx-dep-${i}`,
+    select: { group: selectedGroup, pick: select },
   });
 
   // ---- headline and summary (TX-11) ----
@@ -1572,9 +1419,9 @@ export default function TransactionDetailPage() {
           </Prose>
           <ScriptGroupMatrix
             txHash={hash}
-            inputs={matrixInputs}
-            outputs={matrixOutputs}
-            groups={matrixGroups}
+            inputs={matrix.inputs}
+            outputs={matrix.outputs}
+            groups={matrix.groups}
             lit={lit}
             onHover={setHover}
           />
