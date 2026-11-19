@@ -145,7 +145,7 @@ const OBJECT_PHONE_HEAD_PX = phoneHead(
   12 +
     8 +
     textPx(
-      `#${(BigInt(2) ** BigInt(64) - BigInt(1)).toLocaleString('en-US')}`.length,
+      objectName((BigInt(2) ** BigInt(64) - BigInt(1)).toString(), '', 'row').length,
       fontPx('body')
     )
 );
@@ -229,7 +229,10 @@ function ClusterObjectPhoneRow({
                   return (
                     own && (
                       <Labelled key={lane.gene} label={geneLabel(lane.gene)} words>
-                        <TraitText text={geneCellText(own.value)} />
+                        {/* a value anyone can mint: it breaks anywhere, never past the line */}
+                        <span className="[overflow-wrap:anywhere]">
+                          <TraitText text={geneCellText(own.value)} />
+                        </span>
                       </Labelled>
                     )
                   );
