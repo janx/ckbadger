@@ -1,5 +1,13 @@
 import { afterEach, vi } from 'vitest';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { InventoryRows } from '@/components/asset/inventory-table';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
@@ -768,5 +776,141 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       // a phone row's summary form (readability R5, re-pinned on purpose: was "100.00000001")
       ['figures', '100 CKB held · 61 occupied (61.00%)', null],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board, its tokens pane; objects and identities by its rules): line 1 the
+// class's mark, the name and the CKB its cells hold, the figure the list sorts by ("sorted by ckb
+// held in its cells"), at the key's step in the bright ink; line 2 what it is and who uses it, a
+// separated list of named figures that wraps between them — its tags, its holders, its transfers or
+// objects or names, the H-multiplier named and grouped (PA-09: it was a bare "×15019.09") — and, on
+// an object collection's row, the composition chip at its right, where it stays whatever the
+// list's length (the owner's rule: on every row of an object list); line 3 quiet, the rest. The
+// collection's id leaves the row (PA-09: a bare hash at its end); the transfers of the last 24 h
+// leave it for the row's title.
+describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const spore: Asset = {
+    ...asset,
+    id: '0x' + 'cd'.repeat(32),
+    assetType: 'object',
+    standard: 'spore',
+    name: 'Wyltek Founding Members',
+    symbol: null,
+    holdersCount: 32,
+    liveCount: 93,
+    totalSupply: '93',
+    activitiesCount: 95,
+    compositionTier: 'pure_ckb',
+  };
+  const lines = (row: HTMLElement) => phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right]);
+
+  it('writes a token as name and CKB held · tags and named figures · supply and occupied', () => {
+    atContainerWidth(358);
+    render(
+      <InventoryRows
+        assetType="token"
+        rows={[
+          asset,
+          { ...asset, id: '0x' + 'ef'.repeat(32), standard: 'sudt', hMultiplier: '15019.0912' },
+        ]}
+      />
+    );
+    const [token, sudt] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(token)).toEqual([
+      ['identity', 'head', 'Token', '100 CKB'],
+      ['what', 'body', 'T · 2 holders · 4 transfers · H-mult. ×1.63', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+    ]);
+    expect(phoneLines(sudt)[1].left).toBe(
+      'T · sUDT · 2 holders · 4 transfers · H-mult. ×15,019.09'
+    );
+    const labels = Array.from(token.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual([
+      'holders',
+      'transfers',
+      'H-mult.',
+      'supply',
+      'occupied',
+    ]);
+    for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');
+    expect(token.querySelector('[data-line="identity"] > [data-part="right"] > *')).toHaveClass(
+      'text-body',
+      'text-text-bright'
+    );
+  });
+
+  it('writes an object collection with its composition chip on line 2, and no bare id', () => {
+    atContainerWidth(358);
+    render(<InventoryRows assetType="object" rows={[spore]} />);
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(row)).toEqual([
+      ['identity', 'head', 'Wyltek Founding Members', '100 CKB'],
+      ['what', 'body', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
+      ['figures', 'quiet', '93 minted · 61 CKB occupied (61.00%) · H-mult. ×1.63', null],
+    ]);
+    // the chip holds line 2's right edge: the line does not wrap it under its figures
+    const what = row.querySelector('[data-line="what"]')!;
+    expect(what).toHaveClass('flex-nowrap');
+    expect(what.querySelector('[data-part="right"] [data-composition="pure_ckb"]')).not.toBeNull();
+    expect(row.textContent).not.toMatch(/0xcdcd/);
+  });
+
+  it('writes an identity system with its live, registered and holder counts named', () => {
+    atContainerWidth(358);
+    render(
+      <InventoryRows
+        assetType="identity"
+        rows={[
+          {
+            ...asset,
+            assetType: 'identity',
+            standard: 'dotbit',
+            name: '.bit',
+            liveCount: 5,
+            totalSupply: '9',
+          },
+        ]}
+      />
+    );
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(lines(row)).toEqual([
+      ['identity', 'head', '.bit', '100 CKB'],
+      ['what', 'body', '5 live · 9 ever registered · 2 holders', null],
+      ['figures', 'quiet', '61 CKB occupied (61.00%)', null],
+    ]);
+    expect(dottedItems(row.querySelector('[data-line="what"]')!)).toEqual([
+      '5 live',
+      '9 ever registered',
+      '2 holders',
+    ]);
+  });
+
+  // The board's head(): the class's mark and its 6 px (18), an 18-character name at the key's
+  // 14 px (151.2), the 12 px between the parts and the widest CKB a row's cells hold at the key's
+  // step, "99,999,999,999" (117.6) and " CKB" at the unit's 12 px (28.8): 327.6 of 328 px. A longer
+  // name drops the widest figure under it, whole.
+  it('states its first line, 327.6 of 328 px, and draws an 18-character name with the widest figure', () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    render(
+      <InventoryRows
+        assetType="token"
+        rows={[
+          {
+            ...asset,
+            name: 'Eighteen chars nam',
+            ownedCapacity: '9999999999999999999',
+            ownedKnowledge: '100000000',
+          },
+        ]}
+      />
+    );
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(row)[0].right).toBe('99,999,999,999 CKB');
+    expect(statedHeadPx(row)).toBe(327.6);
+    expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });
