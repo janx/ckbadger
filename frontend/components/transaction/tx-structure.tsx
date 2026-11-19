@@ -603,7 +603,7 @@ function SheetHead({
       {total !== undefined && (
         <span data-sheet-total="" className="text-small">
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={exactUnsignedInteger(total, `${txHash}: ${side} capacity`)}
             signed={false}
             tone="plain"
@@ -697,7 +697,7 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
     >
       <span className="block">fee</span>
       <CkbAmount
-        form="column"
+        form="exact"
         shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
         signed={false}
         tone="plain"
@@ -721,7 +721,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
     >
       <span className="block">{inflow.label}</span>
       <CkbAmount
-        form="column"
+        form="exact"
         shannons={exactUnsignedInteger(inflow.amount, `${txHash}: ${inflow.label}`)}
         signed={false}
         tone="plain"
