@@ -208,7 +208,7 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
 
   it('refuses a stack whose route sends no whole', () => {
     for (const [slug, method, field] of [
-      ['activity-type-breakdown', 'getActivityTypeBreakdownChart', 'kindOccurrences'],
+      ['activity-type-breakdown', 'getActivityTypeBreakdownChart', 'activityCount'],
       ['total-supply', 'getTotalSupplyChart', 'totalIssuance'],
       ['common-knowledge-composition', 'getCommonKnowledgeCompositionChart', 'knowledgeSize'],
     ] as const) {
@@ -225,14 +225,15 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
 
   it('names a stack above its scale by the day’s whole the route sends', () => {
     const payload = fixture<StackedFixture>('getActivityTypeBreakdownChart');
-    // the spike's kind occurrences, one more than its bands, shows where the note reads its whole
-    payload.data[50].values.kindOccurrences = '1000699';
+    // the spike's activities, one more than its bands, shows where the note reads its whole
+    payload.data[50].values.activityCount = '1000699';
     const model = chartModel(definition('activity-type-breakdown'), payload as never);
     const outliers = axisOutliers(model.points, model.series, model.kind)!;
     expect(outliers.indexes).toEqual([50]);
     expect(capNote(model, model.points, outliers.indexes, (label) => label, 'day')).toBe(
-      // re-pinned for lane D1's second follow-up, item 2: the stack's whole is kind counts
-      `${model.points[50].label} · 1,000,699 kind counts, above this scale`
+      // re-pinned on purpose (F-6 merged): the stack's whole is the day's activities (it was
+      // "kind counts" while the kinds overlapped)
+      `${model.points[50].label} · 1,000,699 activities, above this scale`
     );
   });
 });

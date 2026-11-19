@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '../../utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
-import { CHARTS, SIX_KINDS_SLUG } from '@/components/charts/chart-catalogue';
+import { ACTIVITY_KINDS_SLUG, CHARTS } from '@/components/charts/chart-catalogue';
 import { api } from '@/lib/api';
 import { CHART_FIXTURES, days } from './chart-hero-fixtures';
 
@@ -80,21 +80,21 @@ const EXPECT: Record<string, Expect> = {
     figure: '302,594,731 CKB',
     sentence: 'The most in a day on record.',
   },
-  // lane D1, second follow-up, item 2: the series is the day's kind counts, and the page says so
-  // (was "recorded in a day", "6,177 activities")
+  // re-pinned on purpose (F-6 merged): the kinds partition the day's activities, so the series is
+  // its activities again and needs no note (lane D1's second follow-up had made it "counted in a
+  // day", "6,177 kind counts" and the note "An activity of two kinds counts under both.")
   'activity-volume': {
-    eyebrow: 'counted in a day · 2026-11-18',
-    figure: '6,177 kind counts',
-    sentence: `The fewest in a day on record; the peak was 1,111,902 on ${d400[100]}. An activity of two kinds counts under both.`,
+    eyebrow: 'recorded in a day · 2026-11-18',
+    figure: '6,177 activities',
+    sentence: `The fewest in a day on record; the peak was 1,111,902 on ${d400[100]}.`,
   },
   'activity-type-breakdown': {
     eyebrow: 'script calls, the largest kind in a day · 2026-11-18',
     figure: '5,425 activities',
-    // re-pinned for the D1 hand-back, item 2, and its second follow-up, item 2: the whole is the
-    // day's kind counts, which count an activity of two kinds under both (was "… of the day's kind
-    // occurrences, …", and before that "of the day's activities")
-    sentence:
-      "Script calls were 88.47% of the day's kind counts, CKB transfers 10.25%. An activity of two kinds counts under both.",
+    // re-pinned on purpose (F-6 merged): the whole is the day's activities, which the kinds
+    // partition (it was "… of the day's kind counts, …" with the overlap's note, and before that
+    // "of the day's kind occurrences")
+    sentence: "Script calls were 88.47% of the day's activities, CKB transfers 10.25%.",
   },
   'cell-count': {
     eyebrow: 'live · 2026-11-18',
@@ -310,12 +310,13 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
       if (chart.kind === 'stacked') {
         const series = chart.series as { key: string }[];
         // Rule 5: at most five bands. The lead's ruling (lane D1's third round, T's MUST-1): Activity
-        // by type keeps its six kinds, the site's closed set, each with its class colour and its
+        // by type keeps every kind, the site's closed set, each with its class colour and its
         // filter chip, none of them "others"; five and "others" would hide a named kind behind a
         // word. It is the owner's to confirm at the gate; the allowance is that one slug's, by
-        // name (SIX_KINDS_SLUG), and every other stack, classed or not, is held at five.
-        expect(series.length).toBeLessThanOrEqual(definition.slug === SIX_KINDS_SLUG ? 6 : 5);
-        if (definition.slug === SIX_KINDS_SLUG) expect(series).toHaveLength(6);
+        // name (ACTIVITY_KINDS_SLUG), and every other stack, classed or not, is held at five.
+        // Re-pinned on purpose (F-6 merged): seven kinds, the protocols' their own (it was six).
+        expect(series.length).toBeLessThanOrEqual(definition.slug === ACTIVITY_KINDS_SLUG ? 7 : 5);
+        if (definition.slug === ACTIVITY_KINDS_SLUG) expect(series).toHaveLength(7);
         expect(Object.keys(chart.bandEnds as Record<string, string>).sort()).toEqual(
           series.map((entry) => entry.key).sort()
         );

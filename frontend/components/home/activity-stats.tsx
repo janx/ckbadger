@@ -65,7 +65,6 @@ export function ActivityStats() {
 
 interface SummaryView {
   activities: number;
-  occurrences: number;
   addresses: number;
   /** CKB moved, compact (a tile, R5), and the exact value its title names when it was cut. */
   ckbMoved: { text: string; title: string | undefined };
@@ -93,7 +92,6 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   }
   return {
     activities: s.activityCount,
-    occurrences: s.kindOccurrences,
     addresses: s.uniqueAddressCount,
     ckbMoved: {
       text: ckbAmountText(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
@@ -103,7 +101,8 @@ function summaryView(s: ActivitySummary24h): SummaryView {
       key: r.key,
       label: r.label,
       count: r.count,
-      total: s.kindOccurrences,
+      // One kind per activity: the types are a partition of the activities.
+      total: s.activityCount,
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,
@@ -141,7 +140,7 @@ function Summary({ view }: { view: SummaryView }) {
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-10 gap-y-[22px]">
         <RankedBars
           testId="home-activity-types"
-          title={`By type, share of ${n(view.occurrences)} kind occurrences`}
+          title={`By type, share of ${formatCount(view.activities, 'transaction')}`}
           titleHref={TYPE_BREAKDOWN}
           rows={view.types}
         />
@@ -167,7 +166,8 @@ interface DailyView {
 
 /**
  * Activities per day, oldest first; the last day is the headline. A day's bar is the route's count
- * of its user transactions (`userTransactionCount`). Days must be in order.
+ * of its activities (`activityCount`, every transaction but the cellbases, each in one kind). Days
+ * must be in order.
  */
 export function dailyActivityView(days: DailyActivityStats[]): DailyView | null {
   if (days.length === 0) return null;
@@ -176,7 +176,7 @@ export function dailyActivityView(days: DailyActivityStats[]): DailyView | null 
       throw new Error(`daily activity days out of order: ${days[i - 1].date} then ${days[i].date}`);
     }
   }
-  const totals = days.map((day) => day.userTransactionCount);
+  const totals = days.map((day) => day.activityCount);
   const bars = days.map((day, i) => ({
     label: dayLabel(day.date),
     value: totals[i],

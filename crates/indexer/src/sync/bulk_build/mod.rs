@@ -31,11 +31,11 @@ use ckbadger_store::types::{
     DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, BATCH_LOOP_ONLY_CFS, CF_ADDR_TXS,
-    CF_ADDR_TXS_BY_PREFIX, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH,
-    CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE,
-    CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
-    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
+    AddressBalance, CkbadgerStore, ClassifiedTxActions, ScriptInfo, BATCH_LOOP_ONLY_CFS,
+    CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
+    CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
+    CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
+    CF_LOCK_SCRIPTS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
     CF_TX_ACTIONS_BY_BUCKET, CF_TX_HASH_MAP, CF_TX_INDEX, FINALIZE_WRITTEN_CFS,
 };
 use rayon::prelude::*;
@@ -1779,7 +1779,7 @@ impl ActivityStatsAccumulator {
     fn apply_batch(
         &mut self,
         blocks: &[facts::BlockFacts],
-        tx_actions_list: &[TxActions],
+        tx_actions_list: &[ClassifiedTxActions],
     ) -> Result<Vec<materialize::MaterializedRow>> {
         if blocks.is_empty() {
             if tx_actions_list.is_empty() {
@@ -1940,7 +1940,7 @@ impl ActivityStatsAccumulator {
     /// addresses.
     fn accumulate_tx_actions(
         &mut self,
-        tx_actions_list: &[TxActions],
+        tx_actions_list: &[ClassifiedTxActions],
         chain_time_of: impl Fn(i64) -> Option<i64>,
     ) -> Result<()> {
         let mut cached_block = None;
@@ -1994,7 +1994,10 @@ impl ActivityStatsAccumulator {
                     tx_actions.tx_index
                 )
             })?;
-            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut open.stats);
+            crate::db::BatchWriter::accumulate_tx_activity_stats(
+                tx_actions.view(),
+                &mut open.stats,
+            );
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
@@ -2054,6 +2057,14 @@ impl ActivityStatsAccumulator {
 
     #[cfg(test)]
     fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+        self.apply_classified_tx_actions(&classified_for_test(tx_actions_list))
+    }
+
+    #[cfg(test)]
+    fn apply_classified_tx_actions(
+        &mut self,
+        tx_actions_list: &[ClassifiedTxActions],
+    ) -> Result<()> {
         let times: FxHashMap<i64, i64> = tx_actions_list
             .iter()
             .map(|action| (action.block_number, action.timestamp))
@@ -2157,7 +2168,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.daily_addrs.get(&date) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Daily, &date, addrs)?;
@@ -2178,7 +2189,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.hourly_addrs.get(&hour) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Hourly, &hour, addrs)?;
@@ -2257,7 +2268,7 @@ fn drain_activity_bucket_rows(
         rows.push(materialize::MaterializedRow::new(
             CF_STATS_CHAIN,
             keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
-            bincode::serialize(&stats)?,
+            stats.encode(),
         ));
     }
     Ok(rows)
@@ -3726,7 +3737,7 @@ struct HistoryBuildResult {
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
-    tx_actions_list: Vec<ckbadger_store::types::TxActions>,
+    tx_actions_list: Vec<ckbadger_store::ClassifiedTxActions>,
 }
 
 /// Pure-data payload sent to the flush channel. Contains materialized rows
@@ -3910,7 +3921,7 @@ struct BlockHistoryRows {
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     /// Standalone protocol-named participations per 20-byte lock-hash prefix.
     prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
-    tx_actions_list: Vec<ckbadger_store::types::TxActions>,
+    tx_actions_list: Vec<ckbadger_store::ClassifiedTxActions>,
 }
 
 #[doc(hidden)]
@@ -4870,7 +4881,7 @@ fn build_history_batches(
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_prefix_deltas: FxHashMap<[u8; 20], i64> = FxHashMap::default();
-    let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
+    let mut all_tx_actions: Vec<ckbadger_store::ClassifiedTxActions> = Vec::new();
     let mut collection_activity_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
     for result in block_results {
         let mut block_rows = result?;
@@ -5365,8 +5376,14 @@ fn build_history_rows_for_block(
     // of this function. Cellbase txs are excluded from CF_TX_ACTIONS — the API
     // filters them at read time (activities.rs:795) and they are never displayed.
     // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
-    for built in &built_list {
-        let tx_actions = &built.actions;
+    // Each transaction is classified here, once: its bucket row below and the
+    // activity stats stage take the classification from the returned list.
+    let classified_list: Vec<ckbadger_store::ClassifiedTxActions> = built_list
+        .into_iter()
+        .map(|built| ckbadger_store::ClassifiedTxActions::classify(built.actions))
+        .collect();
+    for classified in &classified_list {
+        let tx_actions = classified.actions();
         if !tx_actions.is_cellbase {
             // Keyed by its position; the value is what the transaction did
             // (`TxActions::stored_ref`, serialized straight into the chunk —
@@ -5375,17 +5392,16 @@ fn build_history_rows_for_block(
             let tx_actions_key =
                 keys::encode_tx_actions_key(tx_actions.block_number, tx_actions.tx_index);
             rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.stored_ref())?;
-            // Its global bucket row, derived by the same function the live
-            // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
-            let bucket_key =
-                ckbadger_store::tx_actions_bucket_key(tx_actions).ok_or_else(|| {
-                    anyhow!(
-                        "non-cellbase tx has no global bucket: block={} tx_index={} tx=0x{}",
-                        tx_actions.block_number,
-                        tx_actions.tx_index,
-                        hex::encode(&tx_actions.tx_hash)
-                    )
-                })?;
+            // Its global bucket row, from the same classification the live
+            // writer's `StoreBatch::put_tx_actions` writes, into the same rows.
+            let bucket_key = classified.bucket_key().ok_or_else(|| {
+                anyhow!(
+                    "non-cellbase tx has no global bucket: block={} tx_index={} tx=0x{}",
+                    tx_actions.block_number,
+                    tx_actions.tx_index,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            })?;
             rows.push_raw(CF_TX_ACTIONS_BY_BUCKET, &bucket_key, &[])?;
         }
 
@@ -5733,7 +5749,7 @@ fn build_history_rows_for_block(
         object_activity_count_deltas,
         identity_activity_count_deltas,
         prefix_tx_count_deltas,
-        tx_actions_list: built_list.into_iter().map(|b| b.actions).collect(),
+        tx_actions_list: classified_list,
     })
 }
 
@@ -6000,12 +6016,23 @@ fn preload_token_info_cache(
     Ok(cache)
 }
 
+/// Test fixtures hold bare `TxActions`; the activity stage takes them
+/// classified, as `build_history_rows_for_block` hands them on.
+#[cfg(test)]
+fn classified_for_test(tx_actions_list: &[TxActions]) -> Vec<ClassifiedTxActions> {
+    tx_actions_list
+        .iter()
+        .cloned()
+        .map(ClassifiedTxActions::classify)
+        .collect()
+}
+
 #[cfg(test)]
 fn build_sealed_aggregate_rows(
-    tx_actions_list: &[TxActions],
+    tx_actions_list: &[ClassifiedTxActions],
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut accumulator = ActivityStatsAccumulator::default();
-    accumulator.apply_tx_actions(tx_actions_list)?;
+    accumulator.apply_classified_tx_actions(tx_actions_list)?;
     accumulator.build_rows()
 }
 
@@ -10127,7 +10154,8 @@ mod tests {
             .format("%Y%m%d")
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
-        assert_eq!(daily.transfer_count, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.ckb, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.total(), 1);
         assert_eq!(daily.total_ckb_moved, 100_00000000);
         assert_eq!(daily.coinbase_count, 0);
         assert_eq!(acc.daily_addrs.get(&date_key).unwrap().len(), 1);
@@ -10169,7 +10197,7 @@ mod tests {
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
         assert_eq!(daily.coinbase_count, 1);
-        assert_eq!(daily.transfer_count, 0);
+        assert_eq!(daily.kind_counts.total(), 0, "a cellbase is in no kind");
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
@@ -10241,7 +10269,10 @@ mod tests {
 
         let mut acc = ActivityStatsAccumulator::default();
         assert!(acc
-            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .apply_batch(
+                &[block(0, 0)],
+                &classified_for_test(std::slice::from_ref(&action))
+            )
             .unwrap()
             .is_empty());
 
@@ -10269,11 +10300,11 @@ mod tests {
         let next = acc
             .apply_batch(
                 &[block(3, 14_400_000)],
-                &[TxActions {
+                &classified_for_test(&[TxActions {
                     block_number: 3,
                     timestamp: 14_400_000,
                     ..action
-                }],
+                }]),
             )
             .unwrap();
         assert!(next.is_empty(), "new hour remains open");
@@ -10348,7 +10379,10 @@ mod tests {
 
         let mut incremental = ActivityStatsAccumulator::default();
         let mut actual = incremental
-            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .apply_batch(
+                &[block(0, 0)],
+                &classified_for_test(std::slice::from_ref(&action)),
+            )
             .unwrap();
         actual.extend(
             incremental
@@ -11490,7 +11524,9 @@ mod tests {
         );
         for stats in [&run.daily_stats[&date], &run.hourly_stats[&hour]] {
             assert_eq!(stats.protocol_action_counts["dotbit:transfer_account"], 4);
-            assert_eq!(stats.identity_count, 2);
+            // `.bit` actions are listed under Identity: two transactions.
+            assert_eq!(stats.kind_counts.identity, 2);
+            assert_eq!(stats.kind_counts.total(), 2);
             assert_eq!(stats.total_ckb_moved, 60);
         }
         assert_eq!(run.daily_addrs[&date].len(), 5, "locks 0x40..0x44");
@@ -11631,12 +11667,12 @@ mod tests {
                 .daily_stats
                 .entry(date.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into());
             oracle
                 .hourly_stats
                 .entry(hour.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into());
             if !tx.is_cellbase {
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(lock_hash) = participant.id {
@@ -11705,6 +11741,7 @@ mod tests {
         // Production path, one batch: the hour and day boundaries fall
         // inside it, so it lands several runs and seals the first day.
         let mut single = ActivityStatsAccumulator::default();
+        let list = classified_for_test(&list);
         let mut actual = single.apply_batch(&blocks, &list).unwrap();
         assert!(!actual.is_empty(), "the batch seals day one");
         actual.extend(single.build_rows().unwrap());
@@ -11913,7 +11950,7 @@ mod tests {
         };
         let error = |blocks: &[facts::BlockFacts], actions: &[TxActions]| {
             ActivityStatsAccumulator::default()
-                .apply_batch(blocks, actions)
+                .apply_batch(blocks, &classified_for_test(actions))
                 .unwrap_err()
                 .to_string()
         };
@@ -11947,11 +11984,11 @@ mod tests {
         let mut acc = ActivityStatsAccumulator::default();
         acc.apply_batch(
             &[block(0, 0), block(1, 7_200_000), block(2, 10_800_000)],
-            &[action(0, 0, 0)],
+            &classified_for_test(&[action(0, 0, 0)]),
         )
         .unwrap();
         let late = acc
-            .apply_batch(&[block(3, 0)], &[action(3, 0, 0)])
+            .apply_batch(&[block(3, 0)], &classified_for_test(&[action(3, 0, 0)]))
             .unwrap_err()
             .to_string();
         assert!(
@@ -11986,13 +12023,18 @@ mod tests {
         };
         let mut acc = ActivityStatsAccumulator::default();
         let err = acc
-            .accumulate_tx_actions(std::slice::from_ref(&action), |_| Some(i64::MIN))
+            .accumulate_tx_actions(&classified_for_test(std::slice::from_ref(&action)), |_| {
+                Some(i64::MIN)
+            })
             .expect_err("an unbucketable chain time must fail the fold");
         assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
         assert!(acc.daily_stats.is_empty() && acc.hourly_stats.is_empty());
 
         let err = ActivityStatsAccumulator::default()
-            .apply_batch(std::slice::from_ref(&block), std::slice::from_ref(&action))
+            .apply_batch(
+                std::slice::from_ref(&block),
+                &classified_for_test(std::slice::from_ref(&action)),
+            )
             .expect_err("the production batch path fails too");
         assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
     }

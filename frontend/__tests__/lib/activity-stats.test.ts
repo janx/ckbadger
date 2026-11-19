@@ -11,40 +11,31 @@ import {
   type ActivityCounts,
 } from '@/lib/activity-stats';
 
-// Re-pinned on purpose (lists lane P3: a page sums no count): the DAO kind's count and the kind
-// occurrences are the API's figures (`daoCount`, `kindOccurrences`); totalActivities, the
-// page's sum of the eight kinds, went with the three DAO steps' sum.
+/** One kind per activity: the kinds sum to activityCount, the one total the API sends. */
 const counts: ActivityCounts = {
-  transferCount: 1302,
-  daoCount: 8,
-  tokenCount: 0,
-  objectCount: 0,
-  identityCount: 10,
-  scriptCallCount: 5795,
-  kindOccurrences: 7115,
+  activityCount: 7115,
+  kindCounts: { dao: 7, token: 0, object: 0, identity: 10, protocol: 1, script: 5795, ckb: 1302 },
 };
 
 describe('activityTypeShares', () => {
-  it('ranks the types by count, the DAO row the API’s count of its actions, and hides empty types', () => {
+  it('ranks the kinds by count as shares of the activities and hides empty kinds', () => {
     const rows = activityTypeShares(counts);
     expect(rows.map((r) => [r.label, r.count])).toEqual([
       ['Script call', 5795],
       ['Transfer', 1302],
       ['Identity', 10],
-      ['DAO', 8],
+      ['DAO', 7],
+      ['Protocol', 1],
     ]);
+    // A partition: the shares of the activities sum to one.
     expect(rows.reduce((s, r) => s + r.share, 0)).toBeCloseTo(1, 12);
   });
 
   it('has no rows without activity', () => {
     expect(
       activityTypeShares({
-        ...counts,
-        transferCount: 0,
-        daoCount: 0,
-        identityCount: 0,
-        scriptCallCount: 0,
-        kindOccurrences: 0,
+        activityCount: 0,
+        kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 0 },
       })
     ).toEqual([]);
   });
@@ -148,12 +139,17 @@ describe('exact completed day counts', () => {
       completedYesterdayActivities([{ ...dailyActivities[0], date: '20261025' }], now)?.date
     ).toBe('20261025');
   });
-  it('keeps unique totals separate from overlapping occurrences', () => {
-    expect(activityFilterCounts(counts, 10).all).toBe(10);
-    expect(activityFilterCounts(counts).all).toBeUndefined();
-    // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
-    expect(activityFilterCounts({ ...counts, daoCount: 13 }).dao).toBe(13);
-    // the P3 follow-up's 2b: the day's user transactions are the route's figure
-    // (userTransactionCount), so the page's subtraction and its tests went with it
+  it('gives each filter chip its kind count, Protocols included, and All the day’s activities', () => {
+    // one kind per activity: All is the route's activityCount, which the kinds make
+    expect(activityFilterCounts(counts)).toEqual({
+      all: 7115,
+      dao: 7,
+      token: 0,
+      object: 0,
+      identity: 10,
+      protocol: 1,
+      script: 5795,
+      ckb: 1302,
+    });
   });
 });

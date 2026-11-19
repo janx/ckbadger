@@ -65,7 +65,6 @@ const COUNT_NOUNS = new Set([
   'transactions',
   'addresses',
   'activities',
-  'kind counts',
   'cells',
   'blocks',
   'epochs',

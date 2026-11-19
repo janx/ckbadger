@@ -79,7 +79,7 @@ pub use block_overlay::{
 };
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
-pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
+pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucket};
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;
 pub use reorg_ops::{JournalEntry, RollbackResult};

@@ -6,29 +6,27 @@ import { chartModel } from '@/components/charts/chart-model';
 afterEach(() => vi.restoreAllMocks());
 
 describe('daily activity chart adapter', () => {
-  it('uses exact category counts and shannons from one canonical complete-day source', async () => {
+  it('uses exact kind counts, the API total and shannons from one canonical complete-day source', async () => {
+    const max = 4294967295;
     const daily = vi.spyOn(api, 'getDailyActivityStats').mockResolvedValue([
       {
         date: '20261027',
-        transferCount: 4294967295,
-        daoDepositCount: 4294967295,
-        daoWithdrawRequestCount: 4294967295,
-        daoWithdrawCompleteCount: 4294967295,
-        tokenCount: 4294967295,
-        objectCount: 4294967295,
-        identityCount: 4294967295,
-        scriptCallCount: 4294967295,
-        unknownCount: 1,
+        // Seven u32 kinds at their maximum; their total is the API's one number, never summed here.
+        activityCount: 7 * max,
+        kindCounts: {
+          dao: max,
+          token: max,
+          object: max,
+          identity: max,
+          protocol: max,
+          script: max,
+          ckb: max,
+        },
         coinbaseCount: 1,
-        uniqueAddressCount: 4294967295,
+        uniqueAddressCount: max,
         totalCkbMoved: '900719925474099300',
         scriptCounts: [],
-        // the API's sum of the eight kinds (8 × 4,294,967,295)
-        kindOccurrences: 34359738360,
-        // the API's DAO band, the three DAO counts summed by the route (lane D1's third round)
-        daoCount: 12884901885,
-        // the route's count of the day's user transactions (the P3 follow-up's 2b)
-        userTransactionCount: 4294967295,
+        protocolActionCounts: { 'dao:deposit': max },
       },
     ]);
     const volume = chartModel(
@@ -46,8 +44,13 @@ describe('daily activity chart adapter', () => {
     const ckb = chartModel(CHART_BY_SLUG.get('ckb-volume')!, await api.getCkbVolumeChart());
     expect(daily).toHaveBeenCalledTimes(4);
     expect(daily).toHaveBeenCalledWith(0);
-    expect(volume.latest?.raw).toBe('34359738360');
-    expect(types.points[0].values.dao).toBe('12884901885');
+    expect(volume.latest?.raw).toBe('30064771065');
+    expect(types.points[0].values.dao).toBe('4294967295');
+    // F-6: the protocol kind is a band of its own, and the stack is a partition of the total.
+    expect(types.points[0].values.protocol).toBe('4294967295');
+    expect(
+      Object.values(types.points[0].values).reduce((sum, v) => sum + BigInt(v as string), BigInt(0))
+    ).toBe(BigInt(30064771065));
     expect(addresses.latest?.raw).toBe('4294967295');
     expect(ckb.latest?.raw).toBe('9007199254.740993');
     expect(
@@ -55,9 +58,9 @@ describe('daily activity chart adapter', () => {
     ).toBe(true);
   });
 
-  // lane D1's third round, N7: an older API's day has no kindOccurrences or daoCount; the
-  // refusal names the field and says the API is older than the page (it read
-  // 'invalid decimal "undefined"')
+  // lane D1's third round, N7: an older API's day has no kindCounts; the refusal names the field
+  // and says the API is older than the page (it read 'invalid decimal "undefined"'). Re-pinned on
+  // purpose (F-6 merged): the page reads the route's kindCounts, so that is the field it names.
   it('refuses an older API by the field it does not send', async () => {
     vi.spyOn(api, 'getDailyActivityStats').mockResolvedValue([
       {
@@ -78,7 +81,7 @@ describe('daily activity chart adapter', () => {
       } as never,
     ]);
     await expect(api.getActivityTypeBreakdownChart()).rejects.toThrow(
-      'daily activities on 20261027 send no kindOccurrences: the API is older than this page'
+      'daily activities on 20261027 send no kindCounts: the API is older than this page'
     );
   });
 });

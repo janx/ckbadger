@@ -2133,6 +2133,176 @@ impl Check for ChartTxCountPositive {
     }
 }
 
+/// S39: every complete day's activity kinds — each non-cellbase transaction
+/// counted in exactly one (F-6) — plus its cellbases are the day's
+/// transactions, as the block-level daily stats count them.
+///
+/// The two sides are written by different code from different inputs: the
+/// kinds and the cellbase count by the activity accumulator, one classified
+/// transaction at a time (`/stats/daily-activities`); the transaction count by
+/// the chain stats writer from each block's transaction list
+/// (`DailyStats.transactions_count`, `/charts/transaction-count`). A
+/// transaction counted in no kind (the F-6 fault), or in two, breaks the sum.
+/// The cellbase count comes from the activity rows themselves: the API sends
+/// no independent per-day block count, so a transaction misfiled as a
+/// cellbase would not be caught here.
+pub struct DailyActivityKindsPartitionTransactions;
+
+#[derive(serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct DailyActivityKindRow {
+    date: String,
+    kind_counts: std::collections::BTreeMap<String, u64>,
+    coinbase_count: u64,
+}
+
+impl Check for DailyActivityKindsPartitionTransactions {
+    fn name(&self) -> &'static str {
+        "daily_activity_kinds_partition_transactions"
+    }
+    fn description(&self) -> &'static str {
+        "Each complete day's activity kinds and cellbases sum to its transactions (block-level daily stats)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        // The activity rows are read before and after the independent count:
+        // a day whose row moved between the two reads (a reorg across the
+        // day's end) is not compared, and the result says so.
+        let before: Vec<DailyActivityKindRow> = api_get(ctx, "stats/daily-activities?days=0")?;
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/transaction-count")?;
+        let after: Vec<DailyActivityKindRow> = api_get(ctx, "stats/daily-activities?days=0")?;
+
+        let kinds: BTreeSet<&str> = ckbadger_store::GlobalBucket::ALL
+            .iter()
+            .map(|kind| kind.as_filter())
+            .collect();
+        let mut transactions = HashMap::new();
+        for point in &chart.data {
+            let date = point.date.replace('-', "");
+            let count: u64 = point.value.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "transaction count chart value on {} is not a count: {:?}: {e}",
+                    point.date,
+                    point.value
+                )
+            })?;
+            if transactions.insert(date, count).is_some() {
+                anyhow::bail!("transaction count chart lists {} twice", point.date);
+            }
+        }
+        let after_by_date: HashMap<&str, &DailyActivityKindRow> =
+            after.iter().map(|row| (row.date.as_str(), row)).collect();
+
+        let mut findings = vec![];
+        let mut moved = vec![];
+        let mut checked = 0u64;
+        for row in &before {
+            let row_kinds: BTreeSet<&str> = row.kind_counts.keys().map(String::as_str).collect();
+            anyhow::ensure!(
+                row_kinds == kinds,
+                "daily activity row {} counts the kinds {row_kinds:?}, expected the global \
+                 activity filter's {kinds:?}",
+                row.date
+            );
+            if after_by_date.get(row.date.as_str()) != Some(&row) {
+                moved.push(row.date.clone());
+                continue;
+            }
+            let Some(&day_transactions) = transactions.get(&row.date) else {
+                findings.push(Finding {
+                    entity: row.date.clone(),
+                    details: vec!["the day has activity counts but no transaction count in \
+                         /charts/transaction-count (daily stats)"
+                        .to_string()],
+                });
+                continue;
+            };
+            checked += 1;
+            let in_kinds: u64 = row.kind_counts.values().sum();
+            let counted = in_kinds + row.coinbase_count;
+            if counted != day_transactions {
+                let kinds_line = row
+                    .kind_counts
+                    .iter()
+                    .map(|(kind, count)| format!("{kind} {count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let gap = if counted < day_transactions {
+                    format!(
+                        "{} transaction(s) counted in no kind",
+                        day_transactions - counted
+                    )
+                } else {
+                    format!(
+                        "{} transaction(s) counted twice",
+                        counted - day_transactions
+                    )
+                };
+                findings.push(Finding {
+                    entity: row.date.clone(),
+                    details: vec![format!(
+                        "kinds ({kinds_line}) sum to {in_kinds}, plus {} cellbases = \
+                             {counted}, but the day's blocks carry {day_transactions} \
+                             transactions: {gap}",
+                        row.coinbase_count
+                    )],
+                });
+            }
+        }
+        // A day the blocks carry transactions on but the activity rows never
+        // counted (in both reads, so not a day that completed in between).
+        let counted_days: BTreeSet<&str> = before
+            .iter()
+            .chain(after.iter())
+            .map(|row| row.date.as_str())
+            .collect();
+        let mut uncounted: Vec<&String> = transactions
+            .keys()
+            .filter(|date| !counted_days.contains(date.as_str()))
+            .collect();
+        uncounted.sort();
+        for date in uncounted {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "the day's blocks carry {} transactions but it has no activity row",
+                    transactions[date]
+                )],
+            });
+        }
+
+        let moved_note = if moved.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} day(s) not compared, their rows moved between reads: {}",
+                moved.len(),
+                moved.join(", ")
+            )
+        };
+        if !findings.is_empty() {
+            let mut result = CheckResult::fail(checked, findings);
+            if !moved_note.is_empty() {
+                result.detail = Some(moved_note.trim_start_matches("; ").to_string());
+            }
+            return Ok(result);
+        }
+        if checked == 0 {
+            return Ok(CheckResult::inconclusive(format!(
+                "no complete day compared{moved_note}"
+            )));
+        }
+        Ok(CheckResult::pass_with_detail(
+            checked,
+            format!(
+                "{checked} complete days: kinds + cellbases = the day's transactions{moved_note}"
+            ),
+        ))
+    }
+}
+
 /// S5: GET /charts/cell-count → live + dead values present and consistent.
 pub struct ChartCellCountConsistency;
 
@@ -7012,6 +7182,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
         Box::new(GlobalActivityBucketIndexConsistency),
+        Box::new(DailyActivityKindsPartitionTransactions),
         Box::new(TokenLiveCellsConsistency),
         Box::new(CollectionDailyActivityConsistency),
         Box::new(AddressCellbaseCountConsistency),
@@ -7220,7 +7391,8 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 44);
+        // 8 fast + 37 sampling (S39 daily_activity_kinds_partition_transactions the newest).
+        assert_eq!(checks.len(), 45);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -7246,6 +7418,7 @@ mod tests {
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
+        assert!(names.contains(&"daily_activity_kinds_partition_transactions"));
         assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
@@ -7333,7 +7506,8 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 8);
-        assert_eq!(sampling_count, 36);
+        // 37 here; with the entity-history and DAO-cell checks, the 39 of S1-S39.
+        assert_eq!(sampling_count, 37);
     }
 
     #[test]
@@ -10727,6 +10901,157 @@ mod tests {
             "{:?}",
             findings[0].details
         );
+    }
+
+    // ── daily_activity_kinds_partition_transactions ───────────────────────
+
+    fn activity_day(date: &str, kinds: [u64; 7], coinbase: u64) -> serde_json::Value {
+        let [dao, token, object, identity, protocol, script, ckb] = kinds;
+        json!({
+            "date": date,
+            "activityCount": kinds.iter().sum::<u64>(),
+            "kindCounts": { "dao": dao, "token": token, "object": object, "identity": identity,
+                            "protocol": protocol, "script": script, "ckb": ckb },
+            "coinbaseCount": coinbase,
+            "uniqueAddressCount": 1,
+            "totalCkbMoved": "0",
+            "scriptCounts": [],
+            "protocolActionCounts": {}
+        })
+    }
+
+    /// Serves `/stats/daily-activities` as `first` once and `then` after,
+    /// and `/charts/transaction-count` as `(YYYY-MM-DD, count)` points.
+    fn run_daily_kinds_check(
+        first: serde_json::Value,
+        then: serde_json::Value,
+        transactions: &[(&str, u64)],
+    ) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let points: Vec<_> = transactions
+            .iter()
+            .map(|(date, count)| json!({ "date": date, "value": count.to_string() }))
+            .collect();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/stats/daily-activities"))
+                .and(query_param("days", "0"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(first))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/stats/daily-activities"))
+                .and(query_param("days", "0"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(then))
+                .with_priority(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/transaction-count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": points, "title": "Transaction Count", "yAxisLabel": "Transactions"
+                })))
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("daily_activity_kinds_partition_transactions").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    #[test]
+    fn daily_kinds_check_passes_when_kinds_and_cellbases_are_the_days_transactions() {
+        let days = json!([
+            activity_day("20261116", [2, 3, 0, 1, 4, 5, 10], 8_600),
+            activity_day("20261117", [1, 0, 0, 0, 6, 2, 3], 8_700),
+        ]);
+        let completed = run_daily_kinds_check(
+            days.clone(),
+            days,
+            &[("2026-11-16", 8_625), ("2026-11-17", 8_712)],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 2);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("2 complete days"),
+            "{:?}",
+            result.detail
+        );
+    }
+
+    /// F-6 as mainnet showed it on 2026-11-17: six Fiber channel opens and
+    /// closes counted in no kind — "All 7,847" beside kinds summing to 7,841.
+    #[test]
+    fn daily_kinds_check_fails_naming_the_day_whose_transactions_are_in_no_kind() {
+        let days = json!([activity_day(
+            "20261117",
+            [30, 400, 10, 200, 0, 5_000, 2_201],
+            9_000
+        )]);
+        let completed = run_daily_kinds_check(days.clone(), days, &[("2026-11-17", 16_847)]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].entity, "20261117");
+        let detail = &result.findings[0].details[0];
+        assert!(
+            detail.contains("sum to 7841, plus 9000 cellbases = 16841")
+                && detail.contains("carry 16847 transactions: 6 transaction(s) counted in no kind"),
+            "{detail}"
+        );
+        // A kind counted twice is the other side of the same fault.
+        let days = json!([activity_day("20261117", [1, 1, 0, 0, 0, 0, 1], 2)]);
+        let completed = run_daily_kinds_check(days.clone(), days, &[("2026-11-17", 4)]);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert!(completed.result.unwrap().findings[0].details[0]
+            .contains("1 transaction(s) counted twice"));
+    }
+
+    /// A day whose row changed between the two reads is not compared (a
+    /// reorg across its end); with nothing left to compare the run is
+    /// inconclusive, never a pass. A row whose kinds are not the filter's is
+    /// an error, and a day the blocks carry but no row counts is a finding.
+    #[test]
+    fn daily_kinds_check_skips_a_moving_day_and_refuses_foreign_kinds() {
+        let completed = run_daily_kinds_check(
+            json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1)]),
+            json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 6], 1)]),
+            &[("2026-11-17", 7)],
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive);
+        assert!(
+            completed
+                .status_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("rows moved between reads: 20261117"),
+            "{:?}",
+            completed.status_reason
+        );
+
+        let mut foreign = activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1);
+        foreign["kindCounts"]["unknown"] = json!(0);
+        let completed = run_daily_kinds_check(json!([foreign.clone()]), json!([foreign]), &[]);
+        assert_eq!(completed.status, CheckStatus::Error);
+
+        let days = json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1)]);
+        let completed =
+            run_daily_kinds_check(days.clone(), days, &[("2026-11-16", 3), ("2026-11-17", 6)]);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.unwrap().findings;
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].entity, "20261116");
+        assert!(findings[0].details[0].contains("no activity row"));
     }
 
     // ── collection_daily_activity_consistency ─────────────────────────────

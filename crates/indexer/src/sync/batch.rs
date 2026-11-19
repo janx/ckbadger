@@ -3246,7 +3246,10 @@ impl Indexer {
                 )?;
 
                 for built in &built_list {
-                    let tx_actions = &built.actions;
+                    // The transaction's one classification: its bucket row
+                    // and its activity kind both take this value.
+                    let classified = ckbadger_store::ClassifiedTxActions::classify(&built.actions);
+                    let tx_actions = classified.actions();
                     // addr_txs rows follow the participants — the ONE derivation,
                     // shared with bulk build and the tx-pool mirror. Cellbase is
                     // included: it has participants (its output locks) even though
@@ -3329,7 +3332,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity);
+                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity);
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -3350,7 +3353,7 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(&mut activity_batch, tx_actions.block_number, tx_actions);
+                    put_tx_actions(&mut activity_batch, tx_actions.block_number, classified);
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -12845,7 +12848,8 @@ mod tests {
             // The fixture exercises what it claims: one day, three hours,
             // the `.bit` counters and the hours' address sets.
             let day = ckbadger_common::stats_bucket::stats_date_key(1_700_002_790_000).unwrap();
-            let daily: ckbadger_store::types::DailyActivityStats = bincode::deserialize(
+            let daily = ckbadger_store::types::DailyActivityStats::decode(
+                &day,
                 &bulk
                     .iter()
                     .find(|(key, _)| {
@@ -14700,7 +14704,9 @@ mod tests {
                 .tx_actions_map
                 .values()
                 .filter_map(|actions| {
-                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                    ckbadger_store::ClassifiedTxActions::classify(actions)
+                        .bucket_key()
+                        .map(|k| k.to_vec())
                 })
                 .collect();
             expected.sort();

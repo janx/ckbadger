@@ -2572,6 +2572,93 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
     );
 }
 
+/// F-6 follow-up: the Transactions page's Protocol kind. `activity_type=protocol`
+/// lists exactly the transactions of the Protocol bucket — the bucket the
+/// Activities filter reads — and none the precedence puts elsewhere: a `.bit`
+/// renewal stays under identity, a DAO deposit beside a Fiber close under dao.
+/// An unknown value is still refused.
+#[tokio::test]
+async fn transaction_protocol_kind_lists_exactly_the_protocol_bucket() {
+    use ckbadger_store::types::{ProtocolAction, TAG_DAO, TAG_PROTOCOL, TAG_TOKEN};
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    put_test_block_header(&mut batch, 11, &[0xba; 32], 1_700_000_000_011);
+    let cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    // (tx index, participant tags, protocol actions as (protocol, action))
+    type Fixture<'a> = (i32, u16, &'a [(&'a str, &'a str)]);
+    let fixtures: [Fixture; 5] = [
+        (1, TAG_PROTOCOL, &[("fiber", "channel_open")]),
+        (2, TAG_TOKEN, &[]),
+        (3, TAG_PROTOCOL, &[("dotbit", "renew_account")]),
+        (
+            4,
+            TAG_PROTOCOL | TAG_DAO,
+            &[("dao", "deposit"), ("fiber", "channel_close")],
+        ),
+        (5, 0, &[]),
+    ];
+    for (index, tags, protocols) in fixtures {
+        let mut hash = [0x50; 32];
+        hash[31] = index as u8;
+        let mut actions =
+            make_test_tx_actions(&[0x21; 32], &hash, &[0xba; 32], 11, index, 1000, tags);
+        actions.protocol_actions = protocols
+            .iter()
+            .map(|(protocol, action)| {
+                ProtocolAction::new(*protocol, *action, serde_json::json!({}))
+            })
+            .collect();
+        index_tx_of_actions(&mut batch, &actions);
+        batch.put_tx_actions(&actions);
+        batch.put_cell(&hash, 0, &cell, 11);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let listed = |body: &serde_json::Value| -> Vec<i64> {
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["index"].as_i64().unwrap())
+            .collect()
+    };
+    for (kind, expected) in [
+        ("protocol", vec![1]),
+        ("identity", vec![3]),
+        ("dao", vec![4]),
+        ("token", vec![2]),
+        ("ckb", vec![5]),
+    ] {
+        let (status, body) = get_json(
+            &app,
+            &format!("/transactions?activity_type={kind}&limit=20"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+        assert_eq!(listed(&body), expected, "{kind}");
+    }
+    let (status, body) = get_json(&app, "/transactions?activity_type=protocols").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string().contains(
+            "expected user, ckb, script, cellbase, dao, token, object, identity, or protocol"
+        ),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
     use ckbadger_api::pool::{Interpretation, PoolStatus};
@@ -2643,6 +2730,10 @@ async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
     assert_eq!(status, StatusCode::OK, "{users}");
     assert_eq!(users["total"], 4);
     assert_eq!(users["summary"], all["summary"]);
+    // The pool takes the same kinds as the committed list, Protocol included.
+    let (status, protocols) = get_json(&app, "/transactions/pool?activity_type=protocol").await;
+    assert_eq!(status, StatusCode::OK, "{protocols}");
+    assert_eq!(protocols["total"], 0);
     assert_eq!(
         get_json(&app, "/transactions/pool?activity_type=nft")
             .await

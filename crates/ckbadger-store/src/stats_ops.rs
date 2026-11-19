@@ -681,10 +681,9 @@ impl CkbadgerStore {
         date: &str,
     ) -> anyhow::Result<Option<DailyActivityStats>> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
+        self.get_cf(self.cf_stats_chain(), &key)?
+            .map(|value| DailyActivityStats::decode(date, &value))
+            .transpose()
     }
 
     pub fn put_daily_activity_stats(
@@ -693,8 +692,7 @@ impl CkbadgerStore {
         stats: &DailyActivityStats,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats_chain(), &key, &value)
+        self.put_cf(self.cf_stats_chain(), &key, &stats.encode())
     }
 
     pub fn list_daily_activity_stats(&self) -> anyhow::Result<Vec<(String, DailyActivityStats)>> {
@@ -718,13 +716,7 @@ impl CkbadgerStore {
                     anyhow::anyhow!("invalid UTF-8 date in daily activity stats key: {}", e)
                 })?
                 .to_string();
-            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize daily activity stats: date={}, error={}",
-                    date_str,
-                    e
-                )
-            })?;
+            let stats = DailyActivityStats::decode(&date_str, &value)?;
             results.push((date_str, stats));
         }
         Ok(results)
@@ -738,8 +730,7 @@ impl CkbadgerStore {
         stats: &DailyActivityStats,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats_chain(), &key, &value)
+        self.put_cf(self.cf_stats_chain(), &key, &stats.encode())
     }
 
     /// Every unique address of an activity bucket: its per-address rows.
@@ -773,10 +764,9 @@ impl CkbadgerStore {
         hour_key: &str,
     ) -> anyhow::Result<Option<DailyActivityStats>> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
+        self.get_cf(self.cf_stats_chain(), &key)?
+            .map(|value| DailyActivityStats::decode(hour_key, &value))
+            .transpose()
     }
 
     /// List hourly activity stats from `since_hour` (inclusive) onwards.
@@ -809,13 +799,7 @@ impl CkbadgerStore {
                     anyhow::anyhow!("invalid UTF-8 hour in hourly activity stats key: {}", e)
                 })?
                 .to_string();
-            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize hourly activity stats: hour={}, error={}",
-                    hour_str,
-                    e
-                )
-            })?;
+            let stats = DailyActivityStats::decode(&hour_str, &value)?;
             results.push((hour_str, stats));
         }
         Ok(results)
@@ -2254,38 +2238,44 @@ mod daily_activity_stats_tests {
     fn test_put_and_get_daily_activity_stats_roundtrip() {
         let (_dir, store) = open_test_store();
         let stats = DailyActivityStats {
-            transfer_count: 100,
-            dao_deposit_count: 10,
-            dao_withdraw_request_count: 3,
-            dao_withdraw_complete_count: 2,
-            token_count: 50,
-            object_count: 20,
-            identity_count: 5,
-            script_call_count: 0,
-            unknown_count: 0,
+            kind_counts: crate::types::ActivityKindCounts {
+                dao: 15,
+                token: 50,
+                object: 20,
+                identity: 5,
+                protocol: 6,
+                script: 0,
+                ckb: 100,
+            },
             coinbase_count: 8640,
             unique_address_count: 500,
             total_ckb_moved: 100_000_000_000_000,
             script_counts: std::collections::BTreeMap::new(),
-            protocol_action_counts: std::collections::BTreeMap::new(),
+            protocol_action_counts: std::collections::BTreeMap::from([(
+                "dao:deposit".to_string(),
+                10,
+            )]),
         };
         store.put_daily_activity_stats("20260309", &stats).unwrap();
         let loaded = store.get_daily_activity_stats("20260309").unwrap().unwrap();
-        assert_eq!(loaded.transfer_count, 100);
-        assert_eq!(loaded.coinbase_count, 8640);
-        assert_eq!(loaded.unique_address_count, 500);
-        assert_eq!(loaded.total_ckb_moved, 100_000_000_000_000);
+        assert_eq!(loaded, stats);
     }
 
     #[test]
     fn test_list_daily_activity_stats_returns_all_dates() {
         let (_dir, store) = open_test_store();
         let s1 = DailyActivityStats {
-            transfer_count: 10,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 10,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let s2 = DailyActivityStats {
-            transfer_count: 20,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 20,
+                ..Default::default()
+            },
             ..Default::default()
         };
         store.put_daily_activity_stats("20260308", &s1).unwrap();
@@ -2294,9 +2284,53 @@ mod daily_activity_stats_tests {
         let all = store.list_daily_activity_stats().unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].0, "20260308");
-        assert_eq!(all[0].1.transfer_count, 10);
+        assert_eq!(all[0].1.kind_counts.ckb, 10);
         assert_eq!(all[1].0, "20260309");
-        assert_eq!(all[1].1.transfer_count, 20);
+        assert_eq!(all[1].1.kind_counts.ckb, 20);
+    }
+
+    /// A store written before each transaction counted in one kind holds its
+    /// activity rows in the old layout (eleven `u32` counters first): every
+    /// reader of the rows refuses them, naming the bucket and the remedy.
+    #[test]
+    fn activity_rows_of_an_older_layout_are_refused_by_every_reader() {
+        let (_dir, store) = open_test_store();
+        // transfer, three DAO, token, object, identity, script, unknown,
+        // coinbase, unique addresses; total CKB moved; two empty maps.
+        let mut old = Vec::new();
+        for count in [40u32, 2, 0, 1, 9, 3, 0, 5, 0, 8640, 700] {
+            old.extend_from_slice(&count.to_le_bytes());
+        }
+        old.extend_from_slice(&123_456u128.to_le_bytes());
+        old.extend_from_slice(&0u64.to_le_bytes());
+        old.extend_from_slice(&0u64.to_le_bytes());
+        store
+            .put_stats_key(
+                &keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, b"20261116"),
+                &old,
+            )
+            .unwrap();
+        store
+            .put_stats_key(
+                &keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, b"2026111608"),
+                &old,
+            )
+            .unwrap();
+        let errors = [
+            store.get_daily_activity_stats("20261116").unwrap_err(),
+            store.list_daily_activity_stats().unwrap_err(),
+            store.get_hourly_activity_stats("2026111608").unwrap_err(),
+            store
+                .list_hourly_activity_stats_since("2026111600")
+                .unwrap_err(),
+        ];
+        for err in errors {
+            let err = format!("{err:#}");
+            assert!(
+                err.contains("written by an older layout, re-sync from genesis"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
@@ -2310,7 +2344,10 @@ mod daily_activity_stats_tests {
     fn test_put_and_get_hourly_activity_stats_roundtrip() {
         let (_dir, store) = open_test_store();
         let stats = DailyActivityStats {
-            transfer_count: 42,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 42,
+                ..Default::default()
+            },
             total_ckb_moved: 100_00000000,
             unique_address_count: 5,
             ..Default::default()
@@ -2322,7 +2359,7 @@ mod daily_activity_stats_tests {
             .get_hourly_activity_stats("2026030912")
             .unwrap()
             .unwrap();
-        assert_eq!(got.transfer_count, 42);
+        assert_eq!(got.kind_counts.ckb, 42);
         assert_eq!(got.total_ckb_moved, 100_00000000);
         assert_eq!(got.unique_address_count, 5);
     }
@@ -2331,15 +2368,24 @@ mod daily_activity_stats_tests {
     fn test_list_hourly_activity_stats_since_returns_range() {
         let (_dir, store) = open_test_store();
         let s1 = DailyActivityStats {
-            transfer_count: 10,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 10,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let s2 = DailyActivityStats {
-            transfer_count: 20,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 20,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let s3 = DailyActivityStats {
-            transfer_count: 30,
+            kind_counts: crate::types::ActivityKindCounts {
+                ckb: 30,
+                ..Default::default()
+            },
             ..Default::default()
         };
         store.put_hourly_activity_stats("2026030910", &s1).unwrap();
@@ -2352,9 +2398,9 @@ mod daily_activity_stats_tests {
             .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, "2026030911");
-        assert_eq!(results[0].1.transfer_count, 20);
+        assert_eq!(results[0].1.kind_counts.ckb, 20);
         assert_eq!(results[1].0, "2026030912");
-        assert_eq!(results[1].1.transfer_count, 30);
+        assert_eq!(results[1].1.kind_counts.ckb, 30);
     }
 }
 

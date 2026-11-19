@@ -199,26 +199,31 @@ describe('Charts index encodings (F2 charts)', () => {
   // colours; the merged "Assets" band had no class colour to take. The review's item D: they stand
   // in the page's fixed class order, not by size (the test said "largest first" and its data could
   // not tell); here the largest kind is not first and the shares do not descend.
-  it('summarises activity by type in its six kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
+  // F-6 (2026-11-18): one kind per transaction, so Protocols is the seventh band (re-pinned: the
+  // fixture moves 10 of the 50 transfers to it, so the shares still sum to 100%).
+  it('summarises activity by type in its seven kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
     const model = chartModel(def('activity-type-breakdown'), {
       title: 'Activity Type Breakdown',
-      series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'].map((key) => ({
-        key,
-        label: key,
-        color: '#000',
-      })),
+      series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall', 'protocol'].map(
+        (key) => ({
+          key,
+          label: key,
+          color: '#000',
+        })
+      ),
       data: [
         {
           date: '2026-10-29',
           values: {
-            transfer: '50',
+            transfer: '40',
             dao: '22',
             token: '3',
             object: '4',
             identity: '1',
             scriptCall: '20',
-            // the day's kind occurrences, the route's (the D1 hand-back, item 2)
-            kindOccurrences: '100',
+            protocol: '10',
+            // the day's activities, the route's: the seven kinds partition it (F-6)
+            activityCount: '100',
           },
         },
       ],
@@ -226,17 +231,20 @@ describe('Charts index encodings (F2 charts)', () => {
     // Re-pinned for lane D1 (rule 9, CH-07): the card's bands are the page's, in the page's class
     // order (was the card's own order, script calls first); still fixed, not by size.
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'CKB transfers 50.00%',
+      'CKB transfers 40.00%',
       'Nervos DAO 22.00%',
       'Tokens 3.00%',
       'Objects 4.00%',
       'Identities 1.00%',
       'Script calls 20.00%',
+      'Protocols 10.00%',
     ]);
     // the head names the largest kind in words (was the first kind of the card's order)
     const head = chartHead(def('activity-type-breakdown'), model);
     expect(head.eyebrow).toBe('CKB transfers, the largest kind in a day');
-    expect(head.figure).toMatchObject({ display: '50', unit: 'activities' });
+    // re-pinned on purpose (F-6 merged): the protocols' 10 are a band of their own, out of the
+    // transfers' 50, so the largest kind is 40
+    expect(head.figure).toMatchObject({ display: '40', unit: 'activities' });
   });
 
   it('draws live cells as one live count, consumed cells kept apart (CH-08)', () => {
