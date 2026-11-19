@@ -4,7 +4,9 @@ import {
   DEFAULT_PAGE_SIZE,
   ENTITY_PAGE_SIZE,
   mergeAsked,
+  rankOf,
   rankedPageAt,
+  rankedRead,
   stampAsked,
   timePageAt,
   type Asked,
@@ -481,6 +483,69 @@ describe('a page merged from several reads', () => {
     expect(figures(rankedPageAt('cells', mixed!, walk(2)))).toMatchObject({ next: false });
     expect(mergeAsked([undefined], { data: [], limit: 20, hasMore: false, nextCursor: null })).toBe(
       null
+    );
+  });
+});
+
+// Lane exactness, part B5: a ranked list's route states the rank of its page's first row
+// (`firstRank`, the 1-based rank in the read view that served the page); the page computed a row's
+// rank as (page − 1) × size + its place, which holds only if the list stood still between the
+// reads that walked to the page.
+describe('the rank of a row of a ranked page', () => {
+  const holders = (firstRank: unknown) => ({
+    data: ['a', 'b', 'c'],
+    limit: 3,
+    hasMore: true,
+    nextCursor: 'c2',
+    total: 30,
+    firstRank,
+  });
+
+  it('is the route’s firstRank plus the row’s place on the page', () => {
+    // page two at three a page, two holders arrived above it after page one was read: 6, not 4
+    const page = rankedRead(
+      holders(6) as never as { data: string[]; firstRank: number },
+      'holders of token 0xabc'
+    );
+    expect(rankOf(page, 'a', 'holders of token 0xabc')).toBe(6);
+    expect(rankOf(page, 'c', 'holders of token 0xabc')).toBe(8);
+    expect(() => rankOf(page, 'z', 'holders of token 0xabc')).toThrow(
+      'holders of token 0xabc: a row that is not on its page'
+    );
+  });
+
+  it('refuses a response without firstRank by name: the API is older than this page', () => {
+    const { firstRank: _, ...older } = holders(1);
+    expect(() => rankedRead(older as never, 'holders of token 0xabc')).toThrow(
+      'holders of token 0xabc: the API sends no firstRank: it is older than this page'
+    );
+  });
+
+  it('refuses a firstRank that is no rank', () => {
+    for (const bad of [0, -1, 1.5, '3', null])
+      expect(() => rankedRead(holders(bad) as never, 'holders')).toThrow(
+        `holders: firstRank ${JSON.stringify(bad)} is not a rank`
+      );
+  });
+
+  it('counts the pager’s rows from it, where the list moved between the reads', () => {
+    // page two at twenty a page, its first row ranked 23rd: rows 23–42, not 21–40
+    expect(figures(rankedPageAt('holders', read(20, true, 727, 2), walk(2), 23))).toEqual({
+      page: 2,
+      pageSize: 20,
+      rows: { from: 23, to: 42 },
+      count: { total: 727, pages: 37 },
+      previous: true,
+      next: true,
+    });
+    // rows past the count: the list moved under the reader, no rows and no count
+    expect(figures(rankedPageAt('holders', read(7, false, 727, 37), walk(37), 723))).toMatchObject({
+      rows: null,
+      count: null,
+    });
+    // the first page's first row is the first
+    expect(() => rankedPageAt('holders', read(20, true, 727), walk(1), 2)).toThrow(
+      'holders: the first page ranks its first row 2'
     );
   });
 });

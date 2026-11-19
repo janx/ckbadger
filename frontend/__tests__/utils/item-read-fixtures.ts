@@ -6,6 +6,7 @@ import {
   type DotCellItem,
   type SporeDobDecoded,
   type CursorPaginatedResponse,
+  type RankedCursorPage,
   type AssetCapacityHistory,
 } from '@/lib/api';
 import * as producer from '@/__tests__/msw/fixtures/item-producer';
@@ -22,6 +23,11 @@ export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> =>
     hasMore: false,
     nextCursor: null,
   });
+/** One page of a ranked list (a holders list), its first row the first (lane exactness, part B5). */
+export const rankedPage = <T>(data: T[] = []): RankedCursorPage<T> => ({
+  ...emptyPage(data),
+  firstRank: 1,
+});
 const SECP_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 export const protocols: Record<ItemKind, ItemProtocol> = {
   spore: producer.sporeProtocolProducer,
@@ -145,7 +151,7 @@ export function mockItemReads() {
   // B4 second fix round: a holder whose address, lock hash and lock are one lock's, a gallery
   // row's default-lock owner (the cell's owner beside the default lock's name was not one)
   const holder = producer.collectionGalleryProducer.data[0];
-  const holders = emptyPage([
+  const holders = rankedPage([
     {
       lockScriptHash: holder.ownerLockHash,
       address: holder.ownerAddress,

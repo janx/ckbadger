@@ -88,6 +88,7 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
         nextCursor: null,
         totalSupply: '500',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -121,6 +122,7 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
         total: 2,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="lock-column" />);

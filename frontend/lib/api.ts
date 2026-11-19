@@ -131,6 +131,16 @@ interface CursorPaginatedResponse<T> {
 }
 
 /**
+ * A page of a ranked list (the route's `RankedPage`: the holders of a token, a collection or a
+ * cluster). `firstRank` is the 1-based rank of the page's first row in the read view that served
+ * the page (lane exactness, part A3); a row's rank is it plus the row's place, read by
+ * lib/pagination.ts `rankedRead` / `rankOf` (part B5), which refuse a response without it.
+ */
+interface RankedCursorPage<T> extends CursorPaginatedResponse<T> {
+  firstRank: number;
+}
+
+/**
  * A collection feed page (`/assets/objects/{id}/activity-feed`, `/transactions`, the Spore cluster
  * feeds). Round 3 (contracts L2, coordinator ruling): `total` is null = unknown while the indexer
  * has not derived the collection's activity count (say nothing, never 0).
@@ -2049,7 +2059,7 @@ interface TokenHolder {
   lockKind: string | null;
 }
 
-export interface TokenHoldersResponse extends CursorPaginatedResponse<TokenHolder> {
+export interface TokenHoldersResponse extends RankedCursorPage<TokenHolder> {
   totalSupply: string;
   anchor: { blockNumber: number; blockHash: string } | null;
 }
@@ -3965,6 +3975,7 @@ export type {
   MostUtilizedScriptsChartResponse,
   MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
+  RankedCursorPage,
   PoolSummary,
   PoolStatus,
   AddressPendingSummary,
@@ -4949,7 +4960,7 @@ export const api = {
   getSporeClusterHolders: (
     clusterId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -5057,7 +5068,7 @@ export const api = {
   getObjectCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -5098,7 +5109,7 @@ export const api = {
   getIdentityCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);

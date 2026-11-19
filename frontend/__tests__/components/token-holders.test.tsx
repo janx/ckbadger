@@ -1,5 +1,5 @@
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
-import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -280,6 +280,7 @@ describe('Token holders (board L5)', () => {
     // 562,997 of 24,255,256.49 is 2.32 %.
     totalSupply: '2425525649000000',
     anchor: null,
+    firstRank: 1,
   });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(holders);
@@ -555,6 +556,7 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     nextCursor: null,
     totalSupply: '600',
     anchor: null,
+    firstRank: 1,
   });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(page);
@@ -646,6 +648,7 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
         nextCursor: null,
         totalSupply: '600',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -723,6 +726,7 @@ describe('Token holders’ shares at the extremes', () => {
         nextCursor: null,
         totalSupply: '1000000',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -765,6 +769,7 @@ describe('Token holders name a holder whose lock has no address form by its lock
         nextCursor: null,
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -819,6 +824,7 @@ describe('Token holders where the table does not fit (L5)', () => {
         nextCursor: null,
         totalSupply: '1000',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -855,5 +861,82 @@ describe('Holders by balance phone row', () => {
       // lane exactness, part B2: 10,000,000,000 of 10,000,000,001 cut, 99.99% (was >99.99%)
       ['share', '', '99.99% of supply'],
     ]);
+  });
+});
+
+// Lane exactness, part B5: a row's rank is the route's (`firstRank`, the rank of the page's first
+// row in the read view that served it, plus the row's place). The page computed (page − 1) × size
+// + its place, which holds only if the list stood still between the reads that walked to the page.
+describe('Token holders rank each row from the route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const holder = (n: number) => ({
+    lockScriptHash: `0x${n.toString(16).padStart(64, '0')}`,
+    address: null,
+    balance: '1',
+    lockCodeHash: null,
+    lockKind: null,
+  });
+  /** The rows from the `from`th holder on, each holding 1 of a supply of 100. */
+  const rows = (from: number, n: number) => ({
+    data: Array.from({ length: n }, (_, i) => holder(from + i)),
+    totalSupply: '100',
+    anchor: null,
+  });
+
+  it('reads the rank of a page whose list moved between the reads: 23, not 21', async () => {
+    atContainerWidth(1248);
+    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) =>
+      p?.cursor
+        ? // page two, read after two holders came in above it: its first row is the 23rd
+          pagedRead({
+            ...rows(23, 2),
+            limit: 20,
+            total: 24,
+            hasMore: false,
+            nextCursor: null,
+            firstRank: 23,
+          })
+        : pagedRead({
+            ...rows(1, p!.limit!),
+            limit: p!.limit!,
+            total: 22,
+            hasMore: true,
+            nextCursor: 'page2',
+            firstRank: 1,
+          })
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    fireEvent.click(screen.getByRole('button', { name: /^all 22\sholders ↓$/ }));
+    await screen.findByRole('table', { name: 'All holders' });
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('23–24 of 24')
+    );
+    const table = screen.getByRole('table', { name: 'All holders' });
+    const [, first, second] = within(table).getAllByRole('row');
+    expect(within(first).getAllByRole('cell')[0]).toHaveTextContent(/^23$/);
+    expect(within(second).getAllByRole('cell')[0]).toHaveTextContent(/^24$/);
+    expect(first.getAttribute('title')).toMatch(/^#23 · /);
+  });
+
+  it('refuses an API that sends no firstRank, by name', async () => {
+    // a page as an API older than this page sends it: no firstRank
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({ ...rows(1, 2), limit: 10, total: 2, hasMore: false, nextCursor: null }) as never
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    expect(
+      await screen.findByText(
+        'Could not load holders: the holders of token 0xabc: the API sends no firstRank: it is older than this page.'
+      )
+    ).toHaveAttribute('role', 'alert');
+    expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
   });
 });

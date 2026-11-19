@@ -155,6 +155,7 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: 'more',
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     // the distribution is read as the API gives it (lane cd-fixes-controls, SHOULD-3): it was
@@ -196,6 +197,7 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: null,
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
@@ -228,6 +230,7 @@ describe('a refused lock fails its part, in its place', () => {
         total: 1,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(

@@ -758,9 +758,14 @@ network store too), no re-sync:
   ranking cached by the view's tip block). A cursor is a place in the order
   (count or balance descending, lock ascending), not a row: a page starts at the
   first row after it, whether or not its holder still stands there (a holder
-  that moved or left no longer makes the next page a 400).
+  that moved or left no longer makes the next page a 400). The holders pages
+  rank each row by it (the page's `firstRank` plus the row's place) and count
+  the pager's rows from it (part B5); they refuse a response without it, as an
+  API older than the page.
 - `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
-  pool, pending and proposed (not `awaitingIndex`).
+  pool, pending and proposed (not `awaitingIndex`). The pool tab states its
+  pending, proposed and awaiting counts apart and sums none of them, so no page
+  reads `totals.waiting` (part B5).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
 - `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the

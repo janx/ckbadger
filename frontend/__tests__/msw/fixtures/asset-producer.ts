@@ -357,6 +357,7 @@ export const tokenProducer = {
       blockHash: '0x0303030303030303030303030303030303030303030303030303030303030303',
       blockNumber: 3,
     },
+    firstRank: 1,
     data: [
       {
         address: null,

@@ -213,21 +213,28 @@ export interface RankedPage {
  * which the arithmetic (page − 1) × size cannot know: it holds only if the list stood still
  * between the reads) has no rows and no count, its place and its ways. A count is the page's own
  * response's alone: one read at one tip, never a figure another read supplied.
+ *
+ * `firstRank`, for a list whose route ranks its page (a holders list, `rankedRead`): the rows
+ * count from the rank the route states for the page's first row, not from the pages before it
+ * (lane exactness, part B5); the first page's is 1.
  */
 export function rankedPageAt(
   list: string,
   read: Asked<CursorPageRead>,
-  walk: CursorWalk
+  walk: CursorWalk,
+  firstRank?: number
 ): RankedPage | null {
   const at = readOf(list, read, walk);
   const n = at.rows;
+  if (at.page === 1 && firstRank !== undefined && firstRank !== 1)
+    throw new Error(`${list}: the first page ranks its first row ${firstRank}`);
   if (at.page === 1 && !read.hasMore) return null;
   if (at.page === 1 && n === 0)
     throw new Error(`${list}: an empty first page with more rows after it`);
   const ways = { onPrevious: at.onPrevious, onNext: at.onNext };
   const moved = { page: at.page, pageSize: read.limit, rows: null, count: null, ...ways };
   if (n === 0) return moved;
-  const from = (at.page - 1) * read.limit + 1;
+  const from = firstRank ?? (at.page - 1) * read.limit + 1;
   const to = from + n - 1;
   if (at.total !== null && (to > at.total || at.page > at.pages!)) {
     // the first page's rows are its own count's first rows: past it, the response contradicts
@@ -277,4 +284,32 @@ export function timePageAt(
     onNewer: at.onPrevious,
     onOlder: at.onNext,
   };
+}
+
+/**
+ * A page of a ranked list as its route states it (lane exactness, part B5): the route's
+ * `firstRank` is the 1-based rank of the page's first row in the read view that served the page
+ * (a holders list's: `/tokens/{type_hash}/holders`, a collection's and a cluster's). A response
+ * without it is refused by name, as an API older than this page; a value that is no rank too.
+ * The page computed a row's rank as (page − 1) × size + its place, which holds only if the list
+ * stood still between the reads that walked to the page.
+ */
+export function rankedRead<P extends { firstRank: number }>(read: P, list: string): P {
+  const v: unknown = (read as { firstRank?: unknown }).firstRank;
+  if (v === undefined)
+    throw new Error(`${list}: the API sends no firstRank: it is older than this page`);
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1)
+    throw new Error(`${list}: firstRank ${JSON.stringify(v)} is not a rank`);
+  return read;
+}
+
+/** A row's rank on a ranked page: the route's `firstRank` and the row's place (`rankedRead`). */
+export function rankOf<T>(
+  read: { firstRank: number; data: readonly T[] },
+  row: T,
+  list: string
+): number {
+  const at = read.data.indexOf(row);
+  if (at < 0) throw new Error(`${list}: a row that is not on its page`);
+  return read.firstRank + at;
 }

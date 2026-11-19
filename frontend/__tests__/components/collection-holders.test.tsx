@@ -13,7 +13,7 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import { CollectionHolders } from '@/components/asset/collection-holders';
-import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
+import type { CollectionHolder, RankedCursorPage } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { pagedRead } from '@/__tests__/utils/paged-read';
@@ -33,14 +33,15 @@ const lock = '0x' + '12'.repeat(32);
 const prefix = '0x' + '34'.repeat(20);
 const page = (
   data: CollectionHolder[],
-  extra: Partial<CursorPaginatedResponse<CollectionHolder>> = {}
-): CursorPaginatedResponse<CollectionHolder> =>
+  extra: Partial<RankedCursorPage<CollectionHolder>> = {}
+): RankedCursorPage<CollectionHolder> =>
   pagedRead({
     data,
     limit: 10,
     total: 2,
     hasMore: false,
     nextCursor: null,
+    firstRank: 1,
     ...extra,
   });
 // Round 3 (contracts R-A · R-2): no indexed lock script → no address and no code hash either.
@@ -77,6 +78,7 @@ const firstOf21 = (limit: number) =>
     total: 21,
     hasMore: true,
     nextCursor: 'next-50',
+    firstRank: 1,
   });
 // Unmodified holderDistribution from the real collection-insights producer.
 const distribution = [
@@ -179,11 +181,12 @@ describe('Collection holders', () => {
     // buttons were disabled), and it reads its pages from the response: the count is 21 holders,
     // two pages of 20, where the cursor ends (it was 51, three pages, while the cursor ended on
     // the second).
-    const load = vi
-      .fn()
-      .mockImplementation(({ limit, cursor }) =>
-        Promise.resolve(cursor ? page([resolved], { limit, total: 21 }) : firstOf21(limit))
-      );
+    const load = vi.fn().mockImplementation(({ limit, cursor }) =>
+      Promise.resolve(
+        // page two's first row is the 21st (lane exactness, part B5: the route ranks the page)
+        cursor ? page([resolved], { limit, total: 21, firstRank: 21 }) : firstOf21(limit)
+      )
+    );
     const { rerender } = render(
       <CollectionHolders assetClass="objects" load={load} queryKey="first" />
     );
@@ -702,5 +705,49 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(phoneLines(buckets[1])).toEqual([
       { key: 'range', tone: 'body', left: 'holds 2 · 2 items', right: '1holder' },
     ]);
+  });
+});
+
+// Lane exactness, part B5: a row's rank is the route's (`firstRank`, the rank of the page's first
+// row in the read view that served it, plus the row's place), not (page − 1) × size + its place.
+describe('Collection holders rank each row from the route', () => {
+  it('reads the rank of a page whose list moved between the reads: 23, not 21', async () => {
+    atContainerWidth(1248);
+    const load = vi.fn().mockImplementation(({ limit, cursor }) =>
+      Promise.resolve(
+        cursor
+          ? // page two, read after two holders came in above it: its first row is the 23rd
+            page([resolved], { limit, total: 23, firstRank: 23 })
+          : { ...firstOf21(limit), total: 22, firstRank: 1 }
+      )
+    );
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="moved" />);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    fireEvent.click(screen.getByRole('button', { name: /^all 22\sholders ↓$/ }));
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('23–23 of 23')
+    );
+    const table = screen.getByRole('table', { name: 'All collection holders' });
+    const [, first] = within(table).getAllByRole('row');
+    expect(within(first).getAllByRole('cell')[0]).toHaveTextContent(/^23$/);
+    expect(first.getAttribute('title')).toMatch(/^#23 · /);
+  });
+
+  it('refuses an API that sends no firstRank, by name', async () => {
+    const { firstRank: _, ...older } = page([named, resolved]) as never as Record<string, unknown>;
+    render(
+      <CollectionHolders
+        assetClass="objects"
+        load={vi.fn().mockResolvedValue(older)}
+        queryKey="older"
+      />
+    );
+    expect(
+      await screen.findByText(
+        'Could not load collection holders: the holders of collection older: the API sends no firstRank: it is older than this page.'
+      )
+    ).toHaveAttribute('role', 'alert');
   });
 });
