@@ -485,20 +485,22 @@ fn rolling_24h_tx_window(
     Ok(Some((count, i128::from(span_ms))))
 }
 
-/// The status bar's block time: the window's span over its gaps, in seconds at two places.
+/// The status bar's block time: the window's span over its gaps, in seconds cut at two places
+/// (lane exactness, part A2, S5: the page shows the route's text, so the route cuts).
 fn format_avg_block_time(
     span_ms: i128,
     gaps: i128,
     latest_block: i64,
 ) -> Result<String, ApiRouteError> {
-    crate::utils::exact_ratio::format_ratio(span_ms, gaps * 1_000, 2)
+    crate::utils::exact_ratio::format_ratio_cut(span_ms, gaps * 1_000, 2)
         .map(|value| format!("{value}s"))
         .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
 }
 
-/// An asset-ecosystem category's share of the live capacity, a percentage at two places.
+/// An asset-ecosystem category's share of the live capacity, a percentage cut at two places
+/// (lane exactness, part A2, S5).
 fn category_percentage(value: i128, live_capacity: i128) -> Result<String, ApiRouteError> {
-    crate::utils::exact_ratio::format_ratio(
+    crate::utils::exact_ratio::format_ratio_cut(
         value
             .checked_mul(100)
             .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
@@ -532,7 +534,8 @@ fn format_transaction_rates(
                     "transaction rate numerator overflow at block {latest_block}"
                 ))
             })?;
-        crate::utils::exact_ratio::format_ratio(numerator, span_ms, decimals).map_err(|e| {
+        // cut at the places the status bar shows (lane exactness, part A2, S5)
+        crate::utils::exact_ratio::format_ratio_cut(numerator, span_ms, decimals).map_err(|e| {
             ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
         })
     };
@@ -5204,7 +5207,7 @@ fn parse_asset_owned_capacity(id: &str, value: Option<&str>) -> Result<i128, Api
 async fn get_asset_ecosystem(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<AssetEcosystemResponse> {
-    let cache_key = "statistics:asset-ecosystem";
+    let cache_key = "statistics:asset-ecosystem:v2";
     if let Some(cached) = state.cache.get::<AssetEcosystemResponse>(cache_key).await {
         return ok(cached);
     }
@@ -6502,11 +6505,13 @@ mod tests {
     }
 
     #[test]
-    fn capacity_breakdown_rejects_zero_or_negative_denominator_and_rounds_half_up() {
+    // re-pinned for lane exactness, part A2 (S5): the share is cut, 1 of 201 is 0.4975…%, "0.49"
+    // (it was half up, "0.50", and named for it)
+    fn capacity_breakdown_rejects_zero_or_negative_denominator_and_cuts() {
         assert!(build_capacity_breakdown(0, 0, 0, 0).is_err());
         assert!(build_capacity_breakdown(100, -1, 0, 0).is_err());
         let categories = build_capacity_breakdown(201, 1, 0, 0).unwrap();
-        assert_eq!(categories[0].percentage, "0.50");
+        assert_eq!(categories[0].percentage, "0.49");
     }
 
     #[test]

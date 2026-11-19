@@ -1217,7 +1217,8 @@ fn realized_apc(
     let denominator = free
         .checked_mul(duration_ms)
         .ok_or("DAO APC denominator overflow")?;
-    crate::utils::exact_ratio::format_percent(numerator, denominator, 2)
+    // cut at the two places the calculator shows, never rounded (lane exactness, part A2, S5)
+    crate::utils::exact_ratio::format_percent_cut(numerator, denominator, 2)
         .map(|value| Some(format!("{value}%")))
 }
 

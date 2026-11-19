@@ -706,6 +706,12 @@ network store too), no re-sync:
   `capacity` beside `used` and `unused`, as the other "CKB held" histories do.
 - `GET /network/map` — a located node whose GeoIP record has no country is
   `Unknown`, as the distributions name it (it was `""`).
+- Cut at the places the pages show, never rounded half up (part A2, S5), the
+  shapes unchanged: `/inventory`'s `hMultiplier` (two places),
+  `/statistics/network`'s `avgBlockTime` (two) and `tps`,
+  `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
+  `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
+  realized APC (two) and `/dao/evidence`'s percentages (two and four).
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five

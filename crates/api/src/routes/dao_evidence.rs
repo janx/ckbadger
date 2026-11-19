@@ -13,7 +13,8 @@ use super::dao_epoch::{next_phase0_boundary, nominal_day_bucket, phase1_ready_ep
 use crate::derived::require_derived;
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::address::{compute_script_hash, resolve_lock_address};
-use crate::utils::exact_ratio::format_percent;
+// every percentage of the DAO evidence is cut at its places, never rounded (lane exactness, part A2, S5)
+use crate::utils::exact_ratio::format_percent_cut as format_percent;
 use crate::utils::script_to_address;
 use crate::AppState;
 

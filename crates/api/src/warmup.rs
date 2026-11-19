@@ -284,8 +284,9 @@ impl CachedAssetEntry {
     pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
         let h_multiplier = self
             .h_multiplier_ratio()?
+            // cut at the two places the inventory shows, never rounded (lane exactness, part A2, S5)
             .map(|(cap, used)| {
-                crate::utils::exact_ratio::format_ratio(cap as i128, used as i128, 2)
+                crate::utils::exact_ratio::format_ratio_cut(cap as i128, used as i128, 2)
                     .map_err(anyhow::Error::msg)
             })
             .transpose()?;
