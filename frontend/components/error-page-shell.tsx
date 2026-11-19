@@ -204,7 +204,10 @@ function TipSeal() {
         <Dotted
           inline
           parts={[
-            <BlockLink key="block" number={block.number} className="text-text" />,
+            // a link inside the caption's line, in the reading ink the caption gives its values
+            <span key="block" className="text-text">
+              <BlockLink look="inline" number={block.number} />
+            </span>,
             <ShortId key="hash" value={block.hash} kind="hash" size="row" className="text-text" />,
           ]}
         />

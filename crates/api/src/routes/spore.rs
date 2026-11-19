@@ -17,7 +17,7 @@ use super::assets::{
     list_canonical_nft_collection_activities_page, normalize_activity_action_filter,
     MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard,
 };
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
@@ -512,15 +512,15 @@ fn build_capacity_history_chart_with_initial(
             used_delta,
             &format!("building spore capacity history chart at date {}", date),
         )?;
-        let unused = running_capacity - running_used;
-        let mut values = std::collections::HashMap::new();
-        values.insert("used".to_string(), running_used.to_string());
-        values.insert("unused".to_string(), unused.to_string());
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values,
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                running_capacity,
+                running_used,
+                "spore capacity history",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     Ok(StackedAreaChartResponse {
@@ -862,7 +862,7 @@ async fn get_cluster_holders(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
+) -> ApiResult<crate::response::RankedPage<ClusterHolderResponse>> {
     let id = parse_cluster_id_param(&cluster_id)?;
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
@@ -926,12 +926,11 @@ async fn get_cluster_holders(
         })
         .collect::<Result<_, crate::response::ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        response_rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(crate::response::RankedPage {
+        page: CursorPaginatedResponse::new(response_rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking this request read, plus one (lane exactness, part A, A3)
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 async fn get_cluster_activities(

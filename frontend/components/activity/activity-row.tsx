@@ -48,6 +48,7 @@ import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
 import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
@@ -166,7 +167,9 @@ export function ActivityRowHead({
     <Link
       data-role="headline"
       href={href}
-      className={cn(titleClass, 'hover:text-jade transition-colors')}
+      // the row's key: the key look's bright ink (a link's ink is its look's)
+      look="key"
+      className={cn('text-body font-medium', line && 'leading-row')}
     >
       {title}
     </Link>
@@ -231,10 +234,7 @@ export function ActivityRowHead({
             parts={[
               blockNumber !== null ? (
                 // its ink said on itself, the evidence's quiet ink (a part handed to the list)
-                <Link
-                  href={`/blocks/${blockNumber}`}
-                  className="text-text-dim hover:text-text transition-colors"
-                >
+                <Link href={`/blocks/${blockNumber}`} look="inline">
                   {formatBlockNumber(blockNumber)}
                 </Link>
               ) : poolStatus ? (
@@ -243,10 +243,7 @@ export function ActivityRowHead({
                 <span>Unconfirmed</span>
               ),
               !linked && (
-                <Link
-                  href={`/tx/${hash}`}
-                  className="hover:text-jade text-text-dim transition-colors"
-                >
+                <Link href={`/tx/${hash}`} look="inline">
                   <ShortId value={hash} kind="hash" size="row" />
                 </Link>
               ),
@@ -360,10 +357,12 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
 
 /**
  * The calls by name, once per script (name and page), in first-call order, each with its count
- * and every call it stands for. Without args on the row, two calls of one script would read
- * ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the same.
+ * and, on a row (`args`), every call it stands for in its hover. Without args on the row, two calls
+ * of one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say
+ * the same. A folded run's head names the code its rows called (`args` false): its rows' args
+ * differ, so no row's args are its hover.
  */
-function callNames(refs: CallRef[]): ReactNode[] {
+function callNames(refs: CallRef[], args: boolean): ReactNode[] {
   const groups: { name: string; href: string; calls: string[] }[] = [];
   for (const r of refs) {
     const same = groups.find((g) => g.name === r.name && g.href === r.href);
@@ -374,8 +373,8 @@ function callNames(refs: CallRef[]): ReactNode[] {
     <span key={`${g.href}:${g.name}`} className="whitespace-nowrap">
       <Link
         href={g.href}
-        title={g.calls.join('\n')}
-        className="text-text-dim hover:text-jade transition-colors"
+        title={args ? g.calls.join('\n') : undefined}
+        look="inline"
         onClick={(e) => e.stopPropagation()}
       >
         {g.name}
@@ -624,13 +623,27 @@ function readProtocolAction(action: Parameters<typeof protocolActionNoteFacts>[0
   }
 }
 
+/** Whether the one lock decision refuses a party's lock (its line then fails in its place). */
+function partyLockRefused(party: ParticipantInfo): boolean {
+  try {
+    partyLock(party);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /**
- * Whether a row cannot read one of its protocol actions: its row reports the error in its place
- * (`activityDetails`), so a feed never folds it (lane B4 fix round, review NOTE 1).
+ * Whether a row cannot read one of its protocol actions or one of its parties' locks: its row
+ * reports the error in its place (`activityDetails`; its party line, ruling D7), so a feed never
+ * folds it (lane B4 fix round, review NOTE 1). A folded run names no party (Gate B), so a refused
+ * lock inside a run would show only once the run is opened.
  */
 export function rowReadFails(activity: ActivityBody): boolean {
-  return globalTxEvents(activity).some(
-    (e) => e.kind === 'protocol' && readProtocolAction(e.action).error !== undefined
+  return (
+    globalTxEvents(activity).some(
+      (e) => e.kind === 'protocol' && readProtocolAction(e.action).error !== undefined
+    ) || activity.participants.some(partyLockRefused)
   );
 }
 
@@ -643,7 +656,8 @@ export function rowReadFails(activity: ActivityBody): boolean {
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
-  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void }
+  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void },
+  args = true
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -680,7 +694,7 @@ function activityDetails(
   if (showScriptDetails && types.length > 0)
     calls.push(
       detailRun(
-        foldedCalls(callNames(types.map(typeCallRef)), 'types', folds.types, () =>
+        foldedCalls(callNames(types.map(typeCallRef), args), 'types', folds.types, () =>
           folds.open('types')
         )
       )
@@ -688,7 +702,7 @@ function activityDetails(
   if (showScriptDetails && locks.length > 0) {
     // "lock" names the run once, before its first name
     const [first, ...rest] = foldedCalls(
-      callNames(locks.map(lockCallRef)),
+      callNames(locks.map(lockCallRef), args),
       'locks',
       folds.locks,
       () => folds.open('locks')
@@ -1349,32 +1363,36 @@ export function activityTitleText(
 }
 
 /**
- * A run of rows that say the same thing, folded (readability lane B4; `lib/activity-runs.ts`): one
- * row with what the rows share — the title, the scripts called by name, the parties — their count,
- * and the newest time (the first row's: a feed is newest first). It counts rows and sums nothing:
- * no amount of any row is drawn, and no total. Its button opens the ordinary rows in place, under
- * it, and folds them again; it is a real button, reached by a tap, a click and the keyboard.
+ * A run of rows that did the same thing, folded (readability lane B4; the rule is
+ * `lib/activity-runs.ts`, the owner's of Gate B): one row that says what its rows did and called —
+ * the title, the scripts by the code they share (no row's args: those differ from row to row) —
+ * how many transactions it holds and how many participants they name, and the newest time (the
+ * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
+ * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
+ * fold control (`FoldToggle`: "all N transactions ↓", "fewer ↑"): it opens the ordinary rows in
+ * place, under it, and folds them again, stays where it is in both states and keeps the focus.
  */
 export function FoldedActivityRow({
   rows,
+  participants,
   title,
   showScriptDetails,
   age,
-  focusLockHash,
   className,
   fresh = false,
   open,
+  controls,
   onToggle,
 }: {
   /** The run, newest first: at least two committed rows. */
   rows: readonly ActivityRowData[];
+  /** How many parties its rows name, each once (`runParties`). */
+  participants: number;
   /** The title its rows draw (`ActivityTitle`). */
   title: ReactNode;
   showScriptDetails: boolean;
   /** As the feed's rows: the age on a live feed, else the date (PA-22). */
   age: boolean;
-  /** The party the page is about, written as text first (consistency C3). */
-  focusLockHash?: string;
   /**
    * The class its feed gives its rows, given to the run too: a neighbour's rows on an identity's
    * feed are set back, and so is their run (the feed's one decision, R4).
@@ -1382,6 +1400,12 @@ export function FoldedActivityRow({
   className?: string;
   fresh?: boolean;
   open: boolean;
+  /**
+   * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
+   * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
+   * leaves a run.
+   */
+  controls: string;
   onToggle: () => void;
 }) {
   const first = rows[0];
@@ -1389,18 +1413,26 @@ export function FoldedActivityRow({
     throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
   if (first.timestamp === null || first.blockNumber === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
+  if (participants < 1)
+    throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
   const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
-  // the scripts are the same on every row of a run: the first row's calls are the run's
-  const { calls } = activityDetails(first, showScriptDetails, {
-    ...openCalls,
-    open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })),
-  });
-  // the parties its rows show, by their rule: the run's parties are the same on every row
-  const { focus, shown, hidden } = partiesShown(
-    first.participants,
-    focusLockHash,
-    first.txHash,
+  // the script code is the same on every row of a run: the first row's calls, by name, are the
+  // run's (with no row's args in their hover)
+  const { calls } = activityDetails(
+    first,
+    showScriptDetails,
+    { ...openCalls, open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })) },
     false
+  );
+  const transactions = formatCount(rows.length, 'transaction');
+  const toggle = (
+    <FoldToggle
+      open={open}
+      count={rows.length}
+      singular="transaction"
+      controls={controls}
+      onToggle={onToggle}
+    />
   );
   return (
     <article
@@ -1421,48 +1453,10 @@ export function FoldedActivityRow({
           </>
         }
       />
-      <div
-        data-role="run-parties"
-        className="text-small leading-row flex flex-wrap items-center gap-x-4 gap-y-0 pl-[18px]"
-      >
-        {shown.map((p) => {
-          const lock = partyLock(p);
-          const isFocus = p === focus;
-          return (
-            <span
-              key={p.key}
-              data-role="party"
-              data-party={p.key}
-              data-this-address={isFocus || undefined}
-              className="inline-flex max-w-full flex-wrap items-center gap-x-2.5"
-            >
-              <ParticipantRefView participant={p} size="row" compact quiet linked={!isFocus} />
-              {isFocus && <span className="sr-only">this address</span>}
-              {lock && (
-                <span data-role="lock-kind">
-                  <LockWordsView words={lock} size="row" />
-                </span>
-              )}
-            </span>
-          );
-        })}
-        {hidden > 0 && (
-          <span className="text-text-dim">
-            {unitNode(`+${formatCount(hidden, 'participant')}`)}
-          </span>
-        )}
+      {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
+      <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
+        <Dotted parts={[toggle, open && transactions, formatCount(participants, 'participant')]} />
       </div>
-      <button
-        type="button"
-        data-role="run-toggle"
-        aria-expanded={open}
-        onClick={onToggle}
-        // a finger's target at every width: WCAG 2.2's minimum, 24 px tall (2.5.8, no breakpoint;
-        // the row line is 20), its words centred in it (lane B4 fix rounds)
-        className="text-interactive hover:text-jade text-small leading-row min-h-6 self-start bg-transparent pl-[18px] transition-colors"
-      >
-        {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
-      </button>
     </article>
   );
 }

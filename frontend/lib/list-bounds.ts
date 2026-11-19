@@ -221,6 +221,84 @@ export const WIDEST_HELD_ITEMS = nines(6).toLocaleString('en-US');
 /** Of record: a depositor's rank, under a million depositors. Source: mainnet's DAO depositors. */
 export const WIDEST_RANK = nines(6).toLocaleString('en-US');
 
+/*
+ * The bounds of a growing figure the page lanes kept in their files (lane P2's follow-up, item 7)
+ * take a digit of room past their record, ten times it: a figure of record grows with the chain,
+ * and a column that holds the record alone overflows at its next digit.
+ */
+
+/**
+ * Of record: a token's holders, under a million, `999,999`: the most of any token is 11,866 (RGB++
+ * Protocol), then 9,151 (Seal), five digits, and a digit of room. A range's holders in "Holders by
+ * balance" are at most these. Source: the live mainnet store's `/tokens?sort=holders`, 2026-11-19.
+ */
+export const WIDEST_TOKEN_HOLDERS = nines(6).toLocaleString('en-US');
+
+/**
+ * Of record: a token holder's rank, at most the token's holders (WIDEST_TOKEN_HOLDERS), as a rank
+ * is written, without grouping: `999999`. Source: WIDEST_TOKEN_HOLDERS.
+ */
+export const WIDEST_TOKEN_HOLDER_RANK = nines(6).toString();
+
+/**
+ * Of record: a collection's holders, under 100,000, `99,999`: the most of any collection is 4,211
+ * (.bit; 3,066 of an object collection, Cellula BitCell), four digits, and a digit of room. A
+ * range's holders in "Holders by how many items they hold" are at most these. Source: the live
+ * mainnet store's collections, 2026-11-19.
+ */
+export const WIDEST_COLLECTION_HOLDERS = nines(5).toLocaleString('en-US');
+
+/**
+ * Of record: a collection holder's rank, at most the collection's holders
+ * (WIDEST_COLLECTION_HOLDERS), as a rank is written: `99999`. Source: WIDEST_COLLECTION_HOLDERS.
+ */
+export const WIDEST_COLLECTION_HOLDER_RANK = nines(5).toString();
+
+/**
+ * Of record: a byte of an object's DNA, under 1,000, so a gene's range is `bytes 999–999`: the DNA
+ * the decoders read are tens of bytes (Nervape 3x's, 53). Source: mainnet's Nervape 3x DNA
+ * (`__tests__/fixtures/objects/nervape3x.ts`, captured from the API).
+ */
+export const WIDEST_DNA_SPAN = `bytes ${nines(3)}–${nines(3)}`;
+
+/**
+ * Of record: a code cell's output index, under 100, `99`: a deployment writes a few cells, the
+ * highest index of any family's code cell is 5 (TypeBurnLock). Source: the live mainnet store's
+ * `/scripts/{name}` histories, `codeCellOutputIndex`, 2026-11-19.
+ */
+export const WIDEST_CODE_CELL_INDEX = nines(2).toString();
+
+/**
+ * Of record: a script family's versions, under 100, as a version is written, `v99`: the most of
+ * any family is 46 (.bit Account). Source: the live mainnet store's `/scripts`, `versionsCount`,
+ * 2026-11-19.
+ */
+export const WIDEST_SCRIPT_VERSION = `v${nines(2)}`;
+
+/**
+ * Of record: the code cells of one script version, under 100, `99`: the most is 8 (.bit Lock).
+ * Source: the live mainnet store's `/scripts/{name}` versions, `codeCellsTotal`, 2026-11-19.
+ */
+export const WIDEST_VERSION_CODE_CELLS = nines(2).toString();
+
+/**
+ * Of record: a live cell's capacity, under ten billion CKB, every decimal, the column form:
+ * `9,999,999,999.99999999`: the genesis allocation's cells hold billions. Source: mainnet block 0.
+ */
+export const WIDEST_CELL_CAPACITY = ckbAmountText(ckbNines(10), 'column');
+
+/**
+ * Of record: WIDEST_CELL_CAPACITY as a phone row writes it, the summary form (whole CKB from 1,000
+ * up): `9,999,999,999`. Source: WIDEST_CELL_CAPACITY.
+ */
+export const WIDEST_CELL_CAPACITY_SUMMARY = ckbAmountText(ckbNines(10), 'summary');
+
+/**
+ * Of record: a cell's occupied bytes, fewer than the bytes of the transaction that made it, at
+ * most LARGEST_TX_BYTES (1,236,271, seven digits): `9,999,999 B`. Source: LARGEST_TX_BYTES.
+ */
+export const WIDEST_CELL_OCCUPIED = `${nines(7).toLocaleString('en-US')} B`;
+
 /**
  * Of record: CKB held in a list row's cells, whole from 1,000 up (the summary form): under 100
  * billion CKB, the whole issuance (about 45 billion today, 1.3 billion more a year) for decades.

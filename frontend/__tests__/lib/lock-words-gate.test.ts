@@ -276,15 +276,25 @@ const DECIDED: Reads = {
 const KNOWN: Reads = {
   // components/asset/cell-versions.tsx left (lane p-assets): a version's lock is cellOwnerLockPart
   // (writer 1)
-  'components/asset/item-evidence.tsx': { 'api name': 1 },
-  'components/asset/mnft-detail.tsx': { 'api name': 1 },
+  // components/asset/mnft-detail.tsx (1) and components/asset/object-hero.tsx (5) left (lane P2's
+  // follow-up, item 6): the Issued note, the life sentence and the lock footnote say the lock
+  // through the decision's sentence form (cellLockSentence, cellLockWords). Then the rest of the
+  // second round's writers left with them: components/asset/item-evidence.tsx (1, the lock
+  // script's name), components/identity/identity-overview.tsx (3, the .bit Cell summary's minted
+  // and holding locks; its Owner note was cellOwnerLockPart already) and
+  // components/identity/identity-evidence.tsx (1, the name cell's "Lock · …" row)
+  // registry name 1 → 0 (lane D3): the structure's group names, the third copy of the registry
+  // rule (9), went with the list; the cell page's groups are the rows of script-group-rows.tsx
+  // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
+  // address-holdings.tsx's one read
+  // 3 → 1 (lane D3): the cellbase witness's lock stays; the script groups' name and link (12)
+  // moved with the rows to script-group-rows.tsx, where one read gives both
+  // known writer 12 moved, not a new writer (lane D3): the transaction page's script groups, the
+  // rows the cell page now draws too, their two reads (a group's name, its link) made one
   // 6 → 5 (lane p-assets, R8): the life sentence names the lock it sits under once, its story
   // and its lede alike
-  'components/asset/object-hero.tsx': { 'api name': 5 },
   // 4 → 3 (lane p-assets): the Owner fact's note is cellOwnerLockPart (writer 5's first read);
   // the .bit Cell summary's wallet and holder words stay, prose that names a default lock too
-  'components/identity/identity-overview.tsx': { 'api name': 3 },
-  'components/identity/identity-evidence.tsx': { 'api name': 1 },
   // app/cell/[outpoint]/client-page.tsx, components/cell/cell-transactions.tsx and
   // components/cell/cell-microscope.tsx left (lane P1 follow-up; writers 8, 9 and 10): the cell
   // page decides its lock once (`cellLockFacts`, `lockWords`), and its Lock fact, its spend
@@ -405,6 +415,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane cd-fixes-controls, renamed, it was "… 34 reads in 20 files, … 12
   // files and 21 reads"): the gate learned `lockScriptName`, and the Fiber graph's two reads of it
   // (known writer 13, p-topics) came to light: 21 → 23 known reads in 13 files, 34 → 36 in 21
+  // Re-pinned on purpose (lane P2's follow-up, item 6; renamed, it was "… 36 reads in 21 files, …
+  // 13 files and 23 reads"): the m-NFT Issued note (known writer 3) and the object hero's prose
+  // (known writer 4) say the lock through the decision's sentence form, 23 → 17 known reads in 11
+  // files, 36 → 30 in all in 19
+  // Re-pinned on purpose (lane P2's follow-up, item 6; renamed, it was "… 30 reads in 19 files, …
+  // 11 files and 17 reads"): the item evidence (known writer 2), the identity overview (5) and the
+  // identity evidence (6) say the lock through the decision too, 17 → 12 known reads in 8 files,
+  // 30 → 25 in all in 16; of the second round's six known writers none is left
   // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 36 reads in 21 files, … 13 files
   // and 23 reads"): the cell page decides its lock once, its registry read feeds the decision and
   // the three `lockName`s are the decision's name; 23 → 18 known reads in 10 files, 36 → 32 in all
@@ -415,11 +433,16 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 32 reads in 19 files, … 8 files and
   // 16 reads"): the address's lock is named once by the decision; the page's two reads went, the
   // holdings' one feeds it: 16 → 13 known reads in 6 files, 32 → 30 in all in 18
-  it('pins the totals: 30 reads in 18 files, the known writers 6 files and 13 reads', () => {
+  // Re-pinned on purpose (the merge of lane P1's follow-up with lane P2's; renamed, it was "… 25
+  // reads in 16 files, … 8 files and 12 reads" on the base): this lane's follow-up took the cell
+  // page's, the address's and the transaction page's known writers (7 to 12), 10 known reads in 7
+  // files, four of its reads feeding the decision now; 12 → 2 known reads in 1 file (the Fiber
+  // graph's, writer 13), 25 → 19 in all in 13
+  it('pins the totals: 19 reads in 13 files, the known writers 1 file and 2 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(18);
-    expect(total(all)).toBe(30);
-    expect(Object.keys(KNOWN)).toHaveLength(6);
-    expect(total(KNOWN)).toBe(13);
+    expect(Object.keys(all)).toHaveLength(13);
+    expect(total(all)).toBe(19);
+    expect(Object.keys(KNOWN)).toHaveLength(1);
+    expect(total(KNOWN)).toBe(2);
   });
 });

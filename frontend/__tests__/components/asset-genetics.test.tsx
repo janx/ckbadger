@@ -1,4 +1,6 @@
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import {
   ObjectGeneticsView,
   ObjectGeneticsEvidence,
@@ -35,10 +37,12 @@ describe('Independent DOB evidence', () => {
   // Midnight, continued (review 2026-11-03, item 5, move 3): the DNA gel is an instrument. An
   // object that is not BTC+CKB or pure CKB has no copper, so its gel sits in the one frame; a
   // BTC+CKB or pure-CKB object keeps its copper plate untouched.
+  // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its plate
+  // tinted by the object's composition as it was in tier 1
   it('puts the gel in the instrument frame, unless the object has its copper plate (move 3)', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     const { container, rerender } = render(
-      <ObjectGeneticsView evidence={data} subject="Spore" tier="decentralized_mixture" />
+      <ObjectGeneticsEvidence evidence={data} subject="Spore" tier="decentralized_mixture" />
     );
     const plate = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(plate).toHaveAttribute('data-gel-plate', 'frame');
@@ -48,7 +52,7 @@ describe('Independent DOB evidence', () => {
     expect(plate).not.toHaveClass('neon-edge-top');
     expect(plate).toContainElement(container.querySelector('[data-gene]') as HTMLElement);
     expect(plate.querySelector('.space-y-4')).toHaveClass('px-4', 'py-4', 'sm:px-5');
-    rerender(<ObjectGeneticsView evidence={data} subject="Spore" tier="btc_ckb" />);
+    rerender(<ObjectGeneticsEvidence evidence={data} subject="Spore" tier="btc_ckb" />);
     const copper = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(copper).toHaveAttribute('data-gel-plate', 'copper');
     expect(copper).not.toHaveAttribute('data-instrument-frame');
@@ -64,12 +68,13 @@ describe('Independent DOB evidence', () => {
     if (data.currentPattern.status !== 'dob') throw new Error('fixture');
     data.currentPattern.steps[0].bytes[0].declaredByteLength = '100';
     data.currentPattern.steps[0].bytes[0].truncated = true;
-    const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
+    render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/18446744073709551614/)).toBeInTheDocument();
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its hover there
+    const { container } = render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     fireEvent.focus(container.querySelector('[data-gene]')!);
     expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '0.15');
     expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
-    render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // B3 round 4, task 3: the decode time is one unit of its sentence (unitText), so the sentence
     // is read across that unit's span; the date-time itself never breaks.
     expect(screen.getByText(fullText(/decoded 2023-11-15 06:13:20 UTC\+8/))).toBeInTheDocument();
@@ -93,6 +98,9 @@ describe('Independent DOB evidence', () => {
     };
     render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/awaiting DOB execution/)).toBeInTheDocument();
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), the decoder's
+    // missing byte mapping said under it
+    render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // Lane E (C12 wording): the ruled sentence, the API's reason kept in the line's title.
     expect(
       screen.getByText(
@@ -105,7 +113,8 @@ describe('Independent DOB evidence', () => {
   it('preserves multiple VM values for one trait name', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.cachedVmTraits.traits.push({ name: 'Face', value: 'Green' });
-    const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its genes there
+    const { container } = render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // F2 objects (OB-8): the gene reads its values plainly ("Cached VM result" was developer wording).
     expect(container.querySelector('[data-gene="Face"]')!.textContent).toContain('Blue · Green');
   });
@@ -392,6 +401,29 @@ describe('Per-version raw protocol and item context', () => {
       protocol.versions[1].cell.lock.codeHash
     );
   });
+
+  // Lane P2's follow-up (item 6): the lock script's name is the one decision's, off the cell's lock
+  // and its owner's address: a lock on the default lock's code hash by data is not the default
+  // lock, whose name the registry sends for that code hash (no cell's data hashes to it)
+  it('names the lock script through the decision, never the default lock’s name for a by-data lock', () => {
+    const protocol: ItemProtocol = structuredClone(didProtocolProducer);
+    const cell = protocol.versions[0].cell;
+    const args = `0x${'01'.repeat(20)}`;
+    Object.assign(cell, {
+      lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockName: 'Default Lock',
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+    });
+    const { unmount } = render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Unregistered');
+    unmount();
+    Object.assign(cell, {
+      lock: { ...cell.lock, hashType: 'type' },
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+    });
+    render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Default Lock');
+  });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];
     const { rerender } = render(
@@ -424,23 +456,38 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
 
   // Consistency round: the allele gel is its own section beside the DNA (C10), and only the three
   // genes that vary get a lane (C9), so at 358 px they fit one row.
+  // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), so the panel
+  // and the evidence are rendered together and the two gels are found in their own places
   it('fits 358 px: both gels drawn 1:1, the allele gel of the varying genes in one row, nothing to scroll', () => {
     stubChartWidth(358);
     render(
-      <ObjectGeneticsView
-        evidence={nervape3xGenetics}
-        subject="Nervape 3x #125"
-        collection={nervape3xInsights}
-        collectionName="Nervape 3x"
-        tier="btc_ckb"
-      />
+      <>
+        <ObjectGeneticsView
+          evidence={nervape3xGenetics}
+          subject="Nervape 3x #125"
+          collection={nervape3xInsights}
+          collectionName="Nervape 3x"
+          tier="btc_ckb"
+        />
+        <ObjectGeneticsEvidence
+          evidence={nervape3xGenetics}
+          subject="Nervape 3x #125"
+          tier="btc_ckb"
+        />
+      </>
     );
-    const section = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
+    const panel = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
+    const section = screen.getByRole('region', { name: 'DNA evidence' });
     const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+    // tier 1 holds no byte-level plot
+    expect(panel.querySelector('svg')).toBeNull();
     // no minimum width and no sideways scroller anywhere in the panel
     for (const el of [section, among].flatMap((s) => Array.from(s.querySelectorAll('[class]'))))
       expect(el.getAttribute('class')).not.toMatch(/\bmin-w-\[|\boverflow-x-(auto|scroll)\b/);
-    const svgs = [section, among].flatMap((s) => Array.from(s.querySelectorAll('svg[role="img"]')));
+    const svgs = [
+      section.querySelector('[data-gel-plate] svg[role="img"]')!,
+      ...Array.from(among.querySelectorAll('svg[role="img"]')),
+    ];
     expect(svgs).toHaveLength(2);
     for (const svg of svgs) {
       expect(svg).toHaveAttribute('width', '358');

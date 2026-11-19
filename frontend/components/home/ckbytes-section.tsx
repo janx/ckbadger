@@ -83,14 +83,15 @@ export function CkbytesSection() {
           <SectionHeading
             id="home-ckbytes-heading"
             command={
-              <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
+              // the heading's command word is its key: the chart of the supply
+              <Link href="/charts/total-supply" look="key">
                 supply
               </Link>
             }
             note={
               view === null ? undefined : (
                 <span data-testid="ckbytes-block" className="tabular-nums">
-                  at <BlockLink number={view.blockNumber} />
+                  at <BlockLink look="inline" number={view.blockNumber} />
                 </span>
               )
             }
@@ -354,7 +355,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       </div>
       <div
         role="img"
-        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
+        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, DAO free ${pct(daoFree)} percent`}
         className="bg-base-surface flex h-2.5 overflow-hidden"
       >
         {knowledge > BigInt(0) && (
@@ -394,9 +395,12 @@ function AllocationReady({ view }: { view: AllocationView }) {
           note={`${pct(free)}%`}
           {...legend('free')}
         />
+        {/* What each DAO figure counts (P3): this one is the DAO cells' free CKB, the part of
+            circulation; beside it the DAO cells' whole capacity; the DAO block below states the
+            CKB in its deposit cells alone */}
         <LegendItem
           swatch="bg-gold"
-          name="Nervos DAO"
+          name="DAO free"
           value={daoFree}
           note={
             <>
@@ -408,7 +412,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
                 tone="inherit"
                 unit={false}
               />{' '}
-              locked
+              in all DAO cells
             </>
           }
           {...legend('dao')}
@@ -609,7 +613,8 @@ function DaoBlock() {
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">
         <span className="text-text-bright text-body">Nervos DAO</span>
-        <span className="text-text-dim text-small">deposited</span>
+        {/* what its figure counts (P3): the deposit cells; requests under way are apart */}
+        <span className="text-text-dim text-small">in deposit cells</span>
       </div>
       {d.state === 'loading' && (
         <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse" />
@@ -621,11 +626,8 @@ function DaoBlock() {
       )}
       {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
       {d.state === 'ready' && <DaoFigures view={d.view} />}
-      <Link
-        href="/dao"
-        className="text-interactive hover:text-jade text-small w-fit transition-colors"
-      >
-        DAO details →
+      <Link href="/dao" look="onward" className="text-small w-fit">
+        DAO details
       </Link>
     </div>
   );

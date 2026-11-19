@@ -159,6 +159,18 @@ pub struct CursorPaginatedResponse<T> {
     pub pool: Option<crate::pool::PoolSummaryResponse>,
 }
 
+/// A page of a ranked list with the rank of its first row (lane exactness, part A, A3): the 1-based position, in
+/// the request's read view, of the row the page starts at, counted with its rows and its total.
+/// A page computed the rank from the rows it had read before, which is wrong once the list moves
+/// between two reads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RankedPage<T> {
+    #[serde(flatten)]
+    pub page: CursorPaginatedResponse<T>,
+    pub first_rank: u64,
+}
+
 impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
     pub fn new(data: Vec<T>, total: i64, limit: i64, next_cursor: Option<String>) -> Self {
         let has_more = next_cursor.is_some();

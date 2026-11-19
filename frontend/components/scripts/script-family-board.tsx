@@ -20,7 +20,7 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { formatExactDecimal } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -156,7 +156,7 @@ export function ScriptSummarySentence({
       cells holding{' '}
       <span className="text-text-bright">
         <CkbAmount
-          form="column"
+          form="summary"
           shannons={BigInt(family.ownedCapacitySum)}
           signed={false}
           tone="plain"
@@ -507,11 +507,11 @@ export function ScriptHistoryFigure({
     onActiveIndexChange: onActive,
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
-  // R7: the sentence over the plots, from the series' own points: CKB held is the stack's top,
-  // occupied and free of one day (the series sends no other total)
+  // R7: the sentence over the plots, from the series' own points: CKB held is each day's
+  // `capacity`, which the route states beside its parts (the page sums nothing)
   const days = chart.data.map((point) => ({
     date: point.date,
-    held: BigInt(point.values.used) + BigInt(point.values.unused),
+    held: exactUnsignedInteger(point.values.capacity, `${family.name} ${point.date}: capacity`),
   }));
   return (
     <div className="min-w-0">
@@ -575,6 +575,10 @@ export function ScriptHistoryReading({
   const point = chart.data[index];
   const used = point ? BigInt(point.values.used) : null;
   const unused = point ? BigInt(point.values.unused) : null;
+  // the whole the day's cells hold, as the route states it (the page sums nothing)
+  const held = point
+    ? exactUnsignedInteger(point.values.capacity, `history ${point.date}: capacity`)
+    : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
   // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)
@@ -595,7 +599,7 @@ export function ScriptHistoryReading({
       data-testid="script-history-reading"
       className="border-row-rule text-small mt-2.5 border-t pt-2"
     >
-      {point && used !== null && unused !== null ? (
+      {point && used !== null && unused !== null && held !== null ? (
         // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): five
         // facts in a row of their own words. A series' swatch leads its value.
         <DetailFacts
@@ -611,16 +615,14 @@ export function ScriptHistoryReading({
             },
             {
               label: 'CKB held',
-              value: (
-                <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
-              ),
+              value: <CkbAmount form="exact" shannons={held} signed={false} tone="plain" />,
             },
             {
               label: 'occupied',
               value: (
                 <>
                   {swatch(DATA_COLOR)}
-                  <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
+                  <CkbAmount form="exact" shannons={used} signed={false} tone="plain" />
                 </>
               ),
             },
@@ -629,7 +631,7 @@ export function ScriptHistoryReading({
               value: (
                 <>
                   {swatch(HELD_CAPACITY_COLOR)}
-                  <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
+                  <CkbAmount form="exact" shannons={unused} signed={false} tone="plain" />
                 </>
               ),
             },
@@ -694,13 +696,13 @@ export function ScriptHistoryNotes({
       {peak && (
         <NoteSentence inline={inline} testId="script-history-peak">
           CKB held peaked at{' '}
-          <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
+          <CkbAmount form="summary" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
           {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
               · occupied is now{' '}
-              <CkbAmount form="column" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
+              <CkbAmount form="summary" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
               {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
@@ -856,7 +858,7 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text-dim text-meta max-w-measure mt-2.5">
+        <p key={handover.day} className="text-text text-meta max-w-measure mt-2.5">
           ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
           {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
           {handover.total - handover.common} of {handover.total}
@@ -923,14 +925,14 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedCapacitySum)}
         signed={false}
         tone="plain"
       />
       ,{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedKnowledgeSum)}
         signed={false}
         tone="plain"

@@ -34,6 +34,8 @@ describe('Miners ranking (CH-03)', () => {
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner Distribution',
       totalBlocks: 61726,
+      // the blocks past the two listed, the route's (lane exactness, part A, A1)
+      restBlocks: 11308,
       windowDays: 7,
       fromDate: '2026-11-07',
       toDate: '2026-11-13',

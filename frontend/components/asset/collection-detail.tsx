@@ -89,7 +89,7 @@ function CollectionLede({
     : undefined;
   const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
-    <p className="text-text-dim text-body max-w-measure">
+    <p className="text-text text-body max-w-measure">
       {/* PB-23: the kind and the sentence are one separated list, so the dot goes with the
           sentence to a new line; the kind is one unit (responsive B#21). */}
       <Dotted
@@ -733,7 +733,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
-              <p className="text-text-dim text-meta max-w-measure">
+              <p className="text-text text-meta max-w-measure">
                 {unitNode(
                   formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
                 )}{' '}

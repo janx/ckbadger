@@ -2533,6 +2533,29 @@ async fn same_spore_producer_detail_protocol_genetics_and_cell_versions_agree() 
     assert_eq!(collection["activitiesCount"], cluster["activitiesCount"]);
 }
 
+/// Every day of a "CKB held" history states `capacity`, and its occupied and free parts make it.
+fn assert_held_points_agree(json: &serde_json::Value) {
+    let points = json["data"]
+        .as_array()
+        .expect("a capacity history has data");
+    assert!(!points.is_empty(), "{json}");
+    for point in points {
+        let int = |key: &str| -> i128 {
+            point["values"][key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} has no {key}: {point}", point["date"]))
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(
+            int("used") + int("unused"),
+            int("capacity"),
+            "{}: used + unused != capacity",
+            point["date"]
+        );
+    }
+}
+
 #[tokio::test]
 async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
     let store = test_store();
@@ -2642,10 +2665,13 @@ async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["data"].as_array().unwrap().len(), 2, "{json}");
         assert_eq!(json["data"][1]["date"], "2026-10-26");
+        // re-pinned on purpose (lane p-assets): each day states the whole its cells hold beside
+        // its parts (it sent used and unused, and a page summed them)
         assert_eq!(
             json["data"][1]["values"],
-            serde_json::json!({"used":"60","unused":"60"})
+            serde_json::json!({"used":"60","unused":"60","capacity":"120"})
         );
+        assert_held_points_agree(&json);
         assert_eq!(json["completeThrough"], "2026-10-26");
         assert_eq!(json["anchor"]["blockNumber"], 2);
         assert_eq!(json["source"], "indexedChainTimeUtc8");

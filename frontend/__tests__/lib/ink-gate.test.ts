@@ -80,7 +80,8 @@ const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
 const GHOST_ALLOWLIST: Allowlist = {
   'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
-  'components/asset/asset-feed.tsx': [separator('> · </span>')],
+  // components/asset/asset-feed.tsx left (lane P2's follow-up, item 10): the heading note's
+  // separator went with its two buttons, the newest rows' fold is one control under them
   'components/asset/detail-shell.tsx': [separator('>/</span>')],
   'components/asset/genetics.tsx': [arrow('aria-hidden="true"')],
   // the mechanism chain's arrow (the amounts' padding zeros are ckb-amount.tsx's)

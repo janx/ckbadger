@@ -41,11 +41,9 @@ export function RankedBars({
   );
   return (
     <div data-testid={testId} className="flex min-w-0 flex-col gap-1.5">
+      {/* the ranked list's title, its key (as a chart card's title): the chart it comes from */}
       {titleHref ? (
-        <Link
-          href={titleHref}
-          className="text-text-dim hover:text-jade text-small w-fit transition-colors"
-        >
+        <Link href={titleHref} look="key" className="text-small w-fit">
           {title}
         </Link>
       ) : (
@@ -83,6 +81,8 @@ export function RankedBars({
               {row.href ? (
                 <Link
                   href={row.href}
+                  // a row that is one link: what it holds draws its inks
+                  look="block"
                   className={cn(
                     grid,
                     'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 px-1 outline-none transition-colors'

@@ -56,7 +56,9 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   );
   // Consistency plan C1: the tab names the page.
   await waitFor(() => expect(document.title).toBe('Genes · object · CKBadger'));
-  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
+  // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
+  // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
+  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '229.00000000'
   );
@@ -165,7 +167,9 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).not.toHaveTextContent(
     '0.00000000'
   );
-  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
+  // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
+  // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
+  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
 });
 // Lane E4: how long ago the object was minted, the life sentence's hover, reads the page's one
 // clock, so it moves with no data change; it was written once, from the time the page mounted.

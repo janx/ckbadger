@@ -165,7 +165,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
 - `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
-- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`)
+- `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 
@@ -661,6 +661,40 @@ bands it draws and the wholes it divides by, read-only on the store:
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
   band of Activity by type.
 
+**What a page states outside the chart pages (lane exactness, part A)**
+
+A count, a rank or a whole that a page states is the route's figure, read in
+the same view as its rows; the page sums nothing. Read-only on the stores (the
+network store too), no re-sync:
+
+- `GET /charts/miner-address-distribution` — `restBlocks`: the window's blocks
+  found by every miner after the five largest, the ranking card's "Others".
+- `GET /charts/uncle-rate` — `counts: [{ date, uncles, blocks }]`, one per
+  point of `data` in its order: each day's exact operands, so "over the target"
+  is counted as uncles × `orphanRateTarget.denominator` > blocks ×
+  `orphanRateTarget.numerator`; `value` stays the share, cut.
+- `GET /tokens/{type_hash}/holders`, `/assets/objects/{collection_id}/holders`,
+  `/assets/identities/{collection_id}/holders` and
+  `/spore/clusters/{cluster_id}/holders` — `firstRank`: the 1-based rank of the
+  page's first row in the request's read view (a token's: the holders that
+  sort before the cursor in `CF_TOKEN_HOLDERS_BY_BALANCE`, counted, plus one; a
+  collection's: the cursor's position in the ranking plus one, the ranking
+  cached by the view's tip block).
+- `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
+  pool, pending and proposed (not `awaitingIndex`).
+- `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
+  blocks, what its uncle rate (`unclesInWindow` of them) divides by.
+- `GET /dao/statistics` — `liveCellsCount`: the live DAO cells, deposits and
+  withdrawal requests; `secondaryIssuance` (shannons): the miners' share, the
+  depositors' compensation and the burnt share, which make it.
+- `GET /network/distributions` — `hosting` (`organisations`, `rest`,
+  `restOrganisations`): the verified nodes by hosting organisation (an
+  organisation's several ASNs as one, `Unknown` without an ASN), the five
+  largest by nodes (ties by name) and the rest's nodes and organisations; they
+  sum to `verifiedRetained`, checked. `releases: [{ release, count, builds }]`:
+  the client versions by release (the label before its build), each release's
+  nodes and builds, largest first.
+
 ---
 
 ### graph (crates/api/src/routes/graph.rs)
@@ -868,7 +902,7 @@ Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/ma
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
 - `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON
-- `StackedAreaChartResponse` for capacity history charts
+- `StackedAreaChartResponse` for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 
@@ -1034,7 +1068,7 @@ disabled or empty state. A point lookup still returns not found.
 - `CodeCellsResponse` — `code_cells: Vec<CodeCellEntry>`, counts, optional `resolved_version_hash`, optional ambiguity
 - `ScriptFamilyDetailResponse` — family + `versions` (from `crate::response`)
 - `ScriptUsageResponse` — totals + `by_deployment: Vec<DeploymentUsage>`
-- `StackedAreaChartResponse` (from statistics) for capacity history charts
+- `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
 ---
 

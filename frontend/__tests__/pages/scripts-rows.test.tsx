@@ -216,17 +216,22 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(rowOf(t, 'JoyID').querySelectorAll('.text-text-bright')).toHaveLength(1);
   });
 
-  it('writes the code status on one dim line, "by whom · since" in its title (D3)', async () => {
+  // Re-pinned on purpose (lists lane P3, the plan: "upgradable" with who can upgrade is the
+  // reading ink): the cell says who can replace the code, the versions in its title (it was
+  // "upgradable · N versions" on one dim line; renamed: "… on one dim line, \"by whom · since\" in
+  // its title")
+  it('writes who can upgrade the code in the reading ink, the versions and "since" in its title (D3)', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const code = (name: string) => within(rowOf(t, name)).getByTestId('script-code-class');
-    expect(code('JoyID')).toHaveTextContent(/^upgradable · 5 versions$/);
-    expect(code('JoyID')).toHaveClass('text-text-dim');
+    expect(code('JoyID')).toHaveTextContent(/^upgradable by a multisig$/);
+    expect(within(code('JoyID')).getByText(/^upgradable by/)).toHaveClass('text-text');
     expect(code('JoyID')).toHaveAttribute(
       'title',
       'upgradable · 5\u00a0versions · by a multisig · since 2023-10-07'
     );
-    expect(code('.bit Lock')).toHaveTextContent(/^upgradable · 34 versions$/);
+    expect(code('.bit Lock')).toHaveTextContent(/^upgradable by /);
+    expect(code('.bit Lock').getAttribute('title')).toMatch(/^upgradable · 34\u00a0versions · /);
     expect(code('Default Lock')).toHaveTextContent(/^immutable$/);
     expect(code('Default Lock')).toHaveAttribute(
       'title',

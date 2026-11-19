@@ -169,11 +169,12 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    await waitFor(() =>
-      expect(within(metrics).getByRole('alert')).toHaveTextContent(
-        new RegExp(`address ${joy} spells the lock`)
-      )
-    );
+    // re-pinned on purpose (lane P2's follow-up, item 6): the Issued fact's note says the lock the
+    // token was issued to through the same decision, so it fails in its place too (one alert was
+    // the owner's note); each says the refusal, and the page is drawn
+    await waitFor(() => expect(within(metrics).getAllByRole('alert')).toHaveLength(2));
+    for (const alert of within(metrics).getAllByRole('alert'))
+      expect(alert).toHaveTextContent(new RegExp(`address ${joy} spells the lock`));
   });
 
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
@@ -374,7 +375,13 @@ describe('MnftItemDetailPage', () => {
     // the owner field says 'No live owner', as every object's owner field does (U-15)
     expect(screen.getByText('No live owner')).toBeInTheDocument();
     expect(screen.getAllByText('No live cell')).toHaveLength(1);
-    expect(screen.getByRole('link', { name: 'Consumed in transaction' })).toBeInTheDocument();
+    // lane P2's follow-up (item 11): the spending transaction opens at this cell, the anchor
+    // P1's builder writes, so its fold never hides the cell the reader came from
+    const cell = consumed.versions[0].cell;
+    expect(screen.getByRole('link', { name: 'Consumed in transaction' })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${'0x' + '56'.repeat(32)}#${cell.txHash}-${cell.outputIndex}`
+    );
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();

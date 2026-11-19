@@ -17,6 +17,10 @@ import {
   MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
+  WIDEST_COLLECTION_HOLDER_RANK,
+  WIDEST_COLLECTION_HOLDERS,
+  WIDEST_TOKEN_HOLDER_RANK,
+  WIDEST_TOKEN_HOLDERS,
   WIDEST_BLOCK_FEES,
   WIDEST_BLOCK_NUMBER,
   WIDEST_BLOCK_REWARD,
@@ -177,6 +181,18 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_SIBLING_GAP',
         // lane P4: a Fiber channel's lifetime, out of the channel list's own module
         'WIDEST_FIBER_LIFETIME',
+        // lane P2's follow-up (item 7): the asset and script pages' bounds, out of their modules
+        'WIDEST_TOKEN_HOLDERS',
+        'WIDEST_TOKEN_HOLDER_RANK',
+        'WIDEST_COLLECTION_HOLDERS',
+        'WIDEST_COLLECTION_HOLDER_RANK',
+        'WIDEST_DNA_SPAN',
+        'WIDEST_CODE_CELL_INDEX',
+        'WIDEST_SCRIPT_VERSION',
+        'WIDEST_VERSION_CODE_CELLS',
+        'WIDEST_CELL_CAPACITY',
+        'WIDEST_CELL_CAPACITY_SUMMARY',
+        'WIDEST_CELL_OCCUPIED',
       ].sort(),
     });
   });
@@ -296,5 +312,21 @@ describe('trackPx: a bar’s track holds its head’s tick row', () => {
   it('refuses an empty tick row', () => {
     expect(() => trackPx([])).toThrow('an empty tick row');
     expect(() => trackPx(['0', ''])).toThrow('an empty tick row');
+  });
+});
+
+// Lane P2's follow-up (item 7): a growing figure's bound of record holds its record and a digit of
+// room past it (ten times it), and a rank is at most the holders it ranks. Figures of record, the
+// live mainnet store, 2026-11-19: the most holders of any token 11,866 (RGB++ Protocol), of any
+// collection 4,211 (.bit).
+describe('the holders’ bounds hold their record and a digit of room', () => {
+  const figure = (text: string) => Number(text.replace(/,/g, ''));
+  it('holds ten times the record, and a rank no wider than its holders', () => {
+    expect(figure(WIDEST_TOKEN_HOLDERS)).toBeGreaterThanOrEqual(11_866 * 10);
+    expect(figure(WIDEST_COLLECTION_HOLDERS)).toBeGreaterThanOrEqual(4_211 * 10);
+    expect(figure(WIDEST_TOKEN_HOLDER_RANK)).toBe(figure(WIDEST_TOKEN_HOLDERS));
+    expect(figure(WIDEST_COLLECTION_HOLDER_RANK)).toBe(figure(WIDEST_COLLECTION_HOLDERS));
+    // as a rank is written, without grouping
+    expect([WIDEST_TOKEN_HOLDER_RANK, WIDEST_COLLECTION_HOLDER_RANK]).toEqual(['999999', '99999']);
   });
 });

@@ -79,12 +79,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // components/transaction/transaction-cell-content.tsx left the list (lane P1 follow-up): a token
   // amount's "no readable amount of" takes its link's ink (ink 1 → 0; lane P1 took the file's own
   // inks, the reader of an ink inside a link found this one)
-  'components/transaction/transaction-list-table.tsx': {
-    lane: 'p-chain',
-    sites: { look: 2, ink: 3 },
-    reason:
-      '2 without a look; inks by hand (hover:text-jade, hover:underline), and one on a child (the Hash’s text-text-bright)',
-  },
+  // 'components/transaction/transaction-list-table.tsx' left the list (lane P3: look 2, ink 3 →
+  // 0; the hash a key's look, the Hash inheriting its ink; the blocks inline)
   // ---- p-assets ----
   // app/scripts/[name]/client-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
   // app/tokens/[typeHash]/client-page.tsx left the list (lane p-assets: each link states its look: look 4 → 0, ink 2 → 0, raw 1 → 0)
@@ -143,84 +139,32 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       'the look an Address had before (bright, a faint indigo underline), drawn while a caller states none: it goes with the last such call site (most are p-assets)',
   },
   // ---- p-lists ----
-  'app/activities/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-dim, hover:text-jade)',
-  },
-  'app/blocks/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 9, ink: 5 },
-    reason: '9 without a look; inks by hand (text-text-bright, hover:text-jade, text-text-dim)',
-  },
-  'app/dao/depositors/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 2 },
-    reason: '5 without a look; inks by hand (hover:underline, text-text-bright, text-text)',
-  },
-  'app/scripts/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 2, raw: 1 },
-    reason:
-      '1 without a look; inks by hand (hover:underline, text-text-bright, hover:text-emphasis); 1 raw <a>',
-  },
-  'app/transactions/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason:
-      '3 without a look; inks by hand (text-text-dim, hover:text-jade), and one on a child (the Hash’s text-text-bright)',
-  },
+  // 'app/activities/page.tsx' left the list (lane P3: look 1, ink 1 → 0; the transactions link a way
+  // onward)
+  // 'app/blocks/page.tsx' left the list (lane P3: look 9, ink 5 → 0; a block number its row's key,
+  // the miner, the paid block and the hardfork inline)
+  // 'app/dao/depositors/page.tsx' left the list (lane P3: look 5, ink 2 → 0; a depositor its row's
+  // key, the way to the DAO page onward, the blocks inline)
+  // 'app/scripts/page.tsx' left the list (lane P3: look 1, ink 2, raw 1 → 0; a script's name its
+  // row's key, "How it works" a way onward)
+  // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
+  // a way onward, the pool's squares blocks, the pool's hash a key whose Hash inherits its ink)
   'components/activity-event-row.tsx': {
     lane: 'p-lists',
     sites: { look: 5, ink: 6 },
     reason:
       '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive), and one on a child (a span’s text-text-dim)',
   },
-  'components/activity/activity-row.tsx': {
-    lane: 'p-lists',
-    sites: { look: 4, ink: 4 },
-    reason: '4 without a look; inks by hand (hover:text-jade, text-text-dim, hover:text-text)',
-  },
-  'components/crash-page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text, hover:text-jade)',
-  },
-  'components/error-page-shell.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text)',
-  },
-  'components/home/activity-feed.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-interactive, hover:text-jade)',
-  },
-  'components/home/activity-stats.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-interactive, hover:text-jade)',
-  },
-  'components/home/ckbytes-section.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-interactive)',
-  },
-  'components/home/mini-chart.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
-  },
-  'components/home/ranked-bars.tsx': {
-    lane: 'p-lists',
-    sites: { look: 2, ink: 1 },
-    reason: '2 without a look; inks by hand (text-text-dim, hover:text-jade)',
-  },
-  'components/not-found-page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (text-text, hover:text-jade, text-jade)',
-  },
+  // 'components/activity/activity-row.tsx' left the list (lane P3: look 4, ink 4 → 0; the headline
+  // its row's key, the evidence's block and transaction and a call's name inline in their lines)
+  // 'components/crash-page.tsx' left the list (lane P3: look 1, ink 1 → 0; the way on a way onward)
+  // 'components/error-page-shell.tsx' left the list (lane P3: look 1, ink 1 → 0; the seal caption's block inline)
+  // 'components/home/activity-feed.tsx' left the list (lane P3: look 1, ink 1 → 0; "view all" a way onward)
+  // 'components/home/activity-stats.tsx' left the list (lane P3: look 1, ink 1 → 0; "charts" a way onward)
+  // 'components/home/ckbytes-section.tsx' left the list (lane P3: look 3, ink 2 → 0; "supply" the heading's key, its block inline, "DAO details" a way onward)
+  // 'components/home/mini-chart.tsx' left the list (lane P3: look 1, ink 1 → 0; a card's title its key)
+  // 'components/home/ranked-bars.tsx' left the list (lane P3: look 2, ink 1 → 0; the title its key, a row one block)
+  // 'components/not-found-page.tsx' left the list (lane P3: look 5, ink 5 → 0; the ways on and the alternative ways onward)
   'components/pipeline/pipeline-panel.tsx': {
     lane: 'p-lists',
     sites: { look: 3, ink: 2 },
@@ -303,12 +247,16 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // transactions page's and the transaction list's Hash in the bright ink, the activity row's span
 // in the quiet ink, the status line's epoch link's five label, value and position spans, the
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
-// block page's step arrow mark; TabLinks' name span is NAMED) → 118 (lane P1 follow-up:
-// participant-ref.tsx's three links hand their caller's look through, 3) → 113 (lane P1
-// follow-up: the address's API JSON and the block's hardfork resources are ExternalLinks, 2; the
-// block's step arrow mark and a token cell's "no readable amount of" take their link's ink, 2; the
-// resources' hand ink, 1)
-const TOLERATED_TOTAL = 113;
+// block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
+// page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
+// → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
+// (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
+// (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8) → 48 (lane P3: the DAO
+// depositors, 7) → 40 (the merge with lane P1's follow-up, 8: participant-ref.tsx's three links
+// hand their caller's look through, 3; the address's API JSON and the block's hardfork resources
+// are ExternalLinks, 2, the resources' hand ink with them, 1; the block's step arrow mark and a
+// token cell's "no readable amount of" take their link's ink, 2)
+const TOLERATED_TOTAL = 40;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

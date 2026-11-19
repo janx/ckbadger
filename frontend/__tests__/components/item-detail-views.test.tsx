@@ -34,12 +34,16 @@ it('keeps object capacity primary, one versions heading and exact occupied value
 // A4 Chrome F4 (the other tier-2 grids): the raw evidence's out point set its tx hash at 13 px in
 // an 11 px line, 514.8 px, in a 460 px column at 1024 ((976 − 56) / 2): a scroll of 55 px. The hash
 // takes its line's 11 px: 66 × 6.6 = 435.6 px and ":N" after it, 448.8 px, within 460.
+// Re-pinned on purpose (lane P2's follow-up, item 8; 48da6a17 left it red, "expect(element)
+// .toHaveClass("text-meta")"): the out point's hash is a head's id (HeadId) in the 11 px line, its
+// index said in words before it; at 11 px it is 435.6 px, one line in the 460 px column at 1024,
+// two halves below 435.6
 it('sets the raw evidence’s out point at its line’s size, so a whole hash fits a 1024 column', async () => {
   render(<SporeDetailView object={sporeDetailProducer} error={null} />);
   const evidence = await screen.findByRole('region', { name: 'Raw item evidence' });
-  const line = within(evidence).getByText(/^Outpoint/);
+  const line = within(evidence).getByText(/^Outpoint · output \d+ of$/).parentElement!;
   expect(line).toHaveClass('text-meta');
-  const hash = line.querySelector('[data-full-value]') as HTMLElement;
+  const hash = line.querySelector('[data-head-id]') as HTMLElement;
   expect(hash).not.toBeNull();
   expect(hash.className).not.toMatch(/(^|\s)text-(body|small|section)/);
 });
@@ -167,11 +171,9 @@ it("titles collection feed rows from the API's collectionContext, never the tx's
   const recent = await screen.findByRole('region', { name: 'Recent activity' });
   expect(await within(recent).findByText('Transferred 1')).toBeInTheDocument();
   expect(within(recent).queryByText(/^Object (mint|transfer|burn)$/)).toBeNull();
-  act(() =>
-    within(recent)
-      .getByRole('button', { name: /transactions →$/ })
-      .click()
-  );
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N
+  // transactions ↓" under the rows (it was "N transactions →" in the heading's note)
+  act(() => screen.getByRole('button', { name: /^all \S+\stransactions ↓$/ }).click());
   const feed = await screen.findByRole('region', { name: 'What happened' });
   // The Transactions tab says the same thing per row.
   // Table and compact layouts both carry it.

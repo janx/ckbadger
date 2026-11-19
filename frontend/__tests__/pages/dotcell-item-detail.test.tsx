@@ -355,7 +355,9 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
     'Expires',
     'Registered',
     'Records',
-    'Sub-names · for sale',
+    // re-pinned on purpose (lane P2's follow-up, a standing cause): its own metric, the sale's
+    // drawn only for a name for sale (it was "Sub-names · for sale")
+    'Sub-names',
     'CKB held in its cell',
   ]);
   expect(facts).not.toHaveTextContent(/Namespace args|Physical cell owner|Name state/);

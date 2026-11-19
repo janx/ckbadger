@@ -159,7 +159,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
               </AppLink>
             </p>
           ) : (
-            <p className="text-text-dim">Top-level name</p>
+            <p className="text-text">Top-level name</p>
           )}
           <DotCellChildren item={item} />
           {ring.data ? (
@@ -182,7 +182,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
         <section aria-label="For sale" className="space-y-3">
           <PromptHeading command="For sale" />
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={BigInt(item.sale.priceShannons)}
             signed={false}
             tone="plain"

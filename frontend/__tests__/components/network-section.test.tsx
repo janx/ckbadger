@@ -34,6 +34,11 @@ describe('NetworkSection', () => {
     await waitFor(() =>
       expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent('9.57')
     );
+    // the readability plan's P3: each card's unit beside its value and its window named, so the
+    // day's 9.57 s is not read against the status strip's recent blocks (it was "9.57" under
+    // "daily average, s")
+    expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent(/^9\.57 s$/);
+    expect(screen.getByTestId('home-block-time-subtitle')).toHaveTextContent(/^average of 10\/23$/);
     const blockTime = within(figure('home-block-time')).getByRole('img');
     expect(blockTime).toHaveAccessibleName(
       'Average block time per day, 10/10 to 10/23, between 8.66 and 11.10 seconds, 9.57 s on 10/23'
@@ -138,7 +143,9 @@ describe('NetworkSection', () => {
     await waitFor(() =>
       expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('1.00%')
     );
-    expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 1%');
+    // re-pinned on purpose (lists lane P3): "target 1%" in plain words, the day named (it was
+    // "daily, NC-Max target 1%")
+    expect(figure('home-uncle-rate')).toHaveTextContent('on 10/23 · target 1%');
     fireEvent.pointerMove(within(figure('home-uncle-rate')).getByRole('img'), { clientX: 268 });
     expect(screen.getByTestId('home-uncle-rate-readout')).toHaveTextContent('1.00%');
   });
@@ -149,7 +156,10 @@ describe('NetworkSection', () => {
       expect(screen.getByTestId('home-hash-rate-headline')).toHaveTextContent('91.75')
     );
     const fig = figure('home-hash-rate');
-    expect(fig).toHaveTextContent('daily, PH/s');
+    // re-pinned on purpose (lists lane P3): the unit beside the value, the day named (it was
+    // "daily, PH/s" under a bare "91.75")
+    expect(screen.getByTestId('home-hash-rate-headline')).toHaveTextContent(/^91\.75 PH\/s$/);
+    expect(screen.getByTestId('home-hash-rate-subtitle')).toHaveTextContent(/^average of 10\/23$/);
     expect(within(fig).getByRole('img')).toHaveAccessibleName(
       'Hash rate per day, 10/10 to 10/23, between 91.75 and 103.10 PH/s, 91.75 PH/s on 10/23'
     );
@@ -162,7 +172,8 @@ describe('NetworkSection', () => {
       expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('2.63%')
     );
     const fig = figure('home-uncle-rate');
-    expect(fig).toHaveTextContent('daily, NC-Max target 2.5%');
+    // re-pinned on purpose (lists lane P3): the day named, the target in plain words
+    expect(fig).toHaveTextContent('on 10/23 · target 2.5%');
     const svg = within(fig).getByRole('img');
     expect(svg.querySelector('[data-role="reference"]')).toHaveAttribute('stroke-dasharray', '4 3');
     expect(svg).toHaveAccessibleName(
@@ -180,7 +191,7 @@ describe('NetworkSection', () => {
       )
     );
     render(<NetworkSection />);
-    await waitFor(() => expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 2%'));
+    await waitFor(() => expect(figure('home-uncle-rate')).toHaveTextContent('target 2%'));
   });
 
   it('shows an error, not a chart, when the API omits the target', async () => {
@@ -209,8 +220,9 @@ describe('NetworkSection', () => {
     await waitFor(() =>
       expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731')
     );
-    // The toggle names the range; the sub-label names only the bucket.
-    expect(within(fig).getByText('per hour')).toBeInTheDocument();
+    // The toggle names the range; the sub-label names the headline's window, the last full bucket
+    // (re-pinned on purpose, lists lane P3: it named only the bucket, "per hour").
+    expect(within(fig).getByText('in the last full hour')).toBeInTheDocument();
     expect(fig).not.toHaveTextContent(/last 24/);
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');
@@ -257,7 +269,8 @@ describe('NetworkSection', () => {
       'false'
     );
     expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('15,710');
-    expect(within(fig).getByText('per day')).toBeInTheDocument();
+    // re-pinned on purpose (lists lane P3): the headline's window (it was "per day")
+    expect(within(fig).getByText('on the last full day')).toBeInTheDocument();
     expect(fig).not.toHaveTextContent(/last 14/);
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');

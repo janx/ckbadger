@@ -27,7 +27,11 @@ function history() {
     title: 'Collection capacity',
     data: Array.from({ length: 21 }, (_, i) => ({
       date: day(i),
-      values: { used: String(100000000 * (i + 1)), unused: String(200000000 * (i + 1)) },
+      values: {
+        used: String(100000000 * (i + 1)),
+        unused: String(200000000 * (i + 1)),
+        capacity: String(300000000 * (i + 1)),
+      },
     })),
     series: [
       { key: 'used', label: 'Used', color: '#f59e0b' },

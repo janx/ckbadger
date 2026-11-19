@@ -1026,6 +1026,7 @@ export const clusterCapacityHistoryProducer = {
     {
       date: '2026-10-25',
       values: {
+        capacity: '100',
         unused: '50',
         used: '50',
       },
@@ -1033,6 +1034,7 @@ export const clusterCapacityHistoryProducer = {
     {
       date: '2026-10-26',
       values: {
+        capacity: '120',
         unused: '60',
         used: '60',
       },
@@ -1064,6 +1066,7 @@ export const sporeCapacityHistoryProducer = {
     {
       date: '2026-10-25',
       values: {
+        capacity: '100',
         unused: '50',
         used: '50',
       },
@@ -1071,6 +1074,7 @@ export const sporeCapacityHistoryProducer = {
     {
       date: '2026-10-26',
       values: {
+        capacity: '120',
         unused: '60',
         used: '60',
       },
@@ -1102,6 +1106,7 @@ export const objectCollectionCapacityHistoryProducer = {
     {
       date: '2026-10-25',
       values: {
+        capacity: '100',
         unused: '50',
         used: '50',
       },
@@ -1109,6 +1114,7 @@ export const objectCollectionCapacityHistoryProducer = {
     {
       date: '2026-10-26',
       values: {
+        capacity: '120',
         unused: '60',
         used: '60',
       },

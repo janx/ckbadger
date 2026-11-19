@@ -113,7 +113,8 @@ it('retains class and issuer raw evidence and separate full transaction history'
   expect(within(evidence).getByText('100 · planned 100')).toBeInTheDocument();
   expect(within(evidence).getByText('not recorded')).toBeInTheDocument();
   // Main.dc.html: "Recent activity" opens the full feed at its transactions.
-  fireEvent.click(screen.getByRole('button', { name: /transactions →$/ }));
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N transactions ↓" (it was "N transactions →")
+  fireEvent.click(screen.getByRole('button', { name: /^all 50\stransactions ↓$/ }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
 });
 it('does not invent permissions or issuer data when class metadata is absent', async () => {

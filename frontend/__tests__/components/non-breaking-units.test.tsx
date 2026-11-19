@@ -15,15 +15,20 @@ it('keeps an outpoint index whole after its hash', () => {
 
 // B3 round 4 (re-pinned on purpose): the box breaks a long hash with [overflow-wrap:anywhere]
 // where it was break-all, which also cut the word "Outpoint" beside it
-it('never splits ":16" from a cell version outpoint in a box that breaks the hash (B#22)', () => {
+// Re-pinned on purpose (lane P2's follow-up, item 8; renamed, it was "never splits ":16" from a
+// cell version outpoint in a box that breaks the hash (B#22)"): the hash is a head's id (HeadId),
+// its lines whole units, never broken anywhere nor scrolled; the index is said in words before it,
+// "Outpoint · output 16 of", so no ":16" can leave its hash
+it('says a cell version outpoint’s index in words and sets its hash in whole lines (B#22)', () => {
   const protocol: ItemProtocol = structuredClone(didProtocolProducer);
   const shown = protocol.versions[protocol.versions.length - 1].cell;
   shown.outputIndex = 16;
   render(<ItemEvidence protocol={protocol} />);
   const link = screen.getByRole('link', { name: new RegExp(shown.txHash) });
-  expect(link.closest('[class~="[overflow-wrap:anywhere]"]')).not.toBeNull();
-  expect(link.querySelector('[data-outpoint-index]')).toHaveTextContent(/^:16$/);
-  expect(link.querySelector('[data-outpoint-index]')).toHaveClass('whitespace-nowrap');
+  expect(link.querySelector('[data-head-id]')).toHaveAttribute('title', shown.txHash);
+  for (const line of link.querySelectorAll('[data-head-line]'))
+    expect(line).toHaveClass('whitespace-nowrap');
+  expect(link.closest('div')).toHaveTextContent(/^Outpoint · output 16 of0x/);
 });
 
 it('reads "H-multiplier ×1.02" as one unbroken unit (B#18)', () => {

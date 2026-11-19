@@ -172,7 +172,7 @@ export default function BlocksPage() {
             ) : (
               <>
                 in{' '}
-                <Link href={`/blocks/${block.rewardFinalizesAt}`}>
+                <Link href={`/blocks/${block.rewardFinalizesAt}`} look="inline">
                   {formatBlockNumber(block.rewardFinalizesAt)}
                 </Link>
               </>
@@ -356,13 +356,13 @@ function BlockIdentity({ block }: { block: Block }) {
       <RowSeal id={blockSeal(block)} />
       <div className="min-w-0 space-y-1">
         <div className="whitespace-nowrap">
-          <Link href={`/blocks/${block.number}`} className={KEY}>
+          <Link href={`/blocks/${block.number}`} look="key" className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>{' '}
           <Hash hash={block.hash} size="tight" className="text-text-dim text-meta" />
         </div>
         {block.hardforkActivation && (
-          <Link href="/hardforks" className="text-text-dim text-meta block">
+          <Link href="/hardforks" look="inline" className="text-meta block">
             HF · {block.hardforkActivation.shortName.toUpperCase()}
           </Link>
         )}
@@ -372,7 +372,8 @@ function BlockIdentity({ block }: { block: Block }) {
 }
 
 /** The key cell of a block row (table-rows T5): 13 px, bright, on the row's 18 px line. */
-const KEY = 'text-body text-text-bright leading-row hover:text-jade';
+/** The block number, the row's key: the key look's bright ink, at the body step on the row line. */
+const KEY = 'text-body leading-row';
 
 /**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
@@ -385,10 +386,13 @@ function miner(block: Block, size: ShortSize) {
     <MinerLink
       address={block.minerAddress}
       pool={block.minerPool}
-      // T5: the block number is the row's one bright thing; a named pool reads in body ink.
+      // T5: the block number is the row's one bright thing; a named pool reads in body ink, a link
+      // inside the cell's line
+      look="inline"
       size={size}
-      className="text-text"
-      unnamed={<Address address={block.minerAddress} size={size} className="text-small" />}
+      unnamed={
+        <Address address={block.minerAddress} look="inline" size={size} className="text-small" />
+      }
     />
   );
 }
@@ -434,7 +438,7 @@ function reward(block: Block) {
   return (
     <span className="whitespace-nowrap">
       reward pays at{' '}
-      <Link href={`/blocks/${block.rewardFinalizesAt}`}>
+      <Link href={`/blocks/${block.rewardFinalizesAt}`} look="inline">
         {formatBlockNumber(block.rewardFinalizesAt)}
       </Link>
     </span>
@@ -494,7 +498,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
           key: 'identity',
           tone: 'head',
           left: (
-            <Link href={`/blocks/${block.number}`} className="text-text-bright font-medium">
+            <Link href={`/blocks/${block.number}`} look="key" className="font-medium">
               {formatBlockNumber(block.number)}
             </Link>
           ),
@@ -534,7 +538,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
                   </span>
                 ),
                 block.hardforkActivation && (
-                  <Link key="hf" href="/hardforks">
+                  <Link key="hf" href="/hardforks" look="inline">
                     HF · {block.hardforkActivation.shortName.toUpperCase()}
                   </Link>
                 ),
@@ -582,7 +586,7 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
         <RowSeal id={blockSeal(block)} />
         <div className="min-w-0">
           {/* a block number is one figure: no table cell breaks inside it (ListTable) */}
-          <Link href={`/blocks/${block.number}`} className={KEY}>
+          <Link href={`/blocks/${block.number}`} look="key" className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>
           <Hash
@@ -591,7 +595,7 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
             className="text-text-dim text-meta block whitespace-nowrap"
           />
           {block.hardforkActivation && (
-            <Link href="/hardforks" className="text-text-dim text-meta block">
+            <Link href="/hardforks" look="inline" className="text-meta block">
               HF · {block.hardforkActivation.shortName.toUpperCase()}
             </Link>
           )}

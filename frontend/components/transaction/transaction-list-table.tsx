@@ -7,12 +7,6 @@ import { Hash } from '@/components/ui/hash';
 import { NoBreak } from '@/components/ui/no-break';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
-import {
-  AlignedBar,
-  BAR_FIGURE_GAP,
-  COUNT_TRACK_PX,
-  ScaleHeader,
-} from '@/components/ui/aligned-bar';
 import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import {
   activityClassMark,
@@ -22,7 +16,6 @@ import {
   ActivityReadError,
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -32,32 +25,16 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import {
-  LARGEST_TX_BYTES,
   MAX_TX_INPUTS,
-  TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_AGE_UNDER_A_YEAR,
   WIDEST_BLOCK_NUMBER,
-  WIDEST_BLOCK_REWARD,
   shortChars,
   WIDEST_COUNT,
   WIDEST_TX_FEE,
+  WIDEST_TX_OUTPUT,
   WIDEST_TX_VALUE,
 } from '@/lib/list-bounds';
-
-/**
- * The widest scale each bar column's figure writes (readability F3-e). Size: a transaction is no
- * larger than its block, and the largest block is genesis, whose 1,235,438-byte cellbase the oldest
- * page lists (LARGEST_TX_BYTES, as the block page's table; review fb-logic 6: it was the 597,000
- * limit, a 600,000 scale): a 1,500,000 scale. Cycles: any scale under a billion cycles (lane B5's
- * bound of record: a page's largest transaction under 750,000,000). Both heads write their ticks in
- * the tick form ("0 … 1.5M", "0 … 750M"; the rule at `trackPx`), so each track is COUNT_TRACK_PX,
- * 48 px; the exact figure beside each bar keeps its digits.
- */
-const SIZE_SCALE = resourceScale([LARGEST_TX_BYTES]).toLocaleString('en-US');
-const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
-const SIZE_TRACK = COUNT_TRACK_PX;
-const CYCLES_TRACK = COUNT_TRACK_PX;
 
 /**
  * Where a headline's separated parts meet: `protocolActionLabel` joins a protocol's name and its
@@ -86,18 +63,35 @@ function Quiet({ when, children }: { when: boolean; children: ReactNode }) {
   );
 }
 
-/** A cellbase's note (R2b-a 35): the block whose reward it pays (linked by hash, R-6a), or that it pays none. */
-function paysNote(tx: Transaction): ReactNode {
+/**
+ * What a cellbase pays, in its own words (R2b-a 35; the lists lane P3: cellbases are a list of their
+ * own): the reward for the block it names (linked by hash, R-6a), and the name its amount takes;
+ * none yet in a chain's first blocks, whose cellbases pay no reward; and block 0's, which is no
+ * reward at all but the genesis issuance, the CKB first issued (its output is 33.6 billion CKB on
+ * mainnet).
+ */
+function cellbasePays(tx: Transaction): {
+  words: ReactNode;
+  label: 'reward' | 'issued' | 'output';
+} {
+  if (!tx.isCellbase) throw new Error(`Transaction ${tx.hash} is no cellbase`);
   if (tx.pays === undefined) throw new Error(`Cellbase ${tx.hash} has no "pays" field`);
-  if (tx.pays === null) return 'pays no reward yet';
-  return (
-    <>
-      pays{' '}
-      <Link href={`/blocks/${tx.pays.hash}`} look="inline">
-        {formatBlockNumber(tx.pays.number)}
-      </Link>
-    </>
-  );
+  if (tx.blockNumber === 0) {
+    if (tx.pays !== null) throw new Error(`Cellbase ${tx.hash} of block 0 pays a reward`);
+    return { words: 'the genesis issuance', label: 'issued' };
+  }
+  if (tx.pays === null) return { words: 'no reward yet', label: 'output' };
+  return {
+    words: (
+      <>
+        reward for{' '}
+        <Link href={`/blocks/${tx.pays.hash}`} look="inline">
+          {formatBlockNumber(tx.pays.number)}
+        </Link>
+      </>
+    ),
+    label: 'reward',
+  };
 }
 
 /**
@@ -158,18 +152,19 @@ const TX_PHONE_HEAD_PX = phoneHead(
 );
 
 /**
- * The phone row of the Transactions list (the phone-rows board, gate D0′): the hash and the block
+ * The phone row of the Transactions lists (the phone-rows board, gate D0′): the hash and the block
  * with its age; what it did, in the reading ink, wrapping between its parts and never cut; then,
  * quiet, what every reader uses — the cells, the value and the fee, each figure after its name (a
- * cellbase: the reward it pays, named; it pays no fee). Bytes and cycles are on the transaction's
- * page and in the table; the cards from 560 px (`wide`, where no table stands until the list's
- * bound) keep them at the end of the quiet line.
+ * cellbase: what it pays, its amount named "reward", "issued" for block 0's genesis issuance, or
+ * "output"; it pays no fee). Bytes and cycles are on the transaction's page; the cards from 560 px
+ * (`wide`, where no table stands until the lists' bound) keep them at the end of the quiet line.
  */
 function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   const mark = tx.activity ? activityClassMark(tx.activity) : null;
+  const pays = tx.isCellbase ? cellbasePays(tx) : null;
   // What it did, as parts of the line's one separated list (PA-25: no "·" ends or opens a line).
-  const what: ReactNode[] = tx.isCellbase
-    ? ['Cellbase', paysNote(tx)]
+  const what: ReactNode[] = pays
+    ? ['Cellbase', pays.words]
     : [
         <>
           {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
@@ -189,10 +184,10 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
     <span key="cells" className="whitespace-nowrap">
       {consumedCells(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
-    ...(tx.isCellbase
+    ...(pays
       ? [
-          <Labelled key="reward" label="reward">
-            {amount(tx.outputCapacity!, 'reward')}
+          <Labelled key="paid" label={pays.label}>
+            {amount(tx.outputCapacity!, pays.label)}
           </Labelled>,
         ]
       : [
@@ -216,7 +211,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} look="key">
-              <Hash hash={tx.hash} size="tight" className="text-body" />
+              <Hash hash={tx.hash} size="tight" variant="inherit" className="text-body" />
             </Link>
           ),
           // the block and its age are each a unit; "this device's clock is behind" in the age's
@@ -241,14 +236,10 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
 }
 
 /**
- * The committed list's columns (readability F3-e: each budgeted from the widest value it holds),
- * on the page's two bar scales.
+ * The columns both lists begin with (readability F3-e: each budgeted from the widest value it
+ * holds): the transaction, its row's key, and its block over its age.
  */
-function committedColumns(
-  sizeScale: number,
-  cycleScale: number,
-  sameWidth: number
-): ListColumn<Transaction>[] {
+function keyColumns(): ListColumn<Transaction>[] {
   return [
     {
       key: 'transaction',
@@ -261,20 +252,21 @@ function committedColumns(
           textPx(shortChars(SHORT_FORMS.row.hash), fontPx('body')) +
           CELL_GAP_PX
       ),
-      // Table-rows T5: the hash is the row's key, bright on the 20 px row line (a cellbase row
-      // keeps its dim row class); its stone leads it, centred on that line (RowSeal).
+      // Table-rows T5: the hash is the row's key (the key look's bright ink) on the 20 px row line;
+      // its stone leads it, centred on that line (RowSeal).
       render: (tx) => (
         <span className="flex items-start">
           <RowSeal id={txSealId(tx)} />
-          <Link href={`/tx/${tx.hash}`} className="hover:underline">
-            <Hash hash={tx.hash} size="row" className="text-body text-text-bright leading-row" />
+          <Link href={`/tx/${tx.hash}`} look="key">
+            <Hash hash={tx.hash} size="row" variant="inherit" className="text-body leading-row" />
           </Link>
         </span>
       ),
     },
     {
       key: 'block',
-      label: 'Block · date',
+      // its two lines are the block and its age (the notes: it said "date" over an age)
+      label: 'Block · age',
       // Two data on two lines (readability F3-e): the block, "#99,999,999", over its age, "10y
       // 364d ago" (12 characters at 13 px, 93.6, the wider), and the gap. On one line, with " · "
       // between them, they took 25 characters (211 px; it was 175, which held "59m ago" and not an
@@ -288,7 +280,8 @@ function committedColumns(
         <span className="text-small">
           <Link
             href={`/blocks/${tx.blockNumber}`}
-            className="hover:text-jade block whitespace-nowrap"
+            look="inline"
+            className="block whitespace-nowrap"
           >
             {formatBlockNumber(tx.blockNumber)}
           </Link>
@@ -298,6 +291,39 @@ function committedColumns(
         </span>
       ),
     },
+  ];
+}
+
+/**
+ * The cells a transaction consumed and created (its stone's rods), counted, on one line: the most
+ * inputs a transaction holds and the widest output count, "13,568 → 9,999" (14 characters at 13
+ * px, 109.2), and the gap (review fb-tests 6: it counted four digits of inputs, "9,999", while
+ * 13,568 44-byte inputs fit a block). It held "10 → 2" (65 px), and the genesis cellbase's "0 → 671"
+ * ran past it. The last column of both lists: no gap after it.
+ */
+const CELLS_COLUMN: ListColumn<Transaction> = {
+  key: 'cells',
+  label: 'Cells',
+  minWidth: columnPx(
+    textPx(`${MAX_TX_INPUTS.toLocaleString('en-US')} → ${WIDEST_COUNT}`.length, fontPx('small'))
+  ),
+  className: 'whitespace-nowrap',
+  render: (tx) => (
+    <span className="text-small">
+      {consumedCells(tx).toLocaleString('en-US')} → {tx.outputsCount.toLocaleString('en-US')}
+    </span>
+  ),
+};
+
+/**
+ * The user transactions' columns (the lists lane P3): what a reader of the list asks first — which
+ * transaction, when, what it did, what moved and its fee, its cells. The size and the cycles bars
+ * left the list for What it did's width (a common row on one line at 1,232 px: ".bit Time" rows
+ * needed 430.2 px in 225); they are on each transaction's page and in the cards from 560 px.
+ */
+function committedColumns(sameWidth: number): ListColumn<Transaction>[] {
+  return [
+    ...keyColumns(),
     {
       key: 'what',
       label: 'What it did',
@@ -305,16 +331,15 @@ function committedColumns(
       // the sum. B5: the note is never cut (it was truncated mid-word, "2 participa"): it follows
       // the headline on its line when it fits and wraps under it, part by part, when it does not.
       // At its minimum the mark (16), its 8 px gap, the longest DAO headline, "DAO Withdraw
-      // Complete" (21 characters at 13 px, 163.8), whole, and the gap: 203.8; a common row's note
-      // ("CKB Transfer" and "12 participants", 258.6 px on one line) goes under its headline there.
-      // On the Transactions page it also keeps `sameWidth`, what the pool list's sum is over this
-      // one's, so both of the page's lists change form at one width.
+      // Complete" (21 characters at 13 px, 163.8), whole, and the gap: 203.8. On the Transactions
+      // page it also keeps `sameWidth`, what the page's widest list's sum is over this one's, so
+      // the page's lists change form at one width.
       minWidth:
         columnPx(16 + 8 + textPx('DAO Withdraw Complete'.length, fontPx('small')) + CELL_GAP_PX) +
         sameWidth,
       width: 'auto',
       render: (tx) => {
-        const mark = tx.activity ? activityClassMark(tx.activity) : null;
+        const mark = activityClassMark(tx.activity!);
         return (
           <span className="flex min-w-0 items-start gap-2">
             {/* One line tall (1lh), so the mark stands centred on the headline's line. */}
@@ -324,16 +349,14 @@ function committedColumns(
             <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
               {/* The headline is words (the lead's ruling): it breaks between its separated parts
                   first, the " · " with the part after it, then between the words of a part still
-                  too long, and the row grows taller; it never draws past the cell. */}
-              <span className={tx.isCellbase ? 'text-text min-w-0' : 'text-text-bright min-w-0'}>
-                {tx.isCellbase ? (
-                  'Cellbase'
-                ) : (
-                  <Dotted parts={activityHeadline(tx.activity!).split(HEADLINE_SEPARATOR)} />
-                )}
+                  too long, and the row grows taller; it never draws past the cell. A name inside
+                  it is a user's word with no bound (a .cell label in "ring pointer changed for
+                  …"): it breaks anywhere rather than run out of the cell (the notes, logic N6). */}
+              <span className="text-text-bright min-w-0 [overflow-wrap:anywhere]">
+                <Dotted parts={activityHeadline(tx.activity!).split(HEADLINE_SEPARATOR)} />
               </span>
               <span className="text-text-dim text-small min-w-0">
-                {tx.isCellbase ? paysNote(tx) : <Dotted parts={whatNote(tx.activity!, 'row')} />}
+                <Dotted parts={whatNote(tx.activity!, 'row')} />
               </span>
             </span>
           </span>
@@ -343,41 +366,22 @@ function committedColumns(
     {
       key: 'value',
       label: 'Value, CKB',
-      // Every value under a billion CKB, "999,999,999.99999999" (20 characters), or a cellbase's
-      // "reward" and a reward of four whole digits, "reward 9,999.99999999" (21, the wider: 163.8 at
-      // 13 px; the first epochs paid 1,917 CKB), and the gap.
-      minWidth: columnPx(
-        textPx(
-          Math.max(WIDEST_TX_VALUE.length, `reward ${WIDEST_BLOCK_REWARD}`.length),
-          fontPx('small')
-        ) + CELL_GAP_PX
-      ),
+      // Every value under a billion CKB, "999,999,999.99999999" (20 characters at 13 px, 156), and
+      // the gap (a cellbase's "reward 9,999.99999999", 21, left with the cellbases).
+      minWidth: columnPx(textPx(WIDEST_TX_VALUE.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
-      render: (tx) =>
-        tx.isCellbase ? (
-          <span data-reward className="text-text-dim">
-            reward{' '}
-            <span className="[&_[data-ckb-amount]]:text-text-dim">
-              <CkbAmount
-                form="column"
-                shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
-                signed={false}
-                tone="plain"
-                unit={false}
-              />
-            </span>
-          </span>
-        ) : (
-          <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
-            <CkbAmount
-              form="column"
-              shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
-              signed={false}
-              tone="plain"
-              unit={false}
-            />
-          </Quiet>
-        ),
+      // a column of the subject amounts (R5's column form), aligned on the point
+      render: (tx) => (
+        <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
+          <CkbAmount
+            form="column"
+            shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
+            signed={false}
+            tone="plain"
+            unit={false}
+          />
+        </Quiet>
+      ),
     },
     {
       key: 'fee',
@@ -397,101 +401,81 @@ function committedColumns(
         </Quiet>
       ),
     },
-    {
-      key: 'cells',
-      label: 'Cells',
-      // The most inputs a transaction holds and the widest output count, "13,568 → 9,999" (14
-      // characters at 13 px, 109.2), and the gap, on one line (review fb-tests 6: it counted four
-      // digits of inputs, "9,999", while 13,568 44-byte inputs fit a block). It held "10 → 2"
-      // (65 px), and the genesis cellbase's "0 → 671" ran past it.
-      minWidth: columnPx(
-        textPx(
-          `${MAX_TX_INPUTS.toLocaleString('en-US')} → ${WIDEST_COUNT}`.length,
-          fontPx('small')
-        ) + CELL_GAP_PX
-      ),
-      className: 'whitespace-nowrap',
-      render: (tx) => (
-        <span className="text-text-dim text-small">
-          {consumedCells(tx).toLocaleString('en-US')} → {tx.outputsCount.toLocaleString('en-US')}
-        </span>
-      ),
-    },
-    {
-      key: 'size',
-      label: 'Size, bytes',
-      // The 48 px track (its head's "0 … 1.5M" in the tick form), the bar's 10 px gap, the scale's
-      // figure ("1,500,000", genesis's cellbase; 9 characters at 13 px, 70.2) and the gap: 144.2
-      // (review fb-logic 6: it was "600,000", 128.6, and genesis's figure ran 15.6 px past it). It
-      // held a 5-digit scale ("2,000") on a 56 px track its head's exact ticks ran past.
-      minWidth: columnPx(
-        SIZE_TRACK + BAR_FIGURE_GAP + textPx(SIZE_SCALE.length, fontPx('small')) + CELL_GAP_PX
-      ),
-      // The shared head at this table's own geometry: a tick row as long as the track, 2 px under
-      // the name.
-      header: (
-        <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={SIZE_TRACK} tickGap={2} />
-      ),
-      render: (tx) => (
-        <AlignedBar
-          label="Size, bytes"
-          scale={sizeScale}
-          trackWidth={SIZE_TRACK}
-          segments={[
-            {
-              key: 'value',
-              label: 'Size, bytes',
-              value: tx.txSize!,
-              tone: tx.isCellbase ? 'overhead' : 'data',
-            },
-          ]}
-        />
-      ),
-    },
-    {
-      key: 'cycles',
-      label: 'Cycles',
-      // The track (CYCLES_TRACK, 48: its head's ticks in the tick form), the bar's 10 px gap and
-      // the figure of any scale under a billion ("750,000,000", 11 characters at 13 px, 85.8); the
-      // last column, no gap after it (it counted 16).
-      minWidth: columnPx(
-        CYCLES_TRACK + BAR_FIGURE_GAP + textPx(CYCLES_SCALE.length, fontPx('small'))
-      ),
-      header: (
-        <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={CYCLES_TRACK} tickGap={2} />
-      ),
-      render: (tx) =>
-        tx.cycles === null ? (
-          <span className="text-text-dim text-small">
-            {tx.cyclesStatus === 'failed' ? 'replay failed' : 'not yet run'}
-          </span>
-        ) : (
-          <AlignedBar
-            label="Cycles"
-            scale={cycleScale}
-            trackWidth={CYCLES_TRACK}
-            segments={[{ key: 'value', label: 'Cycles', value: tx.cycles, tone: 'data' }]}
-          />
-        ),
-    },
+    CELLS_COLUMN,
   ];
 }
 
 /**
- * The committed list's own sum of its columns' minimums (1,211 px). The Transactions page changes
- * both of its lists' form at one width, the larger of the two sums (`formWidth`).
+ * The cellbases' columns (the lists lane P3: a list of their own, with their own words and
+ * bounds): which transaction and when; what it pays (a reward for an earlier block, none yet, or
+ * block 0's genesis issuance), the flexible column; the CKB it outputs; its cells.
  */
-export const TRANSACTION_LIST_MIN_PX = minimumWidth(
-  'Committed transactions',
-  committedColumns(1, 1, 0)
-);
+function cellbaseColumns(sameWidth: number): ListColumn<Transaction>[] {
+  return [
+    ...keyColumns(),
+    {
+      key: 'pays',
+      label: 'Pays',
+      // "reward for #99,999,999" (22 characters at 13 px, 171.6) on one line, and the gap; it takes
+      // what the container gives beyond the sum (`sameWidth`, as What it did does).
+      minWidth:
+        columnPx(
+          textPx(`reward for ${WIDEST_BLOCK_NUMBER}`.length, fontPx('small')) + CELL_GAP_PX
+        ) + sameWidth,
+      width: 'auto',
+      render: (tx) => <span className="text-small">{cellbasePays(tx).words}</span>,
+    },
+    {
+      key: 'output',
+      label: 'Output, CKB',
+      // Every output of eleven whole digits, "99,999,999,999.99999999" (WIDEST_TX_OUTPUT, 23
+      // characters at 13 px, 179.4: block 0's 33,600,000,000 CKB is 20), and the gap.
+      minWidth: columnPx(textPx(WIDEST_TX_OUTPUT.length, fontPx('small')) + CELL_GAP_PX),
+      numeric: true,
+      render: (tx) => (
+        <Quiet when={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} output`) === BigInt(0)}>
+          <CkbAmount
+            form="column"
+            shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} output`)}
+            signed={false}
+            tone="plain"
+            unit={false}
+          />
+        </Quiet>
+      ),
+    },
+    CELLS_COLUMN,
+  ];
+}
 
 /**
- * The committed list of the Transactions board (TX-25 / TX-26): general columns first (tx,
- * block · age, what it did, value, fee), then the quieter cells / size / cycles on one shared
- * scale per column. A cellbase row is set back (the quiet variant: every word dim, its stone
- * pressed; R4) and shows the reward it pays, grey (D5): Value
- * itself excludes cellbase issuance, so the reward is never added to a total.
+ * The user transactions list's own sum of its columns' minimums (898 px). The Transactions page
+ * changes its lists' form at one width, the largest of their sums (`formWidth`).
+ */
+export const TRANSACTION_LIST_MIN_PX = minimumWidth('Committed transactions', committedColumns(0));
+
+/** The cellbases list's own sum of its columns' minimums (804 px). */
+export const CELLBASE_LIST_MIN_PX = minimumWidth('Cellbases', cellbaseColumns(0));
+
+/** A list's width to change form at: at least its own sum (its flexible column keeps the rest). */
+function checkedFormWidth(label: string, formWidth: number, own: number): number {
+  if (!(formWidth >= own))
+    throw new Error(`${label}: cannot change form at ${formWidth} px, under its ${own}`);
+  return formWidth - own;
+}
+
+/** The size and the cycles a card from 560 px writes: the exact evidence, or the list fails. */
+function checkResources(tx: Transaction) {
+  if (!Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
+    throw new Error(`Transaction ${tx.hash} is missing its exact serialized size`);
+  if (tx.cyclesStatus === 'complete' ? tx.cycles === null : tx.cycles !== null)
+    throw new Error(`Transaction ${tx.hash} has inconsistent cycle evidence`);
+}
+
+/**
+ * The committed user transactions of the Transactions board (TX-25 / TX-26; lists lane P3): which
+ * transaction and when, what it did, its value and fee, its cells. A cellbase is not one of them
+ * (the cellbases are a list of their own): one here is an error, as is a row without its activity.
  */
 export function TransactionListTable({
   transactions,
@@ -502,37 +486,59 @@ export function TransactionListTable({
   label?: string;
   /**
    * The width this list changes form at, at least its own sum: the page that draws it beside
-   * another list gives the larger of their sums, and What it did keeps the difference.
+   * other lists gives the largest of their sums, and What it did keeps the difference.
    */
   formWidth?: number;
 }) {
-  if (!(formWidth >= TRANSACTION_LIST_MIN_PX))
-    throw new Error(
-      `${label}: cannot change form at ${formWidth} px, under its ${TRANSACTION_LIST_MIN_PX}`
-    );
+  const sameWidth = checkedFormWidth(label, formWidth, TRANSACTION_LIST_MIN_PX);
   for (const tx of transactions) {
-    if (!Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
-      throw new Error(`Transaction ${tx.hash} is missing its exact serialized size`);
-    if (tx.cyclesStatus === 'complete' ? tx.cycles === null : tx.cycles !== null)
-      throw new Error(`Transaction ${tx.hash} has inconsistent cycle evidence`);
-    if (tx.isCellbase ? tx.outputCapacity === undefined : !tx.activity)
+    if (tx.isCellbase)
       throw new Error(
-        `Transaction ${tx.hash} is missing its ${tx.isCellbase ? 'output capacity' : 'activity'}`
+        `Transaction ${tx.hash} is a cellbase: the cellbases are a list of their own`
       );
+    if (!tx.activity) throw new Error(`Transaction ${tx.hash} is missing its activity`);
+    checkResources(tx);
   }
-  const sizeScale = resourceScale(transactions.map((tx) => tx.txSize!));
-  const cycleScale = resourceScale(
-    transactions.flatMap((tx) => (tx.cycles === null ? [] : [tx.cycles]))
-  );
-  const columns = committedColumns(sizeScale, cycleScale, formWidth - TRANSACTION_LIST_MIN_PX);
   return (
     <ListTable
       label={label}
       rows={transactions}
-      columns={columns}
+      columns={committedColumns(sameWidth)}
       rowKey={(tx) => tx.hash}
-      rowClassName={(tx) => (tx.isCellbase ? 'quiet' : '')}
       empty="No transactions."
+      mobileRow={(tx, wide) => <TransactionPhoneRow tx={tx} wide={wide} />}
+    />
+  );
+}
+
+/**
+ * The cellbases of the Transactions board, one in every block, newest first (lists lane P3; plan
+ * §7.6: the page opens on user transactions, the cellbases one tab away): what each pays and the
+ * CKB it outputs. A transaction that is no cellbase is an error here.
+ */
+export function CellbaseListTable({
+  transactions,
+  formWidth = CELLBASE_LIST_MIN_PX,
+}: {
+  transactions: readonly Transaction[];
+  /** As `TransactionListTable`'s: Pays keeps what this is over the list's own sum. */
+  formWidth?: number;
+}) {
+  const label = 'Cellbases';
+  const sameWidth = checkedFormWidth(label, formWidth, CELLBASE_LIST_MIN_PX);
+  for (const tx of transactions) {
+    if (!tx.isCellbase) throw new Error(`Transaction ${tx.hash} is no cellbase`);
+    if (tx.outputCapacity === undefined)
+      throw new Error(`Cellbase ${tx.hash} is missing its output capacity`);
+    checkResources(tx);
+  }
+  return (
+    <ListTable
+      label={label}
+      rows={transactions}
+      columns={cellbaseColumns(sameWidth)}
+      rowKey={(tx) => tx.hash}
+      empty="No cellbases."
       mobileRow={(tx, wide) => <TransactionPhoneRow tx={tx} wide={wide} />}
     />
   );

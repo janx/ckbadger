@@ -88,6 +88,15 @@ export const UNCLE_RATES = [
 export const uncleRateChart: UncleRateChartResponse = {
   ...chart('Uncle Rate', UNCLE_RATES, 'Uncle Rate'),
   orphanRateTarget: { numerator: 1, denominator: 40 },
+  // each day's operands, the route's (lane exactness, part A, A2): the share of 1,000,000 blocks
+  counts: chart('Uncle Rate', UNCLE_RATES, 'Uncle Rate').data.map((point) => ({
+    date: point.date,
+    // the share's six places are the uncles in a million blocks: 0.026371 is 26,371
+    uncles: Number(
+      `${point.value.split('.')[0]}${(point.value.split('.')[1] ?? '').padEnd(6, '0')}`
+    ),
+    blocks: 1_000_000,
+  })),
 };
 
 /** Knowledge size in whole CKB: +0.2–0.4M a day, one −8.94M day (drawn clipped). */
@@ -166,6 +175,8 @@ export const daoStatistics: DaoStatistics = {
   activeDeposits: 22379,
   depositCellsCount: 20689,
   withdrawalRequestCellsCount: 1690,
+  // the route's: the live DAO cells, 20,689 + 1,690 (lane exactness, part A, A5 ii)
+  liveCellsCount: 22379,
   pendingWithdrawalCapacity: '90872260089687313',
   pendingWithdrawalCapacityCkb: '908722600.89687313',
   daoCapacity: '903761821733487013',
@@ -187,6 +198,8 @@ export const daoStatistics: DaoStatistics = {
   depositCompensationCkb: '1598388623.91653367',
   burnt: '674731136445379763',
   burntCkb: '6747311364.45379763',
+  // the route's whole, which the three parts make (lane exactness, part A, A5 ii)
+  secondaryIssuance: '930874961456346983',
   depositChange24h: '-2578825.48689593',
   depositorsChange24h: -3,
   claimedCompensationChange24h: '0',
@@ -257,6 +270,9 @@ export const activitySummary24h: ActivitySummary24h = {
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
   hoursCovered: 24,
+  // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
+  kindOccurrences: 7115,
+  daoCount: 8,
 };
 
 /** 29 complete days, 09/25 … 10/23, oldest first; the last day has 6,691 activities. */

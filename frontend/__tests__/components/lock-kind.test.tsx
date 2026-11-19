@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
-import { cellLockFacts, cellOwnerLock, LockKind, rowLock } from '@/components/ui/lock-kind';
+import {
+  cellLockFacts,
+  cellLockSentence,
+  cellOwnerLock,
+  LockKind,
+  lockPhrase,
+  lockWords,
+  LockWordsView,
+  namedLockWords,
+  rowLock,
+} from '@/components/ui/lock-kind';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
@@ -252,5 +262,77 @@ describe('rowLock: a row’s own hash type', () => {
         'column'
       )
     ).toThrow(`lock ${DEFAULT_LOCK_CODE_HASH}: lock hash type "data3" is not a CKB hash type`);
+  });
+});
+
+// Lane P2's follow-up (item 6): a SENTENCE must name the default lock (silence beside a party says
+// "the default lock"; a sentence has no party to be silent beside), so the one decision has a
+// sentence form: the column's answer, never null, said as a noun phrase with its article.
+describe('the decision’s sentence form', () => {
+  const args = `0x${'ab'.repeat(20)}`;
+  const cell = (codeHash: string, hashType: 'type' | 'data', lockName: string | null) => ({
+    lock: { codeHash, hashType, args },
+    lockName,
+    ownerAddress: ckbAddress({ codeHash, hashType, args }),
+    txHash: `0x${'77'.repeat(32)}`,
+    outputIndex: 3,
+  });
+
+  it('names the default lock by its name, where beside a party it is silent', () => {
+    const facts = {
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'type' as const,
+    };
+    expect(lockWords(facts, 'inline')).toBeNull();
+    expect(lockPhrase(namedLockWords(facts, 'sentence'), 'row')).toBe('a Default Lock');
+    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'type', 'Default Lock'), 'row')).toBe(
+      'a Default Lock'
+    );
+  });
+
+  it('says another lock with its article, a name without "lock" with the word', () => {
+    expect(cellLockSentence(cell(JOYID, 'type', 'JoyID'), 'row')).toBe('a JoyID lock');
+    expect(
+      lockPhrase(
+        namedLockWords({ name: 'Omnilock', codeHash: CODE, hashType: 'type' }, 'sentence'),
+        'row'
+      )
+    ).toBe('an Omnilock');
+  });
+
+  it('writes a lock the registry does not name by its code hash, a by-data lock with its hash type', () => {
+    expect(cellLockSentence(cell(CODE, 'type', null), 'row')).toBe('a lock 0x9b9b9b9b…9b9b9b');
+    // the registry's name is the default lock's, not this lock's (B4 fix round)
+    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'data', 'Default Lock'), 'row')).toBe(
+      'a lock 0x9bd7e06f…a3cce8 by data'
+    );
+  });
+
+  it('says a lock that is not indexed in words, never silent', () => {
+    expect(
+      lockPhrase(namedLockWords({ name: null, codeHash: null, hashType: null }, 'sentence'), 'row')
+    ).toBe('a lock not indexed');
+  });
+
+  it('refuses a cell whose address spells another lock, naming the cell', () => {
+    const wrong = {
+      ...cell(JOYID, 'type', 'JoyID'),
+      ownerAddress: cell(CODE, 'type', null).ownerAddress,
+    };
+    expect(() => cellLockSentence(wrong, 'row')).toThrow(`cell 0x${'77'.repeat(32)}:3`);
+  });
+
+  it('draws the default lock in a sentence at the line’s size and ink, not as a column’s cell', () => {
+    const facts = {
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'type' as const,
+    };
+    render(<LockWordsView words={namedLockWords(facts, 'sentence')} size="row" />);
+    const words = screen.getByText('Default Lock');
+    expect(words).toHaveAttribute('title', DEFAULT_LOCK_CODE_HASH);
+    expect(words).not.toHaveClass('truncate');
+    expect(words).not.toHaveClass('text-meta');
   });
 });

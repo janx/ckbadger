@@ -1,4 +1,5 @@
-import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { JOYID_CODE_HASH, namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -196,6 +197,34 @@ describe('Collection holders', () => {
     expect(screen.queryByRole('navigation', { name: 'holders' })).not.toBeInTheDocument();
   });
 
+  // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
+  // (FoldToggle): one button that stays mounted while the list loads, says its state, names the
+  // list it opens, and keeps the keyboard's focus both ways (the Pager's "all N ↓" and a second
+  // "fewer ↑" button swapped places, and the loading list took both away)
+  it('opens and folds its list with one button that keeps the focus', async () => {
+    const load = vi
+      .fn()
+      .mockImplementation(({ limit }) =>
+        Promise.resolve(page([named], { limit, total: 21, hasMore: true, nextCursor: 'next-50' }))
+      );
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="fold" />);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    toggle.focus();
+    fireEvent.click(toggle);
+    const all = await screen.findByRole('table', { name: 'All collection holders' });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('fewer ↑');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(all);
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(toggle).toHaveAccessibleName(/^all 21\sholders ↓$/);
+    expect(document.activeElement).toBe(toggle);
+  });
+
   it('shows refresh failures while retaining the previously read holder rows', async () => {
     const client = createTestQueryClient();
     const load = vi.fn().mockResolvedValue(page([resolved]));
@@ -305,6 +334,80 @@ describe('Collection holders', () => {
 
 // Table-rows round, lane L2-4: the collection holder tables on the row rules — one 41 px line,
 // the holder bright, the lock a chip, the item count as an 8 px bar on the table's scale.
+// Lane P2's follow-up (item 3): a lock the same on every row of the page (an identity collection's
+// holders, every one ".bit Lock") is no column and no phone part: said once over the list, by the
+// one helper the objects list uses (SaidOnce), and the holder takes the table's flexible width.
+describe('Collection holders say a lock the same on every row once', () => {
+  const bitLock = namedLockCodeHash('.bit Lock');
+  const holder = (seed: string, itemCount: number) => {
+    const address = seededAddress(seed, bitLock);
+    return {
+      lockScriptHash: '0x' + seed.charCodeAt(0).toString(16).padStart(2, '0').repeat(32),
+      address,
+      itemCount,
+      lockCodeHash: bitLock,
+      lockKind: '.bit Lock',
+    };
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('drops the Lock column and says ".bit Lock" once over the table', async () => {
+    atContainerWidth(1232);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).not.toContain('Lock');
+    expect(table).not.toHaveTextContent('.bit Lock');
+    const once = document.querySelector<HTMLElement>('[data-role="said-once"]')!;
+    expect(once).toHaveTextContent(/^every one of the 2\sholders listed · \.bit Lock$/);
+    expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the holder is the flexible column now
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols[1].width).toBe('auto');
+    // each row's title still names its lock
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain('.bit Lock');
+  });
+
+  it('leaves the lock out of each phone row', async () => {
+    atContainerWidth(358);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit-phone" />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="said-once"]')).toHaveTextContent(
+        /^every one of the 2\sholders listed · \.bit Lock$/
+      )
+    );
+    expect(document.querySelectorAll('[data-lock-kind]')).toHaveLength(1);
+    expect(document.querySelector('[data-role="said-once"] [data-lock-kind]')).toBeInTheDocument();
+  });
+
+  it('keeps the column where the rows’ locks differ', async () => {
+    atContainerWidth(1232);
+    const other = {
+      ...holder('c', 1),
+      address: seededAddress('c'),
+      lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+      lockKind: 'Default Lock',
+    };
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), other]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="mixed" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toContain('Lock');
+    expect(document.querySelector('[data-role="said-once"]')).toBeNull();
+  });
+});
+
 describe('Collection holders on the row rules (table-rows L2-4)', () => {
   const joyid = {
     ...resolved,
@@ -384,8 +487,11 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
       // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
       ceil(at('x'.repeat(12), 13) + 16),
-      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "99,999" items; the last column
-      48 + 10 + ceil(at('99,999', 13)),
+      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "999,999" items; the last
+      // column. Re-pinned on purpose (lane P2's follow-up, item 7): a holder's items are
+      // lib/list-bounds.ts's one bound of them, WIDEST_HELD_ITEMS, "999,999" (the column held
+      // "99,999", a second bound of the same quantity kept in the file), 113 px, the table 531
+      48 + 10 + ceil(at('999,999', 13)),
     ];
     const bands = [
       // the head "Holds", wider than the widest range, "3–5" at 14 px
@@ -395,9 +501,9 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // a range's items under a million, "999,999"; the last column
       ceil(at('999,999', 13)),
     ];
-    expect(holders).toEqual([55, 253, 110, 105]);
+    expect(holders).toEqual([55, 253, 110, 113]);
     expect(bands).toEqual([52, 121, 55]);
-    expect(holders.reduce((s, w) => s + w, 0)).toBe(523);
+    expect(holders.reduce((s, w) => s + w, 0)).toBe(531);
     expect(bands.reduce((s, w) => s + w, 0)).toBe(228);
     const load = vi.fn().mockResolvedValue(page([joyid, named]));
     render(
@@ -412,7 +518,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(holders);
     expect(cols[2].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(523);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(531);
     const bandTable = screen.getByRole('table', { name: 'Holders by how many items they hold' });
     expect(
       [...bandTable.querySelectorAll('col')].map((c) =>
@@ -427,9 +533,10 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       for (const [width, holders, bands] of [
         [1232, 'table', 'table'],
         // re-pinned on purpose (lane p-assets): the holders' table is 523 px with the lock as
-        // words (it was 528 with the lock's tag)
-        [523, 'table', 'table'],
-        [522, 'rows', 'table'],
+        // words (it was 528 with the lock's tag); then (lane P2's follow-up, item 7) 531, its
+        // items column holding WIDEST_HELD_ITEMS
+        [531, 'table', 'table'],
+        [530, 'rows', 'table'],
         [358, 'rows', 'table'],
         [228, 'rows', 'table'],
         [227, 'rows', 'rows'],

@@ -728,6 +728,9 @@ export const handlers = [
       countries: [],
       asns: [],
       protocols: [],
+      // the route's groupings (lane exactness, part A, A5 iii)
+      hosting: { organisations: [], rest: 0, restOrganisations: 0 },
+      releases: [],
     });
   }),
 

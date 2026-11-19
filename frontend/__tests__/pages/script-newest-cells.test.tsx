@@ -116,7 +116,9 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       'The newest live cells this script locks, newest block first · it is not a list of transactions'
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-small', 'text-text-dim');
+    // re-pinned on purpose (lane P2's follow-up, item 4): the caption states what the list is, a
+    // statement in the reading ink (it was the quiet ink)
+    expect(caption).toHaveClass('text-small', 'text-text');
     // R16 measures a text node's parent box: the words sit in their own inline box, not the
     // full-width paragraph.
     expect(caption.children).toHaveLength(1);
@@ -192,9 +194,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         name: `${first.address!.slice(0, 4)}…${first.address!.slice(-8)}`,
       })
     ).toHaveAttribute('title', first.address);
+    // re-pinned on purpose (lane P2's follow-up, item 11): the creating transaction opens at
+    // this cell, the anchor P1's builder writes, so its fold never hides the cell
     expect(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' })).toHaveAttribute(
       'href',
-      `/mainnet/tx/${first.txHash}`
+      `/mainnet/tx/${first.txHash}#${first.txHash}-0`
     );
     expect(within(row).getByRole('link', { name: '#20,911,460' })).toHaveAttribute(
       'href',

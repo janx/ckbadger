@@ -24,10 +24,7 @@ export function DroppedGenesCaption({
 }) {
   if (dropped.length === 0) return null;
   const caption = (
-    <p
-      data-role="caption"
-      className="text-text-dim text-small max-w-measure [overflow-wrap:anywhere]"
-    >
+    <p data-role="caption" className="text-text text-small max-w-measure [overflow-wrap:anywhere]">
       <TraitText text={droppedGenesCaption(dropped, objects)} />
     </p>
   );

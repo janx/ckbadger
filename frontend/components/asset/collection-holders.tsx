@@ -1,7 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
+import { useId, useState } from 'react';
+import {
+  LockKind,
+  LockWordsView,
+  lockWordsText,
+  namedLockWords,
+  rowLock,
+  rowLockFacts,
+} from '@/components/ui/lock-kind';
+import { SaidOnce, onEveryRow } from '@/components/asset/said-once';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -14,7 +22,7 @@ import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
-import { FoldBack } from '@/components/transaction/tx-structure';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { listTotal } from '@/components/asset/token-holders';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -30,7 +38,12 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
-import { WIDEST_HELD_ITEMS, shortChars } from '@/lib/list-bounds';
+import {
+  WIDEST_COLLECTION_HOLDER_RANK,
+  WIDEST_COLLECTION_HOLDERS,
+  WIDEST_HELD_ITEMS,
+  shortChars,
+} from '@/lib/list-bounds';
 import { PartReadBoundary } from '@/components/read-failure';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
@@ -68,12 +81,12 @@ const COLLECTION_HOLDER_PHONE_HEAD_PX = phoneHead(
 /**
  * The count bars' track; the exact count prints beside it (table-rows L2-4). Readability F3-e:
  * the track holds its head's ticks ("0" … "750M", the tick form) whole, under the 48 px a bar
- * keeps at least, so 48; the count is a holder's items or a range's holders, under 100,000:
- * "99,999" (6 characters at 13 px, 46.8; it was 44, five).
+ * keeps at least, so 48; the count is a holder's items, "999,999" (WIDEST_HELD_ITEMS, 54.6 at
+ * 13 px), or a range's holders, "99,999" (WIDEST_COLLECTION_HOLDERS, 46.8). Lane P2's follow-up
+ * (item 7): each from lib/list-bounds.ts, where one "99,999" in this file held both.
  */
 const TRACK = COUNT_TRACK_PX;
-const WIDEST_COUNT = '99,999';
-const COUNT_WIDTH = columnPx(cell(WIDEST_COUNT.length));
+const countWidth = (widest: string) => columnPx(cell(widest.length));
 
 /**
  * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
@@ -85,15 +98,18 @@ function countColumn<T>(
   rows: readonly T[],
   value: (row: T) => number,
   assetClass: BarClass,
+  /** The widest count the column holds, as it is written (a bound of lib/list-bounds.ts). */
+  widest: string,
   /** The table's last column keeps no gap after it. */
   last = false
 ): ListColumn<T> {
   const scale = resourceScale(rows.map(value));
+  const figure = countWidth(widest);
   return {
     key,
     label,
     // the track, the bar's 10 px gap, the count and the gap, none after the last column
-    minWidth: columnPx(TRACK + BAR_FIGURE_GAP + COUNT_WIDTH + (last ? 0 : CELL_GAP_PX)),
+    minWidth: columnPx(TRACK + BAR_FIGURE_GAP + figure + (last ? 0 : CELL_GAP_PX)),
     header: <ScaleHeader label={label} scale={scale} trackWidth={TRACK} />,
     render: (row) => (
       <AlignedBar
@@ -107,7 +123,7 @@ function countColumn<T>(
             <AssetCount value={value(row)} />
           </span>
         }
-        displayWidth={COUNT_WIDTH}
+        displayWidth={figure}
       />
     ),
   };
@@ -147,10 +163,21 @@ function ScopedCollectionHolders({
     setAll(open);
     pagination.reset();
   };
-  const holders = useQuery({
-    queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
-    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
+  // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
+  // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
+  // item 10: the loading list unmounted it and the focus fell to the page)
+  const top = useQuery({
+    queryKey: ['collection-holders', queryKey, 'top'],
+    queryFn: () => load({ limit: 10, cursor: undefined }),
   });
+  // all holders, in pages of the walk
+  const allHolders = useQuery({
+    queryKey: ['collection-holders', queryKey, 'all', pagination.cursor, limit],
+    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
+    enabled: all,
+  });
+  const holders = all ? allHolders : top;
+  const listId = useId();
   // The distribution's totals, read while its column is drawn: a distribution that breaks its
   // invariants fails its own column in place (D7), the holders' table and the heading standing.
   const totalsOf = () => {
@@ -196,20 +223,28 @@ function ScopedCollectionHolders({
         holder.lockScriptHash ??
         `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
       // what its Lock cell says, from the one decision (B4)
-      lockWordsText(rowLock(holder, 'column')!, 'row'),
+      lockText(holder),
       `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
+  const holdersAt =
+    all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
   // the holders' columns, built while their table is drawn (inside its part)
-  const columnsOf = (): ListColumn<CollectionHolder>[] => [
+  // what a holder's Lock cell says, from the one decision (B4)
+  const lockText = (holder: CollectionHolder) => lockWordsText(rowLock(holder, 'column')!, 'row');
+  /**
+   * The holders' columns; `sameLock` (lane P2's follow-up, item 3): a lock the same on every row of
+   * the page (an identity collection's holders, every one ".bit Lock") is no column, said once over
+   * the list, and the holder takes what the container gives beyond the sum.
+   */
+  const columnsOf = (sameLock: boolean): ListColumn<CollectionHolder>[] => [
     {
       key: 'rank',
       label: '#',
       // A rank of five digits (a collection's holders under 100,000), "99999" (39 at 13 px), and
       // the gap; it was 32, two digits.
-      minWidth: columnPx(cell('99999'.length) + CELL_GAP_PX),
+      minWidth: columnPx(cell(WIDEST_COLLECTION_HOLDER_RANK.length) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       render: (holder) => <span className="text-text-bright">{rank(holder)}</span>,
     },
@@ -227,34 +262,44 @@ function ScopedCollectionHolders({
           2 * 1 +
           CELL_GAP_PX
       ),
+      ...(sameLock ? { width: 'auto' as const } : {}),
       render: (holder) => party(holder, 'row'),
     },
-    {
-      key: 'lock',
-      label: 'Lock',
-      // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
-      // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum; a
-      // longer name ends in the one ellipsis. It was 115, a tag of 12 characters at 12 px with its
-      // 5 px sides and 1 px border (98.4).
-      minWidth: columnPx(cell(12) + CELL_GAP_PX),
-      width: 'auto',
-      render: (holder) => (
-        <span className="flex min-w-0">
-          {/* a column headed "Lock" is never empty: the default lock by its name (B4); a lock is
-              plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
-          <LockKind
-            lockKind={holder.lockKind}
-            lockCodeHash={holder.lockCodeHash}
-            address={holder.address}
-            size="row"
-            place="column"
-            className="text-text text-small min-w-0 truncate"
-          />
-        </span>
-      ),
-    },
-    countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass, true),
+    ...(sameLock ? [] : [lockColumn]),
+    countColumn(
+      'items',
+      'Items',
+      listed,
+      (holder) => holder.itemCount,
+      assetClass,
+      WIDEST_HELD_ITEMS,
+      true
+    ),
   ];
+  const lockColumn: ListColumn<CollectionHolder> = {
+    key: 'lock',
+    label: 'Lock',
+    // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
+    // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum; a
+    // longer name ends in the one ellipsis. It was 115, a tag of 12 characters at 12 px with its
+    // 5 px sides and 1 px border (98.4).
+    minWidth: columnPx(cell(12) + CELL_GAP_PX),
+    width: 'auto',
+    render: (holder) => (
+      <span className="flex min-w-0">
+        {/* a column headed "Lock" is never empty: the default lock by its name (B4); a lock is
+              plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
+        <LockKind
+          lockKind={holder.lockKind}
+          lockCodeHash={holder.lockCodeHash}
+          address={holder.address}
+          size="row"
+          place="column"
+          className="text-text text-small min-w-0 truncate"
+        />
+      </span>
+    ),
+  };
   // the distribution's columns, built while its column is drawn (inside its part)
   const bucketColumnsOf = (): ListColumn<
     NonNullable<CollectionHoldersProps['distribution']>[number]
@@ -272,13 +317,20 @@ function ScopedCollectionHolders({
         <span className="text-body text-text-bright leading-row">{bucket.range}</span>
       ),
     },
-    countColumn('holders', 'Holders', distribution ?? [], (bucket) => bucket.holders, assetClass),
+    countColumn(
+      'holders',
+      'Holders',
+      distribution ?? [],
+      (bucket) => bucket.holders,
+      assetClass,
+      WIDEST_COLLECTION_HOLDERS
+    ),
     {
       key: 'items',
       label: 'Items',
       // A range's items under a million, "999,999" (54.6 at 13 px); the last column, no gap after
       // it. It was 100.
-      minWidth: columnPx(cell('999,999'.length)),
+      minWidth: columnPx(cell(WIDEST_HELD_ITEMS.length)),
       numeric: true,
       render: (bucket) => (
         <span>
@@ -295,90 +347,102 @@ function ScopedCollectionHolders({
         }
       >
         <div className="min-w-0">
-          {holders.data ? (
-            <>
-              <AssetReadState error={holders.error} label="collection holders" retained />
-              {/* a refusal while the holders are drawn fails their table in its place (D7) */}
-              <PartReadBoundary
-                what="the collection holders"
-                where={holdersWhere}
-                render={() => {
-                  for (const holder of holders.data!.data) {
-                    holderKey(holder);
-                    count(holder.itemCount, 'holder item count');
-                  }
-                  return (
-                    <ListTable
-                      label={all ? 'All collection holders' : 'Top 10 collection holders'}
-                      columns={wordHeads(columnsOf())}
-                      rows={holders.data.data}
-                      rowKey={holderKey}
-                      empty="No current holders."
-                      density="row"
-                      rowTitle={holderTitle}
-                      mobileRow={(holder, wide) => {
-                        // R7: the table's scale for its Items bars — the page's rounded maximum.
-                        const scale = resourceScale(listed.map((h) => h.itemCount));
-                        return (
-                          <HolderPhoneRow
-                            rank={rank(holder)}
-                            party={party(holder, phoneSize)}
-                            lock={(() => {
-                              // no part where the row names no lock (B4)
-                              const words = rowLock(holder, 'inline');
-                              return words && <LockWordsView words={words} size={phoneSize} />;
-                            })()}
-                            amount={
-                              <span className="whitespace-nowrap">
-                                <AssetCount value={holder.itemCount} />{' '}
-                                <span className="text-text-dim text-small">
-                                  {countNoun(holder.itemCount, 'item', 'items')}
-                                </span>
-                              </span>
-                            }
-                            bar={{
-                              value: holder.itemCount,
-                              scale,
-                              color: CLASS_COLORS[assetClass],
-                            }}
-                            axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
-                            head={COLLECTION_HOLDER_PHONE_HEAD_PX}
-                            wide={wide}
+          <div id={listId} className="min-w-0">
+            {holders.data ? (
+              <>
+                <AssetReadState error={holders.error} label="collection holders" retained />
+                {/* a refusal while the holders are drawn fails their table in its place (D7) */}
+                <PartReadBoundary
+                  what="the collection holders"
+                  where={holdersWhere}
+                  render={() => {
+                    for (const holder of holders.data!.data) {
+                      holderKey(holder);
+                      count(holder.itemCount, 'holder item count');
+                    }
+                    const rows = holders.data!.data;
+                    const sameLock = onEveryRow(rows, lockText);
+                    return (
+                      <>
+                        {sameLock && (
+                          <SaidOnce
+                            count={rows.length}
+                            singular="holder"
+                            parts={[
+                              <LockWordsView
+                                key="lock"
+                                words={namedLockWords(rowLockFacts(rows[0]), 'sentence')}
+                                size="row"
+                                className="text-text"
+                              />,
+                            ]}
                           />
-                        );
-                      }}
-                    />
-                  );
-                }}
+                        )}
+                        <ListTable
+                          label={all ? 'All collection holders' : 'Top 10 collection holders'}
+                          columns={wordHeads(columnsOf(sameLock))}
+                          rows={holders.data.data}
+                          rowKey={holderKey}
+                          empty="No current holders."
+                          density="row"
+                          rowTitle={holderTitle}
+                          mobileRow={(holder, wide) => {
+                            // R7: the table's scale for its Items bars — the page's rounded maximum.
+                            const scale = resourceScale(listed.map((h) => h.itemCount));
+                            return (
+                              <HolderPhoneRow
+                                rank={rank(holder)}
+                                party={party(holder, phoneSize)}
+                                lock={(() => {
+                                  // no part where the row names no lock (B4), nor where every row
+                                  // of the page names the same, said once over the list
+                                  const words = sameLock ? null : rowLock(holder, 'inline');
+                                  return words && <LockWordsView words={words} size={phoneSize} />;
+                                })()}
+                                amount={
+                                  <span className="whitespace-nowrap">
+                                    <AssetCount value={holder.itemCount} />{' '}
+                                    <span className="text-text-dim text-small">
+                                      {countNoun(holder.itemCount, 'item', 'items')}
+                                    </span>
+                                  </span>
+                                }
+                                bar={{
+                                  value: holder.itemCount,
+                                  scale,
+                                  color: CLASS_COLORS[assetClass],
+                                }}
+                                axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
+                                head={COLLECTION_HOLDER_PHONE_HEAD_PX}
+                                wide={wide}
+                              />
+                            );
+                          }}
+                        />
+                      </>
+                    );
+                  }}
+                />
+              </>
+            ) : (
+              <AssetReadState error={holders.error} read={holders} label="collection holders" />
+            )}
+          </div>
+          {top.data && (all || top.data.hasMore) && (
+            // the list's one disclosure control (FoldToggle, lane P1): "all 522 holders ↓", the
+            // count the top ten's own response states, opens the list in place; "fewer ↑" folds
+            // it back. It stays mounted while the list loads and keeps the focus; the pager stands
+            // over it, a ranked list in pages, every figure the response's
+            <div className="mt-3 space-y-1">
+              {holdersAt && <Pager mode="pages" label="holders" {...holdersAt} />}
+              <FoldToggle
+                open={all}
+                count={listTotal(top.data, `the holders of collection ${queryKey}`)}
+                singular="holder"
+                controls={listId}
+                onToggle={showAll}
               />
-              {all ? (
-                <div className="mt-3 space-y-1">
-                  {holdersAt && (
-                    // the controls board's pager: a ranked list in pages, every figure the
-                    // response's
-                    <Pager mode="pages" label="holders" {...holdersAt} />
-                  )}
-                  <FoldBack onFold={() => showAll(false)} />
-                </div>
-              ) : (
-                holders.data.hasMore && (
-                  // the short list's form, opened in place (the placement lane's toggles, the
-                  // lead's ruling): "all 522 holders ↓", the count its response's own
-                  <div className="mt-3">
-                    <Pager
-                      mode="more"
-                      all={{
-                        count: listTotal(holders.data, `the holders of collection ${queryKey}`),
-                        singular: 'holder',
-                        onShow: () => showAll(true),
-                      }}
-                    />
-                  </div>
-                )
-              )}
-            </>
-          ) : (
-            <AssetReadState error={holders.error} read={holders} label="collection holders" />
+            </div>
           )}
         </div>
         {distribution && (
@@ -397,12 +461,12 @@ function ScopedCollectionHolders({
                   !!holders.data && BigInt(holders.data.data.length) > totals.holders;
                 return (
                   <>
-                    <p className="text-text-dim text-meta max-w-measure mb-2 break-words">
+                    <p className="text-text text-meta max-w-measure mb-2 break-words">
                       Full collection: <AssetCount value={totals.holders.toString()} /> holders ·{' '}
                       <AssetCount value={totals.items.toString()} /> items
                     </p>
                     {readsDiffer && (
-                      <p role="note" className="text-text-dim text-meta max-w-measure mb-2">
+                      <p role="note" className="text-text text-meta max-w-measure mb-2">
                         The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown)
                         and the distribution ({totals.holders.toLocaleString('en-US')} holder
                         {totals.holders === BigInt(1) ? '' : 's'}) were read at different moments.

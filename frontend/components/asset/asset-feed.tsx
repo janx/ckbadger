@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState, type ReactNode } from 'react';
+import { FoldToggle } from '@/components/ui/fold-toggle';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
   CollectionFeedActivity,
@@ -533,9 +534,44 @@ export interface AssetFeedProps {
   recent?: { rows: number; transactions: number | null };
 }
 export function AssetFeed(props: AssetFeedProps) {
-  const [opened, setOpened] = useState<'activities' | 'transactions' | null>(null);
-  if (!props.recent || opened) return <FullAssetFeed {...props} initialTab={opened ?? undefined} />;
-  return <RecentAssetFeed {...props} recent={props.recent} onOpen={setOpened} />;
+  const [opened, setOpened] = useState(false);
+  const feedId = useId();
+  if (!props.recent) return <FullAssetFeed {...props} />;
+  const count = props.recent.transactions;
+  // Lane P2's follow-up (item 10): the newest rows open into the whole feed in place, a fold, so
+  // its control is the one disclosure control (FoldToggle, lane P1): "all 184 transactions ↓",
+  // the collection's own count, opens the whole feed on its transactions (the tabs switch to the
+  // activities), and the same button, still focused, "fewer ↑", folds it back to the newest
+  // rows. Where the count is not derived (L2) the fold has no count to say; the newest rows keep
+  // their two ways in (RecentAssetFeed), FoldToggle stating a count of every list it opens.
+  return (
+    <>
+      <div id={feedId} className="min-w-0">
+        {opened ? (
+          // the count's fold opens on the transactions it counts; the uncounted way, "All activity
+          // →", on the activities
+          <FullAssetFeed {...props} initialTab={count === null ? 'activities' : 'transactions'} />
+        ) : (
+          <RecentAssetFeed
+            {...props}
+            recent={props.recent}
+            onOpen={count === null ? () => setOpened(true) : undefined}
+          />
+        )}
+      </div>
+      {count !== null && (
+        <div className="mt-3">
+          <FoldToggle
+            open={opened}
+            count={count}
+            singular="transaction"
+            controls={feedId}
+            onToggle={setOpened}
+          />
+        </div>
+      )}
+    </>
+  );
 }
 
 /** The newest few activities of an asset, as the board's "Recent activity" (see `recent`). */
@@ -552,7 +588,8 @@ function RecentAssetFeed({
   onOpen,
 }: AssetFeedProps & {
   recent: NonNullable<AssetFeedProps['recent']>;
-  onOpen: (tab: 'activities' | 'transactions') => void;
+  /** The way into the whole feed where no fold can say its count (the count not derived). */
+  onOpen?: () => void;
 }) {
   if (!Number.isSafeInteger(recent.rows) || recent.rows <= 0)
     throw new Error(`recent activity needs a positive row count, got ${recent.rows}`);
@@ -568,27 +605,11 @@ function RecentAssetFeed({
         command="Activity"
         args={`--last ${recent.rows}`}
         note={
-          <>
-            <button
-              type="button"
-              onClick={() => onOpen('activities')}
-              className="text-text hover:text-text-bright"
-            >
+          onOpen && (
+            <button type="button" onClick={onOpen} className="text-text hover:text-text-bright">
               All activity →
             </button>
-            <span className="text-text-ghost"> · </span>
-            <button
-              type="button"
-              onClick={() => onOpen('transactions')}
-              className="text-text hover:text-text-bright tabular-nums"
-            >
-              {unitNode(
-                recent.transactions === null
-                  ? 'All transactions →'
-                  : `${formatCount(recent.transactions, 'transaction')} →`
-              )}
-            </button>
-          </>
+          )
         }
       />
       <div className="mt-3.5">

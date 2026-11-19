@@ -38,6 +38,12 @@ export interface NotFoundEvidence {
    * "checked … → 404"); null where no exact lookup was run.
    */
   finding: string | null;
+  /**
+   * The same finding in plain words, the second line of the page's verse (the readability plan's
+   * P3: the concrete reason, where the routes stand in the note); null where no exact lookup was
+   * run, and the page says what it knows without one.
+   */
+  reason: string | null;
   alternative?: {
     label: string;
     href: string;
@@ -81,6 +87,7 @@ export async function resolveNotFoundEvidence(
       query: null,
       searchEndpoint: null,
       finding: null,
+      reason: null,
     };
   }
   const response = await search(plan.query);
@@ -105,6 +112,7 @@ export async function resolveNotFoundEvidence(
       return {
         ...base,
         finding: `/search lists it as “${hit.label}”, so this 404 does not prove the cell never existed`,
+        reason: `search knows it as “${hit.label}”, so it may yet be indexed.`,
       };
     }
   } else {
@@ -123,6 +131,7 @@ export async function resolveNotFoundEvidence(
       return {
         ...base,
         finding: `/search: this hash is a ${plan.kind}`,
+        reason: `this hash is a ${plan.kind}’s.`,
         alternative: {
           label: hit.label,
           href: hit.url,
@@ -140,6 +149,10 @@ export async function resolveNotFoundEvidence(
       plan.kind === 'cell'
         ? '/search: no cell at this out point either'
         : `/search: no ${plan.kind} has this hash either`,
+    reason:
+      plan.kind === 'cell'
+        ? 'the index has seen no cell at this out point.'
+        : `no ${plan.kind} has this hash either.`,
   };
 }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { TopicCharts } from '@/components/charts/topic-charts';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { AppLink } from '@/components/ui/app-link';
@@ -22,13 +22,11 @@ import {
   ScriptCodeClassBar,
   ScriptCodeClassLegend,
   ScriptCodeClassSummary,
-  codeClassTotals,
   DEPRECATED_TITLE,
   immutableHow,
   isImmutableClass,
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
-import { HeroFigure } from '@/components/scripts/script-hero';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
@@ -85,9 +83,14 @@ const GOVERNOR: Partial<Record<NonNullable<KnownScript['codeClasses']>[number]['
  * upgradable code is changed, and whether some references are pinned): the phone row writes them,
  * the day being the script page's and the row's title's.
  */
-function scriptCodeClass(
-  script: KnownScript
-): { head: string; sub: string; facts: string[]; replaceable: boolean } | null {
+function scriptCodeClass(script: KnownScript): {
+  head: string;
+  sub: string;
+  facts: string[];
+  replaceable: boolean;
+  /** Who can replace the code, the Code column's words ("by a multisig"); none for immutable code. */
+  who: string | null;
+} | null {
   const classes = script.codeClasses ?? [];
   if (!classes.length) return null;
   const replaceable = classes.filter((row) => !isImmutableClass(row.class));
@@ -105,6 +108,7 @@ function scriptCodeClass(
       ].join(' · '),
       facts,
       replaceable: false,
+      who: null,
     };
   }
   if (script.versionsCount === undefined)
@@ -118,6 +122,7 @@ function scriptCodeClass(
     ),
     facts: [formatCount(script.versionsCount, 'version'), by, ...pinned],
     replaceable: true,
+    who: by,
   };
 }
 
@@ -138,10 +143,12 @@ function CodeClassPip({ replaceable }: { replaceable: boolean }) {
 }
 
 /**
- * The Code column on one line (table-rows L1-1, board Scripts): "upgradable · N versions" in dim
- * ink with its pip; immutable code — the rarer, stronger fact — is the cell's one accent, a jade
- * "immutable" row tag (lane F follow-up). By whom, since when and how it is pinned are its title
- * (and the row's).
+ * The Code column (table-rows L1-1, board Scripts): upgradable code says who can replace it,
+ * "upgradable by a multisig", in the reading ink with its pip (the readability plan's P3: the key
+ * fact of the row, it stood quiet as "upgradable · N versions" with the who in its title only);
+ * immutable code — the rarer, stronger fact — is the cell's one accent, a jade "immutable" row tag
+ * (lane F follow-up). The versions, since when and how it is pinned are its title (and the row's);
+ * a long "who" wraps between its words, never cut.
  */
 function ScriptCodeClass({ script }: { script: KnownScript }) {
   const code = scriptCodeClass(script);
@@ -149,15 +156,15 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
     <span
       data-testid="script-code-class"
       title={codeStatusText(script)}
-      className="text-text-dim flex min-w-0 items-center gap-2 whitespace-nowrap"
+      className="flex min-w-0 items-center gap-2"
     >
       {code && <CodeClassPip replaceable={code.replaceable} />}
       {code && !code.replaceable ? (
         <RowTag variant="accent">immutable</RowTag>
+      ) : code ? (
+        <span className="text-text min-w-0">upgradable {code.who}</span>
       ) : (
-        <span className="truncate">
-          {code ? code.head.toLowerCase() : 'code evidence unavailable'}
-        </span>
+        <span className="text-text-dim min-w-0">code evidence unavailable</span>
       )}
     </span>
   );
@@ -327,8 +334,9 @@ function ScriptName({ script }: { script: KnownScript }) {
     <span className="flex min-w-0 items-center gap-2">
       <AppLink
         href={scriptHref(script)}
+        look="key"
         title={!hasName(script) ? `${script.hashType} ref:${script.codeHash}` : undefined}
-        className="text-body text-text-bright hover:text-emphasis leading-row min-w-0 truncate hover:underline"
+        className="text-body leading-row min-w-0 truncate"
       >
         {name}
       </AppLink>
@@ -404,28 +412,26 @@ const LEAD =
   'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.';
 
 /**
- * The hero's figure and picture (hierarchy v3, C0 / C1): the CKB under these scripts' locks with
- * the script counts on its baseline row, then "who can change the code" as a 28 px bar, its key in
- * one quiet row and one caption. From the role-less summary, so the table's tabs never move it.
+ * What the list's first screen says of all the scripts (the readability plan's P3: the aggregate
+ * becomes one sentence and a bar of 12 px, so rows stand in the first screen): the counts, as the
+ * API states them, and who can change the code under the locks as a 12 px bar, its key the legend
+ * row under it. From the role-less summary, so the table's tabs never move it. It states no CKB
+ * total: the classes' CKB summed would be a sum made in the page (tier 2 states each class's).
  */
-function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
-  // As before v3: without the class summary or the role counts the page states no total.
+function ScriptsSummary({ summary }: { summary: ScriptsListApi }) {
+  // As before: without the class summary or the role counts the page states no summary.
   if (!summary.classSummary || !summary.roleCounts) return null;
-  const { total } = codeClassTotals(summary.classSummary);
   const counts = summary.roleCounts;
   return (
     <>
-      <HeroFigure
-        label="CKB under these scripts"
-        shannons={total}
-        companion={[
-          `locked by ${formatCount(counts.locks, 'lock script')}`,
-          `${formatCount(counts.all, 'script')} in all`,
-          formatCount(counts.types, 'type'),
-        ]}
-      />
-      <p className="text-text-dim text-meta mb-1.5 mt-[18px]">who can change the code</p>
-      <ScriptCodeClassBar classes={summary.classSummary} />
+      <p data-role="summary" className="text-text text-body max-w-measure mt-6">
+        {unitNode(formatCount(counts.all, 'script'))}: {unitNode(formatCount(counts.locks, 'lock'))}{' '}
+        and {unitNode(formatCount(counts.types, 'type'))}. Who can change the locks’ code, by the
+        CKB under them:
+      </p>
+      <div className="mt-2">
+        <ScriptCodeClassBar classes={summary.classSummary} size="line" />
+      </div>
     </>
   );
 }
@@ -439,6 +445,18 @@ export default function ScriptsPage() {
   const pagination = useCursorPagination(pageSize);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
+  // The search filters as typed (debounced), no button: the inventory's field's one behaviour (the
+  // placement lane's note: this list was the only one with a Search button and a "×")
+  const { reset: resetPage } = pagination;
+  useEffect(() => {
+    const next = searchInput.trim() || undefined;
+    if (next === search) return;
+    const timer = setTimeout(() => {
+      setSearch(next);
+      resetPage();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchInput, search, resetPage]);
   const [role, setRole] = useState<'lock' | 'type' | undefined>();
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -507,12 +525,13 @@ export default function ScriptsPage() {
       key: 'code',
       label: 'Code',
       header: <Head label="Code" />,
-      // The pip (10 px), its 8 px gap and "upgradable · 99 versions" (24 characters at 13 px,
-      // 187.2), wider than "code evidence unavailable" (195, no pip) and the "immutable" tag, and
-      // the gap: 221.2. It was 220.
+      // The pip (10 px), its 8 px gap and "upgradable by a multisig" (24 characters at 13 px,
+      // 187.2) on one line, wider than "code evidence unavailable" (195, no pip) and the
+      // "immutable" tag, and the gap: 221.2. A longer who ("by one key or a multisig") wraps
+      // between its words under it.
       minWidth: columnPx(
         Math.max(
-          10 + 8 + textPx('upgradable · 99 versions'.length, fontPx('small')),
+          10 + 8 + textPx('upgradable by a multisig'.length, fontPx('small')),
           textPx('code evidence unavailable'.length, fontPx('small'))
         ) + CELL_GAP_PX
       ),
@@ -581,45 +600,16 @@ export default function ScriptsPage() {
     },
   ];
 
+  // the field alone, on the title row: it filters as typed, as the inventory's does
   const searchForm = (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSearch(searchInput.trim() || undefined);
-        pagination.reset();
-      }}
-      // One inline group (as the DAO page's range buttons): one line on the title row.
-      className="min-w-0 whitespace-nowrap"
-    >
-      <TextField
-        label="Search scripts"
-        search
-        value={searchInput}
-        onChange={setSearchInput}
-        placeholder="search by name or code hash"
-        className="w-48 align-middle sm:w-64"
-      />
-      {search && (
-        <button
-          type="button"
-          onClick={() => {
-            setSearchInput('');
-            setSearch(undefined);
-            pagination.reset();
-          }}
-          aria-label="Clear search"
-          className="text-text-dim ml-2 inline-flex h-7 items-center align-middle"
-        >
-          ×
-        </button>
-      )}
-      <button
-        type="submit"
-        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center border px-3 align-middle"
-      >
-        Search
-      </button>
-    </form>
+    <TextField
+      label="Search scripts"
+      search
+      value={searchInput}
+      onChange={setSearchInput}
+      placeholder="search by name or code hash"
+      className="w-48 sm:w-64"
+    />
   );
 
   return (
@@ -635,9 +625,9 @@ export default function ScriptsPage() {
               </div>
               <p data-role="lede" className="text-text text-body max-w-measure mt-1.5">
                 Locks decide who can spend a cell; types, what it is.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                <AppLink href="#evidence" look="onward">
+                  How it works
+                </AppLink>
               </p>
               {summary.isError ? (
                 <div role="alert" className="text-negative text-small mt-9">
@@ -645,23 +635,18 @@ export default function ScriptsPage() {
                   {summary.error instanceof Error ? summary.error.message : 'Unknown error'}
                 </div>
               ) : summary.data ? (
-                <ScriptsHeroFigure summary={summary.data} />
+                <ScriptsSummary summary={summary.data} />
               ) : (
-                <div className="text-text-dim text-small mt-9">Loading the script summary…</div>
+                <div className="text-text-dim text-small mt-6">Loading the script summary…</div>
               )}
             </section>
             {summary.data?.classSummary && (
-              <>
-                <div className="mt-2.5">
-                  <ScriptCodeClassLegend classes={summary.data.classSummary} />
-                </div>
-                <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
-                  Code pinned by its data hash, or held in a code cell no one can spend, can never
-                  change; whoever can spend any other code cell can replace its code.
-                </p>
-              </>
+              <div className="mt-2.5">
+                <ScriptCodeClassLegend classes={summary.data.classSummary} />
+              </div>
             )}
-            <section aria-label="Script list" className="mt-16 min-w-0">
+            {/* the list 40 px under the summary (it stood 64 under a figure and a caption) */}
+            <section aria-label="Script list" className="mt-10 min-w-0">
               {/* The section's command line (the controls board's tab row): the role the table
                   lists; the hero above never follows it. */}
               <Tabs
@@ -685,13 +670,24 @@ export default function ScriptsPage() {
                     options={SORTS}
                     onChange={(next) => sortBy(next, next === 'name' ? 'asc' : 'desc')}
                   />
+                  {/* the direction, the inventory's one form (the placement lane's note): an
+                      arrow and, from sm, its words */}
                   <button
                     type="button"
-                    aria-label="Reverse order"
+                    aria-label="Reverse sort direction"
                     onClick={() => sortBy(sortKey, sortDirection === 'asc' ? 'desc' : 'asc')}
-                    className="hover:text-text-bright"
+                    className="text-text hover:text-text-bright whitespace-nowrap"
                   >
-                    {sortDirection === 'asc' ? '↑' : '↓'}
+                    {sortDirection === 'desc' ? '↓' : '↑'}
+                    <span className="hidden sm:inline">
+                      {sortKey === 'name'
+                        ? sortDirection === 'asc'
+                          ? ' a to z'
+                          : ' z to a'
+                        : sortDirection === 'desc'
+                          ? ' largest first'
+                          : ' smallest first'}
+                    </span>
                   </button>
                   {data?.total !== undefined && data.total !== null && (
                     <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
@@ -731,6 +727,11 @@ export default function ScriptsPage() {
               <DetailSection title="How scripts work">
                 <Prose>
                   <p>{LEAD}</p>
+                  {/* the bar's rule in words: it stood in tier 1, under the bar (readability P3) */}
+                  <p data-role="caption">
+                    Code pinned by its data hash, or held in a code cell no one can spend, can never
+                    change; whoever can spend any other code cell can replace its code.
+                  </p>
                 </Prose>
               </DetailSection>
               {summary.data?.classSummary && summary.data.roleCounts && (

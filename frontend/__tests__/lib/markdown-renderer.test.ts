@@ -214,6 +214,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '123000000000',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 29,
+      daoCount: 5,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -285,6 +287,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoCount: 1,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -350,6 +354,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -407,6 +413,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -469,6 +477,7 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner Distribution',
       totalBlocks: 100,
+      restBlocks: 58,
       windowDays: 7,
       fromDate: '2026-07-23',
       toDate: '2026-07-29',
