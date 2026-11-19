@@ -1023,6 +1023,95 @@ describe('Transaction variants (D4)', () => {
     expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
   });
 
+  // Lane P1, third round (review p-logic-chain MUST 2): the common shape of a DAO step, from the
+  // owner's own address. Its one party gives the fee and holds the DAO cell (the API tags it DAO);
+  // for a deposit and a withdrawal request its CKB delta is −fee, so the flows are the fee alone,
+  // yet the transaction took a step: the lede says the step and never "Only the fee moved", What
+  // moved is drawn with the party's step on its end, and the balance table is drawn.
+  describe('a Nervos DAO step from the owner’s own address', () => {
+    const self = (
+      action: string,
+      metadata: Record<string, string>,
+      ckbDelta: (fee: bigint) => string
+    ) => {
+      const tx = committed();
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata }],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: ckbDelta(BigInt(tx.fee)),
+            tags: 8,
+          },
+        ],
+      });
+      return tx;
+    };
+    const expectStep = async (lede: string, step: string) => {
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(lede);
+      expect(summary).not.toHaveTextContent('Only the fee moved');
+      const moved = await screen.findByTestId('tx-what-moved');
+      expect(moved).toHaveTextContent(step);
+      expect(
+        screen.getByRole('heading', { name: 'Balance changes' }).closest('section')
+      ).toHaveTextContent(row('r4p74p'));
+    };
+
+    it('a deposit', async () => {
+      self('deposit', { capacity: '12200000000000' }, (fee) => `-${fee}`);
+      await expectStep(
+        `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`,
+        'Nervos DAO deposit'
+      );
+    });
+
+    it('a withdrawal request', async () => {
+      self(
+        'withdraw_request',
+        { capacity: '2605000000000', depositBlock: '19695550' },
+        (fee) => `-${fee}`
+      );
+      await expectStep(
+        `${row('r4p74p')} asked to withdraw a Nervos DAO deposit of 26,050 CKB, made at #19,695,550.`,
+        'Nervos DAO withdrawal request'
+      );
+    });
+
+    it('a withdrawal', async () => {
+      const tx = committed();
+      tx.inputsCapacity = '2605000000000';
+      tx.inputs![0].capacity = '2605000000000';
+      tx.outputsCapacity = '2622530633229';
+      tx.outputs![0].capacity = '2622530633229';
+      tx.fee = '936';
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            metadata: { capacity: '2605000000000', compensation: '17530634165' },
+          },
+        ],
+        participants: [
+          { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '17530633229', tags: 8 },
+        ],
+      });
+      await expectStep(
+        `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`,
+        'Nervos DAO withdrawal'
+      );
+    });
+  });
+
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
     const message = `0x${Buffer.from('0.210.0 (860c9bb 2026-09-21) ').toString('hex')}0011223344556677`;
     vi.mocked(api.getTransactionDetail).mockResolvedValue({

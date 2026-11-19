@@ -359,7 +359,7 @@ function TxSummary({
 }) {
   const moves = txMovements(activity);
   const flows = txFlows({ hash: activity.txHash, activity, fee, compensation });
-  const feeOnly = onlyFeeMoved(flows);
+  const feeOnly = onlyFeeMoved(activity, flows);
   const flowOf = (item: ItemDelta | null) => {
     const key = item ? flowKey(item) : 'ckb';
     const flow = flows.find((f) => f.key === key);
@@ -1014,7 +1014,10 @@ export default function TransactionDetailPage() {
     activity !== undefined &&
     activity !== null &&
     readPart(() =>
-      onlyFeeMoved(txFlows({ hash, activity, fee: tx.fee, compensation: compensation ?? null }))
+      onlyFeeMoved(
+        activity,
+        txFlows({ hash, activity, fee: tx.fee, compensation: compensation ?? null })
+      )
     ).value === true;
 
   // ---- hover linking by group identity (TX-14) ----

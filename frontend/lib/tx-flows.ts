@@ -223,11 +223,18 @@ export function txFlows({
 
 /**
  * Whether a transaction moved its fee and nothing else (lane P1, the plan's "a transaction that
- * moves only its fee says so in one line"): its flows are the CKB flow alone, which ends at the
- * miner and at no party, with no Nervos DAO compensation entering it. A transaction that moved
- * nothing, not even a fee, did not move "only its fee".
+ * moves only its fee says so in one line"): it takes no protocol step, and its flows are the CKB
+ * flow alone, which ends at the miner and at no party, with no Nervos DAO compensation entering
+ * it. A transaction that moved nothing, not even a fee, did not move "only its fee". The one
+ * decision the lede, What moved and the balance table follow (lane P1, third round; review
+ * p-logic-chain MUST 2: a DAO deposit or withdrawal request from the owner's own address leaves its
+ * one party −fee and no item, and read as "only the fee moved").
  */
-export function onlyFeeMoved(flows: readonly TxFlow[]): boolean {
+export function onlyFeeMoved(
+  activity: Pick<GlobalActivity, 'protocolActions'>,
+  flows: readonly TxFlow[]
+): boolean {
+  if (activity.protocolActions.length > 0) return false;
   if (flows.length !== 1 || flows[0].asset.kind !== 'ckb') return false;
   const [ckb] = flows;
   return (

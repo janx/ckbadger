@@ -43,8 +43,12 @@ const token = (delta: string): ItemDelta => ({
   symbol: 'iCKB',
   decimals: 8,
 });
-const activity = (participants: ParticipantInfo[]): Pick<GlobalActivity, 'participants'> => ({
+// re-pinned (lane P1, third round): an activity with no protocol step, as onlyFeeMoved reads it
+const activity = (
+  participants: ParticipantInfo[]
+): Pick<GlobalActivity, 'participants' | 'protocolActions'> => ({
   participants,
+  protocolActions: [],
 });
 const amounts = (ends: readonly FlowEnd[]) =>
   ends.map((e) => [e.t, e.t === 'party' ? e.party.address!.slice(-6) : e.t, e.amount.toString()]);
@@ -263,39 +267,50 @@ describe('txFlows', () => {
 
   // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"): its flows are
   // the CKB flow alone, from parties to the miner and to no party, with no compensation entering.
+  // Re-pinned on purpose (lane P1, third round; review p-logic-chain MUST 2): the one decision reads
+  // the activity's protocol steps too, so it takes the activity beside its flows
   it('tells a transaction that moved only its fee', () => {
-    const flows = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) =>
-      txFlows({ hash: HASH, activity: activity(participants), fee, compensation });
-    expect(onlyFeeMoved(flows([party('aaaaaa', '-64119')], '64119', null))).toBe(true);
-    expect(
-      onlyFeeMoved(flows([party('aaaaaa', '-60000'), party('bbbbbb', '-4119')], '64119', null))
-    ).toBe(true);
+    const only = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) => {
+      const a = activity(participants);
+      return onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee, compensation }));
+    };
+    expect(only([party('aaaaaa', '-64119')], '64119', null)).toBe(true);
+    expect(only([party('aaaaaa', '-60000'), party('bbbbbb', '-4119')], '64119', null)).toBe(true);
     // a party received CKB
-    expect(onlyFeeMoved(flows([party('aaaaaa', '-100'), party('bbbbbb', '90')], '10', null))).toBe(
-      false
-    );
+    expect(only([party('aaaaaa', '-100'), party('bbbbbb', '90')], '10', null)).toBe(false);
     // an item moved
     expect(
-      onlyFeeMoved(
-        flows(
-          [party('aaaaaa', '-5', [token('-700')]), party('bbbbbb', '0', [token('700')])],
-          '5',
-          null
-        )
+      only(
+        [party('aaaaaa', '-5', [token('-700')]), party('bbbbbb', '0', [token('700')])],
+        '5',
+        null
       )
     ).toBe(false);
     // compensation entered
     expect(
-      onlyFeeMoved(
-        flows(
-          [party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')],
-          '936',
-          BigInt('17530634165')
-        )
+      only(
+        [party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')],
+        '936',
+        BigInt('17530634165')
       )
     ).toBe(false);
     // nothing moved at all: no fee either, so not "only the fee"
-    expect(onlyFeeMoved(flows([party('aaaaaa', '0')], '0', null))).toBe(false);
+    expect(only([party('aaaaaa', '0')], '0', null)).toBe(false);
+  });
+
+  // Lane P1, third round (review p-logic-chain MUST 2): a Nervos DAO deposit or withdrawal request
+  // from the owner's own address leaves its one party −fee and no item, and it took a step: a
+  // transaction that takes a protocol step did not move only its fee.
+  it('does not call a protocol step "only the fee"', () => {
+    for (const action of ['deposit', 'withdraw_request']) {
+      const a = {
+        ...activity([{ ...party('aaaaaa', '-1000'), tags: 8 }]),
+        protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata: {} }],
+      };
+      expect(
+        onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee: '1000', compensation: null }))
+      ).toBe(false);
+    }
   });
 
   it('keys objects and identities by what they are', () => {
