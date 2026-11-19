@@ -1323,6 +1323,16 @@ type ItemDelta =
     }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
+/** An item's movement in its whole transaction: its net over every party rose, fell, or held. */
+export type ItemMovement = 'mint' | 'burn' | 'transfer';
+
+/**
+ * One item delta of an address's row (the third read's Lb SHOULD 2): the row carries only its
+ * address's deltas, so the route states the item's movement in the whole transaction beside it,
+ * which the page cannot tell from one party's change.
+ */
+export type RowItemDelta = ItemDelta & { movement: ItemMovement };
+
 interface ActivityTypeCall {
   typeCodeHash: string;
   typeHashType: string;
@@ -1406,7 +1416,8 @@ interface Activity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
-  itemDeltas: ItemDelta[];
+  /** This address's item deltas, each with its movement in the whole transaction. */
+  itemDeltas: RowItemDelta[];
   typeCalls: ActivityTypeCall[];
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];

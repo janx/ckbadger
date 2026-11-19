@@ -21,7 +21,7 @@ import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { addressCellSealId } from '@/lib/address-cell-seal';
-import type { Activity, ItemDelta } from '@/lib/api';
+import type { Activity, RowItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
 import { factsOf } from '@/__tests__/utils/facts';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
@@ -613,8 +613,15 @@ describe('Address v3 components', () => {
         activity={{
           ...addressActivitiesFixture[0],
           tags: 1,
+          // a transfer out, as the route states it (the third read's Lb SHOULD 2): its direction
           itemDeltas: [
-            { kind: 'token', typeScriptHash: '0x' + 'ab'.repeat(32), delta: '-1', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: '0x' + 'ab'.repeat(32),
+              delta: '-1',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
         }}
       />
@@ -634,6 +641,7 @@ describe('Address v3 components', () => {
           delta,
           symbol: 'iCKB',
           decimals: 8,
+          movement: 'transfer' as const,
         },
       ],
     });
@@ -653,7 +661,8 @@ describe('Address v3 components', () => {
 // Consistency C3: the address feed is the site's one activity row (ActivityRow), with this
 // address's line first, as text and tagged "this address" (Address.dc.html → History).
 describe('Address activity is the shared activity row (C3)', () => {
-  const nervape = (n: number): ItemDelta => ({
+  // objects that changed hands, as the route states it (the third read's Lb SHOULD 2)
+  const nervape = (n: number): RowItemDelta => ({
     kind: 'object',
     objectId: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
     delta: 1,
@@ -661,6 +670,7 @@ describe('Address activity is the shared activity row (C3)', () => {
     class: 'object',
     composition: 'btc_ckb',
     role: 'spore',
+    movement: 'transfer',
   });
   const received = (count: number): Activity => ({
     ...addressActivitiesFixture[0],

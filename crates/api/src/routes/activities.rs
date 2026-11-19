@@ -191,8 +191,8 @@ pub struct ActivityResponse {
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
-    // This participant's Layer 2
-    pub item_deltas: Vec<ItemDeltaResponse>,
+    // This participant's Layer 2, each item with its movement in the whole transaction
+    pub item_deltas: Vec<RowItemDelta>,
     // TX-level Layer 3
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -263,6 +263,56 @@ pub struct TypeCallResponse {
     pub type_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
+}
+
+/// One item delta of an address's row, with the item's movement in the whole transaction (the
+/// third read's Lb SHOULD 2, ruled): the row carries only its address's deltas, so its page cannot
+/// tell a burn from a send, nor a mint from a transfer in. `movement` is `mint` where the item's
+/// net over every party of the transaction rose, `burn` where it fell, `transfer` where it only
+/// changed hands ([`item_movement`], the rule every other feed's head reads off its whole row).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowItemDelta {
+    #[serde(flatten)]
+    pub delta: ItemDeltaResponse,
+    pub movement: &'static str,
+}
+
+/// An item's movement in a transaction: its net over every party, `mint` where it rose, `burn`
+/// where it fell, `transfer` where it only changed hands (a token by its type script hash, an
+/// object by its id, an identity by its id and standard: the item delta's kind and id).
+fn item_movement(actions: &TxActions, item: &ItemDelta) -> anyhow::Result<&'static str> {
+    let mut net: i128 = 0;
+    for delta in actions.participants.iter().flat_map(|p| &p.item_deltas) {
+        if delta.kind != item.kind || delta.item_id != item.item_id {
+            continue;
+        }
+        let magnitude = i128::try_from(delta.magnitude).map_err(|_| {
+            anyhow::anyhow!(
+                "tx 0x{}: item 0x{} moves {} units, past an i128",
+                hex::encode(&actions.tx_hash),
+                hex::encode(&delta.item_id),
+                delta.magnitude
+            )
+        })?;
+        net = if delta.negative {
+            net.checked_sub(magnitude)
+        } else {
+            net.checked_add(magnitude)
+        }
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "tx 0x{}: item 0x{}'s net movement overflows an i128",
+                hex::encode(&actions.tx_hash),
+                hex::encode(&delta.item_id)
+            )
+        })?;
+    }
+    Ok(match net.cmp(&0) {
+        std::cmp::Ordering::Greater => "mint",
+        std::cmp::Ordering::Less => "burn",
+        std::cmp::Ordering::Equal => "transfer",
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1240,7 +1290,12 @@ pub(crate) fn build_activity_response(
     let item_deltas = participant
         .item_deltas
         .iter()
-        .map(|item| convert_item_delta(item, item_cache, store, pool.is_none()))
+        .map(|item| {
+            Ok(RowItemDelta {
+                delta: convert_item_delta(item, item_cache, store, pool.is_none())?,
+                movement: item_movement(actions, item)?,
+            })
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions

@@ -1159,7 +1159,16 @@ describe('Address v3', () => {
         pageFixture([
           {
             ...addressActivitiesFixture[0],
-            itemDeltas: [{ kind: 'identity', standard, identityId: fixtureHash(77), delta: 1 }],
+            // the route states each item's movement in the whole transaction (the third read's Lb SHOULD 2)
+            itemDeltas: [
+              {
+                kind: 'identity',
+                standard,
+                identityId: fixtureHash(77),
+                delta: 1,
+                movement: 'transfer',
+              },
+            ],
           },
         ])
       );
@@ -1190,8 +1199,15 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           tags: 1,
+          // a transfer in, as the route states it (the third read's Lb SHOULD 2): its direction
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '1', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '1',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
         },
       ])
@@ -1207,7 +1223,13 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '123456789', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '123456789',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
           typeCalls: [
             {

@@ -69,7 +69,10 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 
 **Responses**
 
-- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas, participants)
+- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas, participants);
+  each of its `itemDeltas` carries `movement`, the item's movement in the whole transaction
+  (`mint` where its net over every party rose, `burn` where it fell, `transfer` where it only
+  changed hands), which the row's own delta cannot tell
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 

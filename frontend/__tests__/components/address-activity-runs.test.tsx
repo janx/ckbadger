@@ -2,7 +2,7 @@
 // address's own line alone, and folds its consecutive rows that did the same thing and called the
 // same script code (Gate B's rule, lists lane P3), counting this address and the other parties of
 // each transaction though the row does not draw them.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtures/address';
@@ -73,6 +73,66 @@ describe('an address page folds its own runs (B4 item 5)', () => {
         : el.querySelector('[data-role="headline"]')!.textContent
     );
     expect(drawn).toEqual(['CKB received', 'CKB sent', 'CKB received ×2']);
+  });
+
+  // The third read's Lb SHOULD 2, ruled: the row carries only this address's deltas, so a burn read
+  // "Token sent" and folded with plain sends, a mint "Token received" with transfers in. The route
+  // states each item's movement in the whole transaction; the row is headed as every other feed
+  // heads it ("Token burn", "Token mint"), and by direction only for a transfer.
+  const moved = (n: number, delta: string, movement: 'mint' | 'burn' | 'transfer'): Activity => ({
+    ...update(n),
+    typeCalls: [],
+    ckbDelta: '0',
+    // the route's tag of a token row (TAG_TOKEN)
+    tags: 1,
+    itemDeltas: [
+      {
+        kind: 'token',
+        typeScriptHash: `0x${'5e'.repeat(32)}`,
+        delta,
+        symbol: 'iCKB',
+        decimals: 8,
+        movement,
+      },
+    ],
+  });
+  const drawn = () =>
+    [...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]')].map(
+      (el) =>
+        el.getAttribute('data-role') === 'activity-run'
+          ? `${el.querySelector('[data-role="headline"]')!.textContent} ×${el.getAttribute('data-run-count')}`
+          : el.querySelector('[data-role="headline"]')!.textContent
+    );
+
+  it('heads a burn and a mint as every feed does, a transfer by its direction, and folds none of them together', () => {
+    render(
+      <AddressActivities
+        rows={[
+          moved(1, '-10000000000', 'burn'),
+          moved(2, '-5000000000', 'transfer'),
+          moved(3, '1000000000', 'mint'),
+          moved(4, '4000000000', 'transfer'),
+        ]}
+        address={addressFixture}
+      />
+    );
+    expect(drawn()).toEqual(['Token burn', 'Token sent', 'Token mint', 'Token received']);
+  });
+
+  it('refuses an item an older API states no movement of, by name', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { movement: _gone, ...older } = moved(1, '-100', 'burn').itemDeltas[0] as {
+      movement: string;
+    };
+    expect(() =>
+      render(
+        <AddressActivities
+          rows={[{ ...moved(1, '-100', 'burn'), itemDeltas: [older as never] }]}
+          address={addressFixture}
+        />
+      )
+    ).toThrow("an address activity's item: the API sends no movement: it is older than this page");
+    spy.mockRestore();
   });
 
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties

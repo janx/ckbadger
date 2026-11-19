@@ -333,6 +333,74 @@ async fn test_activity_free_form_json_carries_integers_as_exact_strings() {
     assert_eq!(decoded["protocol"], "fiber", "{json}");
 }
 
+/// `expected` item deltas as an address row states them (the third read's Lb SHOULD 2): each with
+/// its movement in the whole transaction beside it, in order.
+fn with_movements(expected: &serde_json::Value, movements: &[&str]) -> serde_json::Value {
+    let items = expected
+        .as_array()
+        .expect("expected item deltas are an array");
+    assert_eq!(items.len(), movements.len(), "one movement per item delta");
+    serde_json::Value::Array(
+        items
+            .iter()
+            .zip(movements)
+            .map(|(item, movement)| {
+                let mut item = item.clone();
+                item["movement"] = serde_json::json!(movement);
+                item
+            })
+            .collect(),
+    )
+}
+
+/// The third read's Lb SHOULD 2, ruled: an address's row carries only that address's deltas, so
+/// its page headed a burn "Token sent" and folded it with plain sends, and a mint with transfers in.
+/// The address route states each of the row's items' movement in the whole transaction, from its
+/// net over every party as every other feed's head computes it: `mint` where it rose, `burn`
+/// where it fell, `transfer` where it only changed hands (one rule for every kind of item: an
+/// object and an identity by their ids, as a token by its type script hash).
+#[tokio::test]
+async fn address_rows_state_each_items_movement_in_the_whole_transaction() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+    let lock_hash = vec![0x31; 32];
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0xa7; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let party = |id: u8, items: Vec<ItemDelta>| ParticipantDelta {
+        id: ParticipantId::Lock([id; 32]),
+        ckb_delta: 0,
+        used_delta: 0,
+        item_deltas: items,
+        tags: 0,
+        roles: 0,
+    };
+    for (parties, movement) in [
+        // the address's 100 leave and no party gains them
+        (vec![party(0x31, vec![token(100, true)])], "burn"),
+        // its 50 go to another party
+        (
+            vec![
+                party(0x31, vec![token(50, true)]),
+                party(0x32, vec![token(50, false)]),
+            ],
+            "transfer",
+        ),
+        // 10 arrive and no party gave them
+        (vec![party(0x31, vec![token(10, false)])], "mint"),
+    ] {
+        let mut actions = make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 100, 0);
+        actions.participants = parties;
+        let json = address_activities_json(&lock_hash, &actions).await;
+        assert_eq!(
+            json["data"][0]["itemDeltas"][0]["movement"], movement,
+            "{json}"
+        );
+    }
+}
+
 /// R-8 ruling: an activity lock call whose args do not fit the lock's
 /// registry layout is served (200) with `decoded: null` and a `decodeError`
 /// naming the script and the length, the same rule as the transaction detail.
@@ -2482,7 +2550,13 @@ async fn object_item_deltas_name_collection_class_and_composition() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): the address row states each item's
+    // movement in the whole transaction; the one party gains the spore and loses the token
+    assert_eq!(
+        json["data"][0]["itemDeltas"],
+        with_movements(&expected, &["mint", "burn"]),
+        "address feed"
+    );
 
     let (status, global) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{global}");
@@ -2590,7 +2664,12 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): the cluster is created, a mint
+    assert_eq!(
+        json["data"][0]["itemDeltas"],
+        with_movements(&expected, &["mint"]),
+        "address feed"
+    );
     let (status, json) = get_json(
         &app,
         &format!("/transactions/0x{}/activity", hex::encode(&tx_hash)),
@@ -2685,6 +2764,8 @@ async fn pending_object_delta_names_what_the_store_knows() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
+    // re-pinned on purpose (the third read's Lb SHOULD 2): each item's movement in the whole
+    // pending transaction, its one party gaining the new spore and losing the indexed one
     assert_eq!(
         row["itemDeltas"],
         serde_json::json!([
@@ -2696,6 +2777,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "class": "object",
                 "composition": null,
                 "role": null,
+                "movement": "mint",
             },
             {
                 "kind": "object",
@@ -2705,6 +2787,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "class": "object",
                 "composition": "btc_ckb",
                 "role": "spore",
+                "movement": "burn",
             },
         ]),
         "{json}"
