@@ -392,6 +392,10 @@ describe('Fiber channel phone row (board L8)', () => {
     }
   });
 
+  // Re-pinned on purpose (lane D4, PB-17): the phone row states the table's fields — the capacity is
+  // line 1's figure (it was the state, now on the quiet line only where the list is of every state),
+  // the parties are joined by the table's "↔" with no lock (the table writes none; it was "⇄" and
+  // "Default Lock · unnamed lock"), and the opening is its day, named (it was the time to the minute).
   it('labels the date and the duration and names the pair by address suffix at 358 px', async () => {
     atContainerWidth(358);
     atViewportWidth(390);
@@ -400,34 +404,20 @@ describe('Fiber channel phone row (board L8)', () => {
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
     expect(screen.queryByRole('table', { name: 'Open channels' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
-      // U-09 (re-pinned): the phone row's ids at the tight size
-      ['channel', 'head', '0x0101…0101', 'open'],
-      [
-        'pair',
-        'body',
-        'ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "3,000.00000000
-        // CKB")
-        '3,000 CKB',
-      ],
-      [
-        'time',
-        'quiet',
-        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3m 20s$/),
-        null,
-      ],
+      // U-09 (re-pinned): the phone row's ids at the tight size; readability R5, the summary form
+      ['channel', 'head', '0x0101…0101', '3,000 CKB'],
+      ['parties', 'body', 'ckb1…pr3prn↔ 0xbbbb…bbbb', null],
+      ['time', 'quiet', 'opened 2023-11-15 · open for 3m 20s', null],
     ]);
-    // R11: the state word stays neutral; only its dot keeps Fiber's jade
-    const state = within(row).getByText('open');
-    expect(state.className).not.toMatch(/(^|\s)text-jade(\s|$)/);
-    expect(state.querySelector('.bg-jade')).not.toBeNull();
     expect(within(row).getByTitle(channel.channelId)).toHaveAttribute(
       'href',
       `/mainnet/fiber/channels/${channel.channelId}`
     );
   });
 
-  it('folds into two lines at 608 px: id and pair with the capacity, then time and state', async () => {
+  // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts (it was two
+  // lines, the id and the pair with the capacity, then the time and the state).
+  it('is the phone row’s three parts at 608 px, its ids at the row size from sm', async () => {
     atContainerWidth(608);
     atViewportWidth(640);
     serve();
@@ -436,13 +426,9 @@ describe('Fiber channel phone row (board L8)', () => {
     // R9 (re-pinned): at 640 the row is drawn from sm, beside the network reading that writes the
     // same parties at the row size: the row size (it was the tight size)
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      [
-        'channel',
-        '0x01010101…010101 · ckb1…qqpr3prn ⇄ 0xbbbbbbbb…bbbbbb Default Lock · unnamed lock',
-        // a phone row's summary form (readability R5, re-pinned on purpose: "3,000.00000000 CKB")
-        '3,000 CKB',
-      ],
-      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
+      ['channel', '0x01010101…010101', '3,000 CKB'],
+      ['parties', 'ckb1…qqpr3prn↔ 0xbbbbbbbb…bbbbbb', null],
+      ['time', 'opened 2023-11-15 · open for 3m 20s', null],
     ]);
   });
 
@@ -461,7 +447,8 @@ describe('Fiber channel phone row (board L8)', () => {
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['channel', 'head', '0x0101…0101', '3,000 CKB'],
-      ['parties', 'body', 'ckb1…pr3prn ↔ 0xbbbb…bbbb', null],
+      // the parties as the table joins them: each its own item, the arrow before the second
+      ['parties', 'body', 'ckb1…pr3prn↔ 0xbbbb…bbbb', null],
       ['time', 'quiet', 'opened 2023-11-15 · open for 3m 20s', null],
     ]);
     // the table writes no lock of a party and no state on a list of one state: nor does the row

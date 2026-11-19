@@ -164,6 +164,13 @@ export const WIDEST_BLOCK_FEES = ckbAmountText(ckbNines(3), 'column');
 export const WIDEST_TX_VALUE = ckbAmountText(ckbNines(9), 'column');
 
 /**
+ * Of record: WIDEST_TX_VALUE as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `999,999,999`; a Fiber channel's capacity holds to it too (its table's Capacity column reads
+ * WIDEST_TX_VALUE). Source: WIDEST_TX_VALUE.
+ */
+export const WIDEST_TX_VALUE_SUMMARY = ckbAmountText(ckbNines(9), 'summary');
+
+/**
  * Of record: the CKB a transaction outputs, every decimal, eleven whole digits (the genesis
  * transactions output the 33.6 billion CKB first issued; all CKB is some 45 billion today). Source:
  * mainnet block 0 and the issuance.

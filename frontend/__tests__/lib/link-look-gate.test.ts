@@ -412,9 +412,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/client-page.tsx': {
     lane: 'p-topics',
-    sites: { look: 4, ink: 5, raw: 1 },
+    sites: { look: 3, ink: 4, raw: 1 },
     reason:
-      '4 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
+      '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
   },
   'app/forks/[height]/[orphan]/client-page.tsx': {
     lane: 'p-topics',
@@ -519,7 +519,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 594;
+const TOLERATED_TOTAL = 592;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
