@@ -120,7 +120,7 @@ function Counted({
 /** The H-multiplier, named, to 2 dp and grouped as the table writes it (PA-09). */
 function hMultiplierPart(a: Asset): ReactNode {
   return (
-    <Labelled key="hm" label="H-mult.">
+    <Labelled key="hm" label="CKB held ÷ occupied">
       <HMultiplier value={a.hMultiplier} />
     </Labelled>
   );
@@ -398,7 +398,9 @@ function tokenTitle(a: Asset): string {
     a.totalSupply === null
       ? 'supply unavailable'
       : `supply ${formatTokenBalanceWithRawMarker(a.totalSupply, a.decimals)}${a.symbol ? ` ${a.symbol}` : ''}`,
-    a.hMultiplier === null ? 'H-mult. unavailable' : `H-mult. ×${a.hMultiplier}`,
+    a.hMultiplier === null
+      ? 'CKB held ÷ occupied unavailable'
+      : `CKB held ÷ occupied ×${a.hMultiplier}`,
   ].join(' · ');
 }
 
@@ -458,7 +460,7 @@ function tokenColumns(): ListColumn<Asset>[] {
     HELD_COLUMN,
     {
       key: 'hm',
-      label: 'H-mult.',
+      label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
@@ -551,7 +553,9 @@ function objectTitle(a: Asset): string {
     a.id,
     `${countText(a.liveCount, 'live', 'live')} of ${countText(a.totalSupply, 'minted', 'minted')}`,
     heldTitle(a),
-    a.hMultiplier === null ? 'H-mult. unavailable' : `H-mult. ×${a.hMultiplier}`,
+    a.hMultiplier === null
+      ? 'CKB held ÷ occupied unavailable'
+      : `CKB held ÷ occupied ×${a.hMultiplier}`,
   ].join(' · ');
 }
 
@@ -599,7 +603,7 @@ function objectColumns(): ListColumn<Asset>[] {
     HELD_COLUMN,
     {
       key: 'hm',
-      label: 'H-mult.',
+      label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
