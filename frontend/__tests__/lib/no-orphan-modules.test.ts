@@ -45,6 +45,14 @@ const ALLOWLIST: Record<string, string> = {
   // module is first imported by a page (this test then fails until it does).
   'components/ui/tabs.tsx':
     'the controls library’s tab row (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/filter-chips.tsx':
+    'the controls library’s filter chips (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/range-select.tsx':
+    'the controls library’s range (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/text-field.tsx':
+    'the controls library’s text field (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/select.tsx':
+    'the controls library’s select (lane C1): drawn by the filter chips’ phone form and placed by the C2 lanes',
   'lib/tab-row-fit.ts': 'the tab row’s fit, imported by components/ui/tabs.tsx until a page does',
   'lib/roving-focus.ts':
     'the keyboard of the tab row, the filter chips and the range (lane C1), imported by them alone',

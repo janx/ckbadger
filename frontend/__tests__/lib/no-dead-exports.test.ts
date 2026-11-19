@@ -96,6 +96,27 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
     why: 'the controls library’s tab row (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
     anchor: { file: '__tests__/lib/controls-gate.test.ts', text: "'components/ui/tabs.tsx'" },
   },
+  'components/ui/filter-chips.tsx#FilterChips': {
+    why: 'the controls library’s filter chips (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
+    anchor: {
+      file: '__tests__/lib/controls-gate.test.ts',
+      text: "'components/ui/filter-chips.tsx'",
+    },
+  },
+  'components/ui/range-select.tsx#RangeSelect': {
+    why: 'the controls library’s range (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
+    anchor: {
+      file: '__tests__/lib/controls-gate.test.ts',
+      text: "'components/ui/range-select.tsx'",
+    },
+  },
+  'components/ui/text-field.tsx#TextField': {
+    why: 'the controls library’s text field (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
+    anchor: {
+      file: '__tests__/lib/controls-gate.test.ts',
+      text: "'components/ui/text-field.tsx'",
+    },
+  },
 };
 
 const isSource = (path: string) => /\.tsx?$/.test(path) && !path.endsWith('.d.ts');
