@@ -5,6 +5,8 @@
       "ckbDelta": "-50000000000",
       "isCellbase": false,
       "itemDeltas": [],
+      "itemTypes": [],
+      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -29,6 +31,8 @@
       "ckbDelta": "50000000000",
       "isCellbase": false,
       "itemDeltas": [],
+      "itemTypes": [],
+      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {

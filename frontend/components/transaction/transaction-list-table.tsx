@@ -101,7 +101,7 @@ function cellbasePays(tx: Transaction): {
 function whatNote(activity: GlobalActivity, size: ShortSize): ReactNode[] {
   if (activity.protocolActions.length > 0) {
     try {
-      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa, size));
+      return activity.protocolActions.flatMap((pa) => protocolActionNoteParts(pa, size, 'summary'));
     } catch (error) {
       return [<ActivityReadError key="error" txHash={activity.txHash} error={error} />];
     }

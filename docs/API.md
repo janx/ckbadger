@@ -73,6 +73,37 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 
+**The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
+and these codes, never their args)
+
+- `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
+  transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
+  code-hash order: the type script of every token, object and identity any participant gained or
+  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Each is
+  what the indexer classified, read from ckbadger's own stores in the request's view, never a
+  match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
+  - a token: its row (`CF_TOKENS`), the script itself;
+  - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
+    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
+  - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
+    (`object_outpoints`, MNFT_TOKEN);
+  - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
+    classifier would take as the cluster (a code the protocol registry names `Cluster`, the
+    cluster's id as args).
+
+  `null` on a pool row (a pending row never folds), and on a committed row whose item's script the
+  stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
+  item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
+  and a feed folds such a row with no other.
+
+- `itemTypesUnread: string | null` — see `itemTypes`.
+- `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
+  with their args.
+- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
+  An output's lock does not run: these are not the locks the transaction called. The locks that
+  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
+  input flag (a re-sync).
+
 **Participants**
 
 A participant is any party the transaction affects, not only a holder of one of its cells. Both
@@ -281,7 +312,12 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 **Params**
 
-- `ListParams` — `limit`, `block_number`, `cursor`
+- `ListParams` — `limit`, `block_number`, `cursor`, `activity_type`: one of `user`, `ckb`,
+  `script`, `cellbase`, `dao`, `token`, `object`, `identity` (none or `all`: every transaction).
+  `user` is every committed transaction but the cellbase, newest first, read from the
+  `activities` rows (which hold no cellbase) with their `tx_index` entries; the Transactions page
+  opens on it. A filtered list states no `total`. `/transactions/pool` takes the same values;
+  there `user` names every pool transaction (none is a cellbase), a partly read one too.
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**
@@ -676,7 +712,20 @@ bands it draws and the wholes it divides by, read-only on the store:
   kind it is, so this is not a count of distinct activities; coinbase and
   unknown transactions are not in it. `daoCount` is the day's three DAO
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
-  band of Activity by type.
+  band of Activity by type. `userTransactionCount` is the day's user
+  transactions: its committed transactions (its `DailyStats` row) less its
+  cellbases (`coinbaseCount`), the figure the Transactions page's lede and
+  "all" chip, the Activities page's lede and the home's daily bars state; a
+  day without its chain row, or with more cellbases than transactions, is a
+  500 naming the date.
+- `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
+  and `daoCount`, counted as the daily rows count them (one helper each in the
+  route); the home page's activity shares divide by `kindOccurrences` and its
+  DAO share is `daoCount`. `scriptCounts` is ranked by calls, ties by code hash;
+  `scriptCalls` is every call it counts (a transaction calling two scripts
+  counts twice, so it is not `scriptCallCount`), and `scriptRest`
+  (`{ scripts, calls } | null`) the scripts after the five largest: the home
+  card's script shares and its "others" row, summed nowhere in the page.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 
@@ -704,6 +753,11 @@ network store too), no re-sync:
   pool, pending and proposed (not `awaitingIndex`).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
+- `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
+  script families by role; `locks` and `types` each count a family used as both
+  (`both`), `neither` the families with no role, so the four make the whole
+  (`locks + types - both + neither = all`, checked in the route; the list's
+  first sentence says each).
 - `GET /dao/statistics` — `depositCellsCount` (deposits),
   `withdrawalRequestCellsCount` (withdrawal requests) and `liveCellsCount`
   (their total, the live DAO cells); `secondaryIssuance` (shannons): the

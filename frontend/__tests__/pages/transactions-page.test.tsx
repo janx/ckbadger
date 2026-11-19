@@ -37,7 +37,6 @@ vi.mock('@/lib/api', async () => ({
     getTransactions: vi.fn(),
     getPoolTransactions: vi.fn(),
     getDailyActivityStats: vi.fn(),
-    getTxStats: vi.fn(),
   },
 }));
 
@@ -59,12 +58,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getPoolTransactions).mockResolvedValue(emptyPool);
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([]);
-  vi.mocked(api.getTxStats).mockResolvedValue({
-    currentHour: 0,
-    currentDay: 0,
-    hourlyData: [],
-    dailyData: [],
-  });
 });
 
 describe('TransactionsPage', () => {
@@ -971,14 +964,11 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
       daoWithdrawCompleteCount: 0,
       // the API's count of the DAO actions (lists lane P3: the page sums none)
       daoCount: 3,
+      // re-pinned on purpose (the P3 follow-up's 2b): the route's count of the day's user
+      // transactions; the page read the day's 20 transactions from /stats/tx and subtracted 3
+      userTransactionCount: 17,
     },
   ]);
-  vi.mocked(api.getTxStats).mockResolvedValue({
-    currentHour: 0,
-    currentDay: 500,
-    hourlyData: [],
-    dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 20, complete: true }],
-  });
   vi.mocked(api.getTransactions).mockResolvedValue(
     pagedRead({
       data: [],
@@ -1037,17 +1027,15 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
     '/mainnet/activities'
   );
 });
+// Re-pinned on purpose (the P3 follow-up's 2b): the day's user transactions are its activity row's
+// (userTransactionCount), so a day without a complete row states no count; it was a day whose
+// /stats/tx bucket was incomplete ("No complete transaction count for …").
 it('does not infer a transaction total from kind counts when yesterday is incomplete', async () => {
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  const before = new Date(Date.now() + 8 * 3600000 - 2 * 86400000).toISOString().slice(0, 10);
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-    { ...dailyActivities[0], date: yesterday },
+    { ...dailyActivities[0], date: before.replaceAll('-', '') },
   ]);
-  vi.mocked(api.getTxStats).mockResolvedValue({
-    currentHour: 0,
-    currentDay: 500,
-    hourlyData: [],
-    dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 999, complete: false }],
-  });
   vi.mocked(api.getTransactions).mockResolvedValue(
     pagedRead({
       data: [],
@@ -1058,8 +1046,11 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
   );
   render(<TransactionsPage />);
   expect(
-    await screen.findByText(`No complete transaction count for ${yesterday} (UTC+8).`)
+    await screen.findByText(`No complete activity statistics for ${yesterday} (UTC+8).`)
   ).toBeInTheDocument();
+  expect(document.querySelector('[data-role="lede"]')).toHaveTextContent(
+    'Yesterday’s counts are unavailable.'
+  );
   // the kind filter's radio, lowercase (controls lane C2; it was the button "All")
   expect(screen.getByRole('radio', { name: 'all' })).toHaveTextContent(/^all$/);
 });
@@ -1374,6 +1365,26 @@ describe('Transactions kind in the URL (D11)', () => {
     fireEvent.click(chip('all'));
     await waitFor(() => expect(router.state.location.search).toBe(''));
     expect(chip('all')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  // The page-phase review's SHOULD 6 (the P3 follow-up): the cellbases tab left a chosen kind
+  // pressed, and in the URL, over a list of every cellbase, which no kind filters (no cellbase is a
+  // DAO transaction). Opening the cellbases sets the kind back to "all", here and in the URL.
+  it('sets the kind back to all, in the URL too, when the cellbases are opened', async () => {
+    const router = renderAt('/mainnet/transactions?kind=dao');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: /^cellbases/ }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'true');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'false');
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'cellbase',
+      })
+    );
   });
 
   it('follows the URL when it changes under the mounted page', async () => {

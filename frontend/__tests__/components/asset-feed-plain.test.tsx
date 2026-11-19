@@ -52,6 +52,8 @@ const batch: GlobalActivity = {
       scriptName: 'M-NFT',
     },
   ],
+  itemTypes: [],
+  itemTypesUnread: null,
   lockCalls: [
     {
       lockCodeHash: '0x' + '0c'.repeat(32),

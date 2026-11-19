@@ -333,4 +333,53 @@ describe('NotFoundPage', () => {
       entityVerse({ kind: 'script-family', identifier: 'x', checkedEndpoint: '/x' })
     ).not.toContain(ROUTE_VERSE[1]);
   });
+
+  // The P3 follow-up's 2g: the kinds no /search classifies said only "the local index was asked;
+  // it holds none". Once the vitals' tip is read, the second line says what the index holds none
+  // of against that tip; a block number past it says so, with the tip it was compared to.
+  it('says what the index holds none of against the tip, a block number past it as past it', () => {
+    const second = (kind: Parameters<typeof notAnIdVerse>[0], identifier: string, tip: number) =>
+      entityVerse({ kind, identifier, checkedEndpoint: '/x' }, null, tip)[1];
+    expect(second('block', '21054200', 21_054_163)).toBe(
+      '#21,054,200 is past the tip, #21,054,163.'
+    );
+    expect(second('block', '7', 21_054_163)).toBe(
+      'the tip is #21,054,163, yet the index holds no #7.'
+    );
+    expect(second('uncle', '5000 · uncle 0', 1_000)).toBe('#5,000 is past the tip, #1,000.');
+    expect(second('uncle', '100 · uncle 2', 1_000)).toBe('block #100 has no uncle at index 2.');
+    expect(second('fork', '5000/a9bc1b75', 1_000)).toBe('#5,000 is past the tip, #1,000.');
+    expect(second('fork', '7/a9bc1b75', 1_000)).toBe(
+      'the index saw no fork at this height drop this block.'
+    );
+    expect(second('token', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell carries this type hash as a token.'
+    );
+    expect(second('fiber-channel', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell funds this channel.'
+    );
+    expect(second('object', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell carries this object.'
+    );
+    // a /search finding is the more concrete reason, and stands first
+    expect(
+      entityVerse(
+        { kind: 'block', identifier: HASH, checkedEndpoint: '/x' },
+        'this hash is a transaction’s.',
+        1_000
+      )[1]
+    ).toBe('this hash is a transaction’s.');
+  });
+
+  it('compares a block number with the tip the page reads (the vitals’: #1,000,000)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/blocks/1000001']}>
+        <NotFoundPage
+          entity={{ kind: 'block', identifier: '1000001', checkedEndpoint: '/blocks/1000001' }}
+        />
+      </MemoryRouter>
+    );
+    const h1 = screen.getByRole('heading', { level: 1 });
+    await waitFor(() => expect(verseLines(h1)[1]).toBe('#1,000,001 is past the tip, #1,000,000.'));
+  });
 });

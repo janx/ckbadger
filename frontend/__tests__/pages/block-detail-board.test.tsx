@@ -141,6 +141,8 @@ const activity = (txIndex: number): GlobalActivity => ({
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [],
+  itemTypesUnread: null,
   participants: [],
 });
 const tx = (index: number): Transaction =>

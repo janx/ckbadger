@@ -140,12 +140,25 @@ export function partyLockSentence(
  * (`articleBySound`: "an RGB++ lock", "a UniPass lock").
  */
 export function lockPhrase(words: LockWords, size: ShortSize): string {
-  if (words.form === 'not-indexed') return 'a lock not indexed';
+  const noun = lockNoun(words, size);
+  // a lock without a name or not indexed starts with "lock": "a lock 0x…", "a lock not indexed"
+  if (words.form === 'not-indexed' || words.name === null) return `a ${noun}`;
+  return `${articleBySound(words.name)} ${noun}`;
+}
+
+/**
+ * The decision's sentence form without its article (`lockPhrase`'s noun): a name that ends in
+ * "lock" as it is ("Default Lock", "Omnilock"), any other with the word ("JoyID lock"); a lock the
+ * registry does not name, "lock 0x9b9b9b9b…9b9b9b" with its hash type where the name does not
+ * cover it; "lock not indexed". For a list that names locks one after another (the locks an
+ * activity's outputs carry), where every name must say it is a lock.
+ */
+export function lockNoun(words: LockWords, size: ShortSize): string {
+  if (words.form === 'not-indexed') return 'lock not indexed';
   // a lock without a name is "lock 0x…", its hash type after it where it has one
-  if (words.name === null) return `a ${lockWordsText(words, size)}`;
+  if (words.name === null) return lockWordsText(words, size);
   // a named lock never carries a hash type: the decision drops a name it does not cover
-  const article = articleBySound(words.name);
-  return /lock$/i.test(words.name) ? `${article} ${words.name}` : `${article} ${words.name} lock`;
+  return /lock$/i.test(words.name) ? words.name : `${words.name} lock`;
 }
 
 /** Letters whose spoken names start with a vowel sound: "ay", "ee", "ef", "aitch", "eye", "el", … */

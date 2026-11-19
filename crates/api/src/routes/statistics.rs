@@ -4814,6 +4814,10 @@ pub struct DailyActivityStatsResponse {
     /// The day's Nervos DAO actions, the chart's one DAO band: deposits, withdraw requests and
     /// completed withdraws summed here, never in the page (lane D1's third round, M2).
     pub dao_count: u64,
+    /// The day's user transactions: its committed transactions (its chain row) less its cellbases,
+    /// counted here, never in a page (the P3 follow-up's 2b). The activity stream holds exactly
+    /// these, so the Transactions page's "all" and the Activities page's lede state this figure.
+    pub user_transaction_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4849,6 +4853,24 @@ pub struct ActivitySummary24hResponse {
     pub kind_occurrences: u64,
     /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
     pub dao_count: u64,
+    /// Every script call `script_counts` counts, summed here (the P3 follow-up, SHOULD 5): what the
+    /// home card's script shares are shares of. One transaction calling two scripts counts twice,
+    /// so this is not `script_call_count` (transactions with a script call).
+    pub script_calls: u64,
+    /// The scripts after the [`SCRIPT_TOP`] largest of `script_counts` (ranked by calls, ties by
+    /// code hash) and their calls, the home card's "others" row; `None` when there are none.
+    pub script_rest: Option<ScriptRest>,
+}
+
+/// How many of the window's scripts the home card ranks by name; the rest is one row.
+pub const SCRIPT_TOP: usize = 5;
+
+/// The scripts a ranking does not name, counted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptRest {
+    pub scripts: u64,
+    pub calls: u64,
 }
 
 /// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
@@ -4880,6 +4902,32 @@ fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
     .sum()
 }
 
+/// A day's user transactions: its committed transactions less its cellbases. A day without its
+/// chain row, or with more cellbases than transactions, is an indexer fault named by its date.
+fn user_transaction_count(
+    date: &str,
+    chain: Option<&ckbadger_store::types::DailyStats>,
+    activity: &ckbadger_store::types::DailyActivityStats,
+) -> anyhow::Result<u64> {
+    let chain = chain.ok_or_else(|| {
+        anyhow::anyhow!("day {date} has daily activity stats but no daily chain stats")
+    })?;
+    let transactions = u64::try_from(chain.transactions_count).map_err(|_| {
+        anyhow::anyhow!(
+            "day {date} has a negative transaction count {}",
+            chain.transactions_count
+        )
+    })?;
+    transactions
+        .checked_sub(u64::from(activity.coinbase_count))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "day {date} has {} cellbases but only {transactions} transactions",
+                activity.coinbase_count
+            )
+        })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DailyActivityStatsParams {
     #[serde(default = "default_activity_days")]
@@ -4898,7 +4946,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v3:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v4:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4909,10 +4957,18 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (all_stats, chain_days) = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            store.list_daily_activity_stats()?,
+            store
+                .list_daily_stats_with_dates()?
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
@@ -4967,6 +5023,8 @@ async fn get_daily_activity_stats(
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
+            let user_transaction_count = user_transaction_count(&date, chain_days.get(&date), &s)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
             let mut script_counts: Vec<ScriptCountEntry> = s
                 .script_counts
                 .iter()
@@ -4978,7 +5036,7 @@ async fn get_daily_activity_stats(
                 .collect();
             script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
-            DailyActivityStatsResponse {
+            Ok(DailyActivityStatsResponse {
                 date,
                 transfer_count: s.transfer_count,
                 dao_deposit_count: s.dao_deposit_count,
@@ -4995,9 +5053,10 @@ async fn get_daily_activity_stats(
                 script_counts,
                 kind_occurrences: kind_occurrences(&s),
                 dao_count: dao_count(&s),
-            }
+                user_transaction_count,
+            })
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     // Don't cache empty results — the indexer may not have written data yet
     // and we don't want to serve stale empty responses for hours.
@@ -5026,7 +5085,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:v2:tip:{}",
+            "stats:activity-summary-24h:v3:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -5073,7 +5132,18 @@ async fn get_activity_summary_24h(
             count,
         })
         .collect();
-    script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
+    // ranked by calls, ties by code hash, so the five named and the rest are one partition
+    script_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.code_hash.cmp(&b.code_hash))
+    });
+    let script_calls = script_counts.iter().map(|e| u64::from(e.count)).sum();
+    let rest = script_counts.get(SCRIPT_TOP..).unwrap_or_default();
+    let script_rest = (!rest.is_empty()).then(|| ScriptRest {
+        scripts: rest.len() as u64,
+        calls: rest.iter().map(|e| u64::from(e.count)).sum(),
+    });
 
     let result = ActivitySummary24hResponse {
         activity_count,
@@ -5093,6 +5163,8 @@ async fn get_activity_summary_24h(
         hours_covered,
         kind_occurrences: kind_occurrences(&agg),
         dao_count: dao_count(&agg),
+        script_calls,
+        script_rest,
     };
 
     if let Some(key) = cache_key {

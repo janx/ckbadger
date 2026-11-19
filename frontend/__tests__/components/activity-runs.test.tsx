@@ -71,6 +71,8 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     protocolActions: [],
     typeCalls: [call('.bit Time Index State', '3a'), call('.bit Time Info', '9e')],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [oracleParty(seed)],
   };
 }
@@ -84,6 +86,8 @@ const transfer: GlobalActivity = {
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [],
+  itemTypesUnread: null,
   participants: [
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
     { ...oracleParty('recvr1'), ckbDelta: '99970000' },
@@ -222,31 +226,51 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     ).toEqual(rows.map((a) => a.txHash));
   });
 
-  // The live feed (mainnet, the first page of /activities read from the API on 2026-11-19, blocks
-  // #21,054,083 to #21,054,163): 50 activities drawn as 9 rows, five of them folded runs.
-  it('draws the live feed’s first page, 50 activities, as 9 rows', async () => {
-    const rows = live as unknown as GlobalActivity[];
+  // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
+  // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
+  // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
+  const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
+  const said = (el: Element) =>
+    el.getAttribute('data-role') === 'activity-run'
+      ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
+      : el.querySelector('[data-role="headline"]')!.textContent;
+  const drawnFeed = async (rows: GlobalActivity[]) => {
     vi.setSystemTime(Number(rows[0].timestamp) + 60_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
-    const drawn = [
-      ...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]'),
-    ];
-    const said = (el: Element) =>
-      el.getAttribute('data-role') === 'activity-run'
-        ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
-        : el.querySelector('[data-role="headline"]')!.textContent;
-    expect(drawn.map(said)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
+    return [...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]')].map(
+      said
+    );
+  };
+
+  it('draws the live feed’s first page, 50 activities, in its runs', async () => {
+    expect(await drawnFeed(feeds.all)).toEqual([
+      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
       'Script call',
       'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
-      'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 9 transactions ↓ · 3 participants',
-      '.bit · recycle expired account',
-      'Script call · .bit Time Index State · .bit Time Info | all 21 transactions ↓ · 3 participants',
       'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
+      'Script call',
+      'CKB Transfer | all 5 transactions ↓ · 6 participants',
+      'Script call',
+      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
+      'CKB Transfer | all 2 transactions ↓ · 4 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 participants',
+    ]);
+  });
+
+  // the page-phase review's MUST-1: a folded run names the code its rows' items carry, here the
+  // standard of the tokens they moved ("Simple UDT"), whatever tokens each row moved
+  it('names the standard a run of token transfers carries, its tokens apart', async () => {
+    expect(await drawnFeed(feeds.token)).toEqual([
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×2 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 48 participants',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×3 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 59 participants',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×4 · lock 0xff022d55…d32733 | all 3 transactions ↓ · 22 participants',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×5 · lock 0xff022d55…d32733 | all 4 transactions ↓ · 32 participants',
     ]);
   });
 

@@ -38,6 +38,7 @@ import {
   WIDEST_POOL_VALUE_LINE,
   WIDEST_PROPOSALS,
   WIDEST_RANK,
+  WIDEST_DAO_DEPOSITS,
   WIDEST_ROW_COUNT,
   WIDEST_TX_FEE,
   WIDEST_TX_OUTPUT,
@@ -55,6 +56,9 @@ describe('the widest values a list column holds (lib/list-bounds)', () => {
     expect(WIDEST_COUNT_DIGITS).toBe('9999');
     expect(WIDEST_ROW_COUNT).toBe('99,999,999');
     expect(WIDEST_RANK).toBe('999,999');
+    // the P3 follow-up's 2f: a depositor's deposits, its own bound (it borrowed WIDEST_COUNT, a
+    // block's transactions, which bounds nothing a depositor holds)
+    expect(WIDEST_DAO_DEPOSITS).toBe('999,999');
     expect(WIDEST_FEE_RATE).toBe('1,000,000,000');
     // the column form, every decimal
     expect(WIDEST_BLOCK_REWARD).toBe('9,999.99999999');
@@ -176,6 +180,8 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_DAO_DEPOSIT',
         'WIDEST_DAO_DEPOSIT_SUMMARY',
         'WIDEST_RANK',
+        // the P3 follow-up's 2f: a depositor's deposits
+        'WIDEST_DAO_DEPOSITS',
         'WIDEST_CKB_HELD',
         'WIDEST_ROW_COUNT',
         // lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): occupied bytes

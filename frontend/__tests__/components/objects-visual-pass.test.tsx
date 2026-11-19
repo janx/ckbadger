@@ -113,6 +113,8 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             lockHash: '0x' + '01'.repeat(32),

@@ -64,7 +64,8 @@ describe('script code evidence', () => {
   });
 
   it('consumes API-produced full-scope list totals and canonical history markers', () => {
-    expect(listFixture.roleCounts).toEqual({ all: 1, locks: 1, types: 0 });
+    // re-pinned on purpose (the P3 follow-up, SHOULD 3): the route states the overlap and the rest
+    expect(listFixture.roleCounts).toEqual({ all: 1, locks: 1, types: 0, both: 0, neither: 0 });
     expect(
       listFixture.classSummary.reduce(
         (sum, row) => sum + BigInt(row.lockOwnedCapacitySum),

@@ -220,6 +220,8 @@ export const addressActivitiesFixture: Activity[] = [
     itemDeltas: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     protocolActions: [],
     participants: [],
     roles: [],

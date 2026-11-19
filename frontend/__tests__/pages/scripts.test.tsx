@@ -115,7 +115,7 @@ describe('ScriptsPage', () => {
           familyCount: 1,
         },
       ],
-      roleCounts: { all: 2, locks: 1, types: 1 },
+      roleCounts: { all: 2, locks: 1, types: 1, both: 0, neither: 0 },
     });
     render(<ScriptsPage />);
     // Re-pinned on purpose (controls lane C2): the role row is the controls board's tab row, a

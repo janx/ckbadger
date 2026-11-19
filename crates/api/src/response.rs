@@ -363,8 +363,14 @@ pub struct ScriptFamiliesListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ScriptRoleCountsResponse {
     pub all: i64,
+    /// Families used as a lock (a lock-and-type one too).
     pub locks: i64,
+    /// Families used as a type (a lock-and-type one too).
     pub types: i64,
+    /// Families used as both, in `locks` and in `types` alike (the P3 follow-up, SHOULD 3).
+    pub both: i64,
+    /// Families with neither role (no cell and no registry role), in neither count.
+    pub neither: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

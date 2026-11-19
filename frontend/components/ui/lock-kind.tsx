@@ -22,6 +22,7 @@ import {
 
 /** The decision's text half, said where the page draws it too (lib/lock-words.ts). */
 export {
+  lockNoun,
   lockWords,
   lockWordsText,
   namedLockWords,

@@ -636,9 +636,13 @@ describe('Address v3 components', () => {
     const { rerender } = render(
       <AddressActivity address={addressFixture} activity={tokenRow('100000000')} />
     );
-    expect(screen.getByRole('link', { name: /iCKB/ })).toHaveClass('text-positive');
+    // re-pinned on purpose (the P3 follow-up's 2c): the amount keeps its sign ink itself; the link
+    // is a link inside the line and writes no ink (it wrote the sign inks)
+    const amount = () =>
+      screen.getByRole('link', { name: /iCKB/ }).querySelector('[data-token-amount]');
+    expect(amount()).toHaveClass('text-positive');
     rerender(<AddressActivity address={addressFixture} activity={tokenRow('-100000000')} />);
-    expect(screen.getByRole('link', { name: /iCKB/ })).toHaveClass('text-negative');
+    expect(amount()).toHaveClass('text-negative');
   });
 });
 

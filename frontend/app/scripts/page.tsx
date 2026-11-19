@@ -422,12 +422,16 @@ function ScriptsSummary({ summary }: { summary: ScriptsListApi }) {
   // As before: without the class summary or the role counts the page states no summary.
   if (!summary.classSummary || !summary.roleCounts) return null;
   const counts = summary.roleCounts;
+  const n = (count: number) => count.toLocaleString('en-US');
   return (
     <>
+      {/* what each count is, the overlap the route's: "41 locks and 34 types" of 70 read as a
+          partition, and a family used as both is in both (the page-phase review's SHOULD 3) */}
       <p data-role="summary" className="text-text text-body max-w-measure mt-6">
-        {unitNode(formatCount(counts.all, 'script'))}: {unitNode(formatCount(counts.locks, 'lock'))}{' '}
-        and {unitNode(formatCount(counts.types, 'type'))}. Who can change the locks’ code, by the
-        CKB under them:
+        {unitNode(formatCount(counts.all, 'script'))}; {n(counts.locks)} used as locks,{' '}
+        {n(counts.types)} as types, {n(counts.both)} as both
+        {counts.neither > 0 && <>, {n(counts.neither)} as neither</>}. Who can change the locks’
+        code, by the CKB under them:
       </p>
       <div className="mt-2">
         <ScriptCodeClassBar classes={summary.classSummary} size="line" />

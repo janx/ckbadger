@@ -27,6 +27,8 @@ describe('daily activity chart adapter', () => {
         kindOccurrences: 34359738360,
         // the API's DAO band, the three DAO counts summed by the route (lane D1's third round)
         daoCount: 12884901885,
+        // the route's count of the day's user transactions (the P3 follow-up's 2b)
+        userTransactionCount: 4294967295,
       },
     ]);
     const volume = chartModel(

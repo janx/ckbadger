@@ -531,8 +531,9 @@ function TxSummary({
           .map((pa, i) => (
             <Fragment key={i}>
               {readable(activity.txHash, () => {
-                // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
-                const parts = protocolActionNoteParts(pa, 'row');
+                // prose: the facts in a sentence, joined by commas (a "·" list is for rows); the
+                // transaction's own record, so its amounts are exact (the P3 follow-up's 2c)
+                const parts = protocolActionNoteParts(pa, 'row', 'exact');
                 return parts.length ? (
                   <>
                     {parts.map((part, j) => (

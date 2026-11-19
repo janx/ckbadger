@@ -145,7 +145,7 @@ const response = pagedRead({
   limit: 5,
   hasMore: true,
   nextCursor: 'c',
-  roleCounts: { all: 70, locks: 41, types: 34 },
+  roleCounts: { all: 70, locks: 41, types: 34, both: 5, neither: 0 },
 });
 
 const table = () => screen.findByRole('table', { name: 'Scripts' });

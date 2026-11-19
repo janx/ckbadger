@@ -2941,7 +2941,24 @@ async fn list_scripts(
                     .is_some_and(|role| role == "type" || role == "lock+type")
             })
             .count() as i64,
+        both: filtered
+            .iter()
+            .filter(|(id, _)| roles.get(id).is_some_and(|role| role == "lock+type"))
+            .count() as i64,
+        neither: filtered
+            .iter()
+            .filter(|(id, _)| !roles.contains_key(id))
+            .count() as i64,
     };
+    // the parts make the whole: a role this count does not know would fall out of all four
+    if role_counts.locks + role_counts.types - role_counts.both + role_counts.neither
+        != role_counts.all
+    {
+        return Err(ApiError::internal(format!(
+            "script role counts do not make their whole: {} locks + {} types - {} both + {} neither != {} families",
+            role_counts.locks, role_counts.types, role_counts.both, role_counts.neither, role_counts.all
+        )));
+    }
     if let Some(role) = params.role.as_deref() {
         if !matches!(role, "lock" | "type") {
             return Err(ApiError::bad_request(format!(

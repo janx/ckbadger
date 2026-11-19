@@ -88,6 +88,8 @@ export const genesisTransactions: Transaction[] = [
       isCellbase: false,
       protocolActions: [],
       typeCalls: [],
+      itemTypes: [],
+      itemTypesUnread: null,
       lockCalls: [
         {
           lockCodeHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -174,6 +176,8 @@ export const genesisActivities: GlobalActivity[] = [
       },
     ],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [
       {
         address:
@@ -221,6 +225,8 @@ export const genesisActivities: GlobalActivity[] = [
     isCellbase: false,
     protocolActions: [],
     typeCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     lockCalls: [
       {
         lockCodeHash: '0x0000000000000000000000000000000000000000000000000000000000000000',

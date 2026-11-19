@@ -12,6 +12,8 @@ import {
 } from '@/lib/not-found-evidence';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { shortenId } from '@/lib/shorten';
+import { formatBlockNumber } from '@/lib/format-block';
+import { useNetworkStats } from '@/hooks/useNetworkStats';
 
 const NOT_FOUND_TITLE = ['Not found'] as const;
 
@@ -48,18 +50,80 @@ const NONE_WITH: Record<EntityKind, string> = {
 };
 
 /**
+ * What no cell up to the tip has, by kind: the index reads every block to its tip, so holding none
+ * of a thing the chain makes in cells says that none of the blocks it has read made it.
+ */
+const NONE_TO_TIP: Record<Exclude<EntityKind, 'block' | 'uncle' | 'fork'>, string> = {
+  transaction: 'no transaction has this hash.',
+  cell: 'no cell has this out point.',
+  address: 'no cell has had this lock.',
+  script: 'no cell deploys this code.',
+  'script-family': 'no script goes by this name.',
+  token: 'no cell carries this type hash as a token.',
+  object: 'no cell carries this object.',
+  collection: 'no cell carries this collection.',
+  identity: 'no cell carries this identity.',
+  class: 'no cell carries this class.',
+  cluster: 'no cell carries this cluster.',
+  'fiber-channel': 'no cell funds this channel.',
+};
+
+/** A block number the page was asked by, or null for a hash. */
+function heightOf(text: string): number | null {
+  return /^(0|[1-9]\d*)$/.test(text) ? Number(text) : null;
+}
+
+/**
+ * What the index holds none of, said against its tip (the vitals' `tip #n`, the one the page's seal
+ * stands for; the P3 follow-up's 2g): a height past the tip is past it, with the tip it was
+ * compared to; an uncle of a block the index has is not at that index; a fork is what the index
+ * saw happen, not what the chain holds; every other kind, what no cell up to the tip carries.
+ */
+export function tipReason(entity: NotFoundEntity, tip: number): string {
+  const at = formatBlockNumber(tip);
+  const past = (height: number) => `${formatBlockNumber(height)} is past the tip, ${at}.`;
+  switch (entity.kind) {
+    case 'block': {
+      const height = heightOf(entity.identifier);
+      if (height === null) return `to the tip, ${at}, no block has this hash.`;
+      return height > tip
+        ? past(height)
+        : `the tip is ${at}, yet the index holds no ${formatBlockNumber(height)}.`;
+    }
+    case 'uncle': {
+      const [, block, index] = /^(\S+) · uncle (\S+)$/.exec(entity.identifier) ?? [];
+      const height = block === undefined ? null : heightOf(block);
+      if (height === null) return `to the tip, ${at}, no block has this uncle.`;
+      return height > tip
+        ? past(height)
+        : `block ${formatBlockNumber(height)} has no uncle at index ${index}.`;
+    }
+    case 'fork': {
+      const height = heightOf(entity.identifier.split('/')[0]);
+      return height !== null && height > tip
+        ? past(height)
+        : 'the index saw no fork at this height drop this block.';
+    }
+    default:
+      return `to the tip, ${at}, ${NONE_TO_TIP[entity.kind]}`;
+  }
+}
+
+/**
  * An entity the page names but the local index does not hold: the index was asked (the note says
  * which endpoint answered 404), so the route's second line would not be true here. The second line
  * is the concrete reason in plain words where a search found one (the readability plan's P3: "this
- * hash is a block's.", "no block has this hash either."), else what the index says.
+ * hash is a block's.", "no block has this hash either."), else what the index holds none of against
+ * its tip (`tipReason`), and only while the tip is not read yet what the index says.
  */
 export function entityVerse(
   entity: NotFoundEntity,
-  reason: string | null = null
+  reason: string | null = null,
+  tip: number | null = null
 ): readonly string[] {
   return [
     NONE_WITH[entity.kind],
-    reason ?? 'the local index was asked; it holds none.',
+    reason ?? (tip === null ? 'the local index was asked; it holds none.' : tipReason(entity, tip)),
     ROUTE_VERSE[2],
   ];
 }
@@ -150,6 +214,9 @@ type NotFoundPageProps = {
 export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPageProps = {}) {
   const pathname = usePathname();
   const lookup = useNotFoundEvidence(entity);
+  // the tip the seal stands for (the vitals'), what an entity's absence is said against
+  const { data: stats } = useNetworkStats();
+  const tip = stats?.latestBlock ?? null;
   useDocumentTitle(NOT_FOUND_TITLE);
   const kind = entity?.kind ?? notAnId?.kind;
   const back = kind ? RETURNS[kind] : undefined;
@@ -202,7 +269,7 @@ export function NotFoundPage({ entity, notAnId, standalone = false }: NotFoundPa
         notAnId
           ? notAnIdVerse(notAnId.kind)
           : entity
-            ? entityVerse(entity, lookup.status === 'checked' ? lookup.evidence.reason : null)
+            ? entityVerse(entity, lookup.status === 'checked' ? lookup.evidence.reason : null, tip)
             : ROUTE_VERSE
       }
       standalone={standalone}

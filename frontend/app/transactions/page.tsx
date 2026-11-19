@@ -36,8 +36,6 @@ import { cn } from '@/lib/utils';
 import {
   activityFilterCounts,
   completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
   previousChainDay,
 } from '@/lib/activity-stats';
 import { countNoun, formatCount } from '@/lib/format-count';
@@ -495,18 +493,11 @@ export default function TransactionsPage() {
     queryFn: () => api.getDailyActivityStats(2),
     refetchInterval: 60000,
   });
-  const { data: txStats, error: txStatsError } = useQuery({
-    queryKey: ['tx-stats'],
-    queryFn: () => api.getTxStats(),
-    refetchInterval: 60000,
-  });
   const yesterday = previousChainDay();
   const day = daily ? completedYesterdayActivities(daily) : undefined;
-  const total = txStats ? completedYesterdayTransactions(txStats) : undefined;
-  // yesterday's user transactions: its committed transactions but its cellbases (the one path of
-  // that count, the activities page's too)
-  const users =
-    day && total !== undefined ? nonCellbaseCount(total, day.coinbaseCount, yesterday) : undefined;
+  // yesterday's user transactions: the route's count, the day's committed transactions less its
+  // cellbases (the activities page states the same figure; no page subtracts)
+  const users = day?.userTransactionCount;
   const counts: Partial<Record<TransactionKind, number>> = day
     ? activityFilterCounts(day, users)
     : {};
@@ -514,10 +505,8 @@ export default function TransactionsPage() {
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;
-  const chooseKind = (value: TransactionKind) => {
+  const setKindAndUrl = (value: TransactionKind) => {
     setKind(value);
-    // a kind is of the user transactions: chosen over the cellbases, it shows them
-    if (tab === 'cellbases') setTab('committed');
     // D11: the URL names the chosen kind (replace: a filter is not a step of history). Outside a
     // router there is no address to keep in step, and leaving the page would reload it.
     if (inRouter) {
@@ -526,6 +515,18 @@ export default function TransactionsPage() {
       else query.set('kind', value);
       router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
     }
+  };
+  const chooseKind = (value: TransactionKind) => {
+    setKindAndUrl(value);
+    // a kind is of the user transactions: chosen over the cellbases, it shows them
+    if (tab === 'cellbases') setTab('committed');
+  };
+  // no kind filters the cellbases (no cellbase is a DAO or a token transaction): opening them sets
+  // the kind back to "all", in the URL too, so no chip stands pressed over a list it does not
+  // filter (the page-phase review's SHOULD 6)
+  const chooseTab = (value: 'committed' | 'cellbases' | 'pool') => {
+    if (value === 'cellbases' && kind !== 'all') setKindAndUrl('all');
+    setTab(value);
   };
   const active = tab === 'committed' ? committed : tab === 'cellbases' ? cellbases : pool;
   // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
@@ -572,19 +573,14 @@ export default function TransactionsPage() {
                 </>
               )}
             </p>
-            {(dailyError || txStatsError) && (
-              <p role="alert" className="text-text-dim text-small max-w-measure">
-                Could not read yesterday’s statistics: {(dailyError ?? txStatsError)!.message}
+            {dailyError && (
+              <p role="alert" className="text-text text-small max-w-measure">
+                Could not read yesterday’s statistics: {dailyError.message}
               </p>
             )}
             {daily && !day && (
               <p className="text-text-dim text-small max-w-measure">
                 No complete activity statistics for {yesterday} (UTC+8).
-              </p>
-            )}
-            {txStats && total === undefined && (
-              <p className="text-text-dim text-small max-w-measure">
-                No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
             {/* The controls board's kind filter, with yesterday's counts (PA-15: the activities
@@ -623,7 +619,7 @@ export default function TransactionsPage() {
               </div>
             )}
             {poolHead.error ? (
-              <p role="alert" className="text-text-dim text-small max-w-measure">
+              <p role="alert" className="text-text text-small max-w-measure">
                 Could not read the pool: {poolHead.error.message}
               </p>
             ) : poolHead.data ? (
@@ -696,7 +692,7 @@ export default function TransactionsPage() {
               { key: 'pool', label: 'in the pool' },
             ]}
             value={tab}
-            onChange={setTab}
+            onChange={chooseTab}
           >
             <div className="mt-3 space-y-8">
               <div className="text-text-dim text-small">
@@ -712,7 +708,7 @@ export default function TransactionsPage() {
                 </p>
               )}
               {active.error && (
-                <p role="alert" className="text-text-dim max-w-measure">
+                <p role="alert" className="text-text max-w-measure">
                   Unable to read transactions: {active.error.message}
                 </p>
               )}
@@ -796,7 +792,7 @@ export default function TransactionsPage() {
                     after its proposal.
                   </p>
                   {pool.data.truncated && (
-                    <p className="text-text-dim text-small">
+                    <p className="text-text text-small">
                       This node's tracked pool is truncated; more transactions may be present.
                     </p>
                   )}

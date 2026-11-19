@@ -1331,6 +1331,17 @@ interface ActivityTypeCall {
   scriptName?: string;
 }
 
+/**
+ * A type script a committed activity's items or its Nervos DAO step carry, by its code
+ * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
+ * and the registry's name.
+ */
+interface ActivityItemType {
+  typeCodeHash: string;
+  typeHashType: string;
+  scriptName: string | null;
+}
+
 interface ActivityLockCall {
   lockCodeHash: string;
   lockHashType: string;
@@ -1392,7 +1403,14 @@ interface Activity {
   isCellbase: boolean;
   itemDeltas: ItemDelta[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   protocolActions: ActivityProtocolAction[];
   /** The OTHER parties of this transaction. */
   participants: ParticipantRef[];
@@ -1435,7 +1453,14 @@ interface GlobalActivity {
   isCellbase: boolean;
   protocolActions: ActivityProtocolAction[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   participants: ParticipantInfo[];
 }
 
@@ -1477,6 +1502,11 @@ interface DailyActivityStats {
   kindOccurrences: number;
   /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
   daoCount: number;
+  /**
+   * The day's user transactions, the route's count: its committed transactions less its cellbases
+   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
+   */
+  userTransactionCount: number;
 }
 
 interface ActivitySummary24h {
@@ -1500,6 +1530,10 @@ interface ActivitySummary24h {
   kindOccurrences: number;
   /** The window's Nervos DAO actions, the API's count. */
   daoCount: number;
+  /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
+  scriptCalls: number;
+  /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
+  scriptRest: { scripts: number; calls: number } | null;
 }
 
 interface GraphNode {
@@ -3083,7 +3117,11 @@ export interface ScriptCodeClassTotalApi {
 
 export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
   classSummary?: ScriptCodeClassTotalApi[];
-  roleCounts?: { all: number; locks: number; types: number };
+  /**
+   * The families by role, the route's: `locks` and `types` each count a family used as both
+   * (`both`); `neither` counts the families with no role (the P3 follow-up, SHOULD 3).
+   */
+  roleCounts?: { all: number; locks: number; types: number; both: number; neither: number };
 }
 
 export interface ScriptCustodyApi {
@@ -3982,6 +4020,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
+  ActivityItemType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,
