@@ -2190,8 +2190,14 @@ impl Indexer {
                 }
             }
 
-            if !udt_tx_contexts.is_empty() {
-                let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+            // A max-supply claim (an Omnilock supply-info cell, a Unique
+            // Cell an xUDT extension binds, an xUDT extension's own cap) is a
+            // chain fact of the block that makes it, whether or not the batch
+            // moves a UDT: read in every batch, as bulk build reads it in
+            // every transaction. (It was read inside the UDT stage only, so a
+            // claim in a batch with no UDT movement was dropped.)
+            let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+            if !udt_tx_contexts.is_empty() || !max_supply_observations.is_empty() {
                 // Types carried by inputs created before this batch, projected
                 // from the prefetched input view this write already resolved —
                 // no second resolution path. Every input of every non-cellbase
@@ -2297,7 +2303,10 @@ impl Indexer {
                         })?;
                 }
 
-                if !all_transfers.is_empty() {
+                // The token rows: those the batch's transfers move, and those
+                // its claims name (`process_udt_transfers_batch_with_state`
+                // writes a claimed row in the claim's block's scope).
+                if !all_transfers.is_empty() || !max_supply_observations.is_empty() {
                     let transfer_refs: Vec<_> = all_transfers
                         .iter()
                         .map(|(t, h, b)| (t, h.as_slice(), *b))
@@ -14163,21 +14172,18 @@ mod tests {
             assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
         }
 
-        /// resync/protocol-pairs: an Omnilock supply-info cell claims the
-        /// token's max supply by Omnilock's registered pair only. Live and
-        /// bulk agree: the info cell under Omnilock's code hash by `type`
-        /// claims it, the same cell by `data` (a pair anyone can lock a cell
-        /// with; no such binary runs) claims nothing.
-        #[tokio::test]
-        async fn omnilock_claims_a_max_supply_only_by_its_registered_pair() {
+        /// An Omnilock supply-info cell naming the issued token: the cell
+        /// claims the token's max supply (`TOKEN_MAX_SUPPLY`). Spends the
+        /// issuance's change output (0xe1:1); with `with_transfer` it also
+        /// moves the token (0xe1:0) to lock B in the same transaction. The
+        /// info cell's lock is Omnilock's code hash by `lock_by`.
+        fn omnilock_claim_block(with_transfer: bool, lock_by: &str) -> BlockResponseWithCycles {
             let info_type = Script {
                 code_hash: format!("0x{}", hex::encode([0x55; 32])),
                 hash_type: "type".to_string(),
                 args: format!("0x{}", hex::encode([0x66; 32])),
             };
             let info_type_hash = crate::parser::ScriptParser::compute_script_hash(&info_type);
-            // above the info cell's occupied capacity (225 CKB)
-            const INFO_CAPACITY: u64 = 300_00000000;
             let mut args = vec![0u8; 21];
             args.push(0b0000_1000);
             args.extend_from_slice(&info_type_hash);
@@ -14185,49 +14191,126 @@ mod tests {
             data.extend_from_slice(&100u128.to_le_bytes());
             data.extend_from_slice(&TOKEN_MAX_SUPPLY.to_le_bytes());
             data.extend_from_slice(&ext_type_hash());
-            for (hash_type, claimed) in [("type", Some(TOKEN_MAX_SUPPLY)), ("data", None)] {
-                let omnilock = Script {
-                    code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2
-                        .to_string(),
-                    hash_type: hash_type.to_string(),
-                    args: format!("0x{}", hex::encode(&args)),
-                };
-                // The claim rides a token transfer: live reads the claims of a
-                // batch that moves a UDT (a batch without one drops them, while
-                // bulk keeps them: a divergence of its own, outside this test).
-                let claim = d3_tx(
-                    0xe3,
-                    vec![input(0xe1, 0), input(0xe1, 1)],
-                    vec![
-                        (
-                            output(INFO_CAPACITY, omnilock, Some(info_type.clone())),
-                            format!("0x{}", hex::encode(&data)),
-                        ),
-                        (
-                            output(
-                                EXT_CELL_CAPACITY,
-                                lock_script_b(),
-                                Some(xudt_ext_type_script()),
-                            ),
-                            amount_data(TOKEN_AMOUNT),
-                        ),
-                        (
-                            output(
-                                FUNDING_CAPACITY - EXT_CELL_CAPACITY - INFO_CAPACITY,
-                                lock_script(),
-                                None,
-                            ),
-                            "0x".to_string(),
-                        ),
-                    ],
-                    vec!["0x".to_string()],
-                );
-                let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, claim)];
-                let row =
-                    assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &ext_type_hash())
-                        .await;
-                assert_eq!(row.max_supply, claimed, "Omnilock by {hash_type}");
+            // above the info cell's occupied capacity (225 CKB)
+            const INFO_CAPACITY: u64 = 300_00000000;
+            let omnilock = Script {
+                code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2.to_string(),
+                hash_type: lock_by.to_string(),
+                args: format!("0x{}", hex::encode(&args)),
+            };
+            let mut inputs = vec![input(0xe1, 1)];
+            let mut outputs = vec![(
+                output(INFO_CAPACITY, omnilock, Some(info_type)),
+                format!("0x{}", hex::encode(&data)),
+            )];
+            if with_transfer {
+                inputs.insert(0, input(0xe1, 0));
+                outputs.push((
+                    output(
+                        EXT_CELL_CAPACITY,
+                        lock_script_b(),
+                        Some(xudt_ext_type_script()),
+                    ),
+                    amount_data(TOKEN_AMOUNT),
+                ));
             }
+            outputs.push((
+                output(
+                    FUNDING_CAPACITY - EXT_CELL_CAPACITY - INFO_CAPACITY,
+                    lock_script(),
+                    None,
+                ),
+                "0x".to_string(),
+            ));
+            d3_block(102, d3_tx(0xe3, inputs, outputs, vec!["0x".to_string()]))
+        }
+
+        /// resync/all: a max-supply claim is a chain fact of the block that
+        /// makes it, whether or not that block moves a UDT. Live sync read a
+        /// batch's claims only when the batch moved one (the claim collection
+        /// sat inside the UDT stage), bulk build in every batch, so a store's
+        /// token row depended on which path wrote the block. Live and bulk
+        /// now write the same row: the claim alone in its block (each batch
+        /// shape) and the claim beside a transfer.
+        #[tokio::test]
+        async fn a_max_supply_claim_counts_with_or_without_a_udt_movement_like_bulk() {
+            for with_transfer in [false, true] {
+                let blocks = vec![
+                    funding_block(),
+                    ext_issuance_block(),
+                    omnilock_claim_block(with_transfer, "type"),
+                ];
+                for plan in [
+                    per_block(&blocks),
+                    vec![vec![funding_block()], blocks[1..].to_vec()],
+                ] {
+                    let row = assert_bulk_row_equals_live(&blocks, &plan, &ext_type_hash()).await;
+                    assert_eq!(
+                        row.max_supply,
+                        Some(TOKEN_MAX_SUPPLY),
+                        "with_transfer={with_transfer}"
+                    );
+                }
+            }
+        }
+
+        /// resync/protocol-pairs: an Omnilock supply-info cell claims the
+        /// token's max supply by Omnilock's registered pair only. Live and
+        /// bulk agree, the claim alone in its block and beside a transfer:
+        /// the info cell under Omnilock's code hash by `type` claims it, the
+        /// same cell by `data` (a pair anyone can lock a cell with; no such
+        /// binary runs) claims nothing.
+        #[tokio::test]
+        async fn omnilock_claims_a_max_supply_only_by_its_registered_pair() {
+            for (lock_by, claimed) in [("type", Some(TOKEN_MAX_SUPPLY)), ("data", None)] {
+                for with_transfer in [false, true] {
+                    let blocks = vec![
+                        funding_block(),
+                        ext_issuance_block(),
+                        omnilock_claim_block(with_transfer, lock_by),
+                    ];
+                    let row =
+                        assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &ext_type_hash())
+                            .await;
+                    assert_eq!(
+                        row.max_supply, claimed,
+                        "Omnilock by {lock_by}, with_transfer={with_transfer}"
+                    );
+                }
+            }
+        }
+
+        /// The claim's block rolled back takes the claim with it: the token
+        /// row is the one its issuance left.
+        #[tokio::test]
+        async fn rolling_back_the_claims_block_removes_the_claim() {
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![ext_issuance_block()],
+                    vec![omnilock_claim_block(false, "type")],
+                ],
+                None,
+            )
+            .await;
+            assert_eq!(
+                store
+                    .get_token(&ext_type_hash())
+                    .unwrap()
+                    .unwrap()
+                    .max_supply,
+                Some(TOKEN_MAX_SUPPLY),
+                "the claim alone in its block is the token's max supply"
+            );
+
+            rollback_to(&store, 101);
+
+            let reference =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
+                    .await;
+            let expected = token_state(&reference, &ext_type_hash());
+            assert_eq!(expected.0.as_ref().unwrap().max_supply, None, "reference");
+            assert_eq!(token_state(&store, &ext_type_hash()), expected);
         }
 
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback

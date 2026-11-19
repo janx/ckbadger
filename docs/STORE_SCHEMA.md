@@ -326,7 +326,7 @@ pair stays the protocol's across upgrades; a binary pair names one version's cod
 version's binary is the protocol's only once that version is registered in the metadata, and a
 cell under the new binary's data hash before then is no protocol's (registering it later needs a
 re-sync to reclassify history). The rows this decides (protocol actions, Fiber channels, `.cell`
-listings, max-supply claims, semantic tags, `lock_calls`) are `STORE_LAYOUT` 3's.
+listings, max-supply claims, semantic tags, `lock_calls`) are `STORE_LAYOUT` 4's.
 
 The pair is not yet a version: `type` references are current-state dependent and may resolve
 differently across upgrades, and exact version attribution for historical execution must come from
@@ -485,8 +485,10 @@ namespace includes:
   `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
   2 is the re-sync set's one number (resync/all): pair-keyed script labels (pseudo deployments
   only), usage counters of generic type references by their live code, one-kind activity rows,
-  the senders bit; 1 was the script changes alone, never re-synced, and is refused. Layout 3
-  (resync/protocol-pairs) adds protocols recognised by their pair; a store stamped 2 is refused.
+  the senders bit; 1 was the script changes alone, never re-synced, and is refused. Layout
+  3 reads token max-supply claims in every live batch, as bulk build does; layout 4
+  (resync/protocol-pairs) adds protocols recognised by their pair; a store stamped 2 or 3 is
+  refused.
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
 - exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and
