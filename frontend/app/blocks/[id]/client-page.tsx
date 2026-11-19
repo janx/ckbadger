@@ -1066,7 +1066,7 @@ function CellbaseHeadline({
               {activity.participants.map((party, i) => (
                 <Fragment key={party.lockHash ?? party.lockHashPrefix ?? i}>
                   {i > 0 && (i === activity.participants.length - 1 ? ' and ' : ', ')}
-                  <ParticipantRefView participant={party} size="row" compact quiet />
+                  <ParticipantRefView participant={party} size="row" compact quiet look="inline" />
                 </Fragment>
               ))}
             </>

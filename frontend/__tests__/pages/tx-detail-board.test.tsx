@@ -603,6 +603,35 @@ describe('Transaction board, tier 1', () => {
     expect(strip).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
   });
 
+  // Lane P1 follow-up (item 3; the link-look gate's participant-ref entry): every party the page
+  // links states its look. In a line (the lede, the fee's payer, What moved) a party is a name
+  // inside it, the inline look; in the balance changes a party is its row's key. None writes an ink
+  // by hand.
+  it('states the look of every party it links: inline in a line, the key of a balance row', async () => {
+    render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const INLINE = ['underline', 'decoration-[color:var(--c-ink-muted)]'];
+    const parties = (root: HTMLElement) =>
+      within(root)
+        .getAllByRole('link')
+        .filter((a) => a.getAttribute('href')!.includes('/address/'));
+    const expectLook = (links: HTMLElement[], classes: string[]) => {
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link).toHaveClass(...classes);
+        expect(link).not.toHaveClass('hover:text-jade');
+      }
+    };
+    expectLook(parties(strip), INLINE);
+    const summary = await screen.findByTestId('tx-summary');
+    await waitFor(() => expect(parties(summary).length).toBeGreaterThan(0));
+    expectLook(parties(summary), INLINE);
+    expectLook(parties(await screen.findByTestId('tx-what-moved')), INLINE);
+    expectLook(parties(screen.getByLabelText('Balance changes by participant')), [
+      'text-text-bright',
+    ]);
+  });
+
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
     // Responsive review A#17: on a phone the facts rail came after the six cell cards.
     render(<TransactionDetailPage />);

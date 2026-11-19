@@ -184,7 +184,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
       {shown.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (parties.length > 2 ? ', ' : ' and ')}
-          <ParticipantRefView participant={p} size="row" compact quiet />
+          <ParticipantRefView participant={p} size="row" compact quiet look="inline" />
         </Fragment>
       ))}
       {parties.length > 2 && ` and ${parties.length - 2} more`}
@@ -1233,6 +1233,7 @@ export default function TransactionDetailPage() {
               size="row"
               compact
               quiet
+              look="inline"
             />
             {unitNode(
               feePaidBy.length > 1 && ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`

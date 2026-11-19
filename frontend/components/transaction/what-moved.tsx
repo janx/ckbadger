@@ -190,6 +190,7 @@ function EndText({
             size={size}
             compact
             quiet
+            look="inline"
             className="shrink-0"
           />
           {/* no span (and no gap) where the row names no lock (B4) */}

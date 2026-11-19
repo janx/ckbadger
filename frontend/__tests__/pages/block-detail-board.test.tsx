@@ -817,6 +817,14 @@ describe('Block board · R2b-a fields', () => {
     expect(within(row).getByRole('link', { name: '#20,827,921' }).getAttribute('href')).toMatch(
       new RegExp(`/blocks/${h('ec')}$`)
     );
+    // lane P1 follow-up (item 3): the payee is a name inside the line, the inline look, no ink
+    // written by hand
+    const party = within(row.querySelector('[data-role="headline"]') as HTMLElement).getByRole(
+      'link',
+      { name: `ckb1…${payee.slice(-8)}` }
+    );
+    expect(party).toHaveClass('underline', 'decoration-[color:var(--c-ink-muted)]');
+    expect(party).not.toHaveClass('hover:text-jade');
   });
 
   it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {

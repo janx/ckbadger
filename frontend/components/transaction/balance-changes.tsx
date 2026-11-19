@@ -167,7 +167,8 @@ export function BalanceChanges({
                   className={cn(BALANCE_GRID, 'border-row-rule items-baseline border-b py-2')}
                 >
                   <span role="cell" className="min-w-0">
-                    <ParticipantRefView participant={p} size="row" compact quiet />
+                    {/* the row's party, its key (components/ui/link.tsx) */}
+                    <ParticipantRefView participant={p} size="row" compact quiet look="key" />
                     {/* a space between the party and its lock: two units, a line between them
                         where they do not fit the track together (B4 second fix round) */}{' '}
                     <LockLabel participant={p} size="row" />
@@ -219,7 +220,9 @@ export function BalanceChanges({
                 // two-line card is drawn at 1024 too (the 640 px column), beside the summary,
                 // the tiles and What moved, which write the same party at the row size (R9)
                 const size: ShortSize = form === 'three-line' ? 'tight' : 'row';
-                const party = <ParticipantRefView participant={p} size={size} compact quiet />;
+                const party = (
+                  <ParticipantRefView participant={p} size={size} compact quiet look="key" />
+                );
                 const ckb = <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>
