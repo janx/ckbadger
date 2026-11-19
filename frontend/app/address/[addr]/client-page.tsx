@@ -477,9 +477,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     className="mt-3.5"
                   />
                 )}
-                {/* The classes are counted by the holdings read, so they are offered once it has
-                    answered, and a class's cells are counted of it. */}
-                {tab === 'cells' && holdings.data && (
+                {/* The classes are offered from the first draw, so the list under them never moves
+                    (lane P1: they appeared once the holdings answered and pushed it down); each
+                    class's cells are counted of the holdings read, added in place when it has
+                    answered. */}
+                {tab === 'cells' && (
                   <FilterChips
                     label="class"
                     values={[
@@ -487,7 +489,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       ...ADDRESS_CLASSES.map((c) => ({
                         key: c.key,
                         label: c.label.toLowerCase(),
-                        count: holdings.data.classes[c.key].cellCount,
+                        count: holdings.data?.classes[c.key].cellCount,
                         mark: CLASS_KEYS[c.mark],
                       })),
                     ]}
