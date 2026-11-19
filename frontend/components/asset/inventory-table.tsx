@@ -167,7 +167,7 @@ function InventoryPhoneRow({ asset: a }: { asset: Asset }) {
         <ClassMark kind={INVENTORY_MARK[a.assetType]} size={12} className="mr-1.5 h-3 w-3" />
         <AppLink href={assetHref(a)} look="key" className="font-medium">
           {(a.assetType === 'token' ? (a.name ?? a.symbol) : a.name) || (
-            <Hash hash={a.id} size="tight" copyable={false} className="text-small" />
+            <Hash hash={a.id} size="tight" className="text-small" />
           )}
         </AppLink>
       </>
@@ -378,9 +378,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name ?? a.symbol ?? (
-          <Hash hash={a.id} size="row" copyable={false} className="text-small" />
-        )}
+        {a.name ?? a.symbol ?? <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
       {a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
@@ -512,7 +510,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
       {a.compositionTier === 'pure_ckb' || a.compositionTier === 'btc_ckb' ? (
@@ -620,7 +618,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}
     </span>

@@ -100,16 +100,17 @@ export default function AddressDetailPage() {
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
 /**
- * The address's id line: the full address and its copy button, in the plate's quiet voice (seals
- * by kind, C10 round 2). The address is the head's full id (A4 Chrome F3): one line where the
- * measured line holds it (97 characters, 698.4 px at 12 px), else in equal unbroken lines — never
- * the own-box scroller it was. Without an address the page is its lock hash, a hash. The copy is
- * the library's CopyButton (the controls board): its icon in a 24 px box from 640 and a 32 px one
- * below it, its answer (`copied`, `not copied`) in words 6 px after it. The id measures the line
- * the button leaves it: at 390, 358 − 8 − 32 − 6 = 312 px, 43 characters at 7.2 px, three lines
- * of 33, 33 and 31; at 640, 608 − 8 − 24 − 6 = 570 px, 79 characters, two of 49 and 48 (the
- * lines it had beside the old button). While `copied` stands beside it (43.2 px) the line is
- * 268.8 and 526.8 px, 37 and 73 characters: the same lines, so a copy moves nothing.
+ * The address's id line: the full address and its copy button, in the plate's voice (seals by
+ * kind, C10 round 2: the plate's 13 px, 7.8 px a character). The address is the head's full id (A4
+ * Chrome F3): one line where the measured line holds it (97 characters, 756.6 px), else in equal
+ * unbroken lines — never the own-box scroller it was. Without an address the page is its lock hash,
+ * a hash. The copy is HeadId's (the controls board's CopyButton, 8 px after the id): its icon in a
+ * 24 px box from 640 and a 32 px one below it, its answer (`copied`, `not copied`) out of the
+ * line's flow under the whole id (lane c2-finish, rulings round 1). The id measures the line the
+ * box leaves it: from md, beside the 73.5 px stone, 1232 − 73.5 − 20 − 32 = 1106.5 px at 1280, one
+ * line; at 640, 608 − 8 − 24 = 576 px, 73 characters, two lines of 49 and 48; at 390, 358 − 8 − 32
+ * = 318 px, 40 characters, three of 33, 33 and 31. The answer takes no room, so a copy moves
+ * nothing.
  */
 function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   return (
@@ -402,18 +403,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
-                        <Hash
-                          hash={c.channelId}
-                          size="row"
-                          className="text-small"
-                          copyable={false}
-                        />
+                        <Hash hash={c.channelId} size="row" className="text-small" />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
                           <Link href={`/address/${p}`} key={p}>
-                            <Hash hash={p} size="row" copyable={false} className="text-small" />
+                            <Hash hash={p} size="row" className="text-small" />
                           </Link>
                         ))}
                       </span>

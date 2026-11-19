@@ -216,7 +216,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} look="key">
-              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
+              <Hash hash={tx.hash} size="tight" className="text-body" />
             </Link>
           ),
           // the block and its age are each a unit; "this device's clock is behind" in the age's
@@ -267,12 +267,7 @@ function committedColumns(
         <span className="flex items-start">
           <RowSeal id={txSealId(tx)} />
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
-            <Hash
-              hash={tx.hash}
-              size="row"
-              copyable={false}
-              className="text-body text-text-bright leading-row"
-            />
+            <Hash hash={tx.hash} size="row" className="text-body text-text-bright leading-row" />
           </Link>
         </span>
       ),

@@ -300,9 +300,11 @@ describe('TabLinks: a tab that is its own address', () => {
     const count = within(current).getByText('727');
     expect(count).toHaveClass('text-meta', 'font-normal');
     expect(inkOf(count)).toBe(QUIET);
-    // the tab's box: the same classes as a tab's
+    // the tab's box: the same classes as a tab's of the same role. Re-pinned (lane c2-finish,
+    // rulings round 2): a row's size goes by its role, so the command links are set beside a
+    // command tab row (it compared them with a plain one, the same size then)
     render(
-      <Tabs label="x" tabs={CLASSES} value="tokens" onChange={() => {}}>
+      <Tabs label="x" tabs={CLASSES} value="tokens" onChange={() => {}} command>
         <p />
       </Tabs>
     );
@@ -340,5 +342,77 @@ describe('TabLinks: a tab that is its own address', () => {
     expect(() =>
       render(<TabLinks label="Inventory classes" tabs={CLASSES} current={'names' as Class} />)
     ).toThrow('TabLinks "Inventory classes": no link names');
+  });
+});
+
+/**
+ * The owner's ruling (2026-11-19, rulings round 2 of lane c2-finish): a tab row's size goes by its
+ * role. A command row IS its section's heading, so it takes the heading's size (17 px from 640, 14
+ * below); a plain row stands inside a section under that section's own heading, so it takes the
+ * body step (14 px) at every width: a 17 px row under a 17 px heading read as two headings, one
+ * over the other (the home feed under "feed --last 8"). The count, the 32 px target, the selected
+ * state and the phone rule are the same; a plain row's fit is the body step's at every width.
+ */
+describe('Tabs and TabLinks: a plain row takes the body step at every width', () => {
+  it('sets a plain row’s names at the body step and never the section step, with its gap', () => {
+    render(<Row command={false} />);
+    const list = screen.getByRole('tablist');
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab).toHaveClass('text-body', 'pb-1.5');
+      expect(tab.className).not.toMatch(/sm:text-section|sm:pb-/);
+      for (const w of [1280, 640, 390, 360]) expect(targetHeightPx(tab, w)).toBe(32);
+    }
+    expect(list.className).not.toMatch(/sm:gap-/);
+    // the body step's row at 1280: 32 glyphs at 8.4 px, three counts, two gaps of 16 px
+    expect(drawnPx(list, 1280)).toBe(tabRowPx(ADDRESS, 'body', false).withCounts);
+    expect(tabRowPx(ADDRESS, 'body', false).withCounts).toBe(340.4);
+  });
+
+  it('keeps a command row at the section step from 640 and the body step below it', () => {
+    render(<Row />);
+    for (const tab of screen.getAllByRole('tab'))
+      expect(tab).toHaveClass('text-body', 'sm:text-section', 'pb-1.5', 'sm:pb-[7px]');
+    expect(screen.getByRole('tablist')).toHaveClass('gap-4', 'sm:gap-[22px]');
+  });
+
+  it('fits a plain row at the body step from 640 too: its counts stay where the body row fits', () => {
+    // a 380 px line at 1280: the body row with its counts is 340.4 px, the section row 410
+    atViewportWidth(1280);
+    stubChartWidth(380);
+    const plain = render(<Row command={false} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'activities 3',
+      'transactions 3',
+      'live cells 3',
+    ]);
+    plain.unmount();
+    render(
+      <Tabs label="address" tabs={ADDRESS} value="activities" onChange={() => {}} command>
+        <p />
+      </Tabs>
+    );
+    // a command row there sets its names at 17 px: 428 px with its counts, past 380
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'activities',
+      'transactions',
+      'live cells',
+    ]);
+  });
+
+  it('draws a plain TabLinks row at the body step too', () => {
+    render(
+      <TabLinks
+        label="classes"
+        tabs={[
+          { key: 'tokens', label: 'tokens', count: 727, href: '/inventory/tokens' },
+          { key: 'objects', label: 'objects', count: 5653, href: '/inventory/objects' },
+        ]}
+        current="tokens"
+      />
+    );
+    for (const link of screen.getAllByRole('link')) {
+      expect(link).toHaveClass('text-body');
+      expect(link.className).not.toMatch(/sm:text-section/);
+    }
   });
 });

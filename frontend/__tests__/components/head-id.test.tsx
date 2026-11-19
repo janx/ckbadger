@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { HeadId } from '@/components/ui/head-id';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { boxPx, gapPx, shrinksAt } from '@/__tests__/utils/tailwind-box';
+import {
+  boxPx,
+  contentPx,
+  gapPx,
+  inFlowAt,
+  insetsPx,
+  shrinksAt,
+  widthRuleAt,
+} from '@/__tests__/utils/tailwind-box';
 
 /**
  * A full id in a page's head (the lead's ruling a, 2026-11-14, widened to every head by the A4
@@ -33,20 +41,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The line's width (stubChartWidth) and its type, 12 px by default, untracked. */
-function stubLine(width: number, fontPx = 12) {
+/**
+ * The line's width and its type, 12 px by default, untracked. An id with its copy measures the line
+ * of the row it shares with it, less the copy and the row's gap (lane c2-finish, rulings round 2):
+ * the row and the id are `width` px, the copy (an element whose child is its button) `copyPx`, and
+ * the row's gap 8 px, as the classes draw it.
+ */
+function stubLine(width: number, fontPx = 12, copyPx = 0) {
   stubChartWidth(width);
+  const isCopy = (el: Element) => el.querySelector(':scope > button') !== null;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    const w = isCopy(this) ? copyPx : width;
+    return {
+      width: w,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: w,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
   const real = window.getComputedStyle.bind(window);
   vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
     const style = real(el, pseudo);
-    if (!(el as Element).hasAttribute('data-head-id')) return style;
+    const row = (el as Element).querySelector(':scope > [data-head-id]') !== null;
+    if (!(el as Element).hasAttribute('data-head-id') && !row) return style;
     return new Proxy(style, {
       get: (target, prop) =>
         prop === 'fontSize'
           ? `${fontPx}px`
           : prop === 'letterSpacing'
             ? 'normal'
-            : (target as unknown as Record<string | symbol, unknown>)[prop],
+            : prop === 'columnGap' && row
+              ? '8px'
+              : (target as unknown as Record<string | symbol, unknown>)[prop],
     });
   });
 }
@@ -290,24 +323,66 @@ describe('HeadId, a full id in a page head', () => {
       expect(row).toHaveClass('flex', 'items-start', 'gap-2');
     });
 
-    it('leaves the id the line less 46 px below 640 and 38 from it', () => {
+    // Re-pinned (lane c2-finish, rulings round 1): the copy's answer is out of the line's flow,
+    // so the id's line is the line less the gap and the box alone, 32 px from 640 and 40 below
+    // (it was 38 and 46: the 6 px gap before the answer, and the answer's words beside the box
+    // while they stood, 43.2 or 72 px more)
+    it('leaves the id the line less 40 px below 640 and 32 from it, whatever the answer says', () => {
       render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       const row = head().parentElement!;
       const button = screen.getByRole('button', { name: 'copy block hash' });
       const copyRoot = button.parentElement!;
-      const taken = (w: number) => gapPx(row, w) + boxPx(button, w)! + gapPx(copyRoot, w);
-      expect([1280, 640, 390, 360].map(taken)).toEqual([38, 38, 46, 46]);
+      const taken = (w: number) => gapPx(row, w) + contentPx(copyRoot, w);
+      expect([1280, 640, 390, 360].map(taken)).toEqual([32, 32, 40, 40]);
+      expect(boxPx(button, 390)).toBe(32);
+      expect(inFlowAt(within(copyRoot).getByRole('status'), 390)).toBe(false);
       expect(shrinksAt(copyRoot, 390)).toBe(false);
     });
 
-    it('keeps a hash at 13 px in the lines it had: one at 640 (570 px of 608), two at 390', () => {
-      // 66 × 7.8 = 514.8 px: 570 holds it; at 390, 358 − 46 = 312 holds a half (34 × 7.8 = 265.2)
-      stubLine(570, 13);
+    // An id in two or three lines stands beside its box: an answer hung under the box alone would
+    // lie over the id's later lines. The copy stands the row's full height, its icon at the
+    // first line, so its answer hangs under the whole id, over none of it.
+    // Lane c2-finish, rulings round 2: the copy stood at the far end of the row (at 1280, x = 1226,
+    // 352 to 727 px after the id's last glyph), because the id grew to fill the row. The id takes
+    // its content's width (it may shrink and wrap; it does not grow), so the copy stands the row's
+    // 8 px gap after it wherever the row has room, and after its lines' box where it wraps.
+    it('stands the copy 8 px after the id: the id takes its content’s width, never the row’s', () => {
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      const row = head().parentElement!;
+      const copyRoot = screen.getByRole('button', { name: 'copy block hash' }).parentElement!;
+      for (const w of [1280, 640, 390, 360]) {
+        expect(widthRuleAt(head(), w), `the id at ${w}`).toBe('auto');
+        expect(shrinksAt(head(), w)).toBe(true);
+        expect(widthRuleAt(copyRoot, w)).toBe('auto');
+        expect(insetsPx(copyRoot, w).margin).toBe(0);
+        expect(gapPx(row, w)).toBe(8);
+      }
+      expect(row.className).not.toMatch(/justify-(between|end|around|evenly)/);
+      expect(copyRoot.className).not.toMatch(/(^|\s)ml-auto/);
+    });
+
+    it('hangs the answer under the whole id, the icon at its first line', () => {
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      const button = screen.getByRole('button', { name: 'copy block hash' });
+      const copyRoot = button.parentElement!;
+      expect(copyRoot).toHaveClass('self-stretch', 'items-start');
+      expect(copyRoot).not.toHaveClass('items-center');
+      expect(within(copyRoot).getByRole('status')).toHaveClass('top-full');
+    });
+
+    // Re-pinned (lane c2-finish, rulings round 2): the id no longer fills its row (it takes its
+    // content's width, so its copy stands 8 px after it), so it measures the row's line less the
+    // copy's box and the gap: the stub gives the row 608 and 358 px and the copy 24 and 32 (it gave
+    // the id the line left over, 576 and 318)
+    it('keeps a hash at 13 px in the lines it had: one at 640 (576 px of 608), two at 390', () => {
+      // 66 × 7.8 = 514.8 px: 608 − 24 − 8 = 576 holds it; at 390, 358 − 32 − 8 = 318 holds a half
+      // (34 × 7.8 = 265.2)
+      stubLine(608, 13, 24);
       const one = render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       expect(lines()).toHaveLength(1);
       one.unmount();
       vi.restoreAllMocks();
-      stubLine(312, 13);
+      stubLine(358, 13, 32);
       render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       expect(texts()).toEqual([HASH.slice(0, 34), HASH.slice(34)]);
     });

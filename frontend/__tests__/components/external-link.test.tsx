@@ -15,10 +15,12 @@ describe('ExternalLink', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noreferrer');
     expect(link).toHaveClass('text-text');
-    // the mark never stands alone at the start of a line
+    // the mark never stands alone at the start of a line: re-pinned (lane c2-finish, rulings
+    // round 2), a no-break space glues it to the last word (it was a space, held by the span's
+    // nowrap alone), the span still nowrap
     const mark = link.lastElementChild!;
     expect(mark).toHaveTextContent('↗');
-    expect(mark.textContent).toBe(' ↗');
+    expect(mark.textContent).toBe('\u00a0↗');
     expect(mark).toHaveClass('whitespace-nowrap');
   });
 

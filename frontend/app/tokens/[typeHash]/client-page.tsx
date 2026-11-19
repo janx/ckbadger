@@ -242,12 +242,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash
-                        hash={other.typeScriptHash}
-                        size="row"
-                        copyable={false}
-                        className="text-small"
-                      />
+                      <Hash hash={other.typeScriptHash} size="row" className="text-small" />
                     </AppLink>
                     , {unitNode(formatCount(other.holdersCount, 'holder'))}
                   </span>

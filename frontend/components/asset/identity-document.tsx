@@ -16,12 +16,11 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
               kind={party.address ? 'address' : 'hash'}
               size="row"
               className="text-meta"
-              copyable={false}
             />
           </AppLink>
         ) : (
           <>
-            <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-meta" />{' '}
+            <Hash hash={party.hashPrefix} truncate={false} className="text-meta" />{' '}
             {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
             <CopyButton
               value={party.hashPrefix}

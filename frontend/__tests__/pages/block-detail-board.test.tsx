@@ -12,6 +12,7 @@ import { PAGE_SEAL_HEIGHTS } from '@/components/ui/page-seal';
 import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -394,6 +395,9 @@ describe('Block board · first tier', () => {
     expect(writeText).not.toHaveBeenCalled();
     const copy = screen.getByRole('button', { name: 'copy block hash' });
     expect(container.querySelector('[data-sealed-id]')).toContainElement(copy);
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(copy);
     fireEvent.click(copy);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
     expect(writeText).toHaveBeenCalledTimes(1);

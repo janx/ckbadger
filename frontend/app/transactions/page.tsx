@@ -215,7 +215,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} look="key">
-              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
+              <Hash hash={tx.hash} size="tight" className="text-body" />
             </Link>
           ),
           // the dot, the status word and the wait stand in one row; "this device's clock is
@@ -264,12 +264,7 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
           <div className="min-w-0 space-y-1">
             {/* Table-rows T5: the pool row's key, bright on the 20 px row line. */}
             <Link href={`/tx/${tx.hash}`}>
-              <Hash
-                hash={tx.hash}
-                size="row"
-                copyable={false}
-                className="text-body text-text-bright leading-row"
-              />
+              <Hash hash={tx.hash} size="row" className="text-body text-text-bright leading-row" />
             </Link>
             <PoolInterpretationNotice interpretation={tx.interpretation} />
           </div>

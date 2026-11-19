@@ -1,7 +1,7 @@
 'use client';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CopyButton } from '@/components/ui/copy-button';
+import { IdCopyRow } from '@/components/ui/head-id';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -461,12 +461,13 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         strip={{ label: 'Cell status', facts: cellStripFacts(cell) }}
         // The id line: the full out point and its copy, in the plate's quiet voice (C10 round 2:
         // it was text-body in the bright ink, competing with the h1 above it), its colon in the
-        // same ink; it wraps anywhere, as the line does.
+        // same ink; it wraps anywhere, as the line does. The id line's one form (IdCopyRow, lane
+        // c2-finish rulings round 2): its copy 8 px after it at its first line, its answer under
+        // the whole out point; not a HeadId, whose kinds are a hash, an address and a did:ckb.
         identity={
-          <div className="flex flex-wrap items-center gap-2.5">
+          <IdCopyRow value={outpoint} copy="copy out point">
             <span className="min-w-0">{outpoint}</span>
-            <CopyButton value={outpoint} label="copy out point" />
-          </div>
+          </IdCopyRow>
         }
         // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
         // dim small voice: the inventory item this cell is (lane U, U6), the transaction it is an

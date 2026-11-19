@@ -113,25 +113,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home: replaced at its merge ----
   // ---- d1-charts: the chart pages' range and scale are the library's RangeSelect and FilterChips (lane D1) ----
-  // ---- shared: the old pager (components/ui/cursor-pagination.tsx) went with its last use ----
-  // The click-to-copy of an id (`copyable`, lane c2-finish item 4's third kind), awaiting its
-  // ruling: the proposal is no copy (an id in a row or a sentence is the row's key or a link).
-  'components/ui/hex-code.tsx': {
-    lane: 'shared',
-    sites: { clipboard: 1 },
-    reason:
-      'HexCode’s click-to-copy (`copyable`, its default): no call site reaches it today, every Hash and HexCode says copyable={false}',
-  },
-  'components/ui/hex-display.tsx': {
-    lane: 'shared',
-    sites: { clipboard: 1 },
-    reason:
-      'HexDisplay’s click-to-copy (`copyable`, its default): the .cell party’s lock hash reaches it, an id inside a link to its address',
-  },
+  // ---- shared: the old pager (components/ui/cursor-pagination.tsx) went with its last use; the
+  // click-to-copy of an id (HexCode's, HexDisplay's) went with its last call site (lane c2-finish,
+  // rulings round 1: an id inside a link is the link, not a copy target) ----
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 3;
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

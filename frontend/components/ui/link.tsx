@@ -20,8 +20,12 @@ import { cn } from '@/lib/utils';
  *   stands under, at least 3 : 1 on the four grounds in both themes (pinned in palette.test). The
  *   board's `slate-other` line was 1.37–1.66 : 1 by night and 1.50–1.84 : 1 by day, under a
  *   shape's floor. Under hover and focus the line follows its words into the celadon.
- * - `onward`: a way onward: celadon, never broken, its arrow written here and held to its last word
- *   (` →`; ` ↓` to a place further down this page; `ExternalLink` writes ` ↗` to another site).
+ * - `onward`: a way onward: celadon, its arrow written here and held to its last word (` →`; ` ↓`
+ *   to a place further down this page; `ExternalLink` writes ` ↗` to another site). It wraps
+ *   between its words like any line (lane c2-finish, rulings round 2: it was never broken, and a
+ *   long one, the chart pages' hardfork note at 413 px, ran out of a 360 px page by 77 px); the
+ *   arrow never stands alone on a line: it follows a no-break space, glued to the last word (see
+ *   `ONWARD_GLUE`).
  * - `block`: a link that is a block — a tile, a card, a row that is one link, a seal, an SVG mark:
  *   no link ink of its own; what it holds draws its inks.
  * - `nav`: the shell's navigation (the header, its menu, the footer, the wordmark, the skip link):
@@ -42,7 +46,7 @@ const LOOK_CLASS: Record<LinkLook, string> = {
   key: 'text-text-bright',
   // the line's ink; the underline in INLINE_UNDERLINE (its key written out: a class is a literal)
   inline: 'underline decoration-1 underline-offset-[3px] decoration-[color:var(--c-ink-muted)]',
-  onward: 'text-jade whitespace-nowrap',
+  onward: 'text-jade',
   block: '',
   nav: '',
 };
@@ -58,11 +62,21 @@ export function linkLookClass(look: LinkLook | undefined, className?: string): s
   return out === '' ? undefined : out;
 }
 
+/**
+ * What holds a way onward's arrow to its last word: a no-break space before it. A line breaks at a
+ * space (after it); a no-break space offers no break before or after it (Unicode line breaking,
+ * LB12 and LB12a: glue, unless the word before ends in a space or a hyphen, which a link's words do
+ * not), so the last word and the arrow end the same line however the words before them wrap. The
+ * arrow's span does not wrap either, whatever the line's own white-space reads.
+ */
+export const ONWARD_GLUE = '\u00a0';
+
 /** The arrow a way onward writes, held to its last word: down to a place on this page, else on. */
 function onwardArrow(href: string) {
   return (
     <span aria-hidden="true" className="whitespace-nowrap">
-      {href.startsWith('#') ? ' ↓' : ' →'}
+      {ONWARD_GLUE}
+      {href.startsWith('#') ? '↓' : '→'}
     </span>
   );
 }

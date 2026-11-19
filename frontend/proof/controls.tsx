@@ -88,7 +88,11 @@ function TabRows() {
         value={plain}
         onChange={setPlain}
       >
-        <Note>no square, the names in their own case; a zero’s name in the quiet ink</Note>
+        <Note>
+          a plain row, under its section’s own heading: 14 px at every width, no square, the names
+          in their own case; a zero’s name in the quiet ink (the rows above are command rows, their
+          section’s heading: 17 px from 640)
+        </Note>
       </Tabs>
     </Item>
   );

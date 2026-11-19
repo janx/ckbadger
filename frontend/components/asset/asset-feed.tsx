@@ -240,7 +240,7 @@ function AssetTxPhoneRow({
           tone: 'head',
           left: (
             <AppLink href={`/tx/${r.hash}`} look="key">
-              <Hash hash={r.hash} size="tight" copyable={false} className="text-body" />
+              <Hash hash={r.hash} size="tight" className="text-body" />
             </AppLink>
           ),
           // the block and its age (or date) are each a unit; "this device's clock is behind" in
@@ -294,7 +294,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
-          <Hash hash={r.hash} size="row" copyable={false} className="text-small" />
+          <Hash hash={r.hash} size="row" className="text-small" />
         </AppLink>
       ),
     },

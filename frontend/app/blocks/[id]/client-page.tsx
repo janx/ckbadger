@@ -587,7 +587,6 @@ export default function BlockDetailPage() {
                               <Hash
                                 hash={proposal.committedTxHash}
                                 size="row"
-                                copyable={false}
                                 className="text-small"
                               />
                             </Link>{' '}
@@ -948,7 +947,7 @@ function UncleRow({
         </Link>
         <span className="text-text-dim">uncle</span>
         <Link href={getUncleDetailHref(blockNumber, index)}>
-          <Hash hash={uncle.hash} size="row" copyable={false} className="text-small" />
+          <Hash hash={uncle.hash} size="row" className="text-small" />
         </Link>
       </span>
       <span className="text-text-dim">
@@ -971,12 +970,7 @@ function UncleRow({
               {formatBlockNumber(detail.sameParentAs)}
             </Link>{' '}
             <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-              <Hash
-                hash={detail.canonicalAtHeight.hash}
-                size="row"
-                copyable={false}
-                className="text-small"
-              />
+              <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
             </Link>
             , same parent{' '}
             <Link href={`/blocks/${uncle.parentHash}`}>{formatBlockNumber(uncle.number - 1)}</Link>

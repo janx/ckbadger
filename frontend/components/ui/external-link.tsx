@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { linkLookClass, type LinkLook } from '@/components/ui/link';
+import { linkLookClass, ONWARD_GLUE, type LinkLook } from '@/components/ui/link';
 
 /**
  * A link that leaves the site (UI review 2026-11-14, U-20): its words, then ` ↗` held to the last
@@ -26,7 +26,8 @@ export function ExternalLink({
   return (
     <a href={href} target="_blank" rel="noreferrer" className={linkLookClass(look, className)}>
       {children}
-      <span className="whitespace-nowrap"> ↗</span>
+      {/* held to the last word by a no-break space, as a way onward's arrow is */}
+      <span className="whitespace-nowrap">{ONWARD_GLUE}↗</span>
     </a>
   );
 }
