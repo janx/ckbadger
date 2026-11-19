@@ -89,12 +89,13 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
     >
       {/* One mark column, one text edge (seals by kind, C11): a column of marks as wide as the
           widest, the cell's 18 px stone (readability R6: it was the 30 px stone's 30; the owner's
-          stone is 15 wide, the class mark 16), and the text, 10 px apart, in four rows — the
+          stone is 13.5 wide, the class mark 16), and the text, 10 px apart, in four rows — the
           cell's stone with its label and out point, the owner's stone with the owner, the class
           mark with the content, then the occupied bar. Each mark stands alone, centred in the
           column, on its row's first line (the row line, 20 px): the cell's 18 px stone centred on
-          it, 1 px clear above and below (RowSeal); the owner's overhangs it by 1 px; the 16 px
-          class mark sits 1 px down. Every row's text starts on the same edge; the rows after the
+          it, 1 px clear above and below (RowSeal), and the owner's 18 px stone the same, as high
+          as the cell's (Gate B; it was 20 px and overhung the line by 1 px); the 16 px class mark
+          sits 1 px down. Every row's text starts on the same edge; the rows after the
           first end with their right-end item (lock kind, capacity, the cell's state beside the
           bar), which wraps under its row's text when it does not fit and stays right. Row 1 is the
           label and the out point alone: with the state beside them it wrapped on every tile of a
@@ -137,7 +138,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="owner" data-tile-owner className="contents">
         <span data-tile-mark className="flex items-start justify-center">
-          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="-my-px" />
+          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="h-row items-center" />
         </span>
         {/* the lock's kind, a label beside the owner: quiet (R3) */}
         <TileText end={cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}>

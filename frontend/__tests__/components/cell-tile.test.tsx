@@ -241,8 +241,11 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
-    // one line: the stone at the line's height (20 px, 1 px over above and below)
-    expect(stone).toHaveClass('-my-px');
+    // one line: re-pinned on purpose (lane D3, Gate B's ruling): the 18 px stone, as high as the
+    // cell's, stands centred in a box of the 20 px line, 1 px clear above and below, as the cell's
+    // stone does (it was the 20 px stone overhanging the line, `-my-px`)
+    expect(stone).toHaveClass('h-row', 'items-center');
+    expect(stone.className).not.toMatch(/-my-/);
     // the out point and its seal come first; the owner, then the lock's kind
     expectBefore(within(tile).getByRole('link', { name: /:1$/ }), stone);
   });
@@ -418,7 +421,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
     expect(tile.tagName).toBe('ARTICLE');
-    // the widest of the three marks: the cell's stone (18), the owner's (15), the class mark (16)
+    // the widest of the three marks: the cell's stone (18), the owner's (13.5), the class mark (16)
     const column = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
     expect(column).toBe(18);
     expect(tile).toHaveClass(
@@ -440,7 +443,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(content.mark.firstElementChild).toHaveAttribute('width', '16');
     expect(occupied.mark.childNodes).toHaveLength(0);
     // each mark centred in the column, on its row's first line (the cell's stone centred in a box
-    // of the 20 px line, the owner's overhanging it by 1 px; the 16 px class mark sits 1 px down)
+    // of the 20 px line, the owner's 18 px stone too; the 16 px class mark sits 1 px down)
     for (const { mark } of [cell, owner, content])
       expect(mark).toHaveClass('flex', 'items-start', 'justify-center');
     expect(content.mark).toHaveClass('pt-px');

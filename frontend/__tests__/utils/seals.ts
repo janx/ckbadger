@@ -255,7 +255,7 @@ export function expectOneRowSeal(
 }
 
 /**
- * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 20 px script row
+ * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 18 px script row
  * stone of `lockHash` (compared as markup with `drawSeal`'s), an image and not a link, with the
  * 5 px gap after it (none with `gap: false`, in a cell tile's mark column). Returns the stone's
  * holder (`[data-owner-seal]`).
