@@ -156,7 +156,7 @@ export function ScriptSummarySentence({
       cells holding{' '}
       <span className="text-text-bright">
         <CkbAmount
-          form="column"
+          form="summary"
           shannons={BigInt(family.ownedCapacitySum)}
           signed={false}
           tone="plain"
@@ -615,14 +615,14 @@ export function ScriptHistoryReading({
             },
             {
               label: 'CKB held',
-              value: <CkbAmount form="column" shannons={held} signed={false} tone="plain" />,
+              value: <CkbAmount form="exact" shannons={held} signed={false} tone="plain" />,
             },
             {
               label: 'occupied',
               value: (
                 <>
                   {swatch(DATA_COLOR)}
-                  <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
+                  <CkbAmount form="exact" shannons={used} signed={false} tone="plain" />
                 </>
               ),
             },
@@ -631,7 +631,7 @@ export function ScriptHistoryReading({
               value: (
                 <>
                   {swatch(HELD_CAPACITY_COLOR)}
-                  <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
+                  <CkbAmount form="exact" shannons={unused} signed={false} tone="plain" />
                 </>
               ),
             },
@@ -696,13 +696,13 @@ export function ScriptHistoryNotes({
       {peak && (
         <NoteSentence inline={inline} testId="script-history-peak">
           CKB held peaked at{' '}
-          <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
+          <CkbAmount form="summary" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
           {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
               · occupied is now{' '}
-              <CkbAmount form="column" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
+              <CkbAmount form="summary" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
               {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
@@ -925,14 +925,14 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedCapacitySum)}
         signed={false}
         tone="plain"
       />
       ,{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedKnowledgeSum)}
         signed={false}
         tone="plain"

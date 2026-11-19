@@ -132,7 +132,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
       'JoyID decides who can spend 161,049 live cells'
     );
     expect(within(paragraph).getByTestId('script-history-peak')).toHaveTextContent(
-      /CKB held peaked at 456,002,179\.570* CKB on 2026-10-29/
+      // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form (it was
+      // "456,002,179.57000000")
+      /CKB held peaked at 456,002,179 CKB on 2026-10-29/
     );
     expect(paragraph).toHaveTextContent('A cell must hold enough CKB to pay for its own bytes.');
     expect(paragraph).toHaveTextContent(

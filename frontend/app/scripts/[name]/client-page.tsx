@@ -72,7 +72,17 @@ const AMOUNT_LINE_PX = columnPx(
 /** A version's CKB in its compact form, under a billion CKB: "999.99M". */
 const WIDEST_COMPACT_CKB = ckbAmountText(BigInt('99999999999999999'), 'compact');
 
-function CellOccupiedValue({ cell }: { cell: Cell }) {
+function CellOccupiedValue({
+  cell,
+  form,
+}: {
+  cell: Cell;
+  /**
+   * The table's numeric column aligns its points (`column`); a phone row writes the summary (lane
+   * P2's follow-up, item 5: one form for both was the column's).
+   */
+  form: 'column' | 'summary';
+}) {
   if (cell.cellType === 'genesis_special_burn') {
     return cell.virtualCommonKnowledgeSize === undefined ? (
       <span
@@ -88,7 +98,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
         <CkbAmount
-          form="column"
+          form={form}
           shannons={BigInt(cell.virtualCommonKnowledgeSize)}
           signed={false}
           tone="plain"
@@ -99,7 +109,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
   }
   return (
     <CkbAmount
-      form="column"
+      form={form}
       shannons={BigInt(cell.commonKnowledgeSize)}
       signed={false}
       tone="plain"
@@ -1655,7 +1665,7 @@ export default function ScriptDetailPage({
                           // as Capacity (F3-e: it was 120 and 11 %)
                           minWidth: AMOUNT_LINE_PX,
                           numeric: true,
-                          render: (cell) => <CellOccupiedValue cell={cell} />,
+                          render: (cell) => <CellOccupiedValue cell={cell} form="column" />,
                         },
                         {
                           key: 'created',
@@ -1704,7 +1714,7 @@ export default function ScriptDetailPage({
                               signed={false}
                               tone="plain"
                             />{' '}
-                            · occupied <CellOccupiedValue cell={cell} />
+                            · occupied <CellOccupiedValue cell={cell} form="summary" />
                           </div>
                           <div>
                             Created{' '}

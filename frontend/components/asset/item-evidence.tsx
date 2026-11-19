@@ -170,7 +170,7 @@ export function ItemTransactionContext({
             Output {context.createdCell.outputIndex} · cell after
           </AppLink>
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={BigInt(context.createdCell.capacity)}
             signed={false}
             tone="plain"

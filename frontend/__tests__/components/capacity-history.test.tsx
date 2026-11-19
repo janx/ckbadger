@@ -118,9 +118,11 @@ it.each([928, 358])(
       expect(new Set(ticks).size).toBe(ticks.length);
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       expect(errors).not.toHaveBeenCalled();
-      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000120');
+      // re-pinned on purpose (lane P2's follow-up, item 5): a readout writes the exact value, its trailing
+      // zeros dropped (it wrote the column's padded "0.00000120")
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.0000012 CKB');
       fireEvent.keyDown(plot, { key: 'ArrowLeft' });
-      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000100');
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.000001 CKB');
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

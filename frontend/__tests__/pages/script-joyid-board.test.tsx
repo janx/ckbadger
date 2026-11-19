@@ -92,7 +92,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
     const summary = within(tier2).getByTestId('script-summary').textContent!;
     expect(summary).toContain(
-      'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
+      // re-pinned on purpose (lane P2's follow-up, item 5): the summary sentence writes the summary form
+      'JoyID decides who can spend 161,049 live cells holding 456,002,179 CKB'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
     // re-pinned (A4 round 2): a count is a unit of its own, its number and noun joined by a plain
@@ -480,7 +481,9 @@ describe('JoyID script page · visual pass', () => {
   it('states the peak of CKB held from the API (SC-S8, R2b-b totalPeak)', async () => {
     await renderJoyid();
     expect(screen.getByTestId('script-history-peak')).toHaveTextContent(
-      /CKB held peaked at 456,002,179\.570* CKB on 2026-10-29/
+      // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form (it was
+      // "456,002,179.57000000")
+      /CKB held peaked at 456,002,179 CKB on 2026-10-29/
     );
   });
 

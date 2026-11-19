@@ -396,16 +396,16 @@ export function CanonicalIdentityDetail({
           <p className="max-w-measure">
             The cell holds{' '}
             <span className="text-text-bright">
-              <CkbAmount form="column" shannons={BigInt(held)} signed={false} tone="plain" />
+              <CkbAmount form="exact" shannons={BigInt(held)} signed={false} tone="plain" />
             </span>
-            . <CkbAmount form="column" shannons={BigInt(occupied)} signed={false} tone="plain" />{' '}
-            pay for its bytes;{' '}
+            . <CkbAmount form="exact" shannons={BigInt(occupied)} signed={false} tone="plain" /> pay
+            for its bytes;{' '}
             {BigInt(held) === BigInt(occupied) ? (
               'none is free.'
             ) : (
               <>
                 <CkbAmount
-                  form="column"
+                  form="exact"
                   shannons={BigInt(held) - BigInt(occupied)}
                   signed={false}
                   tone="plain"

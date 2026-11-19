@@ -171,14 +171,14 @@ export function CellVersions({
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
                 <CkbAmount
-                  form="column"
+                  form="exact"
                   shannons={BigInt(v.capacity)}
                   signed={false}
                   tone="plain"
                   wrap
                 />
                 <div className="text-text-dim text-meta mt-1">
-                  <CkbAmount form="column" shannons={free} signed={false} tone="plain" wrap /> free
+                  <CkbAmount form="exact" shannons={free} signed={false} tone="plain" wrap /> free
                 </div>
                 {v.consumedByTx && (
                   <AppLink

@@ -47,7 +47,13 @@ describe('script code evidence', () => {
       </>
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('18,014,398,509.48198600');
+    // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form, whole CKB from
+    // 1,000 up, the exact value its title (it wrote the column's every decimal, padded)
+    expect(sentence).toContain('Of the 18,014,398,509 CKB under these');
+    expect(screen.getByTestId('code-class-sentence').querySelector('[title]')).toHaveAttribute(
+      'title',
+      expect.stringContaining('18,014,398,509.481986')
+    );
     expect(sentence).toContain('50.00% runs code no one can change');
     expect(sentence).toContain('50.00% sits under code marked "holder lock not recognised"');
     expect(screen.getByText('Holder lock not recognised')).toBeInTheDocument();

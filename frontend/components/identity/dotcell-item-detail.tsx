@@ -182,7 +182,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
         <section aria-label="For sale" className="space-y-3">
           <PromptHeading command="For sale" />
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={BigInt(item.sale.priceShannons)}
             signed={false}
             tone="plain"

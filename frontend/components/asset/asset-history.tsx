@@ -444,7 +444,7 @@ export function AssetHistory({
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
       peak{' '}
-      <CkbAmount form="column" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
+      <CkbAmount form="summary" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
       on {unitNode(peak.date)}
     </span>
   );
@@ -476,12 +476,7 @@ export function AssetHistory({
         {
           label: 'held',
           value: (
-            <CkbAmount
-              form="column"
-              shannons={BigInt(point.capacity)}
-              signed={false}
-              tone="plain"
-            />
+            <CkbAmount form="exact" shannons={BigInt(point.capacity)} signed={false} tone="plain" />
           ),
         },
         {
@@ -491,7 +486,7 @@ export function AssetHistory({
             <>
               <Swatch color={DATA_COLOR} />
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={BigInt(point.occupiedCapacity)}
                 signed={false}
                 tone="plain"
@@ -512,7 +507,7 @@ export function AssetHistory({
             <>
               <Swatch color={CLASS_COLORS.ckb} />
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
                 signed={false}
                 tone="plain"
@@ -528,7 +523,7 @@ export function AssetHistory({
                   <>
                     <Swatch color={CLASS_COLORS.tokens} />
                     <span className="text-text">
-                      <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />
+                      <TokenAmount form="exact" amount={point.supply!} decimals={token.decimals} />
                     </span>{' '}
                     <span className="text-text-dim">{token.symbol}</span>
                   </>
@@ -544,7 +539,7 @@ export function AssetHistory({
                 value: (
                   <span title="the most CKB its cells held on any complete day">
                     <CkbAmount
-                      form="column"
+                      form="exact"
                       shannons={BigInt(peak.capacity)}
                       signed={false}
                       tone="plain"

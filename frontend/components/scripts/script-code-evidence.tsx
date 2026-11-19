@@ -261,7 +261,7 @@ export function ScriptCodeClassSummary({
       {total > BigInt(0) && (
         <Prose className="mb-3">
           <p data-testid="code-class-sentence">
-            Of the <CkbAmount form="column" shannons={total} signed={false} tone="plain" /> under
+            Of the <CkbAmount form="summary" shannons={total} signed={false} tone="plain" /> under
             these {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
               groups.map(
@@ -282,7 +282,7 @@ export function ScriptCodeClassSummary({
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
             <CkbAmount
-              form="column"
+              form="summary"
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
