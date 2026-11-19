@@ -57,7 +57,7 @@ import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -372,12 +372,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             // the holder's lock by the one decision (B4): nothing for the default lock
             note: protocol.data?.current
               ? (() => {
-                  const words = cellOwnerLock(protocol.data.current.cell);
-                  return words ? (
-                    <RowTag>
-                      <LockWordsView words={words} size="row" className="" />
-                    </RowTag>
-                  ) : undefined;
+                  const part = cellOwnerLockPart(protocol.data.current.cell, '');
+                  return part ? <RowTag>{part}</RowTag> : undefined;
                 })()
               : undefined,
           },

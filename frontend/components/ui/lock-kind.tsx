@@ -8,6 +8,8 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
 import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { PartReadError, readPart } from '@/components/read-failure';
+import type { ReactNode } from 'react';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
 const LOCK_WORDS = 'text-text-dim';
@@ -176,6 +178,20 @@ export function cellOwnerLock(cell: {
     ),
     'inline'
   );
+}
+
+/**
+ * A cell owner's lock as a part of a note or a fact (`cellOwnerLock`, `LockWordsView`): null where
+ * none is written, so a list leaves the part out; a lock the decision refuses fails this part in
+ * its place, said with the refusal (ruling D7; lane B4 third round), never the page.
+ */
+export function cellOwnerLockPart(
+  cell: Parameters<typeof cellOwnerLock>[0],
+  className?: string
+): ReactNode {
+  const read = readPart(() => cellOwnerLock(cell));
+  if (read.error !== undefined) return <PartReadError what="the owner’s lock" error={read.error} />;
+  return read.value && <LockWordsView words={read.value} size="row" className={className} />;
 }
 
 /** An API row's lock where it stands (`rowLockFacts`, `lockWords`), or null where none is written. */

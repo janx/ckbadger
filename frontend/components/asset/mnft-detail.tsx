@@ -35,7 +35,7 @@ import {
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -302,9 +302,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               // is refused): the lock left out where none is named
               note: current
                 ? [
-                    cellOwnerLock(current) && (
-                      <LockWordsView words={cellOwnerLock(current)!} size="row" />
-                    ),
+                    cellOwnerLockPart(current),
                     <>
                       since <Utc8Date timestamp={current.timestamp} />
                     </>,

@@ -36,7 +36,7 @@ import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { useCopy } from '@/hooks/useCopy';
-import { ReadFailure } from '@/components/read-failure';
+import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import {
   api,
   isNotFoundApiError,
@@ -797,7 +797,9 @@ export default function TransactionDetailPage() {
         );
   if (selectedGroup !== null && !groups.some((g) => groupKey(g) === selectedGroup))
     throw new Error(`Transaction ${hash}: unknown script group ${selectedGroup}`);
-  const tiles = isProvisional ? null : cellTiles(tx, lookup);
+  // the cells' tiles; a cell the lock decision refuses fails the Cells section in its place (D7)
+  const tilesRead = isProvisional ? null : readPart(() => cellTiles(tx, lookup));
+  const tiles = tilesRead?.value ?? null;
   const compensation = activity ? daoCompensation(activity) : undefined;
 
   // ---- hover linking by group identity (TX-14) ----
@@ -1417,6 +1419,13 @@ export default function TransactionDetailPage() {
             <BalanceChanges activity={activity} fee={tx.fee} compensation={compensation ?? null} />
           </div>
         )}
+        {tilesRead?.error !== undefined && (
+          <div className="min-w-0 lg:col-start-1">
+            <DetailSection title="Cells">
+              <PartReadError what="the cells" error={tilesRead.error} />
+            </DetailSection>
+          </div>
+        )}
         {tiles && (
           <div className="min-w-0 lg:col-start-1">
             {/* The command and what it runs on (rubbing × Song print, phase 5, the Transaction
@@ -1761,6 +1770,32 @@ export default function TransactionDetailPage() {
             </dd>
           </div>
           {(tx.outputs ?? []).flatMap((cell, i) => {
+            const lockFact = (
+              out: { lock: NonNullable<typeof cell.lock>; address?: string | null },
+              at: number
+            ) => {
+              const read = readPart(() =>
+                lockWordsText(
+                  lockWords(
+                    cellLockFacts(
+                      {
+                        lock: out.lock,
+                        name: registeredName(lookup, out.lock.codeHash),
+                        address: out.address ?? null,
+                      },
+                      `Transaction ${tx.hash} output ${at}`
+                    ),
+                    'column'
+                  )!,
+                  'row'
+                )
+              );
+              return read.error !== undefined ? (
+                <PartReadError what={`the lock of output ${at}`} error={read.error} />
+              ) : (
+                read.value
+              );
+            };
             // R-8 (TX-20): an output lock read by a registry field layout, or — revised R-8 — one
             // whose args do not fit its layout, with the API's reason in place of the fields.
             const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError, 'row');
@@ -1783,22 +1818,9 @@ export default function TransactionDetailPage() {
                 </dt>
                 <dd>
                   {/* the lock as its tile names it, from the one decision (B4), here a fact that
-                      is never empty: the default lock by its name */}
-                  {lockWordsText(
-                    lockWords(
-                      cellLockFacts(
-                        {
-                          lock: cell.lock,
-                          name: registeredName(lookup, cell.lock.codeHash),
-                          address: cell.address ?? null,
-                        },
-                        `Transaction ${tx.hash} output ${i}`
-                      ),
-                      'column'
-                    )!,
-                    'row'
-                  )}
-                  ,{' '}
+                      is never empty: the default lock by its name; a refusal fails the fact in
+                      its place (D7) */}
+                  {lockFact({ lock: cell.lock, address: cell.address }, i)},{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
                     {unitText(line)}
                   </span>
