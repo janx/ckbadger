@@ -315,7 +315,7 @@ export default function FiberChannelsPage() {
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto max-w-[1280px] pb-16 pt-7">
+      <main className="container mx-auto max-w-[1280px] pb-16 pt-8">
         {/* Hierarchy v3 (R13): the hero is open now and the network picture; the concept and the
             graph's explainer are tier 2. Hero → first section 64 px (R6). */}
         <div data-tier="1" className="min-w-0">
