@@ -14,6 +14,7 @@ import {
 } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 const API_BASE = '/api/:network/v1';
 
@@ -22,24 +23,26 @@ describe('NetworkDistributions', () => {
   it('renders verified-peer versions, hosting organisations and protocols', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 7,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 2,
-          versions: [
-            { label: '0.114.0', count: 4 },
-            { label: '0.113.0', count: 1 },
-          ],
-          countries: [
-            { label: 'United States', count: 3 },
-            { label: 'Germany', count: 2 },
-          ],
-          asns: [
-            { label: 'AS24940 Hetzner', count: 2 },
-            { label: 'Unknown', count: 5 },
-          ],
-          protocols: [{ label: '/ckb/2', count: 5 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 7,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 2,
+            versions: [
+              { label: '0.114.0', count: 4 },
+              { label: '0.113.0', count: 1 },
+            ],
+            countries: [
+              { label: 'United States', count: 3 },
+              { label: 'Germany', count: 2 },
+            ],
+            asns: [
+              { label: 'AS24940 Hetzner', count: 2 },
+              { label: 'Unknown', count: 5 },
+            ],
+            protocols: [{ label: '/ckb/2', count: 5 }],
+          })
+        )
       )
     );
 
@@ -70,18 +73,20 @@ describe('NetworkDistributions', () => {
     stubChartWidth(240);
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 10,
-          sameNetworkReachable: 10,
-          verifiedUnavailable: 0,
-          versions: [{ label: '0.114.0', count: 10 }],
-          countries: [{ label: 'China', count: 10 }],
-          asns: [
-            { label: 'AS4134 中国电信', count: 5 },
-            { label: 'AS24940 Hetzner', count: 5 },
-          ],
-          protocols: [{ label: '/ckb/2', count: 10 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 10,
+            sameNetworkReachable: 10,
+            verifiedUnavailable: 0,
+            versions: [{ label: '0.114.0', count: 10 }],
+            countries: [{ label: 'China', count: 10 }],
+            asns: [
+              { label: 'AS4134 中国电信', count: 5 },
+              { label: 'AS24940 Hetzner', count: 5 },
+            ],
+            protocols: [{ label: '/ckb/2', count: 10 }],
+          })
+        )
       )
     );
     const { container } = render(<HostingBar />);
@@ -112,15 +117,17 @@ describe('NetworkDistributions', () => {
   it('waits while its read is paused offline, then draws the distributions once back online', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 5,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 0,
-          versions: [{ label: '0.114.0', count: 5 }],
-          countries: [{ label: 'Germany', count: 5 }],
-          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
-          protocols: [{ label: '/ckb/2', count: 5 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 5,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 0,
+            versions: [{ label: '0.114.0', count: 5 }],
+            countries: [{ label: 'Germany', count: 5 }],
+            asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+            protocols: [{ label: '/ckb/2', count: 5 }],
+          })
+        )
       )
     );
     onlineManager.setOnline(false);
@@ -143,18 +150,89 @@ describe('NetworkDistributions', () => {
     }
   });
 
-  it('renders an empty-state note when a distribution has no data', async () => {
+  // Lane exactness, part A (A5 iii): the hosting bar draws the route's organisations and its
+  // rest (the page summed the ASNs by organisation and the rest), and the versions stand by the
+  // route's releases; an API older than the page sends neither and is refused by name. The ASN
+  // histogram here is empty on purpose: the bar reads `hosting`, not the ASNs.
+  it('draws the hosting bar from the route’s organisations and rest', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
         HttpResponse.json({
-          verifiedRetained: 0,
-          sameNetworkReachable: 0,
+          verifiedRetained: 6,
+          sameNetworkReachable: 6,
           verifiedUnavailable: 0,
-          versions: [],
-          countries: [],
+          versions: [{ label: '0.119.0', count: 6 }],
+          countries: [
+            { label: 'US', count: 4 },
+            { label: 'DE', count: 2 },
+          ],
           asns: [],
           protocols: [],
+          hosting: {
+            organisations: [
+              { label: 'Amazon.com', count: 3 },
+              { label: 'Hetzner Online GmbH', count: 2 },
+            ],
+            rest: 1,
+            restOrganisations: 1,
+          },
+          releases: [{ release: '0.119.0', count: 6, builds: [{ label: '0.119.0', count: 6 }] }],
         })
+      )
+    );
+    const { container } = render(<HostingBar />);
+    expect(
+      await screen.findByText('3 of the 6 verified nodes run on Amazon.com, across 2 countries.')
+    ).toBeInTheDocument();
+    expect(
+      [...container.querySelectorAll('[data-provider]')].map((n) => n.getAttribute('data-provider'))
+    ).toEqual(['Amazon.com', 'Hetzner Online GmbH', 'other networks']);
+  });
+
+  it('refuses distributions without the route’s groupings, an older API', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 5,
+          sameNetworkReachable: 5,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 5 }],
+          countries: [{ label: 'Germany', count: 5 }],
+          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+          protocols: [{ label: '/ckb/2', count: 5 }],
+        })
+      )
+    );
+    render(
+      <>
+        <NetworkDistributions />
+        <HostingBar />
+      </>
+    );
+    expect(
+      await screen.findByText(
+        'Network distributions send no releases: the API is older than this page.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Network distributions send no hosting: the API is older than this page.')
+    ).toBeInTheDocument();
+  });
+
+  it('renders an empty-state note when a distribution has no data', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 0,
+            sameNetworkReachable: 0,
+            verifiedUnavailable: 0,
+            versions: [],
+            countries: [],
+            asns: [],
+            protocols: [],
+          })
+        )
       )
     );
 

@@ -148,6 +148,8 @@ describe('ChartSmallMultiple', () => {
             // (to 100), so one row was one miner who found every block, not 6 of 10; the window's
             // 100 blocks are found by six miners here, the sixth the card's "Others" (8 blocks)
             totalBlocks: 100,
+            // the sixth miner's 8 blocks, the route's (lane exactness, part A, A1)
+            restBlocks: 8,
             fromDate: '2026-10-21',
             toDate: '2026-10-27',
             data: [

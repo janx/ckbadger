@@ -146,14 +146,27 @@ describe('over a target, counted exactly (M1)', () => {
     expect(epochs.figure?.title).toBe('14,418,000 ms');
     expect(epochs.sentence).toBe('Over the 4.00 h target in 2 of the last 3\u00a0epochs.');
   });
-  it('counts the uncle rate over its target by the figure it shows', () => {
+  // Re-pinned for lane exactness, part A (A2): the route sends each day's uncles and blocks, and the count is on
+  // them, uncles × 40 > blocks × 1 for a target of one in forty: 40,001 uncles of 1,600,000 blocks
+  // is 2.5000625 %, cut to the share the route sends (0.025000) and shown 2.50 %, and is over the
+  // target (it compared the shown figure and said "0 of the last 1 day").
+  it('counts the uncle rate over its target on the day’s uncles and blocks', () => {
     const uncles = head('uncle-rate', {
-      ...daily(['0.025001']),
+      ...daily(['0.025000']),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [{ date: '2026-11-18', uncles: 40_001, blocks: 1_600_000 }],
     });
     expect(uncles.sentence).toBe(
-      'Over the 2.50% target on 0 of the last 1\u00a0day; the peak was 2.50% on 2026-11-18.'
+      'Over the 2.50% target on 1 of the last 1\u00a0day; the peak was 2.50% on 2026-11-18.'
     );
+  });
+  it('refuses an uncle rate whose route sends no operands, an older API', () => {
+    expect(() =>
+      head('uncle-rate', {
+        ...daily(['0.02']),
+        orphanRateTarget: { numerator: 1, denominator: 40 },
+      })
+    ).toThrow('uncle-rate: the API sends no counts: it is older than this page');
   });
 });
 
@@ -165,6 +178,8 @@ describe('the miners’ window (S7)', () => {
       fromDate: '2026-11-12',
       toDate: '2026-11-18',
       totalBlocks,
+      // the route's figure: the blocks of every miner after the five largest
+      restBlocks: totalBlocks - data.slice(0, 5).reduce((sum, { blocks }) => sum + blocks, 0),
       data: data.map(({ blocks }, i) => ({
         minerLockHash: `0x${String(i + 1).repeat(64)}`,
         address: null,

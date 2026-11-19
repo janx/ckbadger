@@ -122,7 +122,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         })}
       </dl>
       {current.unreadable.length > 0 && (
-        <p className="text-text-dim text-small max-w-measure">
+        <p className="text-text text-small max-w-measure">
           Not read here: {current.unreadable.join(', ')} — the document as stored is in the raw
           evidence below.
         </p>
@@ -214,7 +214,7 @@ export function AmongDidCkb({
         ))}
       </ul>
       {named !== total && (
-        <p className="text-text-dim text-small max-w-measure">
+        <p className="text-text text-small max-w-measure">
           An identity can name more than one server, so the servers add up to{' '}
           {named.toLocaleString('en-US')}.
         </p>

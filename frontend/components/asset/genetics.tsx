@@ -1,4 +1,5 @@
 'use client';
+import { WIDEST_DNA_SPAN } from '@/lib/list-bounds';
 import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import type {
   CollectionInsights,
@@ -58,12 +59,11 @@ import { unitText } from '@/components/ui/units';
  * gap after every column but the last. A gene's name, its rule and what an object shows are
  * pattern text that ends in the one ellipsis (the row's title holds it): each holds 12 characters
  * at its minimum, the last column is the flexible one and takes what the container gives beyond
- * the sum. A byte range is whole: a DNA under 1,000 bytes, "bytes 999–999".
+ * the sum. A byte range is whole: a DNA under 1,000 bytes, "bytes 999–999" (WIDEST_DNA_SPAN).
  */
 const GENE_TEXT_CHARS = 12;
 const geneText = (last = false) =>
   columnPx(textPx(GENE_TEXT_CHARS, fontPx('small')) + (last ? 0 : CELL_GAP_PX));
-const WIDEST_SPAN = 'bytes 999–999';
 const geneSpanPx = (text: string) => columnPx(textPx(text.length, fontPx('small')) + CELL_GAP_PX);
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
@@ -174,8 +174,12 @@ export function DnaParagraph({
 }
 
 /**
- * The object's DNA: a sequencing gel of its own bytes (gene by gene), then, on the same plate, the
- * allele gel of its collection with this object's genotype drawn across it ("this one").
+ * The object's DNA in tier 1: what its traits are read from, in one caption, then the allele gel of
+ * its collection with this object's genotype drawn across it ("this one"): its variant in each
+ * gene and how common it is. Lane P2's follow-up (item 1): the byte-level plot, the sequencing gel
+ * of its own bytes gene by gene, stands in one place, the evidence tier (`ObjectGeneticsEvidence`),
+ * beside the byte map and the gene table; a trait's hover lights its gene's lane here and its
+ * gene in the gel there.
  */
 export function ObjectGeneticsView({
   evidence,
@@ -236,32 +240,8 @@ export function ObjectGeneticsView({
             DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}
           </p>
         )}
-        <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
-          {layout.genes.length ? (
-            <SequencingGel
-              layout={layout}
-              subject={subject}
-              active={active}
-              onActive={setActive}
-              // C10: the readout row's own "tap or hover" is the section's one hint.
-              idle="A gene's bytes, its rule and the trait they express."
-            />
-          ) : (
-            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-          )}
-          {layout.unsupported.map((u) => (
-            <p
-              key={u.step}
-              role="status"
-              title={u.reason}
-              className="text-text-dim text-meta max-w-measure"
-            >
-              Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
-              is used.
-            </p>
-          ))}
-        </GelPlate>
-        {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
+        {/* Hierarchy v3 (F4): one caption; the paragraph and the bytes, gene by gene, are tier 2
+            (the caption's 160-character budget holds no pointer to them). */}
         <p data-role="caption" className="text-text text-body max-w-measure">
           Its traits are read from {unitText(formatCount(words.bytes, 'byte'))} of DNA
           {words.pointer
@@ -309,7 +289,7 @@ export function ObjectGeneticsView({
                   )}
                 />
                 {own3.absent.length > 0 && (
-                  <p role="status" className="text-text-dim text-meta max-w-measure">
+                  <p role="status" className="text-text text-meta max-w-measure">
                     Its {own3.absent.join(', ')} variant is not among the collection’s counted
                     variants.
                   </p>
@@ -341,9 +321,17 @@ export function ObjectGeneticsEvidence({
   subject,
   decoded,
   description,
+  active,
+  onActive,
+  tier,
 }: {
   evidence: ObjectGenetics;
   subject: string;
+  /** The object's composition: the gel's plate keeps its copper for BTC+CKB and pure CKB. */
+  tier?: CompositionTier;
+  /** The gene lit by a trait's hover in tier 1, and the gel's own hover reported back. */
+  active?: string | null;
+  onActive?: (gene: string | null) => void;
   /**
    * F2 objects (OB-14): the decoder's own output files and the picture drawn from the traits, if
    * any, from `/spore/objects/{id}/decode`.
@@ -354,15 +342,17 @@ export function ObjectGeneticsEvidence({
 }) {
   const { dnaHex, cachedVmTraits: cached } = evidence;
   const layout = dnaHex === null ? null : sequencingGenes(evidence, subject, description);
-  const tier = useDetailTier();
+  const detailTier = useDetailTier();
   return (
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
       <h2
-        className={tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'}
+        className={
+          detailTier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'
+        }
       >
         DNA evidence
       </h2>
-      <p className="text-text-dim text-meta max-w-measure">
+      <p className="text-text text-meta max-w-measure">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null
           ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
@@ -373,6 +363,36 @@ export function ObjectGeneticsEvidence({
         <ObjectDnaReading
           key={`${dnaHex}#${layout.genes.map((g) => g.key).join(',')}`}
           layout={layout}
+          // Lane P2's follow-up (item 1): the byte-level plot moved here from tier 1. The byte map
+          // above it draws the DNA to scale, a part per gene; the gel reads the mechanism, each
+          // hex digit a band in the lane of its value, a gene's bytes, its rule and the trait they
+          // express in its readout; the table under it gives this one object's every gene.
+          gel={
+            <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
+              {layout.genes.length ? (
+                <SequencingGel
+                  layout={layout}
+                  subject={subject}
+                  active={active ?? null}
+                  onActive={(gene) => onActive?.(gene)}
+                  idle="A gene's bytes, its rule and the trait they express."
+                />
+              ) : (
+                <DnaStrip dna={dnaHex!} label={`${subject} DNA`} />
+              )}
+              {layout.unsupported.map((u) => (
+                <p
+                  key={u.step}
+                  role="status"
+                  title={u.reason}
+                  className="text-text text-meta max-w-measure"
+                >
+                  Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern
+                  alone is used.
+                </p>
+              ))}
+            </GelPlate>
+          }
         />
       )}
       {dnaHex !== null && (
@@ -445,7 +465,14 @@ export function ObjectGeneticsEvidence({
  * rule, its raw bytes and value; the declared range in words is the row's title. Genes clipped to
  * this DNA, and genes it has no bytes for, are named under the rows.
  */
-function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGenes> }) {
+function ObjectDnaReading({
+  layout,
+  gel,
+}: {
+  layout: ReturnType<typeof sequencingGenes>;
+  /** The sequencing gel's plate, drawn between the byte map and the gene table. */
+  gel: ReactNode;
+}) {
   const readout = usePinnedReadout<string>();
   const byKey = new Map(layout.genes.map((g) => [g.key, g]));
   const span = (offset: number, length: number) =>
@@ -501,6 +528,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
           note={inside.length > 0 ? insideNote(inside) : undefined}
         />
       )}
+      {gel}
       {layout.genes.length > 0 && (
         <ListTable
           label="DNA genes"
@@ -528,10 +556,10 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               key: 'bytes',
               label: 'bytes',
               // the widest range with its " · clipped" note
-              minWidth: geneSpanPx(`${WIDEST_SPAN} · clipped`),
+              minWidth: geneSpanPx(`${WIDEST_DNA_SPAN} · clipped`),
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
-                <span className="text-text-dim leading-row block truncate tabular-nums">
+                <span className="text-text leading-row block truncate tabular-nums">
                   {span(g.offset, g.length)}
                   {g.truncated ? ' · clipped' : ''}
                 </span>
@@ -542,9 +570,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               label: 'rule',
               minWidth: geneText(),
               header: <span className="text-meta">rule</span>,
-              render: (g) => (
-                <span className="text-text-dim leading-row block truncate">{g.rule}</span>
-              ),
+              render: (g) => <span className="text-text leading-row block truncate">{g.rule}</span>,
             },
             {
               key: 'value',
@@ -584,19 +610,19 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
         />
       )}
       {declaredOnly && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
       )}
       {clipped.length > 0 && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
           {clipped.length === 1 ? 's' : ''} bytes past its {count(layout.bytes.length)}.
         </p>
       )}
       {layout.unmapped.map((u) => (
-        <p key={u.name} className="text-text-dim text-meta max-w-measure">
+        <p key={u.name} className="text-text text-meta max-w-measure">
           {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this DNA
           fall in the declared range.
         </p>
@@ -737,18 +763,16 @@ function PatternReading({
         {
           key: 'bytes',
           label: 'bytes',
-          minWidth: geneSpanPx(WIDEST_SPAN),
+          minWidth: geneSpanPx(WIDEST_DNA_SPAN),
           header: <span className="text-meta">bytes</span>,
-          render: (row) => (
-            <span className={cn(cell, 'text-text-dim tabular-nums')}>{row.span}</span>
-          ),
+          render: (row) => <span className={cn(cell, 'text-text tabular-nums')}>{row.span}</span>,
         },
         {
           key: 'rule',
           label: 'rule',
           minWidth: geneText(),
           header: <span className="text-meta">rule</span>,
-          render: (row) => <span className={cn(cell, 'text-text-dim')}>{row.rule}</span>,
+          render: (row) => <span className={cn(cell, 'text-text')}>{row.rule}</span>,
         },
         {
           key: 'found',
@@ -756,7 +780,7 @@ function PatternReading({
           minWidth: geneText(true),
           width: 'auto',
           header: <span className="text-meta">{foundHead}</span>,
-          render: (row) => <span className={cn(cell, 'text-text-dim')}>{found(row) ?? '—'}</span>,
+          render: (row) => <span className={cn(cell, 'text-text')}>{found(row) ?? '—'}</span>,
         },
       ]}
       mobileRow={(row) => (
@@ -968,14 +992,14 @@ function PatternReading({
         </div>
       ) : (
         genes.length > 0 && (
-          <p className="text-text-dim text-meta">
+          <p className="text-text text-meta">
             Its ranges run past what a ruler can draw; the table gives them exactly.
           </p>
         )
       )}
       {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
       {declared && (
-        <p className="text-text-dim text-meta max-w-measure">
+        <p className="text-text text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
@@ -1026,7 +1050,7 @@ function PatternReading({
             </dl>
           )}
           {outside.length > 0 && (
-            <p className="text-text-dim text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
+            <p className="text-text text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
               <TraitText
                 text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}

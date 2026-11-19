@@ -1,3 +1,5 @@
+// Re-pinned on purpose (lists lane P3, the link-look gate): the ways on are ways onward, their
+// arrow the look's (they typed "← "), so each is found by its words.
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
@@ -63,7 +65,7 @@ describe('NotFoundPage', () => {
       screen.queryByText(/searched every block|pool|cell_not_found|checked/i)
     ).not.toBeInTheDocument();
     const nav = screen.getByRole('navigation', { name: 'Find another route' });
-    expect(within(nav).getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
+    expect(within(nav).getByRole('link', { name: /^back\ to\ the\ explorer/ })).toHaveAttribute(
       'href',
       '/mainnet'
     );
@@ -98,6 +100,7 @@ describe('NotFoundPage', () => {
         query: 'block:0xabc',
         searchEndpoint: '/search',
         finding: '/search: this hash is a block',
+        reason: 'this hash is a block’s.',
         alternative: {
           label: 'block #42',
           href: '/blocks/42',
@@ -119,23 +122,26 @@ describe('NotFoundPage', () => {
       </MemoryRouter>
     );
 
-    // the index was asked, so the verse says so; the finding names the alternative
+    // Re-pinned on purpose (lists lane P3): the second line is the concrete reason, in plain words
+    // (it was "the local index was asked; it holds none."); the routes asked are the note's
     const h1 = screen.getByRole('heading', {
       level: 1,
-      name: "no transaction with this hash. the local index was asked; it holds none. honey badger don't care.",
+      name: "no transaction with this hash. this hash is a block’s. honey badger don't care.",
     });
     expect(verseLines(h1)[0]).toBe('no transaction with this hash.');
     expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
-    // U-18: what was asked, its answer and what /search said, in one line
+    // U-18: what was asked and its answer in one line, the note. Re-pinned on purpose (lists lane
+    // P3): its routes, the entity's and the search's; what the search said is the verse's line 2;
+    // the way on is a way onward, its arrow the look's (it was "→ open block #42", typed)
     expect(factLines()[0]).toHaveTextContent(
-      /^checked \/transactions\/0xabc → 404 · \/search: this hash is a block → open block #42$/
+      /^checked \/transactions\/0xabc → 404 · and \/search · open block #42/
     );
-    expect(screen.getByRole('link', { name: '→ open block #42' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^open block #42/ })).toHaveAttribute(
       'href',
       '/mainnet/blocks/42'
     );
-    expect(screen.getByRole('link', { name: '← transactions' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^transactions/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
@@ -153,6 +159,7 @@ describe('NotFoundPage', () => {
         query: `block:${HASH}`,
         searchEndpoint: '/search',
         finding: '/search: no block has this hash either',
+        reason: 'no block has this hash either.',
       },
     });
 
@@ -168,19 +175,18 @@ describe('NotFoundPage', () => {
     const short = `${HASH.slice(0, 10)}…${HASH.slice(-6)}`;
     const lines = factLines();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toHaveTextContent(
-      `checked /transactions/${short}/detail → 404 · /search: no block has this hash either`
-    );
+    // re-pinned on purpose (lists lane P3): the routes asked; the reason is the verse's line 2
+    expect(lines[0]).toHaveTextContent(`checked /transactions/${short}/detail → 404 · and /search`);
     expect(document.querySelector('.error-facts')).not.toHaveTextContent(HASH);
     // the words of the line wrap between words; the shortened id is one unit (U-16, re-pinned:
     // it broke anywhere, "0x" / "36528a03...742ce54b")
     const id = within(lines[0]).getByText(short);
     expect(id).toHaveAttribute('data-nobreak');
     expect(lines[0].querySelectorAll('.break-all')).toHaveLength(0);
-    // nothing answered: the same verse as an entity known as something else
+    // re-pinned on purpose (lists lane P3): the concrete reason, in plain words, as line 2
     expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
       'no transaction with this hash.',
-      'the local index was asked; it holds none.',
+      'no block has this hash either.',
       "honey badger don't care.",
     ]);
     // the seal pressed beside the verse is the newest block's, never the hash that was asked for
@@ -227,6 +233,7 @@ describe('NotFoundPage', () => {
         query: null,
         searchEndpoint: null,
         finding: null,
+        reason: null,
       },
     });
     render(
@@ -260,7 +267,7 @@ describe('NotFoundPage', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent(/^Invalid CKB address: parse failed$/);
     expect(useNotFoundEvidence).toHaveBeenLastCalledWith(undefined);
-    expect(screen.getByRole('link', { name: '← activities' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^activities/ })).toHaveAttribute(
       'href',
       '/mainnet/activities'
     );

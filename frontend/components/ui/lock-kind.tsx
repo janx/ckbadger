@@ -20,8 +20,11 @@ const LOCK_WORDS = 'text-text-dim';
  */
 const COLUMN_WORDS = cn(LOCK_WORDS, 'text-meta min-w-0 truncate leading-4');
 
-/** Where a lock is written: beside a party, or in a table column headed "Lock". */
-export type LockPlace = 'inline' | 'column';
+/**
+ * Where a lock is written: beside a party, in a table column headed "Lock", or in a sentence (a
+ * lede, a story, a note that says the lock in words: "Minted to a JoyID lock").
+ */
+export type LockPlace = 'inline' | 'column' | 'sentence';
 
 /**
  * What a place knows of a lock: the registry's name the API sends, and the lock's code hash and
@@ -37,8 +40,8 @@ export interface LockFacts {
 
 /** What a lock is called where it stands, or null where nothing is written (see `lockWords`). */
 export type LockWords =
-  /** the default lock in a column: its name in quiet words */
-  | { form: 'default'; name: string | null; codeHash: string }
+  /** the default lock in a column (its name in quiet words) or in a sentence (its name in the line) */
+  | { form: 'default'; name: string | null; codeHash: string; place: 'column' | 'sentence' }
   /** any other lock: the registry's name, else its code hash ("lock 0x…"), with a hash type the name does not cover */
   | {
       form: 'lock';
@@ -49,7 +52,7 @@ export type LockWords =
       /** the hash type written after it, where its name does not cover it */
       byHashType: ScriptRefHashType | null;
     }
-  /** a column's lock that is not indexed: "not indexed" in quiet words */
+  /** a lock that is not indexed, in a column or a sentence: "not indexed" in quiet words */
   | { form: 'not-indexed' };
 
 /**
@@ -67,13 +70,34 @@ export type LockWords =
  *   silent, since silence says "the default lock".
  * - A lock that is not indexed (no code hash, no name) is silent beside a party and "not indexed"
  *   in a column.
+ * - In a sentence (lane P2's follow-up, item 6) silence says nothing: a sentence has no party to be
+ *   silent beside, so it takes the column's answer (`namedLockWords`), never null, the default lock
+ *   by its name and a lock not indexed in words. `lockPhrase` says it as a noun phrase.
  */
 export function lockWords(facts: LockFacts, place: LockPlace): LockWords | null {
+  if (place === 'inline' && silentBesideAParty(facts)) return null;
+  return namedLockWords(facts, place === 'sentence' ? 'sentence' : 'column');
+}
+
+/** The default lock, and a lock not indexed: what a party's place leaves unsaid. */
+function silentBesideAParty({ name, codeHash, hashType }: LockFacts): boolean {
+  return (
+    (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType)) ||
+    (codeHash === null && name === null)
+  );
+}
+
+/**
+ * The decision where a lock is never silent (`lockWords`): a column headed "Lock", and a sentence
+ * (lane P2's follow-up, item 6: the decision's sentence form, said by `lockPhrase`). The default
+ * lock is its name, in a column's quiet words or in the line of a sentence; a lock not indexed is
+ * "not indexed"; any other lock as beside a party.
+ */
+export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): LockWords {
   const { name, codeHash, hashType } = facts;
   if (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType))
-    return place === 'inline' ? null : { form: 'default', name, codeHash };
-  if (codeHash === null && name === null)
-    return place === 'inline' ? null : { form: 'not-indexed' };
+    return { form: 'default', name, codeHash, place };
+  if (codeHash === null && name === null) return { form: 'not-indexed' };
   const notTheDefault =
     codeHash !== null &&
     hashType !== null &&
@@ -177,19 +201,24 @@ export function partyLockFacts(party: ParticipantRef): LockFacts {
  * The lock of a version of an item's cell beside its owner (`cellLockFacts` off the cell's lock and
  * its owner's address, `lockWords` inline), or null where none is written: the default lock.
  */
-export function cellOwnerLock(cell: {
+export function cellOwnerLock(cell: ItemCellLock): LockWords | null {
+  return lockWords(itemCellLockFacts(cell), 'inline');
+}
+
+/** What a version of an item's cell carries of its lock: its script, name, owner and out point. */
+interface ItemCellLock {
   lock: { codeHash: string; hashType: string; args: string };
   lockName: string | null;
   ownerAddress: string;
   txHash: string;
   outputIndex: number;
-}): LockWords | null {
-  return lockWords(
-    cellLockFacts(
-      { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
-      `cell ${cell.txHash}:${cell.outputIndex}`
-    ),
-    'inline'
+}
+
+/** A version of an item's cell's lock facts (`cellLockFacts`), refused with the cell named. */
+function itemCellLockFacts(cell: ItemCellLock): LockFacts {
+  return cellLockFacts(
+    { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
+    `cell ${cell.txHash}:${cell.outputIndex}`
   );
 }
 
@@ -198,10 +227,7 @@ export function cellOwnerLock(cell: {
  * none is written, so a list leaves the part out; a lock the decision refuses fails this part in
  * its place, said with the refusal (ruling D7; lane B4 third round), never the page.
  */
-export function cellOwnerLockPart(
-  cell: Parameters<typeof cellOwnerLock>[0],
-  className?: string
-): ReactNode {
+export function cellOwnerLockPart(cell: ItemCellLock, className?: string): ReactNode {
   const read = readPart(() => cellOwnerLock(cell));
   if (read.error !== undefined)
     return (
@@ -212,6 +238,41 @@ export function cellOwnerLockPart(
       />
     );
   return read.value && <LockWordsView words={read.value} size="row" className={className} />;
+}
+
+/**
+ * The decision's sentence form said (lane P2's follow-up, item 6): a lock as a noun phrase with its
+ * article, for a sentence that names the lock a cell sits under. The words are `lockWordsText`'s:
+ * a name that ends in "lock" stands as it is ("a Default Lock", "an Omnilock"), any other takes the
+ * word ("a JoyID lock"); a lock the registry does not name is its code hash at `size` ("a lock
+ * 0x9b9b9b9b…9b9b9b"), with its hash type where the name does not cover it ("a lock 0x9bd7e06f…a3cce8
+ * by data"); a lock not indexed, "a lock not indexed". "an" before a vowel's letter but "u" ("a
+ * UniPass lock": a leading U usually sounds like "you").
+ */
+export function lockPhrase(words: LockWords, size: ShortSize): string {
+  if (words.form === 'not-indexed') return 'a lock not indexed';
+  // a lock without a name is "lock 0x…", its hash type after it where it has one
+  if (words.name === null) return `a ${lockWordsText(words, size)}`;
+  // a named lock never carries a hash type: the decision drops a name it does not cover
+  const article = /^[aeio]/i.test(words.name) ? 'an' : 'a';
+  return /lock$/i.test(words.name) ? `${article} ${words.name}` : `${article} ${words.name} lock`;
+}
+
+/**
+ * The lock a version of an item's cell sits under, said in a sentence (`cellLockFacts` off the
+ * cell's lock and its owner's address, `lockWords` in a sentence, `lockPhrase`): never silent, the
+ * default lock by its name. A cell whose address spells another lock is refused with the cell named.
+ */
+export function cellLockSentence(cell: ItemCellLock, size: ShortSize): string {
+  return lockPhrase(cellLockWords(cell), size);
+}
+
+/**
+ * The words of the lock a version of an item's cell sits under, in a sentence (never null): for a
+ * place that says them without an article ("Lock: Default Lock throughout."), `lockWordsText`.
+ */
+export function cellLockWords(cell: ItemCellLock): LockWords {
+  return namedLockWords(itemCellLockFacts(cell), 'sentence');
 }
 
 /** An API row's lock where it stands (`rowLockFacts`, `lockWords`), or null where none is written. */
@@ -265,7 +326,9 @@ export function LockWordsView({
         not indexed
       </span>
     );
-  const own = words.form === 'default' ? COLUMN_WORDS : (className ?? LOCK_WORDS);
+  // the default lock in a column is the column's quiet words; in a sentence, words of its line
+  const own =
+    words.form === 'default' && words.place === 'column' ? COLUMN_WORDS : (className ?? LOCK_WORDS);
   const by = words.form === 'lock' && words.byHashType ? ` by ${words.byHashType}` : '';
   const { name, codeHash } = words;
   return (

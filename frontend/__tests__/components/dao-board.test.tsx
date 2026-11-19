@@ -15,7 +15,7 @@ import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { formatPercent } from '@/lib/ckb-decimal';
-import { MEASURE_CHARS, fontPx } from '@/lib/type-metrics';
+import { MEASURE_CHARS, fontPx, textPx } from '@/lib/type-metrics';
 import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/components/dao/dao-sources', () => ({
@@ -71,6 +71,8 @@ const stats = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  // the whole, the route's: 1 + 3 + 3 CKB (lane exactness, part A, A5 ii)
+  secondaryIssuance: '700000000',
   tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
@@ -440,7 +442,7 @@ describe('DaoBoard', () => {
         .map((li) => li.textContent)
     ).toEqual([
       'minersthe occupied share, s × U ÷ C, paid in the cellbase',
-      "depositorsthe deposits' share, compensation accrued via AR, paid out at withdrawal",
+      "depositorsthe deposits' share, compensation accrued via AR, claimed at withdrawal",
       'burnteverything else; no cell can ever claim it',
     ]);
     expect(split).not.toHaveTextContent(/interest|earned/i);
@@ -477,7 +479,8 @@ describe('DaoBoard', () => {
       'epoch ranges rather than predicted calendar dates.',
       'the required input, headers, witnesses and script execution still apply.',
       'it is not the real occupied size of live cells.',
-      "the depositors' share accrues via AR and is paid out at withdrawals.",
+      // re-pinned for lane exactness, part A (A7): claimed / unclaimed (was "paid out")
+      "the depositors' share accrues via AR and is claimed at withdrawals.",
       'what is burnt stays burnt.',
       // lane P4: "“Compensation, last 365 days” is on free capacity, from the header's AR." is
       // said once, in the rates' keys in tier 1
@@ -494,6 +497,7 @@ describe('DaoBoard', () => {
           miningReward: '0',
           depositCompensation: '0',
           burnt: '0',
+          secondaryIssuance: '0',
           totalCompensationPaid: '0',
           unclaimedCompensation: '0',
           // nothing issued yet: the statistics row's S is 0 too
@@ -789,8 +793,10 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(label('compensation')).toBe('depositors 42.86%');
     expect(label('burnt')).toBe('burnt 42.86% · no cell can ever claim it');
     // CH-14 (re-pinned): the depositors' two parts take the one percentage, two decimals (was one)
-    expect(label('paid')).toBe('paid out 33.33%');
-    expect(label('owed')).toBe('still owed 66.67%');
+    // re-pinned for lane exactness, part A (A7): the compensation not yet claimed is "unclaimed", as the Supply
+    // and secondary-issuance charts call it, and the rest "claimed" (were "paid out", "still owed")
+    expect(label('paid')).toBe('claimed 33.33%');
+    expect(label('owed')).toBe('unclaimed 66.67%');
     // No exact amount and no word under the boxes.
     expect(svg.textContent).not.toMatch(/\.\d{8}/);
     expect(svg.querySelector('[data-placeholder]')).toBeNull();
@@ -807,7 +813,7 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
       (_, el) => el?.getAttribute('data-role') === 'amounts'
     );
     expect(line).toHaveTextContent(
-      'to miners 1 · for depositors 3 (paid out 1 · still owed 2 to 22,379 live cells) · burnt 3 CKB'
+      'to miners 1 · for depositors 3 (claimed 1 · unclaimed 2 in 22,379 live cells) · burnt 3 CKB'
     );
     expect(line).toHaveClass('text-small', 'text-text');
     const svg = within(issuance()).getByRole('img', { name: /split three ways/ });
@@ -851,7 +857,7 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(works).toHaveTextContent('Statistics are exact to the shannon at block #5');
     // The icicle's former notes, in words.
     expect(works).toHaveTextContent(
-      "The miners' share is s × U ÷ C of each block's secondary issuance s, paid in cellbases; the depositors' share accrues via AR and is paid out at withdrawals."
+      "The miners' share is s × U ÷ C of each block's secondary issuance s, paid in cellbases; the depositors' share accrues via AR and is claimed at withdrawals."
     );
     // The former caption's long form stays in the explanation.
     expect(works).toHaveTextContent(
@@ -925,23 +931,28 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(
       Array.from(svg.querySelectorAll('[data-label]')).map((t) => t.getAttribute('data-label'))
     ).toEqual(['total', 'burnt']);
+    // re-pinned for lane exactness, part A (A7): each under-line one glyph shorter, so it stands where the old one
+    // stood: at 12 px a glyph is 7.2 px, "claimed 33.33%" 9 + 6 + 14 × 7.2 = 115.8 px (was
+    // 123.0), "unclaimed 66.67%" 9 + 6 + 16 × 7.2 = 130.2 px (was 137.4), each from its box's
+    // left edge where it runs on to the drawing's end, else ending at its box's right edge
     expect([...svg.querySelectorAll('[data-under-label]')].map((g) => g.textContent)).toEqual([
       'miners 14.29%',
       'depositors 42.86%',
-      'paid out 33.33%',
-      'still owed 66.67%',
+      'claimed 33.33%',
+      'unclaimed 66.67%',
     ]);
     expect(within(issuance()).queryByRole('list', { name: 'Secondary issuance parts' })).toBeNull();
     expect(
       within(issuance()).getByText((_, el) => el?.getAttribute('data-role') === 'amounts')
     ).toHaveTextContent(
-      'to miners 1 · for depositors 3 (paid out 1 · still owed 2 to 22,379 live cells) · burnt 3 CKB'
+      'to miners 1 · for depositors 3 (claimed 1 · unclaimed 2 in 22,379 live cells) · burnt 3 CKB'
     );
   });
 });
 
 // PB-25 (UI review 2026-11-14): at 390 the icicle's blocks were blank and the legend's "paid out" /
-// "still owed" rows had no swatch, so the two sub-blocks could not be told apart.
+// "still owed" rows (claimed / unclaimed since lane exactness, part A) had no swatch, so the two
+// sub-blocks could not be told apart.
 describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -968,7 +979,7 @@ describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
       expect(swatch.getAttribute('fill'), key).toBe(block.getAttribute('fill'));
       expect(swatch.getAttribute('fill-opacity'), key).toBe(block.getAttribute('fill-opacity'));
     }
-    // paid out and still owed are told apart by their swatches
+    // claimed and unclaimed are told apart by their swatches
     const paint = (key: string) => {
       const rect = svg.querySelector(`[data-under-label="${key}"] rect`)!;
       return `${rect.getAttribute('fill')} ${rect.getAttribute('fill-opacity')}`;
@@ -996,7 +1007,7 @@ describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
     const under = (key: string) =>
       svg.querySelector(`[data-under-label="${key}"]`)?.textContent ?? null;
     expect(under('compensation')).toBe('depositors 42.86%');
-    expect(under('owed')).toBe('still owed 66.67%');
+    expect(under('owed')).toBe('unclaimed 66.67%');
   });
 });
 
@@ -1692,7 +1703,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000 CKB issued in total');
     // contracts W5-3 (DAO-16): the identity names the block it holds at, number and hash.
     expect(t2).toHaveTextContent(
-      'At block #5 (0xa5a5a5a5…a5a5a5), S (5 CKB) equals the compensation still owed (2) plus the burnt share (3) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+      'At block #5 (0xa5a5a5a5…a5a5a5), S (5 CKB) equals the unclaimed compensation (2) plus the burnt share (3) to the shannon: S only counts the burnt share, it does not hold it for anyone. Claimed + unclaimed compensation equals the depositors’ share.'
     );
     // Lane L: tier 2 names block #5 five times (the header field's heading, the capacity-use
     // line, AR's reading block, the S proof, the statistics note) and every one is a link to it
@@ -1713,7 +1724,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     );
   });
 
-  it('fails when the statistics row S is not still owed + burnt', () => {
+  it('fails when the statistics row S is not unclaimed + burnt', () => {
     stubCalculator();
     expect(() =>
       render(
@@ -1722,7 +1733,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
           evidence={evidence}
         />
       )
-    ).toThrow('DAO statistics at #5: S 500000001 is not still owed + burnt 500000000');
+    ).toThrow('DAO statistics at #5: S 500000001 is not unclaimed + burnt 500000000');
   });
 
   it('fails when the statistics anchor is not the block the row was computed at', () => {
@@ -1754,7 +1765,8 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
       // re-pinned (lane P4): exact (it was '5.00000000 CKB')
-      'At block #4 (0xb4b4b4b4…b4b4b4), S (5 CKB) equals the compensation still owed'
+      // re-pinned for lane exactness, part A (A7): unclaimed (was "the compensation still owed")
+      'At block #4 (0xb4b4b4b4…b4b4b4), S (5 CKB) equals the unclaimed compensation'
     );
     expect(t2).not.toHaveTextContent('not shown across two blocks');
   });
@@ -2052,6 +2064,7 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     totalCompensationPaid: '76728910321000000',
     unclaimedCompensation: '84330935263026618',
     burnt: '681846712767608232',
+    secondaryIssuance: '939923273010482304',
     tipSecondaryPool: '766177648030634850',
   };
 
@@ -2085,8 +2098,11 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     const under = [...svg.querySelectorAll('[data-under-label]')];
     expect(under.map((g) => [g.getAttribute('data-under-label'), g.textContent])).toEqual([
       ['miners', 'miners 10.32%'],
-      ['paid', 'paid out 47.64%'],
-      ['owed', 'still owed 52.36%'],
+      // re-pinned for lane exactness, part A (A7): claimed / unclaimed (were "paid out", "still
+      // owed"); each a glyph shorter, still too wide for its box (at 12 px with 6 px of padding,
+      // "claimed 47.64%" needs 112.8 px and "unclaimed 52.36%" 127.2 px), so still named under it
+      ['paid', 'claimed 47.64%'],
+      ['owed', 'unclaimed 52.36%'],
     ]);
     for (const g of under) {
       const key = g.getAttribute('data-under-label')!;
@@ -2103,7 +2119,7 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
     const line = within(issuance).getByText((_, el) => el?.getAttribute('data-role') === 'amounts');
     expect(line).toHaveTextContent(
-      'to miners 970,167,146 · for depositors 1,610,598,455 (paid out 767,289,103 · still owed 843,309,352 to 22,379 live cells) · burnt 6,818,467,127 CKB'
+      'to miners 970,167,146 · for depositors 1,610,598,455 (claimed 767,289,103 · unclaimed 843,309,352 in 22,379 live cells) · burnt 6,818,467,127 CKB'
     );
     expect(line.querySelector('[title="970,167,146.58847454 CKB"]')).not.toBeNull();
   });
@@ -2133,5 +2149,72 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     const amounts = [...table.querySelectorAll('[data-ckb-amount]')];
     expect(amounts.length).toBeGreaterThan(0);
     for (const amount of amounts) expect(amount.textContent).not.toMatch(/\.\d{8}$/);
+  });
+});
+
+// lane exactness, part A: the DAO page states the route's counts and wholes (A5 ii), names the compensation not yet
+// claimed one way (A7), and stacks an exact amount under its label where a phone cannot hold both
+// on one line (A6)
+describe('DaoBoard reads its figures from the route (lane exactness, part A)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses statistics without the live cells or the issuance whole, an older API', () => {
+    stubCalculator();
+    const { liveCellsCount: _cells, ...noCells } = stats;
+    expect(() => render(<DaoBoard statistics={noCells as never} evidence={evidence} />)).toThrow(
+      'DAO statistics send no liveCellsCount: the API is older than this page'
+    );
+    const { secondaryIssuance: _whole, ...noWhole } = stats;
+    expect(() => render(<DaoBoard statistics={noWhole as never} evidence={evidence} />)).toThrow(
+      'DAO statistics send no secondaryIssuance: the API is older than this page'
+    );
+  });
+
+  it('draws the issuance whole the route states, and fails where its parts do not make it', () => {
+    stubCalculator();
+    stubChartWidth(1400);
+    expect(() =>
+      render(
+        <DaoBoard statistics={{ ...stats, secondaryIssuance: '700000001' }} evidence={evidence} />
+      )
+    ).toThrow(
+      'DAO statistics at #5: secondary issuance 700000001 is not miners 100000000 + compensation 300000000 + burnt 300000000'
+    );
+  });
+
+  it('writes the live cells the route counts', () => {
+    stubChartWidth(1400);
+    render(<DaoBoard statistics={{ ...stats, liveCellsCount: 22_380 }} evidence={evidence} />);
+    // the route's 22,380, not the page's deposits + requests (20,689 + 1,690 = 22,379)
+    expect(
+      screen.getByText((_, el) => el?.getAttribute('data-role') === 'amounts')
+    ).toHaveTextContent('in 22,380 live cells');
+  });
+
+  // A6: at 320 px "The DAO field in every block header" ran 39 px past the window: each row was
+  // three columns, 44 + 96 px and two 12 px gaps, leaving 124 px of the 288 px line for an exact
+  // amount that does not break (C, 23 glyphs at 13 px, 179.4 px). Below sm the value goes under
+  // its label, on the row's whole 288 px; from sm (a 640 px window, its 592 px line) it stands
+  // beside it in 592 − 44 − 96 − 24 = 428 px. An exact amount is never cut to fit.
+  it('puts a field’s exact value under its label on a phone, beside it from sm (A6)', () => {
+    stubCalculator();
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const rows = [...container.querySelectorAll('[data-dao-field]')];
+    expect(rows.map((row) => row.getAttribute('data-dao-field'))).toEqual(['C', 'AR', 'S', 'U']);
+    for (const row of rows) {
+      expect(row).toHaveClass('grid-cols-[44px_96px]', 'sm:grid-cols-[44px_96px_minmax(0,1fr)]');
+      expect(row.querySelector('[data-role="field-value"]')).toHaveClass(
+        'col-span-2',
+        'sm:col-span-1'
+      );
+    }
+    // the widest exact C the chain will write for decades, "99,999,999,999.99999999", 23 glyphs
+    const widest = textPx(23, fontPx('small'));
+    expect(widest).toBeCloseTo(179.4, 6);
+    expect(widest).toBeLessThanOrEqual(320 - 2 * 16);
+    expect(widest).toBeLessThanOrEqual(640 - 2 * 24 - 44 - 96 - 2 * 12);
   });
 });

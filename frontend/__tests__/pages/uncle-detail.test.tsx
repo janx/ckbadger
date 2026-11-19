@@ -74,10 +74,18 @@ describe('Uncle detail page', () => {
     const { container } = render(<UncleDetailPage />);
     const strip = await screen.findByRole('group', { name: 'Uncle status' });
     const facts = factsOf(strip);
-    expect(facts.map(([label]) => label)).toEqual(['included by', 'time', 'canonical', 'epoch']);
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a uncle: the label wrote a number and
+    // its value was a bare hash, only the prose said what it was): the label names the block, the
+    // uncle's sibling, and its note says it is the canonical block on the same parent. A label no
+    // wider than "included by": below sm the strip is a grid of labels and values, its label column
+    // as wide as its widest label, and at 320 the time ("2026-11-14 13:05:16 UTC+8", 195 px at 13
+    // px) holds the 288 px column beside 11 characters of label (79.2 px at 12 px) and the 12 px
+    // gap; "canonical at its height" (165.6 px) put it 69 px past the column (Chrome, 320)
+    expect(facts.map(([label]) => label)).toEqual(['included by', 'time', 'sibling', 'epoch']);
+    expect(Math.max(...facts.map(([label]) => label.length))).toBe('included by'.length);
     expect(facts[0][1]).toBe('#8,775,638 · uncle 0');
     expect(facts[1][1]).toMatch(/^2026-02-22 07:59:40 UTC\+8 · \S+ ago · 92 ms after its sibling$/);
-    expect(facts[2][1]).toBe(`0x${'bb'.repeat(4)}…${'bb'.repeat(3)}`);
+    expect(facts[2][1]).toBe(`0x${'bb'.repeat(4)}…${'bb'.repeat(3)} · canonical, same parent`);
     expect(facts[3][1]).toBe('5,414 · 1 / 1,800');
     // the uncle's state in the dead ink
     expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
@@ -85,7 +93,7 @@ describe('Uncle detail page', () => {
     );
     // the id line, the strip, then the sentence: in the head, in that order
     const header = container.querySelector('header') as HTMLElement;
-    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
+    const sentence = screen.getByText(/^Its sibling on the canonical chain/);
     expect(header).toContainElement(strip);
     expect(header).toContainElement(sentence);
     expectBefore(container.querySelector('[data-head-id]') as HTMLElement, strip);
@@ -102,8 +110,12 @@ describe('Uncle detail page', () => {
       'text-entity',
       'max-md:text-index'
     );
-    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
-    expect(sentence).toHaveTextContent('on the canonical chain is');
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a uncle: a 158-character paragraph):
+    // two sentences, the sibling and the parent, then the including block and what an uncle is
+    const sentence = screen.getByText(/^Its sibling on the canonical chain/);
+    expect(sentence).toHaveTextContent(
+      /^Its sibling on the canonical chain, 0x\S+, was mined on the same parent, #8,775,636, and this uncle came 92 ms after it\. #8,775,638 included it: its transactions never ran, but the proposals it carried count toward the proposal window\.$/
+    );
     expect(within(sentence).getByRole('link', { name: '#8,775,638' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/8775638'
@@ -196,9 +208,10 @@ describe('Uncle detail page', () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
     await screen.findByRole('heading', { name: '#8,775,637' });
-    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
+    // re-pinned (lane P1 follow-up): the sentence names the sibling first
+    const sentence = screen.getByText(/^Its sibling on the canonical chain/);
     expect(sentence).toHaveTextContent(
-      /on the canonical chain is 0x.+, its sibling: both were mined on parent #8,775,636 0x.+, and this uncle came 92 ms after it\./
+      /Its sibling on the canonical chain, 0x.+, was mined on the same parent, #8,775,636, and this uncle came 92 ms after it\./
     );
     expect(screen.getByText('92 ms after its sibling')).toBeInTheDocument();
   });
@@ -212,8 +225,11 @@ describe('Uncle detail page', () => {
     );
     render(<UncleDetailPage />);
     await screen.findByRole('heading', { name: '#8,775,637' });
-    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
-    expect(sentence).toHaveTextContent('which has another parent');
+    // re-pinned (lane P1 follow-up): the canonical block at its height, which is no sibling
+    const sentence = screen.getByText(/^The canonical block at its height/);
+    expect(sentence).toHaveTextContent(
+      /^The canonical block at its height, 0x\S+, has another parent; this uncle was mined on 0x\S+\. #8,775,638 included it:/
+    );
     expect(sentence).not.toHaveTextContent('sibling');
   });
 

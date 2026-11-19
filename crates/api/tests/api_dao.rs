@@ -571,7 +571,9 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         total_depositors: 7,
         active_deposits: 9,
         deposit_cells_count: 9,
-        withdrawal_request_cells_count: 0,
+        // re-pinned for lane exactness, part A: a request cell too, so the live total is not
+        // the deposits alone (was 0)
+        withdrawal_request_cells_count: 4,
         total_compensation_paid: 11_00000000,
         unclaimed_compensation: 13_00000000,
         average_deposit_days: Some("950 days".to_string()),
@@ -615,7 +617,11 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     assert_eq!(json["totalDepositors"], 7);
     assert_eq!(json["activeDeposits"], 9);
     assert_eq!(json["depositCellsCount"], 9);
-    assert_eq!(json["withdrawalRequestCellsCount"], 0);
+    assert_eq!(json["withdrawalRequestCellsCount"], 4);
+    // lane exactness, part A, A5 (ii): the live DAO cells, deposits and withdrawal requests, the route's count
+    assert_eq!(json["liveCellsCount"], 13, "{json}");
+    // and the whole the three destinations make: 17 + 19 + 23 CKB
+    assert_eq!(json["secondaryIssuance"], "5900000000", "{json}");
     assert_eq!(json["daoCapacity"], "12800000000");
     assert_eq!(json["daoFreeCapacity"], "2600000000");
     assert_eq!(json["depositorAllocationWeight"], "0");

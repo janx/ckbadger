@@ -42,8 +42,9 @@ import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { formatUtc8Date } from '@/lib/utils';
 import {
-  MAX_BLOCK_BYTES,
+  LARGEST_TX_BYTES,
   MAX_BLOCK_CYCLES,
+  MAX_TX_INPUTS,
   WIDEST_BLOCK_NUMBER,
   WIDEST_COUNT,
   WIDEST_COUNT_DIGITS,
@@ -151,15 +152,14 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
   );
 }
 /**
- * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`): a run
- * is compared on this address's line and the transaction's other parties, which the row does not
- * draw but the activity names, so two transfers to different counterparties never fold. A run
+ * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`, the
+ * rule of Gate B: what was done and the script code, not the parties): a run counts this address
+ * and the transaction's other parties, which the row does not draw but the activity names. A run
  * folds within the page shown.
  */
 export function AddressActivities({ rows, address }: { rows: Activity[]; address: Address }) {
   return (
     <ActivityRuns
-      focusLockHash={address.lockScriptHash}
       rows={rows.map((activity) => {
         const { row, participant, headline } = addressRow(activity, address);
         return {
@@ -245,9 +245,12 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'cells',
     label: 'Cells in → out',
-    // four digits a side, the inputs as written and the outputs grouped, "9999 → 9,999" (93.6),
-    // and the gap; it was 100
-    minWidth: columnPx(cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT}`.length) + CELL_GAP_PX),
+    // the inputs at most MAX_TX_INPUTS (consensus, 13,568) and the outputs at most WIDEST_COUNT
+    // (consensus, 9,999), both grouped as written, "13,568 → 9,999" (109.2), and the gap (lane P1
+    // follow-up: it was four digits a side, "9999 → 9,999", from before the inputs were grouped)
+    minWidth: columnPx(
+      cell(`${MAX_TX_INPUTS.toLocaleString('en-US')} → ${WIDEST_COUNT}`.length) + CELL_GAP_PX
+    ),
     render: (tx) => (
       <span>
         {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')}{' '}
@@ -287,9 +290,11 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'size',
     label: 'Size, B',
-    // "Unavailable" (85.8), wider than a size of "597,000", and the gap; it was 90
+    // "Unavailable" (85.8), wider than the largest transaction's size, "1,236,271"
+    // (LARGEST_TX_BYTES, of record: genesis's; lane P1 follow-up, it read a block's 597,000), and
+    // the gap; it was 90
     minWidth: columnPx(
-      cell(Math.max('Unavailable'.length, MAX_BLOCK_BYTES.toLocaleString('en-US').length)) +
+      cell(Math.max('Unavailable'.length, LARGEST_TX_BYTES.toLocaleString('en-US').length)) +
         CELL_GAP_PX
     ),
     numeric: true,
@@ -584,10 +589,12 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'occupied',
     label: 'Occupied, CKB',
-    // a cell is at most a block's 597,000 bytes, so at most "597,000.00000000" (124.8) and its
-    // unit (28.8), and the gap
+    // a cell is at most the largest transaction's bytes, genesis's 1,236,271 (LARGEST_TX_BYTES,
+    // of record: genesis's cells are past a block's 597,000, its secp256k1 data cell alone is
+    // 1,048,576 bytes; lane P1 follow-up), so at most "1,236,271.00000000" (140.4) and its unit
+    // (28.8), and the gap
     minWidth: columnPx(
-      cell(`${MAX_BLOCK_BYTES.toLocaleString('en-US')}.00000000`.length) +
+      cell(`${LARGEST_TX_BYTES.toLocaleString('en-US')}.00000000`.length) +
         textPx(' CKB'.length, fontPx('meta')) +
         CELL_GAP_PX
     ),

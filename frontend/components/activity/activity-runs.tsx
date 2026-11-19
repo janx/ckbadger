@@ -1,11 +1,11 @@
 'use client';
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   FoldedActivityRow,
   rowReadFails,
   type ActivityRowData,
 } from '@/components/activity/activity-row';
-import { foldRuns, runKey, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 import { readable } from '@/components/activity-event-row';
 
@@ -38,10 +38,11 @@ export interface FeedRow {
 }
 
 /**
- * What a row is compared on: the title in words (`activityTitleText`), its scripts and its parties
- * (the row's own, unless the feed knows more of them: the address page's other parties). Null for
- * a row that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its
- * place, so it is never folded (lane B4 fix round, review NOTE 1).
+ * What a row is compared on (`lib/activity-runs.ts`): the title in words (`activityTitleText`), its
+ * protocol actions and the code of the scripts it called; and its parties, which a run counts (the
+ * row's own, unless the feed knows more of them: the address page's other parties). Null for a row
+ * that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its place,
+ * so it is never folded (lane B4 fix round, review NOTE 1).
  */
 export function runSubject(
   activity: ActivityRowData,
@@ -53,17 +54,24 @@ export function runSubject(
     title,
     txHash: activity.txHash,
     blockNumber: activity.blockNumber,
+    protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
     parties,
   };
 }
 
+/** A run's row's subject: a row in a run of two or more was compared, so it has one. */
+function subjectOf(r: FeedRow): RunSubject {
+  if (r.subject === null) throw new Error(`transaction ${r.key}: a row in a run has no subject`);
+  return r.subject;
+}
+
 /**
  * A feed's rows with its runs folded (readability lane B4, §7 point 6; the rule is
- * `lib/activity-runs.ts`): a run of two or more rows that say the same thing is one
- * `FoldedActivityRow`, opened in place to the ordinary rows; every other row is itself. A run
- * folds within the rows given: a paged feed folds within its page.
+ * `lib/activity-runs.ts`, the owner's of Gate B): a run of two or more rows that did the same thing
+ * and called the same script code is one `FoldedActivityRow`, opened in place to the ordinary rows;
+ * every other row is itself. A run folds within the rows given: a paged feed folds within its page.
  *
  * A live feed adds rows above (a poll) and below (an older page) and never remounts or folds what
  * the reader has in front of them (lane B4 fix round):
@@ -81,13 +89,13 @@ export function ActivityRuns({
   rows,
   age = false,
   showScriptDetails = true,
-  focusLockHash,
 }: {
   rows: readonly FeedRow[];
   age?: boolean;
   showScriptDetails?: boolean;
-  focusLockHash?: string;
 }) {
+  // the list the rows stand in, which each run's toggle names (aria-controls)
+  const listId = useId();
   // the rows of the runs the reader opened, by their keys
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   // the rows drawn alone, whole, as the last render committed them
@@ -124,7 +132,8 @@ export function ActivityRuns({
     });
   };
   return (
-    <>
+    // one element in every state, so no row remounts as runs open and fold (a block, as the rows)
+    <div id={listId} data-role="feed-rows">
       {runs.flatMap(({ run, head, isOpen }) => {
         const [lead] = run;
         // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
@@ -138,13 +147,14 @@ export function ActivityRuns({
         const folded = (
           <FoldedActivityRow
             rows={run.map((r) => r.activity)}
+            participants={runParties(run.map(subjectOf))}
             title={lead.title}
             showScriptDetails={showScriptDetails}
             age={age}
-            focusLockHash={focusLockHash}
             className={lead.className}
             fresh={run.some((r) => r.fresh)}
             open={isOpen}
+            controls={listId}
             onToggle={() => toggle(run, isOpen)}
           />
         );
@@ -158,6 +168,6 @@ export function ActivityRuns({
             ]
           : [headed];
       })}
-    </>
+    </div>
   );
 }

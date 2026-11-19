@@ -19,7 +19,6 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { AmountForm } from '@/lib/amount-form';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
-import { cn } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
@@ -78,11 +77,8 @@ function Depositor({
 }) {
   const id = row.address ?? row.lockScriptHash;
   return (
-    <Link
-      href={`/address/${id}`}
-      className={cn('text-text-bright hover:underline', className)}
-      title={id}
-    >
+    // the row's key: the key look's bright ink
+    <Link href={`/address/${id}`} look="key" className={className} title={id}>
       <ShortId value={id} kind={row.address ? 'address' : 'hash'} size={size} />
     </Link>
   );
@@ -212,18 +208,15 @@ export default function DaoDepositorsPage() {
           kind="index"
           title="Nervos DAO depositors"
           actions={
-            <Link
-              href="/dao"
-              className="text-text hover:text-text-bright text-small font-mono hover:underline"
-            >
-              ← Nervos DAO
+            <Link href="/dao" look="onward" className="text-small font-mono">
+              Nervos DAO
             </Link>
           }
           identity={
             page ? (
               <span data-role="ranked-at">
                 {page.total.toLocaleString('en-US')} depositors ranked by CKB deposited at block{' '}
-                <BlockLink number={page.anchor.blockNumber} />
+                <BlockLink look="inline" number={page.anchor.blockNumber} />
               </span>
             ) : undefined
           }
@@ -242,9 +235,10 @@ export default function DaoDepositorsPage() {
                   className="text-text-dim text-small max-w-measure mb-3"
                 >
                   The chain tip moved since the first page (ranked at block{' '}
-                  <BlockLink number={moved.from} />
-                  ): this page continues the ranking at block <BlockLink number={moved.to} />, so a
-                  depositor whose rank changed may repeat or be missing.
+                  <BlockLink look="inline" number={moved.from} />
+                  ): this page continues the ranking at block{' '}
+                  <BlockLink look="inline" number={moved.to} />, so a depositor whose rank changed
+                  may repeat or be missing.
                 </p>
               )}
               <ListTable

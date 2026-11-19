@@ -12,6 +12,8 @@ export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
   'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq83503v79qrpczf2e6wdgf6jj8am56udwsgxzykc';
 export const fixtureHash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
+/** JoyID's lock code hash (mainnet), the lock `addressText` spells. */
+const JOYID_CODE_HASH = '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323';
 /**
  * The mainnet type scripts the cell fixtures carry (each typed cell has its type script, as on
  * chain, so its seal has a type to draw): the code hashes of docs/metadata/scripts/ and the Nervos
@@ -30,13 +32,15 @@ export const addressFixture: Address = {
   liveCellsCount: 40,
   transactionsCount: 1021,
   pendingSummary: null,
+  // the lock the address spells (lane P1 follow-up: the lock's words read the lock off the address
+  // and check the two; the code hash was fixtureHash(100), a lock this JoyID address does not spell)
   lockScript: {
-    codeHash: fixtureHash(100),
+    codeHash: JOYID_CODE_HASH,
     hashType: 'type',
     args: '0x0001e347c59e28061c092ace9cd4275291fbba6b8d74',
   },
   lockScriptInfo: {
-    codeHash: fixtureHash(100),
+    codeHash: JOYID_CODE_HASH,
     name: 'JoyID',
     scriptKind: 'lock',
     deprecated: false,
@@ -119,7 +123,7 @@ export const addressDaoFixture: DaoDeposit[] = [5240000, 3500000, 600000, 200000
     txHash: fixtureHash(400 + i),
     outputIndex: 0,
     lockScriptHash: addressHash,
-    lockCodeHash: fixtureHash(100),
+    lockCodeHash: JOYID_CODE_HASH,
     capacity: (BigInt(v) * BigInt(100000000)).toString(),
     depositBlockNumber: 16381488 + i,
     depositTimestamp: '2025-06-06T00:00:00Z',

@@ -12,12 +12,7 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import {
-  activityTypeShares,
-  nonCellbaseCount,
-  scriptShares,
-  totalActivities,
-} from '@/lib/activity-stats';
+import { activityTypeShares, nonCellbaseCount, scriptShares } from '@/lib/activity-stats';
 import {
   api,
   type ActivitySummary24h,
@@ -53,11 +48,8 @@ export function ActivityStats() {
           command="activity"
           args="--24 h"
           note={
-            <Link
-              href="/charts"
-              className="text-interactive hover:text-jade text-small transition-colors"
-            >
-              charts →
+            <Link href="/charts" look="onward" className="text-small">
+              charts
             </Link>
           }
         />
@@ -107,7 +99,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   }
   return {
     activities: s.activityCount,
-    occurrences: totalActivities(s),
+    occurrences: s.kindOccurrences,
     addresses: s.uniqueAddressCount,
     ckbMoved: {
       text: ckbAmountText(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
@@ -117,7 +109,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
       key: r.key,
       label: r.label,
       count: r.count,
-      total: totalActivities(s),
+      total: s.kindOccurrences,
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,

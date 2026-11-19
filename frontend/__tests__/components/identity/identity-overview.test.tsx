@@ -175,7 +175,10 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Manager')).toHaveTextContent(item.manager.hashPrefix);
     expect(fact('Expires')).toHaveTextContent('grace to');
     expect(fact('Records')).toHaveTextContent('0');
-    expect(fact('Sub-names · for sale')).toHaveTextContent('none · no');
+    // re-pinned on purpose (lane P2's follow-up, a standing cause): the sub-names and the sale are
+    // two facts (one metric said "none · no"), and a name not for sale draws no sale metric
+    expect(fact('Sub-names')).toHaveTextContent('none');
+    expect(screen.queryByText('For sale')).toBeNull();
   });
 
   // Readability review 2026-11-18 (lane A): on verification.cell at 1280 "CKB held in its cell"
@@ -198,6 +201,28 @@ describe('identity facts rail (ID-C6)', () => {
     const value = fact('CKB held in its cell')!.querySelector('dd [data-ckb-amount]')!;
     expect(value).toHaveClass('whitespace-nowrap');
     expect(value).not.toHaveClass('flex-wrap');
+  });
+});
+
+// Lane P2's follow-up (a standing cause, empty identity metrics): a metric with nothing to say is
+// not drawn. A .bit version that stores no expiry drew "Expires · not recorded"; the page's
+// sentence says it once ("Version N of its cell records no expiry.").
+describe('identity facts draw no metric with nothing to say', () => {
+  it('draws no expiry for a version that stores none', () => {
+    const protocol = valar();
+    for (const v of protocol.versions) v.decoded.expiredAt = null;
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        createdAtBlock={12260151}
+      />
+    );
+    expect(factLabels()).not.toContain('Expires');
+    expect(document.body).not.toHaveTextContent('not recorded');
+    expect(factLabels()).toContain('Registered');
   });
 });
 
@@ -295,6 +320,45 @@ describe('.bit witness facts (ID-B1, ID-C6)', () => {
     );
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
       'No records are set; sub-accounts are on.'
+    );
+  });
+});
+
+// Lane P2's follow-up (item 6): the .bit Cell summary says the lock it was minted into and the one
+// that holds it now through the decision's sentence form (it said the API's name as "a <name>
+// wallet", "a wallet whose lock is not named" when there was none, and its own article rule)
+describe('.bit Cell summary names its locks through the decision', () => {
+  it('says a lock the registry does not name by its code hash, and the default lock by its name', () => {
+    const protocol = structuredClone(bitCellProtocolProducer) as Extract<
+      ItemProtocol,
+      { kind: 'bit_cell' }
+    >;
+    const summary = () =>
+      render(
+        <IdentitySummary
+          protocol={protocol}
+          term={identityTerm(protocol)}
+          now={NOW}
+          isLive
+          subject="888899.bit"
+        />
+      );
+    const { unmount } = summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /Minted on \S+ into a lock 0x41414141…414141 that still holds it\./
+    );
+    expect(screen.getByTestId('identity-summary')).not.toHaveTextContent('wallet');
+    unmount();
+    const args = `0x${'01'.repeat(20)}`;
+    for (const v of protocol.versions)
+      Object.assign(v.cell, {
+        lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args },
+        lockName: 'Default Lock',
+        ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+      });
+    summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /into a Default Lock that still holds it\./
     );
   });
 });

@@ -85,6 +85,10 @@ describe('not-found identifier evidence', () => {
     expect(evidence.finding).toBe(
       '/search lists it as “Cell (Dead, 100 CKB)”, so this 404 does not prove the cell never existed'
     );
+    // the reason in plain words, the page's second line (lists lane P3)
+    expect(evidence.reason).toBe(
+      'search knows it as “Cell (Dead, 100 CKB)”, so it may yet be indexed.'
+    );
     expect(evidence.alternative).toBeUndefined();
   });
 
@@ -97,6 +101,7 @@ describe('not-found identifier evidence', () => {
     expect(evidence.alternative).toBeUndefined();
     expect(evidence.finding).toBe('/search: no transaction has this hash either');
     expect(evidence.finding).not.toMatch(/never existed|entire chain|pool/);
+    expect(evidence.reason).toBe('no transaction has this hash either.');
   });
 
   // U-18: a transaction page's 404 asks /search whether the hash is a block's; the miss said
@@ -109,6 +114,7 @@ describe('not-found identifier evidence', () => {
     );
     expect(evidence.finding).toBe('/search: no block has this hash either');
     expect(evidence.finding).not.toContain(hash);
+    expect(evidence.reason).toBe('no block has this hash either.');
   });
 
   it('says what an exact hit is, the link being the way on', async () => {
@@ -129,6 +135,7 @@ describe('not-found identifier evidence', () => {
       search
     );
     expect(evidence.finding).toBe('/search: this hash is a block');
+    expect(evidence.reason).toBe('this hash is a block’s.');
     expect(evidence.alternative?.label).toBe('Block #12');
   });
 

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import {
@@ -606,6 +608,32 @@ describe('Address v3', () => {
       expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
     const strip = screen.getByRole('group', { name: 'Address status' });
     expect(within(strip).getByText('deprecated')).toHaveClass('text-negative');
+  });
+  // Lane P1 follow-up (the lock-words gate's known writer 11, the lock byte map's name and link):
+  // the address's lock is named once, by the one decision, and the strip and the byte map write
+  // it. A lock on the default lock's code hash by data is not the default lock: the registry's name
+  // for that code hash ("SECP256K1/blake160") is written nowhere, and no link opens the default
+  // lock's named page.
+  it('writes no default lock name for a lock on its code hash by data, strip or byte map', async () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...addressFixture,
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+      lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockScriptInfo: {
+        codeHash: DEFAULT_LOCK_CODE_HASH,
+        name: 'SECP256K1/blake160',
+        scriptKind: 'lock',
+        deprecated: false,
+      },
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(
+      screen.getByRole('heading', { name: 'The lock script this address names' })
+    ).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('SECP256K1/blake160');
+    expect(document.querySelector('a[href*="/scripts/"]')).toBeNull();
   });
   it('shows raw script identity when no registered name is present', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -1486,10 +1514,22 @@ describe('Address board · F2 blocks', () => {
   it('draws every activity as the shared ActivityRow, this address first and once (C3)', async () => {
     // B4 (re-pinned): the second transaction has another party, so the two rows do not say the
     // same thing and are not folded into one run (they were two transfers of this address alone)
+    // Re-pinned on purpose (Gate B's rule, lists lane P3: a run is what was done and the script
+    // code, not the parties): the second transaction calls a type script, so the two rows do not
+    // fold (another party alone no longer keeps them apart)
     const second = {
       ...addressActivitiesFixture[0],
       txHash: fixtureHash(801),
       ckbDelta: '-5',
+      typeCalls: [
+        {
+          typeCodeHash: fixtureHash(803),
+          typeHashType: 'type',
+          typeArgs: '0x',
+          scriptHash: fixtureHash(804),
+          scriptName: 'Some Type',
+        },
+      ],
       participants: [
         { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [] },
       ],
@@ -1554,15 +1594,24 @@ describe('Address board · F2 blocks', () => {
   it('names the lock code and offers JSON and Markdown in the Lock script section (BA-38)', async () => {
     render(<AddressDetailPage />);
     const lock = await section(/^The lock script this address names/);
-    expect(lock).toHaveTextContent(/code_hash0x0+64 · JoyID/);
+    // re-pinned (lane P1 follow-up): the fixture's lock is the JoyID lock its address spells (its
+    // code hash was 0x0…64, which the address does not spell and the lock words now refuse)
+    expect(lock).toHaveTextContent(
+      'code_hash0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323 · JoyID'
+    );
     // Responsive fix plan 2026-11-01 (A3): in the break-all box the lock name split "Def/ault Lock".
     expect(within(lock).getByText('JoyID')).toHaveClass('whitespace-nowrap');
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
       `/mainnet/address/${addressText}.md`
     );
-    expect(within(lock).getByRole('link', { name: 'JSON' }).getAttribute('href')).toMatch(
-      new RegExp(`/addresses/${addressText}$`)
+    // Re-pinned on purpose (lane P1 follow-up, the link-look gate): the API's JSON is a way out of
+    // the site, an ExternalLink to the API's absolute URL ("JSON ↗", a new tab), not a raw <a>
+    const json = within(lock).getByRole('link', { name: /^JSON\s↗$/ });
+    expect(json.getAttribute('href')).toMatch(
+      new RegExp(`^https?://[^/]+/api/mainnet/v1/addresses/${addressText}$`)
     );
+    expect(json).toHaveAttribute('target', '_blank');
+    expect(json).toHaveAttribute('rel', 'noreferrer');
   });
 
   it('draws the lock script as its occupied bytes and derives its two names (C6)', async () => {

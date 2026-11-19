@@ -1,4 +1,5 @@
 'use client';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import { useState, type ReactNode } from 'react';
 import type { ItemCellVersions, ItemCellVersion } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
@@ -170,19 +171,24 @@ export function CellVersions({
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
                 <CkbAmount
-                  form="column"
+                  form="exact"
                   shannons={BigInt(v.capacity)}
                   signed={false}
                   tone="plain"
                   wrap
                 />
                 <div className="text-text-dim text-meta mt-1">
-                  <CkbAmount form="column" shannons={free} signed={false} tone="plain" wrap /> free
+                  <CkbAmount form="exact" shannons={free} signed={false} tone="plain" wrap /> free
                 </div>
                 {v.consumedByTx && (
                   <AppLink
                     look="onward"
-                    href={`/tx/${v.consumedByTx}`}
+                    // the spending transaction opened at this version's cell, so its fold
+                    // never hides it
+                    href={transactionAtCellHref(v.consumedByTx, {
+                      txHash: v.txHash,
+                      index: v.outputIndex,
+                    })}
                     className="text-meta mt-1 block"
                   >
                     Consumed in transaction

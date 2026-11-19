@@ -62,8 +62,13 @@ it('uses the exact non-cellbase count instead of overlapping kind occurrences', 
   render(<ActivitiesPage />);
   expect(await screen.findByText('50')).toBeInTheDocument();
   expect(screen.getByText('42')).toBeInTheDocument();
+  // what the page says first (lists lane P3): the count with its noun and its period, once
+  expect(document.querySelector('[data-role="lede"]')).toHaveTextContent(
+    /^50\sactivities yesterday \(UTC\+8\), by 42\saddresses\.$/
+  );
   expect(screen.getByTestId('stream-summary')).toHaveTextContent('20261025');
-  expect(screen.getByRole('link', { name: 'Transactions →' })).toHaveAttribute(
+  // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+  expect(screen.getByRole('link', { name: /^Transactions/ })).toHaveAttribute(
     'href',
     '/mainnet/transactions'
   );

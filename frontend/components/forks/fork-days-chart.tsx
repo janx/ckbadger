@@ -8,6 +8,7 @@ import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { UNCLE_RATE_TARGET } from '@/lib/fork-format';
+import { cutScaledInteger } from '@/lib/exact-integer';
 import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
 import { advancePx, descentPx, tightLinePx } from '@/lib/type-metrics';
 
@@ -52,9 +53,11 @@ export const CHAR = advancePx(SVG_TEXT.label);
 const RATE_KEY = 'uncle rate, per day';
 const SWITCHES_NAME = 'this node’s branch switches, per day';
 /** The target the difficulty aims the uncle rate at, one block in 40: 2.5 %, for the geometry. */
-const TARGET_PERCENT = 2.5;
-if (`${TARGET_PERCENT.toFixed(2)}%` !== UNCLE_RATE_TARGET)
-  throw new Error(`forks chart: target ${TARGET_PERCENT} is not ${UNCLE_RATE_TARGET}`);
+const TARGET_PERCENT = 100 / 40;
+// the words say the same target, one in forty cut at two places (lane exactness, part A, A8: the
+// check wrote the geometry's float with toFixed)
+if (`${cutScaledInteger(BigInt(100), BigInt(40), 2)}%` !== UNCLE_RATE_TARGET)
+  throw new Error(`forks chart: one block in 40 is not ${UNCLE_RATE_TARGET}`);
 const TARGET_WORDS = `target ${UNCLE_RATE_TARGET}`;
 
 /** The smallest 1-2-5 step that covers `max` in at most four gridlines. */

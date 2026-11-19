@@ -444,7 +444,7 @@ export function AssetHistory({
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
       peak{' '}
-      <CkbAmount form="column" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
+      <CkbAmount form="summary" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
       on {unitNode(peak.date)}
     </span>
   );
@@ -476,12 +476,7 @@ export function AssetHistory({
         {
           label: 'held',
           value: (
-            <CkbAmount
-              form="column"
-              shannons={BigInt(point.capacity)}
-              signed={false}
-              tone="plain"
-            />
+            <CkbAmount form="exact" shannons={BigInt(point.capacity)} signed={false} tone="plain" />
           ),
         },
         {
@@ -491,7 +486,7 @@ export function AssetHistory({
             <>
               <Swatch color={DATA_COLOR} />
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={BigInt(point.occupiedCapacity)}
                 signed={false}
                 tone="plain"
@@ -512,7 +507,7 @@ export function AssetHistory({
             <>
               <Swatch color={CLASS_COLORS.ckb} />
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
                 signed={false}
                 tone="plain"
@@ -528,7 +523,7 @@ export function AssetHistory({
                   <>
                     <Swatch color={CLASS_COLORS.tokens} />
                     <span className="text-text">
-                      <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />
+                      <TokenAmount form="exact" amount={point.supply!} decimals={token.decimals} />
                     </span>{' '}
                     <span className="text-text-dim">{token.symbol}</span>
                   </>
@@ -544,7 +539,7 @@ export function AssetHistory({
                 value: (
                   <span title="the most CKB its cells held on any complete day">
                     <CkbAmount
-                      form="column"
+                      form="exact"
                       shannons={BigInt(peak.capacity)}
                       signed={false}
                       tone="plain"
@@ -656,7 +651,7 @@ export function AssetHistory({
           >
             No complete daily history in this range.
           </p>
-          {peakItem && <p className="text-text-dim text-small max-w-measure">{peakItem}</p>}
+          {peakItem && <p className="text-text text-small max-w-measure">{peakItem}</p>}
         </>
       )}
       {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
@@ -666,11 +661,11 @@ export function AssetHistory({
             Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
           </summary>
           {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-            <p className="text-text-dim text-meta max-w-measure mt-2">
+            <p className="text-text text-meta max-w-measure mt-2">
               The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
             </p>
           )}
-          <p className="text-text-dim text-meta max-w-measure my-3">
+          <p className="text-text text-meta max-w-measure my-3">
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
           </p>

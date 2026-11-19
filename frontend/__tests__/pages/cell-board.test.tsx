@@ -9,6 +9,9 @@ import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/ut
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { factsOf } from '@/__tests__/utils/facts';
 import { gapPx, widthRuleAt } from '@/__tests__/utils/tailwind-box';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { shortenHash } from '@/lib/shorten';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -21,7 +24,7 @@ vi.mock('@/src/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock('@/components/cell/cell-transactions', () => ({
-  CellTransactions: (props: { lockName: string | null; typeName: string | null }) => {
+  CellTransactions: (props: { lockLabel: string | null; typeName: string | null }) => {
     transactionsProps(props);
     return <div data-testid="transactions" />;
   },
@@ -319,8 +322,10 @@ describe('Cell page against the Cell board', () => {
       '/mainnet/blocks/20834844'
     );
     // Lane L: the lock's owner, the cell's address, is named and linked under the lock.
-    // R9 (re-pinned): at the row size, `ckb1…` and the last 8 characters (it was 10…6)
-    const owner = within(facts).getByRole('link', { name: 'ckb1…t0shp3hr' });
+    // R9 (re-pinned): at the row size, `ckb1…` and the last 8 characters (it was 10…6); the
+    // fixture's address is the one its lock spells (lane P1 follow-up: it was a string shaped like
+    // one, 'ckb1qp3kr4test0shp3hr', which the lock words now refuse)
+    const owner = within(facts).getByRole('link', { name: 'ckb1…6qshp3hr' });
     expect(owner).toHaveAttribute('href', `/mainnet/address/${cell.address}`);
     expect(owner).toHaveAttribute('title', cell.address);
   });
@@ -343,7 +348,66 @@ describe('Cell page against the Cell board', () => {
       cell.txHash
     );
     expect(transactionsProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lockName: 'Nervape Shadow Lock', typeName: 'Spore' })
+      expect.objectContaining({ lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' })
+    );
+  });
+
+  // Lane P1 follow-up (the lock-words gate's writers 8, 9, 10): the cell page names its lock by the
+  // one decision. A lock on the default lock's code hash by data is another lock (no cell's data
+  // hashes to it), and its words are its code hash and "by data", never the default lock's name.
+  // Re-keyed (lane rd/api-lock-names): the lookup answers each pair asked; the registry names the
+  // default lock's pair (its code hash by type) and not the pair by data.
+  it('names a lock on the default lock’s code hash by data by its code hash, not the default’s name', async () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const byData: Cell = {
+      ...cell,
+      lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+    };
+    vi.mocked(api.getCell).mockResolvedValue(byData);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: { name: 'SECP256K1/blake160' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'data')]: { name: 'Unknown' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
+    } as never);
+    view();
+    const facts = await screen.findByRole('region', { name: 'Cell facts' });
+    await within(facts).findByRole('link', { name: 'Spore' });
+    const lock = within(facts).getByRole('link', {
+      name: shortenHash(DEFAULT_LOCK_CODE_HASH, 'row'),
+    });
+    expect(lock).toHaveAttribute('href', `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data`);
+    expect(lock.parentElement).toHaveTextContent(
+      `${shortenHash(DEFAULT_LOCK_CODE_HASH, 'row')} by data`
+    );
+    expect(facts).not.toHaveTextContent('SECP256K1/blake160');
+    expect(transactionsProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lockLabel: null, typeName: 'Spore' })
+    );
+  });
+
+  it('names the default lock by its registry name in its Lock fact (a column’s form)', async () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const onDefault: Cell = {
+      ...cell,
+      lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args },
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+    };
+    vi.mocked(api.getCell).mockResolvedValue(onDefault);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: { name: 'SECP256K1/blake160' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'data')]: { name: 'Unknown' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
+    } as never);
+    view();
+    const facts = await screen.findByRole('region', { name: 'Cell facts' });
+    expect(await within(facts).findByRole('link', { name: 'SECP256K1/blake160' })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=type`
+    );
+    expect(facts).not.toHaveTextContent('by type');
+    expect(transactionsProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lockLabel: 'SECP256K1/blake160' })
     );
   });
 

@@ -18,8 +18,8 @@ import { ckbAmountText } from '@/lib/amount-form';
 import {
   UNAVAILABLE,
   WIDEST_BLOCK_NUMBER,
-  WIDEST_COUNT,
   WIDEST_ROW_COUNT,
+  WIDEST_VERSION_CODE_CELLS,
 } from '@/lib/list-bounds';
 import {
   ScriptCustodyEvidence,
@@ -79,7 +79,17 @@ const AMOUNT_LINE_PX = columnPx(
 /** A version's CKB in its compact form, under a billion CKB: "999.99M". */
 const WIDEST_COMPACT_CKB = ckbAmountText(BigInt('99999999999999999'), 'compact');
 
-function CellOccupiedValue({ cell }: { cell: Cell }) {
+function CellOccupiedValue({
+  cell,
+  form,
+}: {
+  cell: Cell;
+  /**
+   * The table's numeric column aligns its points (`column`); a phone row writes the summary (lane
+   * P2's follow-up, item 5: one form for both was the column's).
+   */
+  form: 'column' | 'summary';
+}) {
   if (cell.cellType === 'genesis_special_burn') {
     return cell.virtualCommonKnowledgeSize === undefined ? (
       <span
@@ -95,7 +105,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
         <CkbAmount
-          form="column"
+          form={form}
           shannons={BigInt(cell.virtualCommonKnowledgeSize)}
           signed={false}
           tone="plain"
@@ -106,7 +116,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
   }
   return (
     <CkbAmount
-      form="column"
+      form={form}
       shannons={BigInt(cell.commonKnowledgeSize)}
       signed={false}
       tone="plain"
@@ -1144,7 +1154,7 @@ export default function ScriptDetailPage({
               title="Conflicting live bytecode"
               args={formatCount(codeHashAmbiguity.versionHashes.length, 'version')}
             >
-              <p className="text-text-dim text-small mb-4">
+              <p className="text-text text-small mb-4">
                 Current live type resolution points to more than one bytecode version.
               </p>
               <ul className="text-small space-y-2">
@@ -1469,10 +1479,11 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployments',
                       label: 'Code cells',
-                      // a count of four digits, wider than its head's words (F3-e: it was 110 and
-                      // 12 %)
+                      // a version's code cells, two digits (WIDEST_VERSION_CODE_CELLS; lane P2's
+                      // follow-up, item 7: it read WIDEST_COUNT, a block's or a transaction's
+                      // count), under its head's words (F3-e: it was 110 and 12 %)
                       minWidth: columnPx(
-                        Math.max(small(WIDEST_COUNT), meta('cells')) + CELL_GAP_PX
+                        Math.max(small(WIDEST_VERSION_CODE_CELLS), meta('cells')) + CELL_GAP_PX
                       ),
                       numeric: true,
                       render: (row) => row.deploymentsCount.toLocaleString(),
@@ -1687,7 +1698,7 @@ export default function ScriptDetailPage({
                           // as Capacity (F3-e: it was 120 and 11 %)
                           minWidth: AMOUNT_LINE_PX,
                           numeric: true,
-                          render: (cell) => <CellOccupiedValue cell={cell} />,
+                          render: (cell) => <CellOccupiedValue cell={cell} form="column" />,
                         },
                         {
                           key: 'created',
@@ -1736,7 +1747,7 @@ export default function ScriptDetailPage({
                               signed={false}
                               tone="plain"
                             />{' '}
-                            · occupied <CellOccupiedValue cell={cell} />
+                            · occupied <CellOccupiedValue cell={cell} form="summary" />
                           </div>
                           <div>
                             Created{' '}
@@ -1759,7 +1770,7 @@ export default function ScriptDetailPage({
           }
         >
           <DetailSection title="Capacity history">
-            <p className="text-text-dim text-small max-w-measure mb-3">
+            <p className="text-text text-small max-w-measure mb-3">
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
@@ -1809,7 +1820,7 @@ export default function ScriptDetailPage({
                     minWidth: 210,
                     width: '30%',
                     render: (row) => (
-                      <span className="text-text-dim [overflow-wrap:anywhere]">
+                      <span className="text-text [overflow-wrap:anywhere]">
                         {row.currentVersionHash ?? 'Retired · no current code cell'}
                       </span>
                     ),

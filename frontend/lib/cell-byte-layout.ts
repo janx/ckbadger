@@ -23,10 +23,18 @@ export const OFFSET_PX = {
   4: Math.ceil(textPx(2 + 4, fontPx('small'))) + 18,
   5: Math.ceil(textPx(2 + 5, fontPx('small'))) + 18,
 } as const;
-/** The dump box's padding and border (`px-4`, 1 px border) around its rows. */
-export const HEX_BOX_INSET_PX = 2 * 16 + 2;
-/** Row lengths the dump uses, widest first; each divides the 24-byte excerpt alignment. */
-const ROW_BYTES = [24, 16, 8] as const;
+/**
+ * The frame between the measured box and the dump's rows, on both sides: the panel's 1 px border,
+ * the well's 8 px margin (`m-2`), its 1 px border and its 10 px padding (`px-2.5`). Lane P1
+ * follow-up: it was 34, the well's border and a 16 px padding alone, so a row it chose ran 18 px
+ * past the well (the 8-byte row, 329.2 px, scrolled the 306 px well at a 390 px phone).
+ */
+export const HEX_BOX_INSET_PX = 2 * (1 + 8 + 1 + 10);
+/**
+ * Row lengths the dump uses, widest first; 24, 8 and 4 divide the 24-byte excerpt alignment and 16
+ * fits it. 4 is a phone's (lane P1 follow-up): 211.6 px, whole at 320 px.
+ */
+const ROW_BYTES = [24, 16, 8, 4] as const;
 export type HexRowBytes = (typeof ROW_BYTES)[number];
 
 /** The drawn width of one dump row of `n` bytes: offset, hex bytes, ASCII column. */
@@ -37,13 +45,13 @@ export function hexRowWidth(n: number, digits: 4 | 5): number {
 }
 
 /**
- * The most bytes a row holds whole in a dump box `boxWidth` px wide: 24, else 16, else 8. Below
- * the 8-byte row's width (a 360 px phone) the 8-byte row stays and the raw bytes scroll inside
- * their own box, as raw data may.
+ * The most bytes a row holds whole in a dump box `boxWidth` px wide: 24, else 16, else 8, else 4.
+ * Below the 4-byte row's width (no phone's: 251.6 px with the frame, a 320 px page gives 288) the
+ * 4-byte row stays and the raw bytes scroll inside their own well, as raw data may.
  */
 export function hexRowBytes(boxWidth: number, digits: 4 | 5): HexRowBytes {
   if (!(boxWidth > 0)) throw new Error(`invalid cell byte box width ${boxWidth}`);
-  return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 8;
+  return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 4;
 }
 
 /** A capacity-map label's side padding; the label is set at the meta step (`text-meta`). */

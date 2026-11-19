@@ -10,7 +10,7 @@ import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
-import { HexCode } from '@/components/ui/hex-code';
+import { HeadId } from '@/components/ui/head-id';
 import { Dotted } from '@/components/ui/phone-row';
 import { shortenHash } from '@/lib/shorten';
 import { unitNode } from '@/components/ui/units';
@@ -253,19 +253,21 @@ export function BlockPosition({
   }, [currentX, block.number]);
   return (
     <div className="min-w-0 space-y-3">
-      <p data-testid="block-position-sentence" className="text-text-dim text-small max-w-measure">
+      {/* statements in the reading ink: the position, and a read that failed; the line being read
+          is quiet, a transient line (R3; lane P1 follow-up) */}
+      <p data-testid="block-position-sentence" className="text-text text-small max-w-measure">
         <SentenceNodes parts={positionParts(block, links)} />
         {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
-        <p role="alert" className="text-text-dim text-small max-w-measure">
+        <p role="alert" className="text-text text-small max-w-measure">
           Proposal origins unavailable: {transactionsError}
         </p>
       ) : transactions === undefined ? (
         <p className="text-text-dim text-small">Reading transaction proposal origins…</p>
       ) : null}
       {proposalsError && (
-        <p role="alert" className="text-text-dim text-small max-w-measure">
+        <p role="alert" className="text-text text-small max-w-measure">
           Outgoing commitments unavailable: {proposalsError}
         </p>
       )}
@@ -316,7 +318,7 @@ export function BlockPosition({
               </Link>
             </p>
             {arc.uncles.size > 0 && (
-              <p className="text-text-dim max-w-measure">
+              <p className="text-text max-w-measure">
                 Includes proposals carried by {unitNode(formatCount(arc.uncles.size, 'uncle'))}.
               </p>
             )}
@@ -328,19 +330,21 @@ export function BlockPosition({
             className="border-row-rule text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
-            {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
+            {/* a full hash is set as the head's id is (HeadId; lane P1 follow-up): one line where
+                its measured line holds it, else two halves, never a box that scrolls (U-16 had
+                it scroll in its own box) */}
             <Link look="inline" href={`/blocks/${uncle.parentHash}`} className="block">
-              Parent <HexCode value={uncle.parentHash} truncate={false} variant="inherit" />
+              Parent <HeadId value={uncle.parentHash} kind="hash" />
             </Link>
             <Link look="inline" href={getUncleDetailHref(block.number, index)} className="block">
               <Dotted
                 parts={[
                   `Uncle ${formatBlockNumber(uncle.number)}`,
-                  <HexCode key="hash" value={uncle.hash} truncate={false} variant="inherit" />,
+                  <HeadId key="hash" value={uncle.hash} kind="hash" />,
                 ]}
               />
             </Link>
-            <p className="text-text-dim max-w-measure">
+            <p className="text-text max-w-measure">
               Included by{' '}
               <Link look="inline" href={`/blocks/${block.hash}`}>
                 {formatBlockNumber(block.number)}

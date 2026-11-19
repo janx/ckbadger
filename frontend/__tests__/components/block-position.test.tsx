@@ -135,6 +135,14 @@ describe('BlockPosition', () => {
       // U-16 (re-pinned): the uncle line is one separated list, its dot hidden from the name
       mobile.getByRole('link', { name: `Uncle #931 ${uncle}` })
     ).toHaveAttribute('href', '/mainnet/blocks/932/uncles/0');
+    // Lane P1 follow-up (item 4; principle 4 of docs/RESPONSIVE_LAYOUT.md): a full hash in tier 2
+    // is set as the head's id is (HeadId: one line where its measured line holds it, else two
+    // halves), never a box that scrolls sideways (it was HexCode's own-box scroller)
+    for (const name of [`Parent ${parent}`, `Uncle #931 ${uncle}`]) {
+      const link = mobile.getByRole('link', { name });
+      expect(link.querySelector('[data-head-id]')).not.toBeNull();
+      expect(link.querySelector('.overflow-x-auto')).toBeNull();
+    }
     expect(screen.getByRole('region', { name: 'Chain position diagram' })).toHaveClass(
       'hidden',
       'md:block'

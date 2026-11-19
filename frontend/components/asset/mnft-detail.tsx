@@ -1,13 +1,13 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError } from '@/lib/api';
+import { api, isNotFoundApiError, type ItemCellVersion } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
-import { ReadFailure } from '@/components/read-failure';
+import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -22,7 +22,6 @@ import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
-import { CopyButton } from '@/components/ui/copy-button';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
@@ -31,12 +30,11 @@ import {
   cellLifeSentence,
   ckbText,
   ItemLife,
-  lockFootnote,
-  lockPhrase,
+  LockFootnote,
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -94,7 +92,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           <div className="text-text-bright text-body">
             {where ? `Its image is ${where}` : 'Its class names a renderer'}
           </div>
-          <p className="text-text-dim text-small max-w-measure break-all">{renderer}</p>
+          <p className="text-text text-small max-w-measure break-all">{renderer}</p>
           {where && (
             <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-small">
               Open the file ↗
@@ -343,7 +341,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>{' '}
-                  · to {lockPhrase(first.lockName)}
+                  · to <IssuedTo cell={first} />
                 </>
               ) : undefined,
             },
@@ -433,17 +431,14 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           />
           <DetailSection title="Issuer record">
             <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
-            <p className="text-meta max-w-measure">
-              Issuer ID ·{' '}
-              <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />{' '}
-              {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
-              <CopyButton
-                value={item.issuer.issuerId}
-                label="copy issuer id"
-                className="align-middle"
-              />
-            </p>
-            <p className="text-text-dim text-meta max-w-measure mt-2">
+            {/* Lane P2's follow-up (item 8): the issuer id as a head's id, its copy after it (it
+                was a box that scrolled): 42 characters at 11 px, 277.2 px, one line at every
+                width from 360 (328 less the copy's 40) */}
+            <div className="text-meta max-w-measure">
+              <span className="text-text-dim">Issuer ID</span>
+              <HeadId value={item.issuer.issuerId} kind="hash" copy="copy issuer id" />
+            </div>
+            <p className="text-text text-meta max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets
             </p>
@@ -498,11 +493,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               )
             }
           />
-          {lockFootnote(history.data, 'token') && (
-            <p className="text-text-dim text-small max-w-measure">
-              {lockFootnote(history.data, 'token')}
-            </p>
-          )}
+          <LockFootnote versions={history.data} noun="token" small />
         </div>
       )}
       <section aria-label={`In ${className}`} className="space-y-3">
@@ -573,4 +564,17 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       </section>
     </AssetDetailShell>
   );
+}
+
+/**
+ * The lock the token was issued to, in the Issued fact's note: the one decision's sentence form
+ * (lane P2's follow-up, item 6), a refusal failing the note's part in place (ruling D7).
+ */
+function IssuedTo({ cell }: { cell: ItemCellVersion }) {
+  const read = readPart(() => cellLockSentence(cell, 'row'));
+  if (read.error !== undefined)
+    return (
+      <PartReadError what="the lock it was issued to" where="the Issued fact" error={read.error} />
+    );
+  return <>{read.value}</>;
 }

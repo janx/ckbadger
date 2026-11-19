@@ -230,8 +230,11 @@ export function highlightCss(ids: readonly string[] | null): string {
 
 export interface CellMicroscopeProps {
   cell: Cell;
-  /** Registry names of its lock and type scripts, for the map detail. */
-  lockName?: string | null;
+  /**
+   * The lock's name as the one decision gives it (`lockWords`), and the registry's name of its
+   * type, for the map detail.
+   */
+  lockLabel?: string | null;
   typeName?: string | null;
 }
 
@@ -241,7 +244,7 @@ export interface CellMicroscopeProps {
  * byte, field or map part is under the pointer. A tap pins it, with a readout line under the
  * bytes, until a second tap on it or Escape (R6).
  */
-export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
+export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProps) {
   const { resolved: theme } = useTheme();
   const molecule = cell.cellOutputMolecule;
   const outBytes = useMemo(
@@ -416,7 +419,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const line = (target: Target): string => {
     if (target.kind === 'group') {
       const g = target.group;
-      const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+      const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
       return `${g}${name ? ` · ${name}` : ''} · ${fmt(groupBytes[g])} B occupied`;
     }
     if (target.kind === 'region') {
@@ -471,7 +474,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     const range = g === 'lock' || g === 'type' ? groupRange(g) : null;
     const hash =
       g === 'lock' ? molecule?.lockScriptHash : g === 'type' ? molecule?.typeScriptHash : null;
-    const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+    const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
     detail = (
       <div data-detail={`group:${g}`}>
         <DetailHead
@@ -735,8 +738,11 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
-              {/* The dump itself is a well inside the glass (material pass v2, move 2). */}
-              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-4 py-3">
+              {/* The dump itself is a well inside the glass (material pass v2, move 2). Its frame,
+                  the panel's border, m-2, the well's border and px-2.5, is the one hexRowBytes
+                  measures by (HEX_BOX_INSET_PX): a row is chosen whole inside it (lane P1
+                  follow-up; px-4 left the 8-byte row 23 px too wide at 390) */}
+              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-2.5 py-3">
                 {molecule && (
                   <div aria-label="CellOutput byte map">
                     <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">

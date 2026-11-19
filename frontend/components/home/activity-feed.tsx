@@ -52,11 +52,8 @@ export function ActivityFeed() {
           command="feed"
           args={`--last ${FEED_ROWS}`}
           note={
-            <Link
-              href={active.viewAll}
-              className="text-interactive hover:text-jade text-small transition-colors"
-            >
-              view all<span className="whitespace-nowrap"> →</span>
+            <Link href={active.viewAll} look="onward" className="text-small">
+              view all
             </Link>
           }
         />

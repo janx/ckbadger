@@ -1731,7 +1731,9 @@ async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
             // CH-21: every chart response names its series' peaks.
             "peak": { "date": "2024-01-15", "value": "0.025000" },
             "peak2": null,
-            "orphanRateTarget": { "numerator": 1, "denominator": 40 }
+            "orphanRateTarget": { "numerator": 1, "denominator": 40 },
+            // lane exactness, part A, A2: each day's operands, so "over the target" is counted on integers
+            "counts": [{ "date": "2024-01-15", "uncles": 250, "blocks": 10000 }]
         })
     );
 

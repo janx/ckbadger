@@ -1089,12 +1089,13 @@ fn list_canonical_activities_page(
 
 /// Whether a `TxActions` falls under a global activity filter. The bucket comes
 /// from `ckbadger_store::classify_global_bucket`, the one classification the
-/// indexer also keys `CF_TX_ACTIONS_BY_BUCKET` by; `cellbase` is the one
-/// filter that names no bucket.
+/// indexer also keys `CF_TX_ACTIONS_BY_BUCKET` by; `cellbase` and `user` (every
+/// transaction but the cellbase) are the filters that name no bucket.
 pub(crate) fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> bool {
     match filter {
         None | Some("") | Some("all") => true,
         Some("cellbase") => actions.is_cellbase,
+        Some("user") => !actions.is_cellbase,
         Some(expected) => ckbadger_store::classify_global_bucket(actions)
             .is_some_and(|bucket| bucket.as_filter() == expected),
     }

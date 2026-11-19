@@ -8,11 +8,13 @@ import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import {
   AddressBalance,
+  addressLockName,
   addressStripFacts,
   AddressHoldingsSection,
   AddressLoadState,
@@ -227,6 +229,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         ? transactions.data?.pool
         : undefined;
   const a = address.data;
+  // the lock's name, the one decision's (lane P1 follow-up): the strip and the byte map write it
+  const lockName = a?.lockScript ? addressLockName(a) : null;
   if (!a && isNotFoundApiError(address.error)) {
     return (
       <NotFoundPage
@@ -282,13 +286,19 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   actions={
                     <span className="text-small">
                       {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
-                      <a
-                        href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
-                        target="_blank"
-                        rel="noreferrer"
+                      {/* the API's JSON, a way out of the site: its absolute URL (lane P1
+                          follow-up; the site's Link would prefix a path with the network) */}
+                      <ExternalLink
+                        look="inline"
+                        href={
+                          new URL(
+                            `${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`,
+                            window.location.origin
+                          ).href
+                        }
                       >
                         JSON
-                      </a>
+                      </ExternalLink>
                       {' · '}
                       <Link
                         look="inline"
@@ -305,9 +315,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <ScriptByteMap
                       kind="lock"
                       script={a.lockScript}
-                      name={a.lockScriptInfo?.name}
+                      name={lockName}
                       href={getScriptDetailHref({
-                        name: a.lockScriptInfo?.name,
+                        name: lockName,
                         codeHash: a.lockScript.codeHash,
                         hashType: a.lockScript.hashType,
                         scriptKind: 'lock',
@@ -361,7 +371,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               nameRows.length > 0 && (
                 <DetailSection title=".cell named rights">
                   <div data-testid="address-dotcell-names">
-                    <p className="text-text-dim text-small max-w-measure mb-3">
+                    {/* a statement of what the list holds: the reading ink (R3; P1 follow-up) */}
+                    <p className="text-text text-small max-w-measure mb-3">
                       Names this protocol assigns to the address. These rights do not add the name
                       cell’s capacity to this address’s physical holdings.
                     </p>
@@ -406,7 +417,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   title="Fiber channels"
                   args={fiber.data.length.toLocaleString('en-US')}
                 >
-                  <p className="text-text-dim text-small mb-3">
+                  <p className="text-text text-small mb-3">
                     Up to 100 indexed channels associated with this address.
                   </p>
                   {fiber.data.map((c) => (

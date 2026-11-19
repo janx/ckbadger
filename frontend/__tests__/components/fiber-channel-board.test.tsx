@@ -522,8 +522,12 @@ describe('FiberChannelBoard', () => {
     );
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     const live = within(tier1).getByTestId('live-commitment');
+    // re-pinned for lane exactness, part A (A5 iv): how the CKB divides between the two is not on chain while the
+    // commitment is live (its lock holds only the settlement's 20-byte hash; the settlement's
+    // witness and outputs show the amounts when it spends the cell), so the page says what the
+    // chain holds (it said the cell holds "the last split both signed")
     expect(live).toHaveTextContent(
-      'The live commitment 0x55555555…555555:1 holds 1,000 CKB, the last split both signed; the payout waits 1 epoch after it.'
+      'The live commitment 0x55555555…555555:1 holds 1,000 CKB. How it divides between the two is not on chain: the lock holds only a 20-byte hash of the split both last signed, and the settlement that spends this cell shows the amounts. The payout waits 1 epoch after the commitment.'
     );
     expect(within(live).getByRole('link', { name: /^0x55555555…555555:1$/ })).toHaveAttribute(
       'href',

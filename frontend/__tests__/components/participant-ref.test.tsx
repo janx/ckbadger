@@ -132,4 +132,50 @@ describe('ParticipantRefView', () => {
     expect(screen.getByText(/owner_to/)).toBeInTheDocument();
     expect(screen.getByText(/manager_to/)).toBeInTheDocument();
   });
+
+  // Lane P1 follow-up (the link-look gate's participant-ref entry): a caller states the party's
+  // look (components/ui/link.tsx) as it does an Address's; the link then draws that look and no ink
+  // by hand. A caller that states none draws what it drew (the feeds, the lists lane's).
+  describe('the look its caller states', () => {
+    const LOCK = `0x${'57'.repeat(32)}`;
+    const INLINE_LINE = 'decoration-[color:var(--c-ink-muted)]';
+
+    it('draws a compact address in the inline look, with no hand ink', () => {
+      render(
+        <ParticipantRefView
+          size="row"
+          participant={makeRef({ address })}
+          compact
+          quiet
+          look="inline"
+        />
+      );
+      const link = screen.getByRole('link');
+      expect(link).toHaveClass('underline', INLINE_LINE);
+      for (const hand of ['text-text', 'text-jade-dim', 'hover:text-jade'])
+        expect(link).not.toHaveClass(hand);
+    });
+
+    it('draws a compact lock hash as a row key, and a standalone address too', () => {
+      const { unmount } = render(
+        <ParticipantRefView
+          size="row"
+          participant={makeRef({ lockHash: LOCK })}
+          compact
+          look="key"
+        />
+      );
+      expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+      expect(screen.getByRole('link')).not.toHaveClass('hover:text-jade');
+      unmount();
+      render(<ParticipantRefView size="row" participant={makeRef({ address })} look="key" />);
+      expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+      expect(screen.getByRole('link')).not.toHaveClass('underline');
+    });
+
+    it('draws what it drew where its caller states no look', () => {
+      render(<ParticipantRefView size="row" participant={makeRef({ lockHash: LOCK })} compact />);
+      expect(screen.getByRole('link')).toHaveClass('text-text', 'hover:text-jade');
+    });
+  });
 });

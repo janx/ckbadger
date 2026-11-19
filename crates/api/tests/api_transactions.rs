@@ -2204,6 +2204,8 @@ async fn redesign_pool_pages_newest_first_with_exact_values_and_interpretation()
     assert_eq!(first["data"][0]["interpretation"]["status"], "complete");
     assert_eq!(first["totals"]["pending"], 1);
     assert_eq!(first["totals"]["proposed"], 1);
+    // lane exactness, part A, A4: the transactions waiting in the pool, pending and proposed, the route's count
+    assert_eq!(first["totals"]["waiting"], 2, "{first}");
     assert_eq!(first["data"][0]["feeRate"], "2000");
     assert_eq!(
         first["summary"],
@@ -2542,6 +2544,28 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
     assert_eq!(status, StatusCode::OK, "{older}");
     assert_eq!(older["data"][0]["blockNumber"], 10);
     assert!(older["nextCursor"].is_null());
+    // `user` (the lists lane P3: the Transactions page opens on them): every committed
+    // transaction but the cellbase, newest first, paged by position, with no total
+    let (status, user) = get_json(&app, "/transactions?activity_type=user&limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{user}");
+    assert_eq!(user["data"][0]["index"], 260, "{user}");
+    assert_eq!(user["data"][1]["index"], 259, "{user}");
+    assert_eq!(user["data"][0]["blockNumber"], 11);
+    assert_eq!(user["data"][0]["isCellbase"], false);
+    assert!(user["data"][0]["activity"].is_object(), "{user}");
+    assert!(user.get("total").is_none());
+    assert_eq!(user["nextCursor"], "11:259");
+    // its last page: index 1, and neither block's cellbase after it
+    let (status, last) =
+        get_json(&app, "/transactions?activity_type=user&limit=2&cursor=11:2").await;
+    assert_eq!(status, StatusCode::OK, "{last}");
+    assert_eq!(last["data"].as_array().unwrap().len(), 1, "{last}");
+    assert_eq!(last["data"][0]["index"], 1);
+    assert!(last["nextCursor"].is_null(), "{last}");
+    let (_, all_users) = get_json(&app, "/transactions?activity_type=user&limit=100").await;
+    let users = all_users["data"].as_array().unwrap();
+    assert_eq!(users.len(), 100);
+    assert!(users.iter().all(|row| row["isCellbase"] == false));
     assert_eq!(
         get_json(&app, "/transactions?activity_type=nft").await.0,
         StatusCode::BAD_REQUEST
@@ -2614,6 +2638,11 @@ async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
     assert_eq!(scripts["summary"]["size"], "500");
     let (_, all) = get_json(&app, "/transactions/pool").await;
     assert_eq!(all["total"], 4);
+    // no pool transaction is a cellbase: `user` names all four, the partly read one too
+    let (status, users) = get_json(&app, "/transactions/pool?activity_type=user").await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    assert_eq!(users["total"], 4);
+    assert_eq!(users["summary"], all["summary"]);
     assert_eq!(
         get_json(&app, "/transactions/pool?activity_type=nft")
             .await

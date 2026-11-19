@@ -59,6 +59,8 @@ const statistics = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  // the whole, the route's: 1 + 3 + 3 CKB (lane exactness, part A, A5 ii)
+  secondaryIssuance: '700000000',
   tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',

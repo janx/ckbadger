@@ -2691,6 +2691,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_a))
     );
     assert_eq!(json["data"][0]["itemCount"], 2);
+    // lane exactness, part A, A3: the rank of the page's first row, the route's
+    assert_eq!(json["firstRank"], 1, "{json}");
     let next_cursor = json["nextCursor"].as_str().expect("next cursor");
 
     let request = Request::builder()
@@ -2709,6 +2711,7 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_b))
     );
     assert_eq!(json["data"][0]["itemCount"], 1);
+    assert_eq!(json["firstRank"], 2, "{json}");
 }
 
 #[tokio::test]
@@ -4378,6 +4381,8 @@ async fn dotcell_detail_counts_the_names_its_owner_holds() {
     let (status, holders) = dotcell_get(app, "/api/v1/assets/identities/dotcell/holders").await;
     assert_eq!(status, StatusCode::OK, "{holders}");
     assert_eq!(holders["data"][0]["itemCount"], item["ownerNameCount"]);
+    // lane exactness, part A (A3): an identity collection's page states its first row's rank
+    assert_eq!(holders["firstRank"], 1, "{holders}");
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_identity_owner20_count(

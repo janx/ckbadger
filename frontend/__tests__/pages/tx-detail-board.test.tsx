@@ -605,6 +605,35 @@ describe('Transaction board, tier 1', () => {
     expect(strip).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
   });
 
+  // Lane P1 follow-up (item 3; the link-look gate's participant-ref entry): every party the page
+  // links states its look. In a line (the lede, the fee's payer, What moved) a party is a name
+  // inside it, the inline look; in the balance changes a party is its row's key. None writes an ink
+  // by hand.
+  it('states the look of every party it links: inline in a line, the key of a balance row', async () => {
+    render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const INLINE = ['underline', 'decoration-[color:var(--c-ink-muted)]'];
+    const parties = (root: HTMLElement) =>
+      within(root)
+        .getAllByRole('link')
+        .filter((a) => a.getAttribute('href')!.includes('/address/'));
+    const expectLook = (links: HTMLElement[], classes: string[]) => {
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link).toHaveClass(...classes);
+        expect(link).not.toHaveClass('hover:text-jade');
+      }
+    };
+    expectLook(parties(strip), INLINE);
+    const summary = await screen.findByTestId('tx-summary');
+    await waitFor(() => expect(parties(summary).length).toBeGreaterThan(0));
+    expectLook(parties(summary), INLINE);
+    expectLook(parties(await screen.findByTestId('tx-what-moved')), INLINE);
+    expectLook(parties(screen.getByLabelText('Balance changes by participant')), [
+      'text-text-bright',
+    ]);
+  });
+
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
     // Responsive review A#17: on a phone the facts rail came after the six cell cards.
     render(<TransactionDetailPage />);
@@ -928,11 +957,18 @@ describe('Transaction variants (D4)', () => {
         },
       ],
       participants: [
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000' },
+        // the owner of the withdrawn deposit: the API tags it DAO (TAG_DAO, bit 3), as the indexer
+        // does the party whose cells hold the step (lane P1 follow-up: the fixture carried no tag)
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000', tags: 8 },
         { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
       ],
     });
     render(<TransactionDetailPage />);
+    // Lane P1 follow-up (the review's standing cause, What moved and the lede on a DAO step): the
+    // lede says what happened from the activity's own kind, a withdrawal with its compensation
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
+    );
     const inflow = await screen.findByTestId('tx-inflow');
     expect(inflow).toHaveAttribute('data-inflow', 'dao');
     expect(inflow).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
@@ -954,6 +990,39 @@ describe('Transaction variants (D4)', () => {
     expect(headers).toHaveTextContent('2 · read, not consumed');
     expect(within(headers).getByRole('link', { name: '#5' })).toBeInTheDocument();
     expect(within(headers).getByRole('link', { name: '#9' })).toBeInTheDocument();
+  });
+
+  // Lane P1 follow-up (review chain-b tx-dao-deposit: the deposit read as a payment): the lede
+  // says the CKB went into a Nervos DAO deposit and who holds it (the party the API tags DAO), and
+  // What moved writes that party's end as the deposit; the payer is not its holder here.
+  it('says a deposit went into the Nervos DAO and who holds it, the figure too', async () => {
+    const tx = committed();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.daoWithdrawRequest,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+      ],
+      participants: [
+        {
+          ...feedSamples.daoWithdrawRequest.participants[2],
+          ckbDelta: `-${BigInt('12200000000000') + BigInt(tx.fee)}`,
+        },
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '12200000000000', tags: 8 },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
   });
 
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
@@ -1086,6 +1155,78 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('a cellbase runs no script');
     expect(api.getTransactionActivity).not.toHaveBeenCalled();
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+  });
+
+  // Lane P1 follow-up (the lock-words gate's known writer 12, the cellbase witness's lock): the
+  // miner lock is named by the one decision. A lock on the default lock's code hash by data is not
+  // the default lock, and the registry's name for that code hash ("Default Lock") is not its name.
+  it('writes a cellbase’s miner lock on the default lock’s code hash by data by its code hash', async () => {
+    const message = `0x${Buffer.from('0.210.0 (860c9bb 2026-09-21) ').toString('hex')}0011223344556677`;
+    const cellbase = {
+      ...committed(),
+      isCellbase: true,
+      fee: '0',
+      feeRate: null,
+      inputs: [
+        {
+          previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+          since: '0x14023e7',
+          capacity: null,
+          commonKnowledgeSize: null,
+          lock: null,
+          type: null,
+          address: null,
+          cellType: null,
+          display: null,
+        } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+      ],
+      inputsCapacity: '0',
+      inputsCommonKnowledgeSize: '0',
+      outputsCapacity: '55961739927',
+      outputsCommonKnowledgeSize: '61',
+      outputs: [
+        {
+          ...committed().outputs![0],
+          type: undefined,
+          cellType: 'plain',
+          capacity: '55961739927',
+          commonKnowledgeSize: '61',
+        },
+      ],
+      scriptGroups: [committed().scriptGroups![2]],
+      witnessDetails: [
+        {
+          index: 0,
+          size: 127,
+          kind: 'cellbase',
+          fields: [
+            { name: 'table header', start: 0, end: 12, hex: '0x' },
+            { name: 'lock', start: 12, end: 85, hex: '0x' },
+            { name: 'message', start: 85, end: 127, hex: '0x' },
+          ],
+        },
+      ],
+      witnesses: ['0x00'],
+      cellbaseWitness: {
+        lock: { codeHash: LOCK_CODE_HASH, hashType: 'data', args: `0x${'ab'.repeat(20)}` },
+        message,
+      },
+      feePaidBy: [],
+      pays: { number: 89, hash: '0x' + '89'.repeat(32) },
+    } as TransactionDetail;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase);
+    vi.mocked(api.getBlock).mockResolvedValue({
+      number: 101,
+      minerMessage: message,
+      minerMessageText: '0.210.0 (860c9bb 2026-09-21)',
+    } as Awaited<ReturnType<typeof api.getBlock>>);
+    render(<TransactionDetailPage />);
+    await waitFor(() =>
+      expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
+        'miner lock 0x9bd7e06f…a3cce8 by data(0xabababab…ababab) · message “0.210.0 (860c9bb 2026-09-21)”'
+      )
+    );
+    expect(screen.getByTestId('tx-witness-item-0')).not.toHaveTextContent('Default Lock');
   });
 
   it('says a pending transaction will run when committed, and still lists its witnesses (TX-37)', async () => {

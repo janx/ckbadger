@@ -298,6 +298,10 @@ describe('Block board · first tier', () => {
       'Next block, 20,827,933',
     ]);
     const [previous, next] = steps;
+    // lane P1 follow-up (the link-look gate): a step link is a block whose mark takes the link's
+    // ink, celadon under the pointer and the focus by the one rule; no ink written on the mark
+    for (const step of steps)
+      expect(step.querySelector('svg')!.getAttribute('class') ?? '').not.toMatch(/\btext-/);
     const height = within(title).getByText('#20,827,932');
     const row = height.parentElement!;
     expect(row.parentElement).toBe(title);
@@ -542,10 +546,13 @@ describe('Block board · first tier', () => {
     const summary = await screen.findByTestId('block-summary');
     expect(summary).not.toHaveTextContent('Example Pool');
     const strip = screen.getByRole('group', { name: 'Block status' });
-    expect(within(strip).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${block.minerAddress}`
-    );
+    const pool = within(strip).getByRole('link', { name: 'Example Pool' });
+    expect(pool).toHaveAttribute('href', `/mainnet/address/${block.minerAddress}`);
+    // lane P1 follow-up (item 3): a strip's value link is inline, as its block's and its epoch's
+    // are; no ink of MinerLink's own; its title names the pool whole, then the address
+    expect(pool).toHaveClass('underline');
+    expect(pool).not.toHaveClass('text-text-bright');
+    expect(pool).toHaveAttribute('title', `Example Pool · ${block.minerAddress}`);
   });
 
   it('counts both views in quiet 12 px beside 17 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
@@ -700,7 +707,10 @@ describe('Block board · second tier', () => {
   it('names the uncle as a sibling with the same parent and its delay; counts committed proposals (BA-18)', async () => {
     render(<BlockDetailPage />);
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
-    expect(uncles).toHaveTextContent('1 · counted toward the NC-Max orphan rate');
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a: "NC-Max orphan rate", a term the
+    // reader has to break): the site's word, the forks chart's "uncle rate", one word for one thing
+    expect(uncles).toHaveTextContent('1 · counted toward the uncle rate');
+    expect(uncles).not.toHaveTextContent(/NC-Max|orphan rate/);
     await waitFor(() =>
       expect(uncles).toHaveTextContent(/sibling of #20,827,931 0x.+, same parent #20,827,930/)
     );
@@ -817,6 +827,14 @@ describe('Block board · R2b-a fields', () => {
     expect(within(row).getByRole('link', { name: '#20,827,921' }).getAttribute('href')).toMatch(
       new RegExp(`/blocks/${h('ec')}$`)
     );
+    // lane P1 follow-up (item 3): the payee is a name inside the line, the inline look, no ink
+    // written by hand
+    const party = within(row.querySelector('[data-role="headline"]') as HTMLElement).getByRole(
+      'link',
+      { name: `ckb1…${payee.slice(-8)}` }
+    );
+    expect(party).toHaveClass('underline', 'decoration-[color:var(--c-ink-muted)]');
+    expect(party).not.toHaveClass('hover:text-jade');
   });
 
   it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {

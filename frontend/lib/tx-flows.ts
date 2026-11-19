@@ -8,7 +8,7 @@
  * an exact bigint; a sum that does not conserve is an upstream bug and throws with the transaction
  * hash.
  */
-import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { TAG_DAO, type GlobalActivity, type ItemDelta, type ParticipantInfo } from '@/lib/api';
 import { PARTICIPANT_LIMIT } from '@/lib/participant-order';
 
 export type FlowAsset =
@@ -53,6 +53,38 @@ export interface TxFlow {
 }
 
 const ZERO = BigInt(0);
+
+/** A Nervos DAO step in words, by the activity's action (the API's `dao` protocol actions). */
+const DAO_STEP: Readonly<Record<string, string>> = {
+  deposit: 'Nervos DAO deposit',
+  withdraw_request: 'Nervos DAO withdrawal request',
+  withdraw_complete: 'Nervos DAO withdrawal',
+};
+
+/**
+ * What a party's Nervos DAO step is, in words, from the activity's own kind (lane P1 follow-up;
+ * review chain-b tx-dao-deposit: What moved drew a deposit to its holder as a payment): the
+ * transaction's DAO actions, each named once, for a party the activity tags DAO (`TAG_DAO`: its
+ * cells hold the step); null for any other party, or where the transaction takes no DAO step. A
+ * DAO action this page has no words for fails, by the transaction and the action.
+ */
+export function daoStepOf(
+  activity: Pick<GlobalActivity, 'txHash' | 'protocolActions'>,
+  party: Pick<ParticipantInfo, 'tags'>
+): string | null {
+  if ((party.tags & TAG_DAO) === 0) return null;
+  const steps = [
+    ...new Set(activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)),
+  ];
+  if (steps.length === 0) return null;
+  return steps
+    .map((step) => {
+      const words = DAO_STEP[step];
+      if (!words) throw new Error(`${activity.txHash}: a Nervos DAO step "${step}" has no words`);
+      return words;
+    })
+    .join(', ');
+}
 
 function exact(value: string | number, what: string, hash: string): bigint {
   const s = String(value);

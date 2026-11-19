@@ -74,6 +74,8 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       await card('uncle-rate', {
         ...line(['2026-11-13'], ['0.0255']),
         orphanRateTarget: { numerator: 1, denominator: 40 },
+        // the day's operands, the route's (lane exactness, part A, A2): 255 of 10,000
+        counts: [{ date: '2026-11-13', uncles: 255, blocks: 10_000 }],
       })
     ).toBe('2.55%');
   });
@@ -124,6 +126,7 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     const uncle = chartModel(CHART_BY_SLUG.get('uncle-rate')!, {
       ...line(['2026-11-13'], ['0.0255']),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [{ date: '2026-11-13', uncles: 255, blocks: 10_000 }],
     });
     expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50%' }]);
     const axis = chartValueAxis({
@@ -137,6 +140,10 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     vi.mocked(api.getUncleRateChart).mockResolvedValue({
       ...line(['2026-11-12', '2026-11-13'], ['0.025', '0.0255']),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [
+        { date: '2026-11-12', uncles: 250, blocks: 10_000 },
+        { date: '2026-11-13', uncles: 255, blocks: 10_000 },
+      ],
     });
     render(<ChartDetail slug="uncle-rate" />);
     // Re-pinned for lane D1 (rule 2): the figure, then the sentence against the target (was the

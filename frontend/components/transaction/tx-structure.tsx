@@ -494,27 +494,6 @@ function foldSheets(
 }
 
 /**
- * The way back from an opened list that a Pager's "all N ↓" opened, in the rows' fold's words,
- * "fewer ↑". Lane P1 (merge with lane P2): the transaction's own folds (its sheets, its empty
- * witnesses) are FoldToggle's (components/ui/fold-toggle.tsx: one button that keeps its focus,
- * review of phases C and D, SHOULD 5); this stays for its last users, the token's and the
- * collection's holders (components/asset/token-holders.tsx, collection-holders.tsx, lane P2),
- * which should take FoldToggle too.
- */
-export function FoldBack({ onFold }: { onFold: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-expanded={true}
-      onClick={onFold}
-      className="text-jade text-small inline-flex h-8 items-center underline-offset-4 hover:underline sm:h-7"
-    >
-      fewer ↑
-    </button>
-  );
-}
-
-/**
  * The fold row (lane D3; the board's dashed row): what the sheet folds, by counting — "152 more
  * cells from ckb1…sqylvfrs" when every folded cell has one lock (the same lock, not the same
  * shortened address), else "152 more cells consumed"; a sheet that draws none of its cells counts

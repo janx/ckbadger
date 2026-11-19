@@ -1,3 +1,5 @@
+// Re-pinned on purpose (lists lane P3, the link-look gate): the ways on are ways onward, their
+// arrow the look's (they typed "← "), so each is found by its words.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import defaultTheme from 'tailwindcss/defaultTheme';
@@ -285,7 +287,9 @@ describe('ErrorPageShell', () => {
         'the chain was not checked in this view — this says nothing about what it holds'
       ).parentElement
     ).toContainElement(copy);
-    expect(screen.getByRole('link', { name: '← Fiber channels' })).toHaveAttribute(
+    // the way on beside "try again" (the header names the same page too): a way onward
+    const ways = screen.getByRole('button', { name: /try again/ }).parentElement!;
+    expect(within(ways).getByRole('link', { name: /^Fiber\ channels/ })).toHaveAttribute(
       'href',
       '/mainnet/fiber/channels'
     );
@@ -334,7 +338,7 @@ describe('ErrorPageShell', () => {
         </ErrorBoundary>
       );
       expect(screen.getByRole('alert')).toHaveTextContent('block 12: invalid DAO field');
-      expect(screen.getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: /^back\ to\ the\ explorer/ })).toHaveAttribute(
         'href',
         '/mainnet'
       );

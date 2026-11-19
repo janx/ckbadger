@@ -3409,13 +3409,25 @@ pub struct UncleRateChartResponse {
     #[serde(flatten)]
     pub chart: ChartResponse,
     pub orphan_rate_target: OrphanRateTargetResponse,
+    /// Each day's exact operands, one per point of `data` in its order (lane exactness, part A, A2): the share is
+    /// cut, so "over the target" is counted on these, `uncles × denominator > blocks × numerator`.
+    pub counts: Vec<UncleRateDayCounts>,
+}
+
+/// A day's uncles and canonical blocks, the uncle rate's operands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleRateDayCounts {
+    pub date: String,
+    pub uncles: u64,
+    pub blocks: u64,
 }
 
 async fn get_uncle_rate_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<UncleRateChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:uncle-rate:v2", chain)?;
+    let cache_key = complete_days_cache_key("chart:uncle-rate:v3", chain)?;
     let cache_key = cache_key.as_str();
     // The cached value is the whole response, target included; the target is
     // a consensus constant of the chain this process serves.
@@ -3427,6 +3439,7 @@ async fn get_uncle_rate_chart(
     let daily_block_stats = load_daily_block_stats(&state).await?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
+    let mut counts: Vec<UncleRateDayCounts> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
         if !is_complete_day_key(chain, "daily block stats", &date_str)? {
             continue;
@@ -3450,8 +3463,16 @@ async fn get_uncle_rate_chart(
             6,
         )
         .map_err(|e| ApiError::internal(format!("uncle rate for {date_str}: {e}")))?;
+        let date = format_chart_date(&date_str)?;
+        counts.push(UncleRateDayCounts {
+            date: date.clone(),
+            uncles: u64::try_from(stats.total_uncles)
+                .map_err(|_| ApiError::internal(format!("uncles on {date_str} exceed u64")))?,
+            blocks: u64::try_from(stats.block_count)
+                .map_err(|_| ApiError::internal(format!("blocks on {date_str} exceed u64")))?,
+        });
         data.push(ChartDataPoint {
-            date: format_chart_date(&date_str)?,
+            date,
             value: uncle_rate,
             value2: None,
         });
@@ -3468,6 +3489,7 @@ async fn get_uncle_rate_chart(
             numerator: target.numerator(),
             denominator: target.denominator(),
         },
+        counts,
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -3491,12 +3513,17 @@ pub struct MinerDistributionResponse {
     pub data: Vec<MinerDistributionDataPoint>,
     pub title: String,
     pub total_blocks: i64,
+    /// The window's blocks found by every miner after the five largest: the ranking card's
+    /// "Others" (lane exactness, part A, A1; the page subtracted the five from the total).
+    pub rest_blocks: i64,
     pub window_days: i64,
     pub from_date: String,
     pub to_date: String,
 }
 
 const MINER_DISTRIBUTION_WINDOW_DAYS: i64 = 7;
+/// The miners a ranking card draws as rows of their own; the rest is one row, `rest_blocks`.
+const MINER_DISTRIBUTION_DRAWN: usize = 5;
 
 fn format_exact_percentage_4(
     numerator: i128,
@@ -3564,6 +3591,19 @@ fn build_miner_distribution_response(
 
     let mut sorted: Vec<(Vec<u8>, i64)> = aggregated.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let five_largest: i64 = sorted
+        .iter()
+        .take(MINER_DISTRIBUTION_DRAWN)
+        .map(|(_, blocks)| *blocks)
+        .sum();
+    let rest_blocks = total_blocks
+        .checked_sub(five_largest)
+        .filter(|rest| *rest >= 0)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "miner window: the five largest found {five_largest} blocks of {total_blocks}"
+            ))
+        })?;
     sorted.truncate(100);
 
     let data = if total_blocks == 0 {
@@ -3594,6 +3634,7 @@ fn build_miner_distribution_response(
             MINER_DISTRIBUTION_WINDOW_DAYS
         ),
         total_blocks,
+        rest_blocks,
         window_days: MINER_DISTRIBUTION_WINDOW_DAYS,
         from_date: from_date.format("%Y-%m-%d").to_string(),
         to_date: to_date.format("%Y-%m-%d").to_string(),
@@ -3618,7 +3659,7 @@ async fn get_miner_address_distribution_chart(
     let from_key = from_date.format("%Y%m%d").to_string();
     let to_key = to_date.format("%Y%m%d").to_string();
     let cache_key = format!(
-        "chart:miner-address-distribution:v2:{}:{}",
+        "chart:miner-address-distribution:v3:{}:{}",
         MINER_DISTRIBUTION_WINDOW_DAYS, to_key
     );
     if let Some(cached) = state
@@ -4817,6 +4858,39 @@ pub struct ActivitySummary24hResponse {
     pub script_counts: Vec<ScriptCountEntry>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
+    /// The window's activity-kind occurrences, as the daily rows count them (`kind_occurrences`).
+    pub kind_occurrences: u64,
+    /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
+    pub dao_count: u64,
+}
+
+/// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
+fn kind_occurrences(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.transfer_count,
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+        s.token_count,
+        s.object_count,
+        s.identity_count,
+        s.script_call_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
+}
+
+/// The three Nervos DAO actions, summed: the DAO kind's one count.
+fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
 }
 
 #[derive(Debug, Deserialize)]
@@ -4900,27 +4974,8 @@ async fn get_daily_activity_stats(
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
-                kind_occurrences: [
-                    s.transfer_count,
-                    s.dao_deposit_count,
-                    s.dao_withdraw_request_count,
-                    s.dao_withdraw_complete_count,
-                    s.token_count,
-                    s.object_count,
-                    s.identity_count,
-                    s.script_call_count,
-                ]
-                .into_iter()
-                .map(u64::from)
-                .sum(),
-                dao_count: [
-                    s.dao_deposit_count,
-                    s.dao_withdraw_request_count,
-                    s.dao_withdraw_complete_count,
-                ]
-                .into_iter()
-                .map(u64::from)
-                .sum(),
+                kind_occurrences: kind_occurrences(&s),
+                dao_count: dao_count(&s),
             })
         })
         .collect::<Result<_, ApiRouteError>>()?;
@@ -4952,7 +5007,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:tip:{}",
+            "stats:activity-summary-24h:v2:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -4989,6 +5044,8 @@ async fn get_activity_summary_24h(
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
         hours_covered,
+        kind_occurrences: kind_occurrences(&agg),
+        dao_count: dao_count(&agg),
     };
 
     if let Some(key) = cache_key {
