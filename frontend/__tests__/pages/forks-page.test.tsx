@@ -13,6 +13,7 @@ import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overvie
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { fullText } from '@/__tests__/utils/full-text';
 import { MEASURE_CHARS } from '@/lib/type-metrics';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
@@ -267,7 +268,12 @@ describe('ForksPage', () => {
   it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {
     const event = list().data[0];
     const rows = Array.from({ length: 18 }, (_, i) => ({ ...event, id: i + 1 }));
-    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 18 });
+    // re-pinned (lane cd-fixes-controls, item 1): the page states the 50 it was asked for (the
+    // producer's page was read at 10, and 18 rows on a page of 10 is a page that disagrees with
+    // itself, which the pager now refuses)
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({ ...list(), data: rows, total: 18, limit: 50 })
+    );
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());

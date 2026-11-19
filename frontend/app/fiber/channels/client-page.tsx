@@ -325,20 +325,21 @@ export default function FiberChannelsPage() {
   const pin = useFiberGraphPin();
   const channels = useQuery({
     queryKey: ['fiber-channels', stateFilter, pagination.cursor, pageSize],
-    queryFn: () =>
+    queryFn: pagination.ask((cursor) =>
       api.getFiberChannels({
         limit: pageSize,
-        cursor: pagination.cursor,
+        cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
         sort: 'capacity',
-      }),
+      })
+    ),
   });
   const summary = network.data?.summary;
   // where the ranked list stands (lib/pagination.ts): the rows shown of the response's total at
   // its page size, the page the response was asked as (the list keeps no previous page while the
   // next loads, so the two never part); nothing for a list on one page, an empty one too
   const channelsAt = channels.data
-    ? rankedPageAt('Fiber channels', pagination.page, channels.data)
+    ? rankedPageAt('Fiber channels', channels.data, pagination)
     : null;
   const chosen = filters.find((filter) => filter.value === stateFilter)!;
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
@@ -405,6 +406,7 @@ export default function FiberChannelsPage() {
                 setStateFilter(next);
                 pagination.reset();
               }}
+              counted
             />
             {channels.isError && (
               <p role="alert" className="text-rouge text-body max-w-measure py-7">
@@ -532,15 +534,7 @@ export default function FiberChannelsPage() {
                   )}
                 />
                 {/* The controls board's pager for a ranked list (the channels by capacity). */}
-                {channelsAt && (
-                  <Pager
-                    mode="pages"
-                    label="channels"
-                    {...channelsAt}
-                    onPrevious={pagination.goToPrevious}
-                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
-                  />
-                )}
+                {channelsAt && <Pager mode="pages" label="channels" {...channelsAt} />}
               </>
             )}
           </section>

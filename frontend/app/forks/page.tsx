@@ -383,7 +383,8 @@ function ShapeKey() {
 export default function ForksPage() {
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination(limit);
+  const walk = useCursorPagination(limit);
+  const { cursor, hasPrevious } = walk;
   const pin = useForkDaysPin();
   const [expanded, setExpanded] = useState(false);
   const overview = useQuery({
@@ -392,7 +393,7 @@ export default function ForksPage() {
   });
   const events = useQuery({
     queryKey: ['forks', cursor, limit],
-    queryFn: () => api.getForks({ cursor, limit }),
+    queryFn: walk.ask((cursor) => api.getForks({ cursor, limit })),
     placeholderData: keepPreviousData,
   });
   const data = overview.data;
@@ -419,7 +420,7 @@ export default function ForksPage() {
   const total = events.data?.total;
   // where the list stands in time (lib/pagination.ts): its page and the pages its served total
   // makes at the served page size; nothing for a list on one page, an empty one too
-  const switchesAt = events.data ? timePageAt('branch switches', page, events.data) : null;
+  const switchesAt = events.data ? timePageAt('branch switches', events.data, walk) : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-8">
@@ -595,10 +596,6 @@ export default function ForksPage() {
                         label="branch switches"
                         order="newest first"
                         {...switchesAt}
-                        onNewer={hasPrevious ? goToPrevious : undefined}
-                        onOlder={
-                          events.data.hasMore ? () => goToNext(events.data!.nextCursor) : undefined
-                        }
                       />
                     </div>
                   )
