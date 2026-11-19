@@ -720,7 +720,8 @@ function FullAssetFeed({
           section's name */}
       <h2 className="sr-only">What happened</h2>
       <Tabs label="What happened" command tabs={FEED_TABS} value={tab} onChange={setTab}>
-        <p className="text-text-dim text-meta pb-1 pt-3">{scope} · newest first</p>
+        {/* the feed's scope, a note (it stood at the row's right end): not a paragraph */}
+        <div className="text-text-dim text-meta pb-1 pt-3">{scope} · newest first</div>
         {current.data ? (
           <>
             <AssetReadState error={current.error} label={tab} retained />
