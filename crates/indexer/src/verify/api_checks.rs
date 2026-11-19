@@ -8901,25 +8901,74 @@ mod tests {
 
     #[test]
     fn total_supply_monotonic_detects_one_shannon_decrease_above_f64_precision() {
+        // lane exactness, part B (the third read's M1): the five bands the route sends, so the two
+        // totals are compared (on four keys every point was refused for a missing daoWithdrawing
+        // and the decrease was never read); the finding is the decrease, by its words
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "9007199254740992.00000001", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+            {"date": "2024-01-02", "values": {"outsideDao": "9007199254740992", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}}
+        ]));
+        assert!(
+            !result.passed(),
+            "one-shannon decrease must remain visible above f64 precision"
+        );
+        let details: Vec<&String> = result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .collect();
+        assert_eq!(details.len(), 1, "{details:?}");
+        assert!(
+            details[0].starts_with(
+                "total supply decreased: 900719925474099200000001 → 900719925474099200000000 shannons"
+            ),
+            "{details:?}"
+        );
+    }
+
+    /// The positive control (the third read's M1): a five-band series whose total rises passes.
+    #[test]
+    fn total_supply_monotonic_passes_a_rising_five_band_series() {
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "100", "daoDeposited": "20", "daoWithdrawing": "3", "unclaimedCompensation": "1", "burnt": "50"}},
+            {"date": "2024-01-02", "values": {"outsideDao": "99", "daoDeposited": "21", "daoWithdrawing": "3", "unclaimedCompensation": "1.00000001", "burnt": "50"}}
+        ]));
+        assert!(result.passed(), "{:?}", result.findings);
+    }
+
+    /// Lane D1's four bands, without the withdrawing band, are refused by its name (the tests
+    /// reader's MUST-1).
+    #[test]
+    fn total_supply_monotonic_refuses_a_four_band_chart_by_the_missing_band() {
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "100", "daoDeposited": "20", "unclaimedCompensation": "1", "burnt": "50"}}
+        ]));
+        assert!(!result.passed());
+        let details: Vec<&String> = result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .collect();
+        assert_eq!(
+            details,
+            vec!["missing or invalid total-supply daoWithdrawing value"],
+            "{details:?}"
+        );
+    }
+
+    fn run_total_supply_check(data: serde_json::Value) -> CheckResult {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"outsideDao": "9007199254740992.00000001", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"outsideDao": "9007199254740992", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
-                ]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": data })))
                 .mount(&server)
                 .await;
         });
-        let result = ChartTotalSupplyMonotonic
+        ChartTotalSupplyMonotonic
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-        assert!(
-            !result.passed(),
-            "one-shannon decrease must remain visible above f64 precision"
-        );
+            .unwrap()
     }
 
     #[test]
@@ -8930,8 +8979,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"outsideDao": "broken", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
+                    {"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"outsideDao": "broken", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}}
                 ]})))
                 .mount(&server)
                 .await;

@@ -2817,6 +2817,9 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
     batch.commit().unwrap();
 
     let owner_new = vec![0x99u8; 32];
+    // the tests reader's NOTE-8: a holder with the cursor's count and a lock below the cursor's
+    // arrives before the cursor's place (count 2, lock 0x05 < 0x11): the page starts after it too
+    let owner_low = vec![0x05u8; 32];
     let mut tip = 1i64;
     seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
     let app = create_router(test_config(store.clone())).await;
@@ -2831,6 +2834,7 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
 
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_new, 5);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 2);
         batch.commit().unwrap();
         tip += 1;
         seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
@@ -2841,10 +2845,13 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
             format!("0x{}", hex::encode(&owner_b)),
             "{path}: {second}"
         );
-        assert_eq!(second["firstRank"], 3, "{path}: {second}");
+        // owner_new (5), owner_low (2, 0x05), owner_a (2, 0x11, the cursor's place), owner_b:
+        // the page starts at owner_b, fourth (it was third before owner_low arrived)
+        assert_eq!(second["firstRank"], 4, "{path}: {second}");
 
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_a, 0);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 0);
         batch.commit().unwrap();
         tip += 1;
         seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
