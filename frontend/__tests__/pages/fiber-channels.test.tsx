@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -439,6 +444,53 @@ describe('Fiber channel phone row (board L8)', () => {
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
     ]);
+  });
+
+  // Lane D4 (the phone-rows board; PB-17): the phone row and the table state the same fields. The
+  // table: the channel (and its state where the list is of every state), its parties, its
+  // capacity, the day it opened and how long it has been open or lived. The phone row stated a
+  // state always, the parties' locks and the opening's time to the minute, none of which the table
+  // writes; it is the board's row now: the channel and its capacity, the list's sort; the parties,
+  // joined as the table joins them; quiet, the day it opened and how long, named, and its state
+  // where the list is of every state.
+  it('states the table’s fields at 358 px: channel and capacity · parties · opened and open for (D4)', async () => {
+    atContainerWidth(358);
+    atViewportWidth(390);
+    serve();
+    render(<FiberChannelsPage />);
+    const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['channel', 'head', '0x0101…0101', '3,000 CKB'],
+      ['parties', 'body', 'ckb1…pr3prn ↔ 0xbbbb…bbbb', null],
+      ['time', 'quiet', 'opened 2023-11-15 · open for 3m 20s', null],
+    ]);
+    // the table writes no lock of a party and no state on a list of one state: nor does the row
+    expect(row.textContent).not.toMatch(/Default Lock|unnamed lock|⇄/);
+    const labels = Array.from(row.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['opened', 'open for']);
+    expect(statedHeadPx(row)).toBe(219);
+    expect(phoneHeadPx(row, 360)).toBeLessThanOrEqual(statedHeadPx(row));
+  });
+
+  it('adds the state where the list is of every state, as the table does (D4)', async () => {
+    atContainerWidth(358);
+    atViewportWidth(390);
+    serve();
+    render(<FiberChannelsPage />);
+    await screen.findAllByTestId('fiber-channel-row-mobile');
+    fireEvent.change(screen.getByRole('combobox', { name: 'state' }), {
+      target: { value: 'all' },
+    });
+    await waitFor(() =>
+      expect(phoneLines(screen.getAllByTestId('fiber-channel-row-mobile')[0])[2].left).toBe(
+        'opened 2023-11-15 · lifetime 3m 20s · open'
+      )
+    );
+    const [row] = screen.getAllByTestId('fiber-channel-row-mobile');
+    // R11: the state word stays neutral; only its dot keeps Fiber's jade
+    const state = within(row).getByText('open');
+    expect(state.className).not.toMatch(/(^|\s)text-jade(\s|$)/);
+    expect(state.querySelector('.bg-jade')).not.toBeNull();
   });
 });
 
