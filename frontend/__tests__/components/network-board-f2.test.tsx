@@ -131,7 +131,8 @@ describe('Network board (F2 charts)', () => {
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
     expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);
-    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14 min · 2,345 dials/);
+    // re-pinned for lane exactness, part A (A8): the span form, cut (was "14 min", rounded)
+    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14m · 2,345 dials/);
     for (const el of [hero, figures])
       expect(el.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
     // The old tier-1 evidence box and per-round counters moved to the developer tier.

@@ -267,14 +267,33 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     for (const d of values) expect(d).toHaveClass('text-section', 'text-text-bright');
     expect(values[0]).toHaveTextContent(/^4$/);
     expect(values[1]).toHaveTextContent(/^181 · 115 never verified$/);
-    expect(values[2]).toHaveTextContent(
-      /^#97 · \d\d-\d\d \d\d:\d\d UTC\+8 · 14 min · 2,345 dials$/
-    );
+    // re-pinned for lane exactness, part A (A8): the round's 840 s in the site's one span form, cut (it was its
+    // minutes rounded, "14 min": a round of 869 s read 14 and one of 870 s read 15)
+    expect(values[2]).toHaveTextContent(/^#97 · \d\d-\d\d \d\d:\d\d UTC\+8 · 14m · 2,345 dials$/);
     // The sub-notes are inline and dim, not a second line of figures.
     for (const note of Array.from(row.querySelectorAll('dd > span')))
       expect(note).toHaveClass('text-small', 'text-text-dim');
     expect(row).not.toHaveTextContent('Reachable now');
     expect(row.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
+  });
+
+  // lane exactness, part A (A8): a round of 869 s is 14m 29s, never "14 min" rounded up or down: the span form
+  // cuts, to the second under an hour
+  it('states the latest round’s duration cut, to the second', async () => {
+    serveRound();
+    server.use(
+      http.get(`${API_BASE}/network/summary`, () =>
+        HttpResponse.json({
+          enabled: true,
+          hasData: true,
+          lastRound: { ...lastRound, finishedAt: lastRound.startedAt + 869 },
+          activeRound: null,
+        })
+      )
+    );
+    render(wrap(<NetworkClientPage />));
+    const figures = await screen.findByRole('group', { name: 'Latest crawler round' });
+    expect(figures).toHaveTextContent(/UTC\+8 · 14m 29s · 2,345 dials/);
   });
 
   it('keeps jade to the figure alone in tier 1; an active round reads as neutral words', async () => {
