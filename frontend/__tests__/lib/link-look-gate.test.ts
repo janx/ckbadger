@@ -430,12 +430,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4: look 10, ink 7 → 0)
   // 'app/forks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
-  'app/hardforks/page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:text-text-bright, hover:underline, text-text); 1 raw <a>',
-  },
+  // 'app/hardforks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
   'app/network/client-page.tsx': {
     lane: 'p-topics',
     sites: { ink: 1, raw: 1 },
@@ -482,11 +477,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'inks by hand (text-text-bright, hover:text-jade) for the callers that state no look yet (blocks list, block page, reward breakdown)',
   },
-  'components/hardforks/script-deployment-timeline.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 3 },
-    reason: '3 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
-  },
   // ---- shell ----
   'components/stats-bar.tsx': {
     lane: 'shell',
@@ -506,9 +496,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink) → 533 (lane P4: the fork page's 17, MinerLink's look 1) → 525 (lane P4: the forks
-// page's 8) → 523 (lane P4: the deep-fork alert's 2)
-const TOLERATED_TOTAL = 523;
+// and one ink) → 509 (page lane P4, 42: the fork page's 17 and MinerLink's look 1, the forks
+// page's 8, the deep-fork alert's 2; the hardforks page, 14: its edition block link and the
+// overview links inline, "How it works" a way onward and no raw <a>, 8; the deployment
+// evidence's three links inline, 6)
+const TOLERATED_TOTAL = 509;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
