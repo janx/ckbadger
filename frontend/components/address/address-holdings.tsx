@@ -568,17 +568,18 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             />,
             dottedGroup(
               held.map((c) => (
-                <a
+                <Link
                   key={c.key}
+                  look="inline"
                   href={`#holdings-${c.key}`}
-                  className="hover:text-jade tabular-nums"
+                  className="tabular-nums"
                   onMouseEnter={() => setActive(c.key)}
                   onMouseLeave={() => setActive(null)}
                   onFocus={() => setActive(c.key)}
                   onBlur={() => setActive(null)}
                 >
                   {unitNode(formatCount(c.count, c.one, c.many))}
-                </a>
+                </Link>
               )),
               { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
             ),
@@ -768,7 +769,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                         >
                           <span className="text-text-dim">
-                            <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+                            <Link look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
                               {d.status === 'deposited'
                                 ? 'deposited'
                                 : d.status === 'withdrawing'
@@ -776,7 +777,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                                   : 'withdrawn'}
                             </Link>{' '}
                             at{' '}
-                            <Link href={`/blocks/${eventBlock}`}>
+                            <Link look="inline" href={`/blocks/${eventBlock}`}>
                               {formatBlockNumber(eventBlock)}
                             </Link>{' '}
                             · <Utc8Date timestamp={eventTimestamp} />
@@ -828,10 +829,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
-                      <Link
-                        href={`/tokens/${t.typeScriptHash}`}
-                        className="text-text-bright hover:text-jade"
-                      >
+                      <Link look="key" href={`/tokens/${t.typeScriptHash}`}>
                         {tokenName(t) ?? (
                           <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         )}
@@ -881,8 +879,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
+                          look="key"
                           href={getIdentityItemDetailHref(d.standard, d.id)}
-                          className="text-text-bright text-body"
+                          className="text-body"
                         >
                           {d.name ?? <Hash hash={d.id} size="row" />}
                         </Link>
@@ -898,7 +897,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                               : `expires ${formatUtc8Date(c.expiresAt * 1000)}`
                           )}{' '}
                           · held since{' '}
-                          <Link href={`/blocks/${c.heldSinceBlock!}`}>
+                          <Link look="inline" href={`/blocks/${c.heldSinceBlock!}`}>
                             {formatBlockNumber(c.heldSinceBlock!)}
                           </Link>
                         </span>
@@ -1001,8 +1000,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                 <ClassMark kind="objects" size={16} />
                 {href ? (
                   <Link
+                    look="key"
                     href={href}
-                    className="text-text-bright text-body min-w-0 truncate"
+                    className="text-body min-w-0 truncate"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {label}
@@ -1117,10 +1117,11 @@ function AddressCollectionObjects({
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
                     <Link
+                      look="key"
                       href={d.standard === 'm-nft' ? `/objects/mnft/${d.id}` : `/objects/${d.id}`}
                       aria-label={d.name ?? `Object ${d.id}`}
                       title={d.id}
-                      className="text-text-bright text-body min-w-0 truncate"
+                      className="text-body min-w-0 truncate"
                     >
                       {d.name ?? <ShortId value={d.id} kind="hash" size="row" />}
                     </Link>
@@ -1133,12 +1134,13 @@ function AddressCollectionObjects({
                     )}
                   </span>
                   <span role="cell" className="text-text-dim hidden tabular-nums sm:block">
-                    <Link href={`/blocks/${c.createdAtBlock}`}>
+                    <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
                       {formatBlockNumber(c.createdAtBlock)}
                     </Link>
                   </span>
                   <span role="cell" className="text-right">
                     <Link
+                      look="inline"
                       href={`/cell/${c.txHash}-${c.outputIndex}`}
                       title={`${c.txHash}:${c.outputIndex}`}
                     >
@@ -1160,7 +1162,7 @@ function AddressCollectionObjects({
               />
             )}
             {href && (
-              <Link href={href} className="text-small">
+              <Link look="inline" href={href} className="text-small">
                 All {group.itemCount.toLocaleString('en-US')} in the collection →
               </Link>
             )}

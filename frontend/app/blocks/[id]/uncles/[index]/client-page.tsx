@@ -64,7 +64,9 @@ export default function UncleDetailPage() {
 }
 
 const blockLink = (number: number) => (
-  <Link href={`/blocks/${number}`}>{formatBlockNumber(number)}</Link>
+  <Link look="inline" href={`/blocks/${number}`}>
+    {formatBlockNumber(number)}
+  </Link>
 );
 
 function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; index: number }) {
@@ -170,13 +172,13 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
             Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
             {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
             chain is{' '}
-            <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+            <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
               <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
             </Link>
             {delay ? (
               <>
                 , its sibling: both were mined on parent{' '}
-                <Link href={`/blocks/${uncle.parentHash}`}>
+                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
                   {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
                 </Link>
                 , and this uncle came {delay} it.
@@ -184,7 +186,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
             ) : (
               <>
                 , which has another parent; this uncle was mined on parent{' '}
-                <Link href={`/blocks/${uncle.parentHash}`}>
+                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
                   <Hash hash={uncle.parentHash} size="row" />
                 </Link>
                 .
@@ -235,7 +237,13 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                   <dt className="text-text-dim">{key}</dt>
                   <dd className="break-all">
-                    {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
+                    {key === 'parentHash' ? (
+                      <Link look="inline" href={`/blocks/${value}`}>
+                        {value}
+                      </Link>
+                    ) : (
+                      value
+                    )}
                   </dd>
                 </div>
               ))}

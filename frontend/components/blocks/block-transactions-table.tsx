@@ -160,7 +160,7 @@ export function BlockTransactionsTable({
       // so not the tight size. It was 140.
       minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
-        <Link href={`/tx/${tx.hash}`} className="hover:underline">
+        <Link look="inline" href={`/tx/${tx.hash}`}>
           <Hash hash={tx.hash} size="row" className="text-small" />
         </Link>
       ),

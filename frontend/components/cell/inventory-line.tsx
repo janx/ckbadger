@@ -47,7 +47,7 @@ function Line({
     >
       <ClassMark kind={mark} size={16} className="mr-2 align-[-1px]" />
       {lead}{' '}
-      <AppLink href={href} className="text-text-bright hover:text-jade">
+      <AppLink look="key" href={href}>
         {name}
       </AppLink>
       {tail}

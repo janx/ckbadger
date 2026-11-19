@@ -318,7 +318,7 @@ export default function BlockDetailPage() {
                     address={block.minerAddress}
                     pool={block.minerPool}
                     size="row"
-                    unnamed={<Address address={block.minerAddress} size="row" />}
+                    unnamed={<Address look="inline" address={block.minerAddress} size="row" />}
                   />
                 ) : (
                   'Genesis'
@@ -397,7 +397,7 @@ export default function BlockDetailPage() {
           // on the kind line, after "Block"
           status={
             activation && (
-              <Link href="/hardforks" className="text-text-dim text-small">
+              <Link look="inline" href="/hardforks" className="text-small">
                 HARDFORK ACTIVATION · {activation.shortName.toUpperCase()}
               </Link>
             )
@@ -412,7 +412,7 @@ export default function BlockDetailPage() {
                 <div>
                   <dt className="text-text-dim mb-1">Epoch</dt>
                   <dd className="flex items-center gap-2">
-                    <Link href={`/blocks/${epochStart}`} className="text-text-bright">
+                    <Link look="key" href={`/blocks/${epochStart}`}>
                       {epoch.number.toLocaleString('en-US')}
                     </Link>
                     {!genesisEpoch && (
@@ -433,8 +433,11 @@ export default function BlockDetailPage() {
                       className="text-text-dim max-w-measure mt-1"
                     >
                       the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
-                      epoch length; <Link href="/blocks/1">{formatBlockNumber(1)}</Link> is the
-                      first header to state epoch 0’s
+                      epoch length;{' '}
+                      <Link look="inline" href="/blocks/1">
+                        {formatBlockNumber(1)}
+                      </Link>{' '}
+                      is the first header to state epoch 0’s
                     </dd>
                   )}
                 </div>
@@ -595,11 +598,11 @@ export default function BlockDetailPage() {
                           {proposal.uncle &&
                             (uncleIndex(proposal.uncle.hash) >= 0 ? (
                               <Link
+                                look="inline"
                                 href={getUncleDetailHref(
                                   block.number,
                                   uncleIndex(proposal.uncle.hash)
                                 )}
-                                className="text-text-dim"
                               >
                                 uncle {formatBlockNumber(proposal.uncle.number)}
                               </Link>
@@ -612,7 +615,7 @@ export default function BlockDetailPage() {
                         {proposal.committedTxHash ? (
                           <p className="text-text-dim max-w-measure">
                             →{' '}
-                            <Link href={`/tx/${proposal.committedTxHash}`}>
+                            <Link look="inline" href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
                                 hash={proposal.committedTxHash}
                                 size="row"
@@ -620,7 +623,7 @@ export default function BlockDetailPage() {
                               />
                             </Link>{' '}
                             in{' '}
-                            <Link href={`/blocks/${proposal.committedBlockNumber}`}>
+                            <Link look="inline" href={`/blocks/${proposal.committedBlockNumber}`}>
                               {formatBlockNumber(
                                 committedBlock(
                                   proposal.committedBlockNumber,
@@ -656,11 +659,21 @@ export default function BlockDetailPage() {
               <div className="flex flex-wrap items-baseline justify-between gap-3">
                 <span className="text-text-dim">Header · version {block.version} · 208 bytes</span>
                 <span>
-                  <Link href={`/blocks/${block.number}.raw`} target="_blank" rel="noreferrer">
+                  <Link
+                    look="inline"
+                    href={`/blocks/${block.number}.raw`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     JSON
                   </Link>
                   {' · '}
-                  <Link href={`/blocks/${block.number}.md`} target="_blank" rel="noreferrer">
+                  <Link
+                    look="inline"
+                    href={`/blocks/${block.number}.md`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Markdown
                   </Link>
                 </span>
@@ -671,7 +684,9 @@ export default function BlockDetailPage() {
                   <dd className="min-w-0">
                     <span className="break-all">
                       {key === 'parentHash' ? (
-                        <Link href={`/blocks/${value}`}>{value}</Link>
+                        <Link look="inline" href={`/blocks/${value}`}>
+                          {value}
+                        </Link>
                       ) : (
                         value
                       )}
@@ -767,8 +782,9 @@ export default function BlockDetailPage() {
                               <>
                                 #{activity.txIndex} ·{' '}
                                 <Link
+                                  look="key"
                                   href={`/tx/${activity.txHash}`}
-                                  className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                                  className="transition-colors"
                                 >
                                   <ShortId value={activity.txHash} kind="hash" size="row" />
                                 </Link>
@@ -831,10 +847,13 @@ export default function BlockDetailPage() {
 
 function ArrowLink({ href, label, d }: { href: string; label: string; d: string }) {
   return (
+    // a block: a box whose mark draws its own ink, quiet, celadon under the pointer (the link's
+    // hover reaches it through the group)
     <Link
+      look="block"
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center border"
+      className="border-base-border group flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -844,6 +863,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        className="text-text-dim group-hover:text-jade group-focus-visible:text-jade"
       >
         <path d={d} />
       </svg>
@@ -978,11 +998,11 @@ function UncleRow({
       <RowSeal id={{ kind: 'block', hash: uncle.hash, txs: 'not kept' }} state="ink" />
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
+          <Link look="key" href={getUncleDetailHref(blockNumber, index)}>
             {formatBlockNumber(uncle.number)}
           </Link>
           <span className="text-text-dim">uncle</span>
-          <Link href={getUncleDetailHref(blockNumber, index)}>
+          <Link look="inline" href={getUncleDetailHref(blockNumber, index)}>
             <Hash hash={uncle.hash} size="row" className="text-small" />
           </Link>
         </span>
@@ -994,7 +1014,7 @@ function UncleRow({
           ) : detail.sameParentAs === null ? (
             <>
               the canonical{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 {formatBlockNumber(detail.canonicalAtHeight.number)}
               </Link>{' '}
               has another parent
@@ -1002,14 +1022,14 @@ function UncleRow({
           ) : (
             <>
               sibling of{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 {formatBlockNumber(detail.sameParentAs)}
               </Link>{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
               </Link>
               , same parent{' '}
-              <Link href={`/blocks/${uncle.parentHash}`}>
+              <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
                 {formatBlockNumber(uncle.number - 1)}
               </Link>
             </>

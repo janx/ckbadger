@@ -57,8 +57,9 @@ export function TransactionCellContent({ display, cellHref, size }: TransactionC
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1 [overflow-wrap:anywhere]">
       <span className="shrink-0">{standard}</span>
       <Link
+        look="inline"
         href={href}
-        className="hover:text-jade min-w-0"
+        className="min-w-0"
         onClick={(event) => event.stopPropagation()}
       >
         {display.kind === 'token' ? (

@@ -15,7 +15,7 @@ import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/s
 import { scriptGroupRows } from '@/components/transaction/script-group-rows';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
 import { formatDurationMs } from '@/lib/utils';
-import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -23,9 +23,6 @@ import { formatCount } from '@/lib/format-count';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
-
-/** Links in a board ink; the global `a:hover` jade still wins over them. */
-const LINK = inkStyle(BOARD_INKS.link);
 
 /** Which of the cell's transactions: the one that created it, or the one that spent it. */
 type Role = 'Created' | 'Spent';
@@ -276,7 +273,7 @@ function NotSpentYet({
             {cell.liveAgeAtBlock != null && (
               <>
                 {' '}
-                · as of <BlockLink number={cell.liveAgeAtBlock} />
+                · as of <BlockLink look="inline" number={cell.liveAgeAtBlock} />
               </>
             )}
           </span>
@@ -293,8 +290,8 @@ function NotSpentYet({
             <span style={{ color: CELL_COLORS[requirement.kind] }}>{requirement.kind} group</span>
             <span className="min-w-0">
               <Link
+                look="inline"
                 href={`/script/${requirement.referenceHash}?hashType=${requirement.hashType}&kind=${requirement.kind}`}
-                className="text-text hover:text-jade"
                 title={`${requirement.hashType} ${requirement.referenceHash}`}
               >
                 {(requirement.kind === 'lock' ? lockName : typeName) ?? (
@@ -319,8 +316,7 @@ function NotSpentYet({
                   {' '}
                   <Link
                     href={`/cell/${candidate.txHash}-${candidate.outputIndex}`}
-                    className="text-[color:var(--ink)]"
-                    style={LINK}
+                    look="inline"
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
                     <ShortId value={candidate.txHash} kind="hash" size="row" />

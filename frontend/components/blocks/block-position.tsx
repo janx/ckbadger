@@ -274,7 +274,7 @@ export function BlockPosition({
           className="text-small space-y-2 p-3"
           style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
         >
-          <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
+          <Link look="key" href={`/blocks/${block.hash}`} className="block">
             Current block {formatBlockNumber(block.number)}
           </Link>
           <BlockContents
@@ -285,12 +285,12 @@ export function BlockPosition({
         </div>
         <nav aria-label="Chain neighbors" className="text-small flex flex-wrap gap-x-5 gap-y-2">
           {block.number > 0 && (
-            <Link href={`/blocks/${block.parentHash}`}>
+            <Link look="inline" href={`/blocks/${block.parentHash}`}>
               ← {formatBlockNumber(block.number - 1)}
             </Link>
           )}
           {block.confirmations > 1 && (
-            <Link href={`/blocks/${block.number + 1}`}>
+            <Link look="inline" href={`/blocks/${block.number + 1}`}>
               {formatBlockNumber(block.number + 1)} →
             </Link>
           )}
@@ -305,11 +305,15 @@ export function BlockPosition({
               {unitNode(formatCount(arc.to - arc.from, 'block'))}
             </p>
             <p className="flex flex-wrap items-center gap-2">
-              <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
+              <Link look="inline" href={`/blocks/${arc.from}`}>
+                {formatBlockNumber(arc.from)}
+              </Link>
               <span aria-hidden="true" className="text-text-dim">
                 →
               </span>
-              <Link href={`/blocks/${arc.to}`}>{formatBlockNumber(arc.to)}</Link>
+              <Link look="inline" href={`/blocks/${arc.to}`}>
+                {formatBlockNumber(arc.to)}
+              </Link>
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim max-w-measure">
@@ -325,10 +329,10 @@ export function BlockPosition({
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
             {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
-            <Link href={`/blocks/${uncle.parentHash}`} className="block">
+            <Link look="inline" href={`/blocks/${uncle.parentHash}`} className="block">
               Parent <HexCode value={uncle.parentHash} truncate={false} variant="inherit" />
             </Link>
-            <Link href={getUncleDetailHref(block.number, index)} className="block">
+            <Link look="inline" href={getUncleDetailHref(block.number, index)} className="block">
               <Dotted
                 parts={[
                   `Uncle ${formatBlockNumber(uncle.number)}`,
@@ -338,7 +342,9 @@ export function BlockPosition({
             </Link>
             <p className="text-text-dim max-w-measure">
               Included by{' '}
-              <Link href={`/blocks/${block.hash}`}>{formatBlockNumber(block.number)}</Link>
+              <Link look="inline" href={`/blocks/${block.hash}`}>
+                {formatBlockNumber(block.number)}
+              </Link>
             </p>
           </div>
         ))}
@@ -425,6 +431,7 @@ export function BlockPosition({
             return (
               <g key={number} transform={`translate(${x(number)}, ${tileTop})`}>
                 <Link
+                  look="block"
                   href={`/blocks/${current ? block.hash : parent ? block.parentHash : number}`}
                   aria-label={`Block ${formatBlockNumber(number)}`}
                 >
@@ -500,6 +507,7 @@ export function BlockPosition({
                     strokeDasharray="3 3"
                   />
                   <Link
+                    look="block"
                     href={getUncleDetailHref(block.number, index)}
                     aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
                   >
@@ -557,6 +565,7 @@ export function BlockPosition({
                   strokeDasharray="3 3"
                 />
                 <Link
+                  look="block"
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
@@ -586,6 +595,7 @@ export function BlockPosition({
                   </text>
                 </Link>
                 <Link
+                  look="block"
                   href={getUncleDetailHref(block.number, index)}
                   aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
                 >

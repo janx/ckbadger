@@ -526,17 +526,14 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
           <div key={name.identityId} data-testid="tx-witness-dotcell-records">
             <p className="text-text-dim text-small max-w-measure mb-3">
               records payload of{' '}
-              <Link
-                href={getIdentityItemDetailHref('dotcell', name.label)}
-                className="text-text hover:text-jade"
-              >
+              <Link look="inline" href={getIdentityItemDetailHref('dotcell', name.label)}>
                 {name.name}
               </Link>{' '}
               (
               <Link
+                look="inline"
                 href={`/cell/${tx.hash}-${name.outputIndex}`}
                 title={`${tx.hash}:${name.outputIndex}`}
-                className="hover:text-jade"
               >
                 output #{name.outputIndex}
               </Link>
@@ -596,8 +593,9 @@ function DepRow({
       )}
     >
       <Link
+        look="key"
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-        className="text-text-bright decoration-aqua/35 min-w-0 self-start underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
+        className="min-w-0 self-start transition-colors [overflow-wrap:anywhere]"
       >
         <ShortId value={dep.outPointTxHash} kind="hash" size="row" />
         <OutpointIndex index={dep.outPointIndex} />
@@ -620,7 +618,7 @@ function DepRow({
             const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
               <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
-                <Link href={`/cell/${cell.txHash}-${cell.index}`} className="hover:text-jade">
+                <Link look="inline" href={`/cell/${cell.txHash}-${cell.index}`}>
                   ↳ <ShortId value={cell.txHash} kind="hash" size="row" />
                   <OutpointIndex index={cell.index} />
                 </Link>
@@ -1250,12 +1248,7 @@ export default function TransactionDetailPage() {
   const raw = (
     <div className="space-y-5">
       <p className="max-w-measure">
-        <Link
-          href={`/tx/${hash}.md`}
-          target="_blank"
-          rel="noreferrer"
-          className="text-text-dim hover:text-jade"
-        >
+        <Link look="inline" href={`/tx/${hash}.md`} target="_blank" rel="noreferrer">
           Markdown
         </Link>
       </p>
@@ -1270,7 +1263,7 @@ export default function TransactionDetailPage() {
         <div className="mt-3 space-y-3">
           {groups.map((g) => (
             <div key={groupKey(g)}>
-              <Link href={groupHref(g, lookup)} className="hover:text-jade">
+              <Link look="inline" href={groupHref(g, lookup)}>
                 {groupLabel(g, lookup)}
               </Link>
               <pre className="mt-2 whitespace-pre-wrap break-all">
@@ -1637,7 +1630,7 @@ export default function TransactionDetailPage() {
                     {h.blockNumber === null ? (
                       <span className="text-text-dim">block not indexed yet</span>
                     ) : (
-                      <Link href={`/blocks/${h.blockNumber}`} className="text-text hover:text-jade">
+                      <Link look="inline" href={`/blocks/${h.blockNumber}`}>
                         {formatBlockNumber(h.blockNumber)}
                       </Link>
                     )}
@@ -1702,14 +1695,14 @@ export default function TransactionDetailPage() {
                   <span>
                     {lifecycle?.proposedIn && (
                       <>
-                        <Link href={`/blocks/${lifecycle.proposedIn.blockNumber}`}>
+                        <Link look="inline" href={`/blocks/${lifecycle.proposedIn.blockNumber}`}>
                           {formatBlockNumber(lifecycle.proposedIn.blockNumber)}
                         </Link>{' '}
                         →{' '}
                       </>
                     )}
                     {tx.blockNumber !== undefined && (
-                      <Link href={`/blocks/${tx.blockNumber}`}>
+                      <Link look="inline" href={`/blocks/${tx.blockNumber}`}>
                         {formatBlockNumber(tx.blockNumber)}
                       </Link>
                     )}

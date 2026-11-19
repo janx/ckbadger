@@ -72,8 +72,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it;
     // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
-    // reading ink
-    sites: { link: 10, prose: 7 },
+    // reading ink; link 10 → 7 (lane P1): the activity rows' transaction link and the hardfork
+    // link state their looks, and the uncle row's links read in the line's ink
+    sites: { link: 7, prose: 7 },
     reason:
       'block heights, hashes and the hardfork link in quiet facts and proposal rows; empty and loading lines; the proposal notes',
   },
@@ -105,8 +106,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/address/address-history.tsx': {
     family: 'chain',
-    sites: { link: 1, td: 1 },
-    reason: "a cell's cycles state in a table cell and its script links in a quiet line",
+    // link 1 → 0 (lane P1): the script link states its look, the line's reading ink
+    sites: { td: 1 },
+    reason: "a cell's cycles state in a table cell",
   },
   'components/address/address-holdings.tsx': {
     family: 'chain',
@@ -175,18 +177,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/transaction/script-group-matrix.tsx': {
     family: 'chain',
-    sites: { link: 1, prose: 1 },
-    reason: 'a group link and the runs line in the quiet ink',
+    // link 1 → 0 (lane P1): a group only attached names its script in the reading ink
+    sites: { prose: 1 },
+    reason: 'the runs line in the quiet ink',
   },
   'components/transaction/tx-structure.tsx': {
     family: 'chain',
     sites: { prose: 1 },
     reason: "the structure's legend line (a note under a figure: P1 decides)",
-  },
-  'components/transaction/what-moved.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: "an object's id link in the quiet ink",
   },
   // ---- assets ----
   'app/tokens/[typeHash]/client-page.tsx': {

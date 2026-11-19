@@ -115,11 +115,7 @@ export function cellTiles(
         // the row size, as the summary, the balances and What moved write the same party (R9): a
         // tile's text column is 215 px at its narrowest (1024; 343 at 1280, 246 at 360), where
         // the address, 13 characters at 12 px (93.6 px), stands whole, its lock wrapping under it
-        <Link
-          href={`/address/${address ?? lockHash}`}
-          className="text-text hover:text-jade"
-          title={lockHash ?? undefined}
-        >
+        <Link look="inline" href={`/address/${address ?? lockHash}`} title={lockHash ?? undefined}>
           {address !== null ? (
             <ShortId value={address} kind="address" size="row" />
           ) : (

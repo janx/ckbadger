@@ -187,7 +187,9 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
         </>
       ) : (
         <>
-          <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
+          <Link look="inline" href={`/blocks/${tx.blockNumber}`}>
+            {formatBlockNumber(tx.blockNumber)}
+          </Link>
           {tx.timestamp !== null && (
             <span className="text-text-dim">
               <Utc8Date timestamp={tx.timestamp} />
@@ -202,7 +204,7 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
 function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
   return (
     <span className="space-y-1">
-      <Link href={`/tx/${tx.txHash}`}>
+      <Link look="inline" href={`/tx/${tx.txHash}`}>
         <Hash hash={tx.txHash} size={size} className="text-small" />
       </Link>
       <PoolInterpretationNotice
@@ -322,9 +324,10 @@ const columns: ListColumn<AddressTransaction>[] = [
           const script = scriptLabel(label, tx.txHash);
           return (
             <Link
+              look="inline"
               key={label}
               href={`/scripts/${encodeURIComponent(label)}`}
-              className="text-text-dim hover:text-jade inline-flex items-center gap-1.5"
+              className="inline-flex items-center gap-1.5"
             >
               <ClassMark kind={script.mark} size={12} />
               {script.name}
@@ -484,7 +487,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
  */
 function CellOutPoint({ cell: c, size }: { cell: AddressCell; size: ShortSize }) {
   return (
-    <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
+    <Link look="inline" href={`/cell/${c.txHash}-${c.outputIndex}`}>
       <Hash hash={c.txHash} size={size} className="text-small" />
       <OutpointIndex index={c.outputIndex} />
     </Link>
@@ -505,6 +508,7 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
       {ADDRESS_CLASSES.find((k) => k.key === c.class)!.label}
       {c.typeScriptHash && (
         <Link
+          look="inline"
           href={getScriptDetailHref({
             codeHash: c.typeCodeHash!,
             hashType: c.typeHashType,
@@ -617,7 +621,9 @@ const cellColumns: ListColumn<AddressCell>[] = [
     // "#99,999,999" (85.8); the last column, no gap after it
     minWidth: columnPx(cell(WIDEST_BLOCK_NUMBER.length)),
     render: (c) => (
-      <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
+      <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
+        {formatBlockNumber(c.createdAtBlock)}
+      </Link>
     ),
   },
 ];
@@ -638,7 +644,9 @@ function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
           </span>,
           <span key="c" className="whitespace-nowrap">
             created{' '}
-            <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
+            <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
+              {formatBlockNumber(c.createdAtBlock)}
+            </Link>
           </span>,
         ]}
       />

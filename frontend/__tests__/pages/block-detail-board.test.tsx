@@ -3,7 +3,6 @@ import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -592,6 +591,9 @@ describe('Block board · first tier', () => {
 
   // Visual finish V5: a feed row's tx link rests as ink with the faint aqua underline (was
   // `text-interactive-dim`); the global a:hover lights it jade.
+  // Re-pinned on purpose (lane P1, the link-look gate: one owner of a link's look): the row's
+  // transaction is its key, the key look's bright ink with no hand-written underline, no aqua and
+  // no hover colour of its own (it was V5's bright ink over a faint aqua underline, by hand).
   it("rests each activity row's tx link as ink, not aqua-dim (V5)", async () => {
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
@@ -601,7 +603,10 @@ describe('Block board · first tier', () => {
       const hash = row.getAttribute('data-feed-row')!;
       const link = row.querySelector(`[data-role="evidence"] a[href$="/tx/${hash}"]`);
       expect(link, hash).not.toBeNull();
-      expectRestingLink(link as HTMLElement);
+      expect(link).toHaveClass('text-text-bright');
+      expect(Array.from((link as HTMLElement).classList)).not.toContainEqual(
+        expect.stringMatching(/^(decoration-aqua|underline$|hover:text-|text-(aqua|interactive))/)
+      );
     }
   });
 });

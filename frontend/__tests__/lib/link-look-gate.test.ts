@@ -58,117 +58,31 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- p-chain ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'p-chain',
-    // look 5 → 4, ink 2 → 1 (lane D2): the kind line's lock link went to the status strip
-    sites: { look: 4, ink: 1, raw: 1 },
-    reason: '4 without a look; inks by hand (text-text-bright); 1 raw <a>',
+    // look 5 → 4, ink 2 → 1 (lane D2): the kind line's lock link went to the status strip. Look 4 →
+    // 0, ink 1 → 0 (lane P1): every link states its look. The raw <a> stays: the address's JSON is
+    // the API's URL, which the site's Link would prefix with the network
+    sites: { raw: 1 },
+    reason: "1 raw <a>: the address's JSON at the API's own URL",
   },
   'app/blocks/[id]/client-page.tsx': {
     lane: 'p-chain',
     // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look.
-    // Look 20 → 18 (lane P1): the lede's miner (the strip's) went, the cellbase row's paid block
-    // states its look
-    sites: { look: 18, ink: 7, raw: 1 },
-    reason:
-      '18 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
-  },
-  'app/blocks/[id]/uncles/[index]/client-page.tsx': {
-    lane: 'p-chain',
-    // look 6 → 5 (lane D2): the facts' canonical-hash link is the status strip's, its look stated
-    sites: { look: 5 },
-    reason: '5 without a look',
-  },
-  'app/cell/[outpoint]/client-page.tsx': {
-    lane: 'p-chain',
-    // look 15 → 14, ink 8 → 7 (lane D2): the Created fact's block link (text-text-bright) went to
-    // the status strip, whose link states its look. Look 14 → 10, ink 7 → 3 (lane P1): the
-    // origin line's three links went (said once), and the kind line's code-cell link became the
-    // lede's, in components/cell/inventory-line.tsx, stating its look
-    sites: { look: 10, ink: 3 },
-    reason: '10 without a look; inks by hand (text-text-bright, text-[color:var(--ink)])',
-  },
-  'app/tx/[hash]/client-page.tsx': {
-    lane: 'p-chain',
-    // look 17 → 16 (lane D2): the facts rail's block link went with the rail; the strip's states
-    // its look. Look 16 → 14, ink 16 → 12, raw 2 → 0 (lane D3): the script groups' code links
-    // moved to components/transaction/script-group-rows.tsx, each stating its look. Look 14 → 9,
-    // ink 12 → 7 (lane P1): the lede's links (the three item names, the cellbase's paid block and
-    // its payees) are links inside the line, and the cellbase's own block went to the strip
-    sites: { look: 9, ink: 7 },
-    reason: '9 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
-  },
-  'components/address/address-history.tsx': {
-    lane: 'p-chain',
-    sites: { look: 7, ink: 1 },
-    reason: '7 without a look; inks by hand (text-text-dim, hover:text-jade)',
-  },
-  'components/address/address-holdings.tsx': {
-    lane: 'p-chain',
-    // look 11 → 10, ink 6 → 5 (lane D2): the Lock metric's link is the status strip's, its look
-    // stated
-    sites: { look: 10, ink: 5, raw: 1 },
-    reason: '10 without a look; inks by hand (text-text-bright, hover:text-jade); 1 raw <a>',
-  },
-  'components/blocks/block-position.tsx': {
-    lane: 'p-chain',
-    sites: { look: 12, ink: 1 },
-    reason: '12 without a look; inks by hand (text-text-bright)',
-  },
-  'components/blocks/block-transactions-table.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:underline)',
-  },
-  'components/blocks/reward-breakdown.tsx': {
-    lane: 'p-chain',
-    sites: { look: 3 },
-    reason: '3 without a look',
-  },
-  'components/cell/cell-transactions.tsx': {
-    lane: 'p-chain',
-    // look 5 → 3, ink 4 → 2 (lane D3): the transaction's full-hash link and the groups' dep links
-    // went; the one link to the transaction states its look
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-[color:var(--ink)], style)',
-  },
-  'components/cell/code-cell-board.tsx': {
-    lane: 'p-chain',
-    sites: { look: 5, ink: 4 },
-    reason: '5 without a look; inks by hand (text-[color:var(--ink)], style, color)',
-  },
-  'components/cell/inventory-line.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
+    // Look 20 → 18 (lane P1): the lede's miner went, the cellbase row's paid block states its look.
+    // Look 18 → 0, ink 7 → 1 (lane P1): every link states its look; the step arrows are blocks
+    // whose mark draws its own ink. The hardfork resources' raw <a> and its ink stay (an external
+    // link with the page's test id, which ExternalLink does not carry)
+    sites: { ink: 1, raw: 1 },
+    reason: "the hardfork resources' raw <a>, inked by hand (text-interactive)",
   },
   'components/participant-ref.tsx': {
     lane: 'p-chain',
     sites: { look: 3, ink: 2 },
     reason: '3 without a look; inks by hand (hover:text-jade, text-text, text-jade-dim)',
   },
-  'components/transaction/script-group-matrix.tsx': {
-    lane: 'p-chain',
-    sites: { look: 3, ink: 3 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
-  },
-  'components/transaction/transaction-cell-content.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-jade)',
-  },
-  'components/transaction/transaction-cell-tiles.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text, hover:text-jade)',
-  },
   'components/transaction/transaction-list-table.tsx': {
     lane: 'p-chain',
     sites: { look: 2, ink: 2 },
     reason: '2 without a look; inks by hand (hover:text-jade, hover:underline)',
-  },
-  'components/transaction/what-moved.tsx': {
-    lane: 'p-chain',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (hover:text-jade, text-text-dim)',
   },
   // ---- p-assets ----
   'app/scripts/[name]/client-page.tsx': {
@@ -524,8 +438,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // more: the transaction page's lede, its item names, the cellbase's paid block, and the cellbase's
 // own block, which the status strip states, 5 looks and 5 inks) → 525 (lane P1: the block page's
 // lede no longer names the miner, and the cellbase row's paid block states its look, 2) → 517 (lane
-// P1: the cell page's origin line and its kind line's code-cell link, 8: four looks, four inks)
-const TOLERATED_TOTAL = 517;
+// P1: the cell page's origin line and its kind line's code-cell link, 8: four looks, four inks) →
+// 382 (lane P1: every link of the chain pages' files states its look, inks by hand gone: 135 sites
+// in seventeen files, fifteen of them leaving the list)
+const TOLERATED_TOTAL = 382;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

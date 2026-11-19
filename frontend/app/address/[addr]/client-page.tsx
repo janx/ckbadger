@@ -280,7 +280,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         JSON
                       </a>
                       {' · '}
-                      <Link href={`/address/${addr}.md`} target="_blank" rel="noreferrer">
+                      <Link
+                        look="inline"
+                        href={`/address/${addr}.md`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Markdown
                       </Link>
                     </span>
@@ -355,10 +360,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         key={n.identityId}
                         className="border-row-rule text-small flex flex-wrap justify-between gap-2 border-b py-2"
                       >
-                        <Link
-                          href={getIdentityItemDetailHref('dotcell', n.identityId)}
-                          className="text-text-bright"
-                        >
+                        <Link look="key" href={getIdentityItemDetailHref('dotcell', n.identityId)}>
                           {n.name}
                         </Link>
                         <span className="text-text-dim">
@@ -402,13 +404,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       key={c.channelId}
                       className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
-                      <Link href={`/fiber/channels/${c.channelId}`}>
+                      <Link look="inline" href={`/fiber/channels/${c.channelId}`}>
                         <Hash hash={c.channelId} size="row" className="text-small" />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
-                          <Link href={`/address/${p}`} key={p}>
+                          <Link look="inline" href={`/address/${p}`} key={p}>
                             <Hash hash={p} size="row" className="text-small" />
                           </Link>
                         ))}

@@ -11,7 +11,6 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import { factsOf } from '@/__tests__/utils/facts';
 import {
   expectBefore,
@@ -757,6 +756,9 @@ describe('Transaction board, tier 2', () => {
 
   // Visual finish V5: a dep row's out point link rests as ink with the faint aqua underline (was
   // `text-info/80`); the global a:hover lights it jade.
+  // Re-pinned on purpose (lane P1, the link-look gate: one owner of a link's look): a dep's out
+  // point is its row's key, the key look's bright ink with no hand-written underline, no aqua and
+  // no hover colour of its own (it was V5's bright ink over a faint aqua underline, by hand).
   it("rests each cell dep's out point link as ink, not aqua (V5)", async () => {
     render(<TransactionDetailPage />);
     const dep0 = await waitFor(() => {
@@ -770,7 +772,10 @@ describe('Transaction board, tier 2', () => {
       const outPoint = dep.querySelector(':scope > a') as HTMLElement | null;
       expect(outPoint, dep.id).not.toBeNull();
       expect(outPoint!.getAttribute('href')).toMatch(/\/cell\/0x[0-9a-z]+-\d+$/);
-      expectRestingLink(outPoint!);
+      expect(outPoint).toHaveClass('text-text-bright');
+      expect(Array.from(outPoint!.classList)).not.toContainEqual(
+        expect.stringMatching(/^(decoration-aqua|underline$|hover:text-|text-(aqua|interactive))/)
+      );
       // The out point still wraps anywhere in its narrow column.
       expect(outPoint).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
     }

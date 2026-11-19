@@ -259,7 +259,7 @@ export function ScriptGroupMatrix({
                     {c.top}
                   </span>
                   {c.href ? (
-                    <Link href={c.href} title={c.title} className="hover:text-jade">
+                    <Link look="inline" href={c.href} title={c.title}>
                       {c.label}
                     </Link>
                   ) : (
@@ -308,15 +308,13 @@ export function ScriptGroupMatrix({
                   <span className="text-text-dim text-meta">{g.kind}</span>
                   {g.mark && <ClassMark kind={g.mark} size={12} />}
                   {g.href ? (
-                    <Link
-                      href={g.href}
-                      className={cn(
-                        'hover:text-jade truncate',
-                        g.ran ? 'text-text-bright' : 'text-text'
-                      )}
-                    >
-                      {g.name}
-                    </Link>
+                    // a group that ran is the row's key; one only attached, a link inside its
+                    // line, in the reading ink though its row is set back
+                    <span className={cn('min-w-0 truncate', !g.ran && 'text-text')}>
+                      <Link href={g.href} look={g.ran ? 'key' : 'inline'}>
+                        {g.name}
+                      </Link>
+                    </span>
                   ) : (
                     <span className="truncate">{g.name}</span>
                   )}
@@ -450,17 +448,15 @@ function GroupList({
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
                 {g.mark && <ClassMark kind={g.mark} size={12} className="self-center" />}
                 {g.href ? (
-                  <Link
-                    href={g.href}
-                    className={cn(
-                      'hover:text-jade break-words',
-                      g.ran ? 'text-text-bright' : 'text-text-dim'
-                    )}
-                  >
-                    {g.name}
-                  </Link>
+                  // a group that ran is the row's key; one only attached, a link inside its line,
+                  // in the reading ink though its row is set back
+                  <span className={cn('break-words', !g.ran && 'text-text')}>
+                    <Link href={g.href} look={g.ran ? 'key' : 'inline'}>
+                      {g.name}
+                    </Link>
+                  </span>
                 ) : (
-                  <span className={cn('break-words', g.ran ? 'text-text-bright' : 'text-text-dim')}>
+                  <span className={cn('break-words', g.ran ? 'text-text-bright' : 'text-text')}>
                     {g.name}
                   </span>
                 )}
