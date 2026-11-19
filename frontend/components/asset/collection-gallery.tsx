@@ -248,7 +248,8 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
     [status, setStatus] = useState<ItemStatusFilter>('live');
   const pageSize = usePageSize(24);
   // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const pages = useCursorPagination(pageSize);
+  // and so does a change of the list it pages (lane cd-fixes-controls): the collection, its search and its status
+  const pages = useCursorPagination(pageSize, { list: [kind, id, search, status] });
   const query = useQuery({
     queryKey: ['collection-items', kind, id, search, status, pages.cursor, pageSize],
     queryFn: pages.ask((cursor) =>
@@ -364,22 +365,11 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
             label="Search collection"
             search
             value={search}
-            onChange={(value) => {
-              pages.reset();
-              setSearch(value);
-            }}
+            onChange={setSearch}
             placeholder="search names or ids"
             className="w-[200px] max-w-full"
           />
-          <FilterChips
-            label="status"
-            values={STATUS_VALUES}
-            value={status}
-            onChange={(value) => {
-              pages.reset();
-              setStatus(value);
-            }}
-          />
+          <FilterChips label="status" values={STATUS_VALUES} value={status} onChange={setStatus} />
         </div>
       </div>
       {query.data ? (
