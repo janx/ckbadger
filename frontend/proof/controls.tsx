@@ -193,7 +193,27 @@ function FoldDemo() {
         ))}
       </ul>
       <FoldToggle open={open} count={12} singular="cell" controls="proof-fold" onToggle={setOpen} />
+      <InlineFoldDemo />
     </div>
+  );
+}
+
+/** The fold's inline form, the rest of a list inside a line of names (the lead's final round, 3). */
+function InlineFoldDemo() {
+  const [open, setOpen] = useState(false);
+  const names = ['JoyID lock', 'Omnilock', 'lock 0x9b9b…9b9b', 'PW lock', 'Sale lock', 'RGB++'];
+  return (
+    <p className="text-small leading-row mt-3">
+      <span id="proof-inline-fold">{(open ? names : names.slice(0, 2)).join(' · ')}</span>{' '}
+      <FoldToggle
+        form="inline"
+        open={open}
+        count={names.length - 2}
+        singular="lock"
+        controls="proof-inline-fold"
+        onToggle={setOpen}
+      />
+    </p>
   );
 }
 
