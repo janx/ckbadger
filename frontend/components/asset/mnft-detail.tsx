@@ -193,31 +193,46 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
       identity={<HeadId value={item.nftId} kind="hash" copy="copy object id" />}
-      intro={
-        <div className="space-y-4 pt-1">
-          <AssetReadState error={detail.error} label="m-NFT" retained />
-          {item.composition ? (
-            <CompositionLine tier={item.composition.tier} />
-          ) : (
-            <p className="text-text-dim text-meta">Composition unavailable.</p>
-          )}
+      // Readability R8: the lede says what the object is and whether it is live (its path to the
+      // lock that holds it now, or that its cell is gone), then what it is made of; it was the
+      // composition first and the life after it
+      lede={
+        <div className="space-y-2.5 pt-1">
           {history && history.data.length > 0 ? (
-            <p className="text-text text-body max-w-measure leading-relaxed">
+            <p
+              data-role="object-state"
+              className="text-text text-body max-w-measure leading-relaxed"
+            >
               <ItemLife
                 versions={history.data}
                 verb="Issued"
                 by={item.issuer.name ?? 'its issuer'}
+                lede
               />
             </p>
           ) : (
             <p className="text-text text-body max-w-measure">
-              Issued in <AppLink href={classHref}>{className}</AppLink> at{' '}
-              <AppLink href={`/blocks/${item.createdAtBlock}`}>
+              Issued in{' '}
+              <AppLink href={classHref} look="inline">
+                {className}
+              </AppLink>{' '}
+              at{' '}
+              <AppLink href={`/blocks/${item.createdAtBlock}`} look="inline">
                 block <AssetCount value={item.createdAtBlock} />
               </AppLink>
               .
             </p>
           )}
+          {item.composition ? (
+            <CompositionLine tier={item.composition.tier} lede />
+          ) : (
+            <p className="text-text-dim text-meta">Composition unavailable.</p>
+          )}
+        </div>
+      }
+      intro={
+        <div className="space-y-4 pt-1">
+          <AssetReadState error={detail.error} label="m-NFT" retained />
           {item.class.description && (
             <blockquote className="border-base-border max-w-measure border-l pl-4">
               <p className="break-words">{item.class.description}</p>

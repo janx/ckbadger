@@ -195,7 +195,8 @@ describe('identity summary (ID-C5)', () => {
     ).toHaveAttribute('title', '116\u00a0days from now');
   });
 
-  it('tells a did:ckb it has no expiry and names its server', () => {
+  // renamed (R8): it was "tells a did:ckb it has no expiry and names its server"
+  it('names a did:ckb’s server; that it has no expiry is the lede’s', () => {
     const protocol = structuredClone(didProtocolProducer) as IdentityProtocol;
     render(
       <IdentitySummary
@@ -206,8 +207,11 @@ describe('identity summary (ID-C5)', () => {
         subject="alice.test"
       />
     );
+    // Re-pinned on purpose (readability R8, lane p-assets): that it is live with no expiry is the
+    // page's lede now (IdentityPositioning), said once; "in words" keeps the rest (it ended "… It
+    // has no expiry date.")
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-      'A Web5 identity, created on 2023-11-15. It names a personal data server at pds.example. It has no expiry date.'
+      /^A Web5 identity, created on 2023-11-15\. It names a personal data server at pds\.example\.$/
     );
   });
 });

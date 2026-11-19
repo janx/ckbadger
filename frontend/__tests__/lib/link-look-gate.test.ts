@@ -242,8 +242,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/asset/mnft-detail.tsx': {
     lane: 'p-assets',
-    sites: { look: 8, ink: 1, raw: 1 },
-    reason: '8 without a look; inks by hand (text-aqua); 1 raw <a>',
+    // look 8 → 6 (lane p-assets, R8): the issue sentence's two links, moved to the lede, are inline
+    sites: { look: 6, ink: 1, raw: 1 },
+    reason: '6 without a look; inks by hand (text-aqua); 1 raw <a>',
   },
   'components/asset/object-media.tsx': {
     lane: 'p-assets',
@@ -514,8 +515,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
 // and one ink) → 537 (lane D3, 14 more: the transaction page's script-group code links moved to
 // script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the structure's
-// group link went, 2; the cell page's transaction links, 4: two looks, two inks)
-const TOLERATED_TOTAL = 537;
+// group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 535 (lane
+// p-assets: the m-NFT issue sentence's two links, inline)
+const TOLERATED_TOTAL = 535;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

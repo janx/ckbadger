@@ -235,7 +235,9 @@ const KNOWN: Reads = {
   'components/asset/cell-versions.tsx': { 'api name': 1 },
   'components/asset/item-evidence.tsx': { 'api name': 1 },
   'components/asset/mnft-detail.tsx': { 'api name': 1 },
-  'components/asset/object-hero.tsx': { 'api name': 6 },
+  // 6 → 5 (lane p-assets, R8): the life sentence names the lock it sits under once, its story
+  // and its lede alike
+  'components/asset/object-hero.tsx': { 'api name': 5 },
   'components/identity/identity-overview.tsx': { 'api name': 4 },
   'components/identity/identity-evidence.tsx': { 'api name': 1 },
   'components/address/address-holdings.tsx': { 'script info name': 1 },
@@ -319,11 +321,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // its link where they read it twice: the known reads fall 26 → 25 and all 39 → 38, in one more
   // file. Then (lane D3, renamed again, it was "… 38 reads in 21 files, … 13 files and 25 reads")
   // the cell page's own copy of the groups' names went: 25 → 24 known reads, 38 → 37 in all
-  it('pins the totals: 37 reads in 21 files, the known writers 13 files and 24 reads', () => {
+  // Re-pinned on purpose (lane p-assets; renamed, it was "… 37 reads in 21 files, … 13 files and
+  // 24 reads"): the object life sentence reads the lock it sits under once (known writer 4), 24 → 23
+  // known reads and 37 → 36 in all
+  it('pins the totals: 36 reads in 21 files, the known writers 13 files and 23 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(21);
-    expect(total(all)).toBe(37);
+    expect(total(all)).toBe(36);
     expect(Object.keys(KNOWN)).toHaveLength(13);
-    expect(total(KNOWN)).toBe(24);
+    expect(total(KNOWN)).toBe(23);
   });
 });

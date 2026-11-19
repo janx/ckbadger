@@ -13,13 +13,16 @@ import { formatCount, countNoun } from '@/lib/format-count';
 import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
 import { useClockText } from '@/components/ui/utc8-date';
 
-/** One status pill for an item page: jade while live, grey once gone (OB-15). */
+/**
+ * One status pill for an item page: jade while live, the reading ink once gone (OB-15; readability
+ * R8: it was the quiet ink on a border near the ground, the head's weakest mark).
+ */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
   return (
     <span
       className={cn(
         'text-meta border px-1.5',
-        live ? 'text-jade border-jade/40' : 'text-text-dim border-base-border'
+        live ? 'text-jade border-jade/40' : 'text-text border-text-dim'
       )}
     >
       {live ? 'Live' : gone}
@@ -160,12 +163,15 @@ function timeOf(v: ItemCellVersion): number {
 
 /**
  * Its life in one sentence, from its canonical cell versions (OB-6, OB-M5): minted when and under
- * which lock, how often its cell moved since, and where it sits now.
+ * which lock, how often its cell moved since, and where it sits now. As the page's lede
+ * (`lede`, readability R8: what the object is and whether it is live, said in the head) it names
+ * no figure, which the metrics row states (C7): no count of moves, no span, no block.
  */
 export function itemLifeSentence(
   versions: readonly ItemCellVersion[],
   verb: 'Minted' | 'Issued' = 'Minted',
-  by?: string
+  by?: string,
+  lede = false
 ): string {
   const first = versions[0];
   const last = versions.at(-1);
@@ -176,16 +182,19 @@ export function itemLifeSentence(
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
+    if (lede)
+      return `${born}${moves ? ', then moved' : ''}; its last cell was consumed, so it is gone.`;
     return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
+  const now = lockPhrase(last.lockName);
   // Two header times need not run forward (a block's timestamp only has to pass the median of the
   // 37 before it), so a move whose header time is earlier than the mint's is told without a span.
   const span = timeOf(last) - timeOf(first);
-  const later = span >= 0 ? ` ${spelledDuration(span)} later` : '';
+  const later = !lede && span >= 0 ? ` ${spelledDuration(span)} later` : '';
   return moves === 1
-    ? `${born}, then moved${later} to ${lockPhrase(last.lockName)}, where it sits now.`
-    : `${born}, then moved ${moves} times; the last move put it under ${lockPhrase(last.lockName)}, where it sits now.`;
+    ? `${born}, then moved${later} to ${now}, where it sits now.`
+    : `${born}, then moved${lede ? '' : ` ${moves} times`}; the last move put it under ${now}, where it sits now.`;
 }
 
 /**
@@ -220,13 +229,16 @@ export function ItemLife({
   versions,
   verb = 'Minted',
   by,
+  lede = false,
 }: {
   versions: readonly ItemCellVersion[];
   verb?: 'Minted' | 'Issued';
   by?: string;
+  /** The page's lede (R8): its path and its state, no figure (`itemLifeSentence`). */
+  lede?: boolean;
 }) {
   const ages = useClockText((now) => itemLifeAges(versions, now, verb));
-  return <span title={ages}>{itemLifeSentence(versions, verb, by)}</span>;
+  return <span title={ages}>{itemLifeSentence(versions, verb, by, lede)}</span>;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──

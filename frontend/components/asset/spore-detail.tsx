@@ -241,20 +241,15 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   ];
   const coll = collection.data;
   const onchain = coll?.composition?.onchainCount;
-  // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column.
-  const words = (history || coll || genetics.data) && (
+  // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column. Its life
+  // story is the page's lede since readability R8 (what it is and whether it is live, said once).
+  const words = (coll || genetics.data || (history && lockFootnote(history, 'object'))) && (
     <DetailSection title="This object, in words">
       <Prose>
-        {(history || coll) && (
+        {coll && collectionName && (
           <p>
-            {history && history.length > 0 && <ItemLife versions={history} />}
-            {coll && collectionName && (
-              <span>
-                {' '}
-                {unitNode(
-                  `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
-                )}
-              </span>
+            {unitNode(
+              `One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${formatCount(coll.holdersCount, 'address', 'addresses')}`}.`
             )}
           </p>
         )}
@@ -284,10 +279,16 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
       identity={<HeadId value={id} kind="hash" copy="copy object id" />}
-      // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
-      // moved to tier 2 ("This object, in words").
+      // Readability R8: the lede says what the object is and whether it is live — its path to the
+      // lock that holds it now, or that its cell is gone — the sentence "This object, in words"
+      // told; then what it is made of (the composition, the owner's first-class rule)
       lede={
-        <div className="pt-1">
+        <div className="space-y-2.5 pt-1">
+          {history && history.length > 0 && (
+            <p data-role="object-state" className="text-text text-body max-w-measure">
+              <ItemLife versions={history} lede />
+            </p>
+          )}
           {tier ? (
             <CompositionLine tier={tier} lede />
           ) : (

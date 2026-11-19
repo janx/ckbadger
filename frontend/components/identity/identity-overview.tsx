@@ -417,8 +417,9 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(Number(d.registeredAt) * 1000)}</NoBreak>
           </B>
           {renewals ? ` and renewed ${times(renewals)}` : ''}
+          {/* R8: that it is no longer a live account is the page's lede, said once */}
           {!isLive ? (
-            '; it is no longer a live account. '
+            '. '
           ) : term.kind === 'term' ? (
             <>, {termClause(now >= term.expiresAt ? '' : 'it is ')}. </>
           ) : (
@@ -456,9 +457,10 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
           </B>{' '}
           into <B>{wallet}</B>
+          {/* R8: that the cell is no longer live, or outlives its account, is the page's lede */}
           {unitNode(
             !isLive
-              ? '; the cell is no longer live. '
+              ? '. '
               : owners.changes === 0
                 ? ' that still holds it. '
                 : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `
@@ -466,12 +468,7 @@ export function IdentitySummary({
           {term.kind === 'term' && (
             <>
               {now >= term.expiresAt ? (
-                <>
-                  {termClause('', "The name's")}
-                  {d.linkedAccount && !d.linkedAccount.isLive
-                    ? '; the .bit account is no longer live, but this cell remains.'
-                    : '.'}
-                </>
+                <>{termClause('', "The name's")}.</>
               ) : (
                 <>It is {termClause('')}.</>
               )}
@@ -518,7 +515,7 @@ export function IdentitySummary({
             </>
           )}
           {names.length > 0 && <> It names {listJoin(names)}.</>}
-          {isLive ? ' It has no expiry date.' : ' It is no longer live.'}
+          {/* R8: whether it is live, and that it has no expiry, is the page's lede */}
         </>
       );
       break;
