@@ -165,11 +165,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '2 without a look; inks by hand (hover:text-jade, text-text-dim)',
   },
   // ---- p-assets ----
-  'app/scripts/[name]/client-page.tsx': {
-    lane: 'p-assets',
-    sites: { look: 10, ink: 11, raw: 1 },
-    reason: '10 without a look; inks by hand (text-emphasis, hover:underline); 1 raw <a>',
-  },
+  // app/scripts/[name]/client-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
   'app/tokens/[typeHash]/client-page.tsx': {
     lane: 'p-assets',
     sites: { look: 4, ink: 2, raw: 1 },
@@ -310,12 +306,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       '3 without a look; inks by hand (hover:text-jade, hover:text-text-bright, hover:underline); 1 raw <a>',
   },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'p-assets',
-    sites: { look: 10, ink: 11, raw: 1 },
-    reason:
-      '10 without a look; inks by hand (hover:text-jade, text-text, hover:underline); 1 raw <a>',
-  },
+  // components/scripts/script-family-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
   'components/scripts/script-newest-cells.tsx': {
     lane: 'p-assets',
     // look 6 → 5, ink 6 → 4, raw 1 → 0 (lane p-assets): the footer's two ways onward
@@ -514,8 +505,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 535 (lane
 // p-assets: the m-NFT issue sentence's two links, inline) → 531 (lane p-assets: a collection's
 // items list, its name a key, its holder and its block inline, 4: three looks, one ink) → 527
-// (lane p-assets: a script's newest cells' footer, two ways onward, 4: a look, two inks, a raw <a>)
-const TOLERATED_TOTAL = 527;
+// (lane p-assets: a script's newest cells' footer, two ways onward, 4: a look, two inks, a raw <a>) → 483 (lane p-assets: each link states its look)
+const TOLERATED_TOTAL = 483;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

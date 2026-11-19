@@ -370,9 +370,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the handover line under the holder figure (a note under a figure: P3 decides)',
   },
   'components/scripts/script-family-page.tsx': {
+    // link 3 → 0, td 9 → 8 (lane p-assets: each link states its look)
     family: 'lists',
     // link 4 → 3, prose 6 → 5 (B7): the lede and its link read in the reading ink
-    sites: { link: 3, td: 9, prose: 5 },
+    sites: { td: 8, prose: 5 },
     reason:
       'deployment blocks, cells, dashes and states quiet in table cells and links; the reference, loading, empty and cells sentences',
   },

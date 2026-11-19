@@ -1,6 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Pager } from '@/components/ui/pager';
@@ -103,7 +104,7 @@ export interface ScriptFamilyPageProps {
 
 function CellOwner({ cell, size }: { cell: Cell; size: ShortSize }) {
   return cell.address ? (
-    <Link href={`/address/${cell.address}`} className="text-text hover:text-jade">
+    <Link href={`/address/${cell.address}`} look="inline">
       <ShortId value={cell.address} kind="address" size={size} />
     </Link>
   ) : (
@@ -128,10 +129,7 @@ function AlsoGuardedBy({ cell, size }: { cell: Cell; size: ShortSize }) {
   if (cell.typeScriptName === undefined)
     throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} row has no typeScriptName (R6)`);
   return (
-    <Link
-      href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
-      className="hover:text-jade text-text"
-    >
+    <Link href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`} look="inline">
       {cell.typeScriptName ?? <ShortId value={cell.typeCodeHash} kind="hash" size={size} />}
     </Link>
   );
@@ -250,7 +248,7 @@ function ReferenceFacts({
             >
               <Link
                 href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                className="text-text hover:text-jade"
+                look="inline"
               >
                 {deployment.codeCellTxHash}
                 <OutpointIndex index={deployment.codeCellOutputIndex} />
@@ -349,10 +347,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     // live code cell" above is words and breaks between them (a list table's rule)
     return (
       <span className="whitespace-nowrap">
-        <Link
-          href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
-          className="text-text hover:text-jade"
-        >
+        <Link href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`} look="inline">
           <ShortId value={first.codeCellTxHash} kind="hash" size={size} />
           <OutpointIndex index={first.codeCellOutputIndex} />
         </Link>
@@ -593,10 +588,7 @@ export function ScriptFamilyPage({
   const outpointKey = (d: Deployment) => `${d.codeCellTxHash}:${d.codeCellOutputIndex}`;
   // a code cell's out point, at the form's size (U-09): row in the table, tight in the phone row
   const outpointLink = (d: Deployment, size: ShortSize) => (
-    <Link
-      href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
-      className="text-text hover:text-jade hover:underline"
-    >
+    <Link href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`} look="inline">
       <ShortId value={d.codeCellTxHash} kind="hash" size={size} />
       <OutpointIndex index={d.codeCellOutputIndex} />
     </Link>
@@ -737,7 +729,8 @@ export function ScriptFamilyPage({
         return lead ? (
           <Link
             href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-            className="text-body text-text-bright leading-row hover:underline"
+            look="key"
+            className="text-body leading-row"
           >
             {label}
           </Link>
@@ -775,7 +768,7 @@ export function ScriptFamilyPage({
       render: (row) => {
         const block = leadOf(row)?.createdAtBlock;
         return block !== undefined ? (
-          <Link href={`/blocks/${block}`} className="text-text-dim hover:text-jade">
+          <Link href={`/blocks/${block}`} look="inline">
             {formatBlockNumber(block)}
           </Link>
         ) : (
@@ -800,7 +793,8 @@ export function ScriptFamilyPage({
           <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
             <Link
               href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-              className="text-text-dim hover:text-jade truncate"
+              look="inline"
+              className="truncate"
             >
               <ShortId value={lead.codeCellTxHash} kind="hash" size="row" />
               <OutpointIndex index={lead.codeCellOutputIndex} />
@@ -1044,8 +1038,10 @@ export function ScriptFamilyPage({
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): the hero, its reading and figures; sections 64 / 72 px apart. */}
           <div data-tier="1" className="min-w-0">
-            <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
-              <Link href="/scripts" className="hover:text-text-bright">
+            {/* the chart pages' breadcrumb (lane D1): its links inline in the reading ink, the
+                separator quiet */}
+            <nav aria-label="Breadcrumb" className="text-small mb-2">
+              <Link href="/scripts" look="inline">
                 Scripts
               </Link>
               {roleCrumb && (
@@ -1080,12 +1076,13 @@ export function ScriptFamilyPage({
                   {family.website && (
                     <>
                       {family.description ? ' · ' : ''}
-                      <a
+                      <ExternalLink
                         href={family.website}
-                        className="hover:text-text-bright whitespace-nowrap hover:underline"
+                        look="inline"
+                        className="whitespace-nowrap"
                       >
-                        {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗
-                      </a>
+                        {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                      </ExternalLink>
                     </>
                   )}
                 </p>
@@ -1225,7 +1222,8 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-body text-text-bright hover:text-jade leading-row hover:underline"
+                          look="key"
+                          className="text-body leading-row"
                         >
                           <ShortId value={cell.txHash} kind="hash" size="row" />
                           <OutpointIndex index={cell.outputIndex} />
