@@ -84,7 +84,9 @@ and these codes, never their args)
   match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
   - a token: its row (`CF_TOKENS`), the script itself;
   - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
-    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
+    item in its out point index (`object_outpoint_by_id`) BY KEY, the lowest transaction hash then
+    index, not the first in time (every cell recorded for one item has its one code); a .bit
+    account: the first cell recorded for its account id, by key the same way;
   - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
     (`object_outpoints`, MNFT_TOKEN);
   - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
@@ -95,6 +97,12 @@ and these codes, never their args)
   stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
   item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
   and a feed folds such a row with no other.
+
+  Its cost per activity, each item once and each creating transaction once per request: a token,
+  one row read; a spore or an identity, one seek and one payload read, whatever its history; an
+  m-NFT token or a cluster, its creating transaction's one read, its N payloads and, for m-NFT
+  tokens, the N token ids recorded for them (one multi_get each), shared by every item it made (a
+  batch of 1,000 tokens in a 1,000-output transaction: 2,001 reads); a DAO step, none.
 
 - `itemTypesUnread: string | null` — see `itemTypes`.
 - `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
