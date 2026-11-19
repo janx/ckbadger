@@ -661,6 +661,40 @@ bands it draws and the wholes it divides by, read-only on the store:
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
   band of Activity by type.
 
+**What a page states outside the chart pages (lane exactness, part A)**
+
+A count, a rank or a whole that a page states is the route's figure, read in
+the same view as its rows; the page sums nothing. Read-only on the stores (the
+network store too), no re-sync:
+
+- `GET /charts/miner-address-distribution` — `restBlocks`: the window's blocks
+  found by every miner after the five largest, the ranking card's "Others".
+- `GET /charts/uncle-rate` — `counts: [{ date, uncles, blocks }]`, one per
+  point of `data` in its order: each day's exact operands, so "over the target"
+  is counted as uncles × `orphanRateTarget.denominator` > blocks ×
+  `orphanRateTarget.numerator`; `value` stays the share, cut.
+- `GET /tokens/{type_hash}/holders`, `/assets/objects/{collection_id}/holders`,
+  `/assets/identities/{collection_id}/holders` and
+  `/spore/clusters/{cluster_id}/holders` — `firstRank`: the 1-based rank of the
+  page's first row in the request's read view (a token's: the holders that
+  sort before the cursor in `CF_TOKEN_HOLDERS_BY_BALANCE`, counted, plus one; a
+  collection's: the cursor's position in the ranking plus one, the ranking
+  cached by the view's tip block).
+- `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
+  pool, pending and proposed (not `awaitingIndex`).
+- `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
+  blocks, what its uncle rate (`unclesInWindow` of them) divides by.
+- `GET /dao/statistics` — `liveCellsCount`: the live DAO cells, deposits and
+  withdrawal requests; `secondaryIssuance` (shannons): the miners' share, the
+  depositors' compensation and the burnt share, which make it.
+- `GET /network/distributions` — `hosting` (`organisations`, `rest`,
+  `restOrganisations`): the verified nodes by hosting organisation (an
+  organisation's several ASNs as one, `Unknown` without an ASN), the five
+  largest by nodes (ties by name) and the rest's nodes and organisations; they
+  sum to `verifiedRetained`, checked. `releases: [{ release, count, builds }]`:
+  the client versions by release (the label before its build), each release's
+  nodes and builds, largest first.
+
 ---
 
 ### graph (crates/api/src/routes/graph.rs)
