@@ -664,7 +664,12 @@ bands it draws and the wholes it divides by, read-only on the store:
   kind it is, so this is not a count of distinct activities; coinbase and
   unknown transactions are not in it. `daoCount` is the day's three DAO
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
-  band of Activity by type.
+  band of Activity by type. `userTransactionCount` is the day's user
+  transactions: its committed transactions (its `DailyStats` row) less its
+  cellbases (`coinbaseCount`), the figure the Transactions page's lede and
+  "all" chip, the Activities page's lede and the home's daily bars state; a
+  day without its chain row, or with more cellbases than transactions, is a
+  500 naming the date.
 - `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
   and `daoCount`, counted as the daily rows count them (one helper each in the
   route); the home page's activity shares divide by `kindOccurrences` and its
