@@ -281,6 +281,7 @@ export function TxStructure({
                 count={cells.length}
                 shown={shown.length}
                 folded={folded}
+                lit={folded.filter((c) => linked.has(c.id)).length}
                 rows={rowsIds[side]}
                 onToggle={fold.onToggle && ((open) => fold.onToggle!(side, open))}
               />
@@ -508,6 +509,7 @@ function FoldRow({
   count,
   shown,
   folded,
+  lit,
   rows,
   onToggle,
 }: {
@@ -515,6 +517,8 @@ function FoldRow({
   count: number;
   shown: number;
   folded: readonly CellTileData[];
+  /** How many of the folded cells the page lights (a script group, a witness): said, not drawn. */
+  lit: number;
   /** The id of the sheet's rows, which the control opens and folds. */
   rows: string;
   onToggle?: (open: boolean) => void;
@@ -538,6 +542,8 @@ function FoldRow({
         ) : (
           side
         )}
+        {/* a cell the page lights inside the fold is said here (lane P1, lane D3's note) */}
+        {lit > 0 && ` · ${lit.toLocaleString('en-US')} lit`}
       </span>
     );
   };
