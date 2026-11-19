@@ -5,6 +5,7 @@ import { parseMarkdownSourcePath } from '@/lib/ai/markdown-route';
 import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-renderer';
 import { api } from '@/lib/api';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -70,12 +71,14 @@ describe('renderMarkdownPage', () => {
         { event: 'open', blockNumber: 42, txHash: '0xfunding', timestamp: '2026-09-08T00:00:00Z' },
       ],
     };
-    vi.mocked(api.getFiberChannels).mockResolvedValue({
-      data: [channel],
-      limit: 20,
-      hasMore: true,
-      nextCursor: 'next',
-    });
+    vi.mocked(api.getFiberChannels).mockResolvedValue(
+      pagedRead({
+        data: [channel],
+        limit: 1,
+        hasMore: true,
+        nextCursor: 'next',
+      })
+    );
     vi.mocked(api.getFiberChannel).mockResolvedValue(channel);
     const list = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/fiber/channels'),
@@ -101,24 +104,26 @@ describe('renderMarkdownPage', () => {
 
   // ---- F2 group dao (DAO-12, R2b-a 42) ----
   it('renders every DAO depositor, ranked at one tip, with the cursor to continue', async () => {
-    vi.mocked(api.getDaoDepositors).mockResolvedValue({
-      anchor: { blockNumber: 20879205, blockHash: `0x${'a'.repeat(64)}` },
-      total: 16641,
-      limit: 1,
-      hasMore: true,
-      nextCursor: '20879205:1',
-      data: [
-        {
-          rank: 1,
-          lockScriptHash: `0x${'1'.repeat(64)}`,
-          address:
-            'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26',
-          capacity: '67073483600000000',
-          depositCount: 1,
-          sharePercent: '8.27',
-        },
-      ],
-    });
+    vi.mocked(api.getDaoDepositors).mockResolvedValue(
+      pagedRead({
+        anchor: { blockNumber: 20879205, blockHash: `0x${'a'.repeat(64)}` },
+        total: 16641,
+        limit: 1,
+        hasMore: true,
+        nextCursor: '20879205:1',
+        data: [
+          {
+            rank: 1,
+            lockScriptHash: `0x${'1'.repeat(64)}`,
+            address:
+              'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26',
+            capacity: '67073483600000000',
+            depositCount: 1,
+            sharePercent: '8.27',
+          },
+        ],
+      })
+    );
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/dao/depositors'),
       searchParams: new URLSearchParams('limit=1'),
@@ -134,61 +139,63 @@ describe('renderMarkdownPage', () => {
   });
 
   it('renders blocks list markdown', async () => {
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [
-        {
-          number: 123,
-          hash: `0x${'a'.repeat(64)}`,
-          parentHash: `0x${'b'.repeat(64)}`,
-          timestamp: '2026-02-23T00:00:00Z',
-          transactionsCount: 3,
-          proposalsCount: 1,
-          unclesCount: 0,
-          difficulty: '1',
-          epoch: '1/10',
-          epochNumber: 1,
-          epochIndex: 0,
-          epochLength: 10,
-          nonce: '0x0',
-          transactionsRoot: `0x${'c'.repeat(64)}`,
-          minerAddress: null,
-          minerPool: null,
-          minerMessage: null,
-          miningReward: null,
-          miningRewardTxHash: null,
-          hardforkActivation: null,
-          compactTarget: '0x0',
-          version: 0,
-          maxBlockBytes: 597000,
-          maxBlockCycles: '3500000000',
-          minerMessageText: null,
-          size: 1000,
-          userTransactionsSize: 600,
-          overheadSize: 400,
-          totalFees: '1000',
-          cycles: null,
-          cyclesStatus: 'pending',
-          transactionSizes: [400, 600],
-          rewardBreakdown: null,
-          cellbasePays: null, // F2 blocks (R2b-a 1)
-          rewardPaidAtBlock: null,
-          rewardFinalizesAt: 112,
-          confirmations: 1,
-          parentTimestamp: '2024-01-15T10:29:50Z',
-          rawHeader: {
-            epoch: '0x1',
-            dao: `0x${'00'.repeat(32)}`,
-            proposalsHash: `0x${'00'.repeat(32)}`,
-            extraHash: `0x${'00'.repeat(32)}`,
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            number: 123,
+            hash: `0x${'a'.repeat(64)}`,
+            parentHash: `0x${'b'.repeat(64)}`,
+            timestamp: '2026-02-23T00:00:00Z',
+            transactionsCount: 3,
+            proposalsCount: 1,
+            unclesCount: 0,
+            difficulty: '1',
+            epoch: '1/10',
+            epochNumber: 1,
+            epochIndex: 0,
+            epochLength: 10,
+            nonce: '0x0',
+            transactionsRoot: `0x${'c'.repeat(64)}`,
+            minerAddress: null,
+            minerPool: null,
+            minerMessage: null,
+            miningReward: null,
+            miningRewardTxHash: null,
+            hardforkActivation: null,
+            compactTarget: '0x0',
+            version: 0,
+            maxBlockBytes: 597000,
+            maxBlockCycles: '3500000000',
+            minerMessageText: null,
+            size: 1000,
+            userTransactionsSize: 600,
+            overheadSize: 400,
+            totalFees: '1000',
+            cycles: null,
+            cyclesStatus: 'pending',
+            transactionSizes: [400, 600],
+            rewardBreakdown: null,
+            cellbasePays: null, // F2 blocks (R2b-a 1)
+            rewardPaidAtBlock: null,
+            rewardFinalizesAt: 112,
+            confirmations: 1,
+            parentTimestamp: '2024-01-15T10:29:50Z',
+            rawHeader: {
+              epoch: '0x1',
+              dao: `0x${'00'.repeat(32)}`,
+              proposalsHash: `0x${'00'.repeat(32)}`,
+              extraHash: `0x${'00'.repeat(32)}`,
+            },
+            uncles: [],
           },
-          uncles: [],
-        },
-      ],
-      total: 1,
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    });
+        ],
+        total: 1,
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/blocks'),
@@ -223,40 +230,42 @@ describe('renderMarkdownPage', () => {
       kindOccurrences: 29,
       daoCount: 5,
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'a'.repeat(64)}`,
-          blockNumber: 123,
-          txIndex: 0,
-          timestamp: '1700000000',
-          isCellbase: false,
-          typeCalls: [],
-          lockCalls: [],
-          protocolActions: [
-            {
-              protocol: 'dao',
-              protocolName: 'Nervos DAO',
-              action: 'deposit',
-              metadata: { capacity: '10000000000' },
-            },
-          ],
-          participants: [
-            {
-              address: 'ckt1qyq9sampleaddress0000000000000000000000000',
-              ckbDelta: '10000000000',
-              usedDelta: '0',
-              itemDeltas: [],
-              tags: 8,
-            },
-          ],
-        },
-      ],
-      total: 1,
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'a'.repeat(64)}`,
+            blockNumber: 123,
+            txIndex: 0,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [
+              {
+                protocol: 'dao',
+                protocolName: 'Nervos DAO',
+                action: 'deposit',
+                metadata: { capacity: '10000000000' },
+              },
+            ],
+            participants: [
+              {
+                address: 'ckt1qyq9sampleaddress0000000000000000000000000',
+                ckbDelta: '10000000000',
+                usedDelta: '0',
+                itemDeltas: [],
+                tags: 8,
+              },
+            ],
+          },
+        ],
+        total: 1,
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/activities'),
@@ -278,7 +287,9 @@ describe('renderMarkdownPage', () => {
 
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
-      activityCount: 29,
+      // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): one activity of
+      // one kind, as its kind counts say (it was 29 activities with one kind occurrence among them)
+      activityCount: 1,
       transferCount: 0,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 1,
@@ -296,40 +307,42 @@ describe('renderMarkdownPage', () => {
       kindOccurrences: 1,
       daoCount: 1,
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'b'.repeat(64)}`,
-          blockNumber: 20_000_000,
-          txIndex: 1,
-          timestamp: '1700000000',
-          isCellbase: false,
-          typeCalls: [],
-          lockCalls: [],
-          protocolActions: [
-            {
-              protocol: 'dao',
-              protocolName: 'Nervos DAO',
-              action: 'withdraw_request',
-              metadata: { capacity: '9007199254740993', depositBlock: '19695550' },
-            },
-          ],
-          participants: [
-            {
-              address: 'ckt1qyq9sampleaddress0000000000000000000000000',
-              ckbDelta: '0',
-              usedDelta: '0',
-              itemDeltas: [],
-              tags: 8,
-            },
-          ],
-        },
-      ],
-      total: 1,
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'b'.repeat(64)}`,
+            blockNumber: 20_000_000,
+            txIndex: 1,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [
+              {
+                protocol: 'dao',
+                protocolName: 'Nervos DAO',
+                action: 'withdraw_request',
+                metadata: { capacity: '9007199254740993', depositBlock: '19695550' },
+              },
+            ],
+            participants: [
+              {
+                address: 'ckt1qyq9sampleaddress0000000000000000000000000',
+                ckbDelta: '0',
+                usedDelta: '0',
+                itemDeltas: [],
+                tags: 8,
+              },
+            ],
+          },
+        ],
+        total: 1,
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/activities'),
@@ -345,7 +358,8 @@ describe('renderMarkdownPage', () => {
 
   it('writes "-" for an activity with no party, not an invented 0 CKB or an empty address', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
-      activityCount: 29,
+      // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
+      activityCount: 1,
       transferCount: 0,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 0,
@@ -363,27 +377,29 @@ describe('renderMarkdownPage', () => {
       kindOccurrences: 1,
       daoCount: 0,
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'c'.repeat(64)}`,
-          blockNumber: 7,
-          txIndex: 1,
-          timestamp: '1700000000',
-          isCellbase: false,
-          typeCalls: [],
-          lockCalls: [],
-          protocolActions: [
-            { protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} },
-          ],
-          participants: [],
-        },
-      ],
-      total: 1,
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'c'.repeat(64)}`,
+            blockNumber: 7,
+            txIndex: 1,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [
+              { protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} },
+            ],
+            participants: [],
+          },
+        ],
+        total: 1,
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/activities'),
@@ -404,7 +420,8 @@ describe('renderMarkdownPage', () => {
     // no address; the API sends its lock hash instead.
     const lockHash = `0x${'5'.repeat(64)}`;
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
-      activityCount: 29,
+      // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
+      activityCount: 1,
       transferCount: 1,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 0,
@@ -422,42 +439,44 @@ describe('renderMarkdownPage', () => {
       kindOccurrences: 1,
       daoCount: 0,
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'b'.repeat(64)}`,
-          blockNumber: 124,
-          txIndex: 0,
-          timestamp: '1700000000',
-          isCellbase: false,
-          typeCalls: [],
-          lockCalls: [],
-          protocolActions: [
-            {
-              protocol: 'dao',
-              protocolName: 'Nervos DAO',
-              action: 'deposit',
-              metadata: { capacity: '10000000000' },
-            },
-          ],
-          participants: [
-            {
-              address: null,
-              lockHash,
-              lockHashPrefix: null,
-              roles: [],
-              ckbDelta: '-10000000000',
-              usedDelta: '0',
-              itemDeltas: [],
-              tags: 8,
-            },
-          ],
-        },
-      ],
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'b'.repeat(64)}`,
+            blockNumber: 124,
+            txIndex: 0,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [
+              {
+                protocol: 'dao',
+                protocolName: 'Nervos DAO',
+                action: 'deposit',
+                metadata: { capacity: '10000000000' },
+              },
+            ],
+            participants: [
+              {
+                address: null,
+                lockHash,
+                lockHashPrefix: null,
+                roles: [],
+                ckbDelta: '-10000000000',
+                usedDelta: '0',
+                itemDeltas: [],
+                tags: 8,
+              },
+            ],
+          },
+        ],
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/activities'),
@@ -572,37 +591,39 @@ describe('renderMarkdownPage', () => {
   });
 
   it('renders scripts list markdown with family-level columns', async () => {
-    vi.mocked(api.getScripts).mockResolvedValue({
-      data: [
-        {
-          codeHash: 'family:default-lock',
-          name: 'Default Lock',
-          description: 'Default lock family',
-          scriptKind: 'lock',
-          rfc: null,
-          website: null,
-          sourceUrl: null,
-          decoderType: null,
-          network: '',
-          hashType: null,
-          dataHash: null,
-          typeHash: null,
-          tag: null,
-          deprecated: false,
-          isSystem: false,
-          codeCellTxHash: null,
-          codeCellOutputIndex: null,
-          ownedCapacitySum: '1500',
-          ownedKnowledgeSum: '900',
-          liveCellsCount: 10,
-          cellsCount: 14,
-        },
-      ],
-      total: 1,
-      limit: 1,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getScripts).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            codeHash: 'family:default-lock',
+            name: 'Default Lock',
+            description: 'Default lock family',
+            scriptKind: 'lock',
+            rfc: null,
+            website: null,
+            sourceUrl: null,
+            decoderType: null,
+            network: '',
+            hashType: null,
+            dataHash: null,
+            typeHash: null,
+            tag: null,
+            deprecated: false,
+            isSystem: false,
+            codeCellTxHash: null,
+            codeCellOutputIndex: null,
+            ownedCapacitySum: '1500',
+            ownedKnowledgeSum: '900',
+            liveCellsCount: 10,
+            cellsCount: 14,
+          },
+        ],
+        total: 1,
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/scripts'),
@@ -767,20 +788,22 @@ describe('renderMarkdownPage', () => {
       },
       lifecycle: [],
     } as any);
-    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xtx',
-          blockNumber: 123,
-          txIndex: 0,
-          timestamp: '1700000000',
-          actions: ['transfer'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getMnftItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xtx',
+            blockNumber: 123,
+            txIndex: 0,
+            timestamp: '1700000000',
+            actions: ['transfer'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/objects/mnft/0xmnft'),
@@ -824,20 +847,22 @@ describe('renderMarkdownPage', () => {
       txHash: null,
       outputIndex: null,
     } as any);
-    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xtx',
-          blockNumber: 456,
-          txIndex: 0,
-          timestamp: '1700000000',
-          actions: ['transfer'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getDotbitItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xtx',
+            blockNumber: 456,
+            txIndex: 0,
+            timestamp: '1700000000',
+            actions: ['transfer'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/identities/dotbit/0xdotbit'),
@@ -868,20 +893,22 @@ describe('renderMarkdownPage', () => {
       txHash: null,
       outputIndex: null,
     } as any);
-    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xtx',
-          blockNumber: 456,
-          txIndex: 0,
-          timestamp: '1700000000',
-          actions: ['transfer'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xtx',
+            blockNumber: 456,
+            txIndex: 0,
+            timestamp: '1700000000',
+            actions: ['transfer'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/identities/did/0xdid'),
@@ -913,20 +940,22 @@ describe('renderMarkdownPage', () => {
       txHash: '0xtx',
       outputIndex: 3,
     } as any);
-    vi.mocked(api.getBitCellItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xtx',
-          blockNumber: 456,
-          txIndex: 0,
-          timestamp: '1700000000',
-          actions: ['mint'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getBitCellItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xtx',
+            blockNumber: 456,
+            txIndex: 0,
+            timestamp: '1700000000',
+            actions: ['mint'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/identities/bit-cell/0xbitcell'),
@@ -987,20 +1016,22 @@ describe('renderMarkdownPage', () => {
       childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     } as any);
-    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xtx',
-          blockNumber: 18_000_001,
-          txIndex: 0,
-          timestamp: '1700000000',
-          actions: ['mint'],
-        },
-      ],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: '0xtx',
+            blockNumber: 18_000_001,
+            txIndex: 0,
+            timestamp: '1700000000',
+            actions: ['mint'],
+          },
+        ],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath(
@@ -1064,12 +1095,14 @@ describe('renderMarkdownPage', () => {
       childrenNextCursor: childId,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     } as any);
-    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
-      data: [],
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
 
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath(

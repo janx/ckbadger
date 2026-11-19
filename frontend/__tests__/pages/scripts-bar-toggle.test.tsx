@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, type KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // The real navigation (setup.ts stubs it with an empty URL), so a router's location reaches the page.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
@@ -51,14 +52,14 @@ function family(name: string, capacity: string, occupied: string): KnownScript {
 const big = family('Big', '4000000000000000000', '5600000000000000');
 const half = family('Half', '400000000000000000', '200000000000000000');
 const none = family('None', '0', '0');
-const response = {
+const response = pagedRead({
   data: [big, half, none],
   total: 3,
   limit: 50,
   hasMore: false,
   nextCursor: null,
   roleCounts: { all: 3, locks: 3, types: 0 },
-};
+});
 
 function renderAt(url: string) {
   const router = createMemoryRouter([{ path: '*', element: <ScriptsPage /> }], {

@@ -17,8 +17,9 @@ import type {
   Asset,
   CursorPaginatedResponse,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 export const tokenProducer = {
-  activityFeed: {
+  activityFeed: pagedRead({
     data: [
       {
         blockNumber: 2,
@@ -154,7 +155,7 @@ export const tokenProducer = {
     limit: 50,
     nextCursor: null,
     total: 3,
-  },
+  }),
   distribution: {
     buckets: [
       {
@@ -309,7 +310,7 @@ export const tokenProducer = {
     ],
   },
   // `/tokens/{hash}/supply-events` for the same fixture: newest first.
-  supplyEvents: {
+  supplyEvents: pagedRead({
     data: [
       {
         address: null,
@@ -344,8 +345,8 @@ export const tokenProducer = {
     limit: 100,
     nextCursor: null,
     total: 2,
-  },
-  holders: {
+  }),
+  holders: pagedRead({
     anchor: {
       blockHash: '0x0303030303030303030303030303030303030303030303030303030303030303',
       blockNumber: 3,
@@ -364,7 +365,7 @@ export const tokenProducer = {
     nextCursor: null,
     total: 1,
     totalSupply: '90',
-  },
+  }),
   token: {
     cellsCount: 1,
     decimals: 0,
@@ -410,7 +411,7 @@ export const tokenProducer = {
     typeScriptHash: '0x7171717171717171717171717171717171717171717171717171717171717171',
     udtType: null,
   },
-  transactions: {
+  transactions: pagedRead({
     data: [
       {
         activity: {
@@ -594,7 +595,7 @@ export const tokenProducer = {
     limit: 50,
     nextCursor: null,
     total: 3,
-  },
+  }),
 } satisfies {
   token: Token;
   history: TokenHistory;
@@ -605,7 +606,7 @@ export const tokenProducer = {
   transactions: CursorPaginatedResponse<Transaction>;
 };
 export const inventoryProducer = {
-  pendingPage: {
+  pendingPage: pagedRead({
     data: [
       {
         activitiesCount: 0,
@@ -639,7 +640,7 @@ export const inventoryProducer = {
     limit: 1,
     nextCursor: null,
     total: 1,
-  },
+  }),
   summary: {
     anchor: null,
     counts: {

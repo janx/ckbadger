@@ -18,6 +18,7 @@ import {
   type GlobalActivity,
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -92,7 +93,7 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
+const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
 const activity: GlobalActivity = {
   txHash: other,
   blockNumber: 12345,
@@ -225,14 +226,16 @@ describe('Token board (F2 objects)', () => {
   });
 
   it('pages the supply events and words the history line (IV-27, IV-17)', async () => {
-    vi.mocked(api.getTokenSupplyEvents).mockImplementation(async (_, p) => ({
-      ...empty,
-      total: 3,
-      limit: 2,
-      data: p?.cursor ? [event(3, 'burn')] : [event(1, 'mint'), event(2, 'mint')],
-      hasMore: !p?.cursor,
-      nextCursor: p?.cursor ? null : '999:2',
-    }));
+    vi.mocked(api.getTokenSupplyEvents).mockImplementation(async (_, p) =>
+      pagedRead({
+        ...empty,
+        total: 3,
+        limit: 2,
+        data: p?.cursor ? [event(3, 'burn')] : [event(1, 'mint'), event(2, 'mint')],
+        hasMore: !p?.cursor,
+        nextCursor: p?.cursor ? null : '999:2',
+      })
+    );
     render(<TokenDetailPage typeHash={hash} />);
     const history = await screen.findByRole('region', { name: 'History' });
     expect(history).toHaveTextContent('2 mints · 1 burn · 1,000 transfers');

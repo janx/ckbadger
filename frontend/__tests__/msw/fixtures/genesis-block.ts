@@ -1,4 +1,5 @@
 import type { Block, BlockProposalFees, GlobalActivity, Transaction } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // Mainnet's genesis block as the API serves it (GET /blocks/0 and the page's other reads, captured
 // 2026-11-12 from a synced mainnet node), verbatim but for one cut: the cellbase activity keeps the
@@ -433,10 +434,11 @@ export const genesisNeighbours: Block[] = [
   },
 ];
 
-/** GET /blocks?cursor=3&limit=50, its page fields. */
-export const genesisNeighboursPage = {
+/** GET /blocks?cursor=3&limit=50: the genesis block's neighbours, the oldest end of the list. */
+export const genesisNeighboursPage = pagedRead({
+  data: genesisNeighbours,
   total: 20987031,
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});

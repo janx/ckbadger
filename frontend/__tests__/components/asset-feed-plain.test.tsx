@@ -12,6 +12,7 @@ import {
   itemTransactionsProducer,
   sporeCellVersionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const obj = (n: number, delta: 1 | -1) => ({
   kind: 'object' as const,
@@ -62,7 +63,7 @@ const batch: GlobalActivity = {
   ],
   protocolActions: [],
 };
-const page = { data: [batch], total: 1, limit: 50, hasMore: false, nextCursor: null };
+const page = pagedRead({ data: [batch], total: 1, limit: 50, hasMore: false, nextCursor: null });
 
 function feed(plain: boolean) {
   return render(

@@ -8,7 +8,7 @@ describe('MinerLink', () => {
   // U-09 (re-pinned): an unnamed miner is its address at the caller's size, head and tail (it was
   // the tail alone, "…93hhsj", a form of its own); R9 (re-pinned): the row size is `ckb1…` and 8
   it('names a miner by its address at its size and links the address', () => {
-    render(<MinerLink size="row" address={address} pool={null} />);
+    render(<MinerLink look="key" size="row" address={address} pool={null} />);
     const link = screen.getByRole('link', { name: 'ckb1…qw93hhsj' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
@@ -19,7 +19,13 @@ describe('MinerLink', () => {
   // address it is read from
   it('names a miner by the pool pools.toml names, the pool whole and the address in the title (R-12)', () => {
     render(
-      <MinerLink size="row" address={address} pool="Example Pool" unnamed={<span>full</span>} />
+      <MinerLink
+        look="key"
+        size="row"
+        address={address}
+        pool="Example Pool"
+        unnamed={<span>full</span>}
+      />
     );
     const link = screen.getByRole('link', { name: 'Example Pool' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
@@ -28,20 +34,24 @@ describe('MinerLink', () => {
   });
 
   it('lets a page show the whole address for an unnamed miner', () => {
-    render(<MinerLink size="row" address={address} pool={null} unnamed={<span>full</span>} />);
+    render(
+      <MinerLink look="key" size="row" address={address} pool={null} unnamed={<span>full</span>} />
+    );
     expect(screen.getByText('full')).toBeInTheDocument();
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  // Table-rows T5: in a list row the key cell is the one bright thing, so a row can set the
-  // miner in body ink; everywhere else it stays bright as before.
-  it('is bright by default and takes a row ink from its caller', () => {
-    const { rerender } = render(<MinerLink size="row" address={address} pool="Example Pool" />);
-    expect(screen.getByRole('link', { name: 'Example Pool' })).toHaveClass('text-text-bright');
-    rerender(<MinerLink size="row" address={address} pool="Example Pool" className="text-text" />);
+  // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): a miner states its
+  // look, which is required, and draws no ink of its own: the bright ink "by default" and the row's
+  // hand ink were for callers that stated none, and every caller states one. It was "is bright by
+  // default and takes a row ink from its caller".
+  it('states its look: a row’s key in the bright ink, none of its own', () => {
+    render(<MinerLink size="row" address={address} pool="Example Pool" look="key" />);
     const link = screen.getByRole('link', { name: 'Example Pool' });
-    expect(link).toHaveClass('text-text', 'hover:text-jade');
-    expect(link).not.toHaveClass('text-text-bright');
+    expect(link).toHaveClass('text-text-bright');
+    expect(link).not.toHaveClass('hover:text-jade');
+    // @ts-expect-error a miner's link states its look
+    render(<MinerLink size="row" address={address} pool={null} />);
   });
 
   // Lane P4: a caller that states the link's job gets the owner of the looks' drawing and no ink of

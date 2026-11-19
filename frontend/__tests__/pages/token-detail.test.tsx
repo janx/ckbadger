@@ -14,6 +14,7 @@ import {
   type GlobalActivity,
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -91,7 +92,7 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
+const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
 const activity: GlobalActivity = {
   txHash: other,
   blockNumber: 12345,
@@ -534,15 +535,17 @@ describe('TokenDetailPage', () => {
       lockCodeHash: null,
       lockKind: null,
     });
-    vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
-      ...empty,
-      data: p?.cursor ? [holder(21)] : Array.from({ length: 20 }, (_, i) => holder(i + 1)),
-      total: 21,
-      totalSupply: '21',
-      anchor: null,
-      hasMore: !p?.cursor,
-      nextCursor: p?.cursor ? null : 'page2',
-    }));
+    vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) =>
+      pagedRead({
+        ...empty,
+        data: p?.cursor ? [holder(21)] : Array.from({ length: 20 }, (_, i) => holder(i + 1)),
+        total: 21,
+        totalSupply: '21',
+        anchor: null,
+        hasMore: !p?.cursor,
+        nextCursor: p?.cursor ? null : 'page2',
+      })
+    );
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('History read failed');
     // Re-pinned on purpose (lane p-assets, the placement lane's toggles with the lead's ruling): the

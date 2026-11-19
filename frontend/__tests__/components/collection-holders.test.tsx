@@ -16,6 +16,7 @@ import { CollectionHolders } from '@/components/asset/collection-holders';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const barWidth = (value: number, scale: number, track: number) =>
   `${Math.max(Math.round((value / scale) * track * 100) / 100, value > 0 ? 2 : 0)}px`;
@@ -33,14 +34,15 @@ const prefix = '0x' + '34'.repeat(20);
 const page = (
   data: CollectionHolder[],
   extra: Partial<CursorPaginatedResponse<CollectionHolder>> = {}
-): CursorPaginatedResponse<CollectionHolder> => ({
-  data,
-  limit: 10,
-  total: 2,
-  hasMore: false,
-  nextCursor: null,
-  ...extra,
-});
+): CursorPaginatedResponse<CollectionHolder> =>
+  pagedRead({
+    data,
+    limit: 10,
+    total: 2,
+    hasMore: false,
+    nextCursor: null,
+    ...extra,
+  });
 // Round 3 (contracts R-A · R-2): no indexed lock script → no address and no code hash either.
 const named = {
   lockScriptHash: null,
@@ -57,6 +59,25 @@ const resolved = {
   lockCodeHash: null,
   lockKind: null,
 };
+/**
+ * A first page of 21 holders as the API sends it at `limit` a page (lane cd-fixes-controls,
+ * review-p-tests SHOULD-5): the named holder and as many more as fill the page, with more after it
+ * (the tests served the named holder alone and said more followed, a page the API cannot send).
+ */
+const firstOf21 = (limit: number) =>
+  pagedRead({
+    data: [
+      named,
+      ...Array.from({ length: limit - 1 }, (_, i) => ({
+        ...resolved,
+        lockScriptHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+      })),
+    ],
+    limit,
+    total: 21,
+    hasMore: true,
+    nextCursor: 'next-50',
+  });
 // Unmodified holderDistribution from the real collection-insights producer.
 const distribution = [
   { holders: 0, items: 0, range: '1' },
@@ -91,16 +112,19 @@ describe('Collection holders', () => {
 
   it('names each holder lock by the registry, else by its code hash (R-2, OB-C7)', async () => {
     const load = vi.fn().mockResolvedValue(
-      page([
-        { ...resolved, lockCodeHash: JOYID_CODE_HASH, lockKind: 'JoyID' },
-        {
-          ...resolved,
-          lockScriptHash: `0x${'56'.repeat(32)}`,
-          lockCodeHash: `0x${'43'.repeat(32)}`,
-          lockKind: null,
-        },
-        named,
-      ])
+      page(
+        [
+          { ...resolved, lockCodeHash: JOYID_CODE_HASH, lockKind: 'JoyID' },
+          {
+            ...resolved,
+            lockScriptHash: `0x${'56'.repeat(32)}`,
+            lockCodeHash: `0x${'43'.repeat(32)}`,
+            lockKind: null,
+          },
+          named,
+        ],
+        { total: 3 }
+      )
     );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="kinds" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
@@ -158,11 +182,7 @@ describe('Collection holders', () => {
     const load = vi
       .fn()
       .mockImplementation(({ limit, cursor }) =>
-        Promise.resolve(
-          cursor
-            ? page([resolved], { limit, total: 21 })
-            : page([named], { limit, total: 21, hasMore: true, nextCursor: 'next-50' })
-        )
+        Promise.resolve(cursor ? page([resolved], { limit, total: 21 }) : firstOf21(limit))
       );
     const { rerender } = render(
       <CollectionHolders assetClass="objects" load={load} queryKey="first" />
@@ -176,7 +196,9 @@ describe('Collection holders', () => {
     fireEvent.click(screen.getByRole('button', { name: /^all 21\sholders ↓$/ }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
     const pager = await screen.findByRole('navigation', { name: 'holders' });
-    expect(pager).toHaveTextContent('1–1 of 21');
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): the first page is full, 20 of 21
+    // (it was the named holder alone, "1–1 of 21")
+    expect(pager).toHaveTextContent('1–20 of 21');
     expect(pager).toHaveTextContent('page 1 of 2');
     fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: 'next-50' }));
@@ -202,11 +224,7 @@ describe('Collection holders', () => {
   // list it opens, and keeps the keyboard's focus both ways (the Pager's "all N ↓" and a second
   // "fewer ↑" button swapped places, and the loading list took both away)
   it('opens and folds its list with one button that keeps the focus', async () => {
-    const load = vi
-      .fn()
-      .mockImplementation(({ limit }) =>
-        Promise.resolve(page([named], { limit, total: 21, hasMore: true, nextCursor: 'next-50' }))
-      );
+    const load = vi.fn().mockImplementation(({ limit }) => Promise.resolve(firstOf21(limit)));
     render(<CollectionHolders assetClass="objects" load={load} queryKey="fold" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });

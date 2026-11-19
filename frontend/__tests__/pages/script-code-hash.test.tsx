@@ -36,13 +36,13 @@ vi.mock('@/src/navigation', () => ({
   useRouter: () => ({ replace: replaceMock }),
 }));
 
-const emptyCells = {
+const emptyCells = pagedRead({
   data: [],
   total: 0,
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('ScriptByCodeHashPage', () => {
   beforeEach(() => {

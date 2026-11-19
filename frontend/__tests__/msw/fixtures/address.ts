@@ -7,6 +7,7 @@ import type {
   Activity,
   AddressTransaction,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
@@ -247,13 +248,14 @@ export const addressTransactionsFixture: AddressTransaction[] = [
  * twenty the address page asks for, which the API states back, since the pager reads its page size
  * from the response (lib/pagination.ts); it said 50, a size the page never asks.
  */
-export const pageFixture = <T>(data: T[], total?: number) => ({
-  data,
-  limit: 20,
-  hasMore: false,
-  nextCursor: null,
-  ...(total === undefined ? {} : { total }),
-});
+export const pageFixture = <T>(data: T[], total?: number) =>
+  pagedRead({
+    data,
+    limit: 20,
+    hasMore: false,
+    nextCursor: null,
+    ...(total === undefined ? {} : { total }),
+  });
 
 export const addressDaoCellsFixture: AddressCell[] = addressDaoFixture.map((d) => ({
   txHash: d.txHash,

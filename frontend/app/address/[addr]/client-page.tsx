@@ -129,10 +129,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  // a change of page size at md starts each walk again (lane c2-finish, 1d)
-  const activityPage = useCursorPagination(pageSize),
+  // a change of page size at md starts each walk again (lane c2-finish, 1d), and so does a change
+  // of the list a walk pages: the kind, the class (lane cd-fixes-controls)
+  const activityPage = useCursorPagination(pageSize, { list: [filter] }),
     txPage = useCursorPagination(pageSize),
-    cellPage = useCursorPagination(pageSize);
+    cellPage = useCursorPagination(pageSize, { list: [cellClass] });
   const historyId = useId();
   const address = useQuery({
     queryKey: ['address', addr],
@@ -493,10 +494,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       };
                     })}
                     value={filter}
-                    onChange={(value) => {
-                      setFilter(value);
-                      activityPage.reset();
-                    }}
+                    onChange={setFilter}
                     counted
                     className="mt-3.5"
                   />
@@ -518,10 +516,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       })),
                     ]}
                     value={cellClass ?? 'all'}
-                    onChange={(value) => {
-                      setCellClass(value === 'all' ? undefined : value);
-                      cellPage.reset();
-                    }}
+                    onChange={(value) => setCellClass(value === 'all' ? undefined : value)}
                     counted
                     className="mt-3.5"
                   />

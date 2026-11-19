@@ -7,6 +7,7 @@ import { plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { CollectionHolders } from '@/components/asset/collection-holders';
 import { NetworkTrends } from '@/app/network/trends';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // Lane A5 follow-up (UI review 2026-11-14, U-19): on a phone the history gutter was 104–110 px
 // because every tick repeated its unit ("1.5k transactions"); a tick is the bare value, the unit
@@ -116,19 +117,21 @@ describe('"over time" at 358 px', () => {
 describe('holder counts', () => {
   it('draws a page whose largest holder has 7 items on a whole-number scale', async () => {
     stubChartWidth(1248);
-    const load = vi.fn().mockResolvedValue({
-      data: [7, 2].map((itemCount, i) => ({
-        lockScriptHash: `0x${String(i + 1).repeat(64)}`,
-        address: null,
-        itemCount,
-        lockCodeHash: null,
-        lockKind: null,
-      })),
-      limit: 10,
-      total: 2,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: [7, 2].map((itemCount, i) => ({
+          lockScriptHash: `0x${String(i + 1).repeat(64)}`,
+          address: null,
+          itemCount,
+          lockCodeHash: null,
+          lockKind: null,
+        })),
+        limit: 10,
+        total: 2,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<CollectionHolders load={load} queryKey="seven" assetClass="objects" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(table.querySelector('[data-scale-ticks]')).toHaveTextContent(/^010$/);

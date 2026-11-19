@@ -13,13 +13,15 @@ import {
   collectionActivityFeedProducer,
   collectionTransactionsProducer,
 } from '@/__tests__/msw/fixtures/collection-feed';
-export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> => ({
-  data,
-  total: data.length,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-});
+import { pagedRead } from '@/__tests__/utils/paged-read';
+export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> =>
+  pagedRead({
+    data,
+    total: data.length,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
 const SECP_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 export const protocols: Record<ItemKind, ItemProtocol> = {
   spore: producer.sporeProtocolProducer,

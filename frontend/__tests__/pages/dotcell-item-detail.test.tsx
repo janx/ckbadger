@@ -6,6 +6,8 @@ import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/it
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { itemActivityFeedProducer } from '@/__tests__/msw/fixtures/item-producer';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -219,11 +221,18 @@ it('appends every sub-name page and only reports the full child count after comp
   item.childrenNextCursor = 'first';
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren)
-    .mockResolvedValueOnce({
-      ...emptyPage([{ identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' }]),
-      hasMore: true,
-      nextCursor: 'second',
-    })
+    .mockResolvedValueOnce(
+      pagedRead({
+        ...emptyPage([
+          { identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' },
+        ]),
+        // a full page of one with more after it (lane cd-fixes-controls, SHOULD-5: one sub-name on
+        // a page of fifty that said more followed)
+        limit: 1,
+        hasMore: true,
+        nextCursor: 'second',
+      })
+    )
     .mockResolvedValueOnce(
       emptyPage([{ identityId: '0x' + '83'.repeat(20), name: 'three.alice.cell', label: 'three' }])
     );
@@ -300,12 +309,16 @@ it('retains recycled name protocol history without a live cell or sale', async (
   expect(await screen.findByLabelText('Raw item evidence')).toBeInTheDocument();
 });
 it('resets item paging on name navigation and reports an unknown name', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender, unmount } = render(<Page identityId="alice" />);
   fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>

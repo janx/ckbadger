@@ -11,6 +11,7 @@ import { textPx } from '@/lib/type-metrics';
 import { expectOneRowSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const BLOCK_ID = '8775638';
 const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
@@ -85,12 +86,14 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_ID;
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
     // F2 blocks: the blocks list around the block (neighbour tiles, the bars' list scale).
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [mockBlock],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [mockBlock],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getBlockUncle).mockRejectedValue(new Error('no uncle detail in this fixture'));
     vi.mocked(api.getBlockProposalFees).mockResolvedValue({
       number: mockBlock.number,
@@ -102,36 +105,40 @@ describe('BlockDetailPage', () => {
       committedIn: [],
       transactions: [],
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [],
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [
-        {
-          hash: `0x${'11'.repeat(32)}`,
-          blockNumber: mockBlock.number,
-          blockHash: mockBlock.hash,
-          index: 0,
-          inputsCount: 1,
-          outputsCount: 1,
-          fee: '1000',
-          value: '100000000',
-          txSize: 226,
-          cycles: 5000000,
-          cyclesStatus: 'complete',
-          outputCapacity: '100000000',
-          proposalOrigin: { blockNumber: mockBlock.number - 3, distance: 3, uncle: null },
-          isCellbase: false,
-          timestamp: mockBlock.timestamp,
-        },
-      ],
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            hash: `0x${'11'.repeat(32)}`,
+            blockNumber: mockBlock.number,
+            blockHash: mockBlock.hash,
+            index: 0,
+            inputsCount: 1,
+            outputsCount: 1,
+            fee: '1000',
+            value: '100000000',
+            txSize: 226,
+            cycles: 5000000,
+            cyclesStatus: 'complete',
+            outputCapacity: '100000000',
+            proposalOrigin: { blockNumber: mockBlock.number - 3, distance: 3, uncle: null },
+            isCellbase: false,
+            timestamp: mockBlock.timestamp,
+          },
+        ],
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getBlockFeeStats).mockResolvedValue({
       blockNumber: mockBlock.number,
       totalSize: 1200,

@@ -36,7 +36,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const mockTokenAssets = {
+const mockTokenAssets = pagedRead({
   data: [
     {
       id: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
@@ -72,7 +72,7 @@ const mockTokenAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
 /** One token a page, two pages: the first with an older one after it, then the last. */
 const twoTokenPages = (cursor: string | undefined) =>
@@ -80,7 +80,7 @@ const twoTokenPages = (cursor: string | undefined) =>
     ? pagedRead({ ...mockTokenAssets, limit: 1, total: 2, hasMore: false, nextCursor: null }, 1)
     : pagedRead({ ...mockTokenAssets, limit: 1, total: 2, hasMore: true, nextCursor: 'older' });
 
-const mockClusterAssets = {
+const mockClusterAssets = pagedRead({
   data: [
     {
       id: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
@@ -116,9 +116,9 @@ const mockClusterAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
-const mockDotbitIdentityAssets = {
+const mockDotbitIdentityAssets = pagedRead({
   data: [
     {
       id: '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
@@ -154,9 +154,9 @@ const mockDotbitIdentityAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
-const mockDidCkbIdentityAssets = {
+const mockDidCkbIdentityAssets = pagedRead({
   data: [
     {
       id: '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
@@ -192,9 +192,9 @@ const mockDidCkbIdentityAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
-const mockMixedObjectAssets = {
+const mockMixedObjectAssets = pagedRead({
   data: [
     {
       id: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -258,18 +258,18 @@ const mockMixedObjectAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
-const emptyAssets = {
+const emptyAssets = pagedRead({
   data: [],
   total: 0,
   limit: 50,
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
-const sortableTokenAssets = {
+const sortableTokenAssets = pagedRead({
   data: [
     {
       id: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -333,7 +333,7 @@ const sortableTokenAssets = {
   hasMore: false,
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-};
+});
 
 describe('Tokens Inventory Page', () => {
   beforeEach(() => {

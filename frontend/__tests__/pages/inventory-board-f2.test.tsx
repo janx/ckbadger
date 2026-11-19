@@ -13,6 +13,7 @@ import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
 import { api, type Asset, type InventorySummary } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/src/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
@@ -74,14 +75,15 @@ const base = {
   clusterName: null,
   hMultiplier: '1.50',
 };
-const page = (data: Asset[]) => ({
-  data,
-  total: data.length,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-  anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
-});
+const page = (data: Asset[]) =>
+  pagedRead({
+    data,
+    total: data.length,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+    anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
+  });
 const tokens = page([
   {
     ...base,

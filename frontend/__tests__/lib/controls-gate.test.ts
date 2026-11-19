@@ -70,6 +70,10 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * - the pager words `‹ prev`, `next ›`, `next page`, `show more`, `more ↓`, on a button or a link,
  *   on any element that is a control by its attributes, or on a component with a click or a link
  *   (`onClick`, `onGo`, `href`, `to`);
+ * - `fold`: a disclosure written by hand (review-p-tests SHOULD-6), an element that says whether it
+ *   is open (`aria-expanded`, set or through a spread) outside the library, whose one disclosure
+ *   is FoldToggle; the shell's menus and a figure's own selection are named, the rest a work list;
+ * - the roles `checkbox`, `switch`, `option` and `menuitemcheckbox` as a choice (NOTE-5);
  * - `retry`: an action after a failed read written by hand, its words `Retry`, `try again` or
  *   `Reload` (a `↻` before them) on the same elements: the library's RetryAction draws it (the
  *   chart reviewer's N11: four raw buttons, each with its own ink and underline).
@@ -96,7 +100,8 @@ type Kind =
   | 'clipboard'
   | 'range'
   | 'spread'
-  | 'retry';
+  | 'retry'
+  | 'fold';
 const KINDS: readonly Kind[] = [
   'select',
   'text-input',
@@ -107,13 +112,25 @@ const KINDS: readonly Kind[] = [
   'range',
   'spread',
   'retry',
+  'fold',
 ];
 
 /**
  * The placement lane a file's sites go to (UI plan, phase C), the shell's own fields (the header's
  * search field and the command palette: no C2 lane names them), or `shared`: the old pager itself.
  */
-type Lane = 'c2-lists' | 'c2-chain' | 'c2-assets' | 'c2-topics' | 'd1-charts' | 'shell' | 'shared';
+type Lane =
+  | 'c2-lists'
+  | 'c2-chain'
+  | 'c2-assets'
+  | 'c2-topics'
+  | 'd1-charts'
+  | 'shell'
+  | 'shared'
+  // the page lanes working in those files now (lane cd-fixes-controls, review-p-tests SHOULD-6)
+  | 'p-chain'
+  | 'p-lists'
+  | 'p-topics';
 
 interface Tolerated {
   lane: Lane;
@@ -147,6 +164,36 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-chain: block, transaction, cell, address, script pages ----
   // components/scripts/script-newest-cells.tsx left the list (lane p-assets): its "All N cells ↓"
   // is a way onward to a place on its page, the onward look's link
+  // ---- the disclosures by hand the reader sees since lane cd-fixes-controls (review-p-tests
+  // SHOULD-6), for the page lanes working in these files: FoldToggle is the library's one ----
+  'components/activity/activity-row.tsx': {
+    lane: 'p-lists',
+    sites: { fold: 5 },
+    reason:
+      'a run’s fold, its participants’ and its objects’ “+N more” and their way back, each a button by hand that says it is open: FoldToggle’s',
+  },
+  'components/address/address-holdings.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 1 },
+    reason: 'a collection’s objects opened in place (“objects ↓” / “close ↑”), a button by hand',
+  },
+  'components/transaction/what-moved.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 1 },
+    reason: 'the parties’ “more” that opens the rest of an end in place, a button by hand',
+  },
+  'app/network/advertisement-graph.tsx': {
+    lane: 'p-topics',
+    sites: { fold: 1 },
+    reason:
+      'the observations’ “fewer ↑” beside the Pager’s “all N ↓”, a fold by hand: FoldToggle’s two forms',
+  },
+  'app/network/nodes-table.tsx': {
+    lane: 'p-topics',
+    sites: { fold: 4 },
+    reason:
+      'a peer’s evidence opened under its row in its three forms (a spread of its toggle), and the phone’s filters folded into one button',
+  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -167,7 +214,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
  * when the reader learned a retry written by hand (lane cd-fixes-controls): the four Retry buttons
  * are the library's RetryAction, and the crash page's "↻ try again" came to light, for the shell.
  */
-const TOLERATED_TOTAL = 1;
+// → 13 (lane cd-fixes-controls, review-p-tests SHOULD-6: the reader learned a disclosure by hand,
+// and twelve came to light for the page lanes: the activity row 5, the nodes table 4, the address
+// holdings 1, what-moved 1, the advertisement graph 1)
+const TOLERATED_TOTAL = 13;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
@@ -189,9 +239,15 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
   },
   'components/layout/theme-switcher.tsx': {
     lane: 'shell',
-    sites: { choice: 3 },
+    sites: { choice: 3, fold: 1 },
     reason:
-      'the theme menu: a preference of the reader, its radio items in the shell’s own menu (menuitemradio, read since lane cd-fixes-controls) and the radio group of its sheet, not a filter of a page',
+      'the theme menu: a preference of the reader, its radio items in the shell’s own menu (menuitemradio, read since lane cd-fixes-controls) and the radio group of its sheet, not a filter of a page; its button opens the shell’s menu (aria-expanded, read since review-p-tests SHOULD-6)',
+  },
+  'components/layout/nav-menu.tsx': {
+    lane: 'shell',
+    sites: { fold: 1 },
+    reason:
+      'the shell’s navigation menu: its button opens the menu (aria-expanded, read since lane cd-fixes-controls, review-p-tests SHOULD-6), the shell’s own, not a fold of a page',
   },
   // ---- what the reader sees since lane cd-fixes-controls (T SHOULD-2): a pressed toggle set
   // through a spread, a menu's radio item, a spread it cannot follow on a control ----
@@ -262,8 +318,9 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
   },
   'components/ui/allele-gel.tsx': {
     lane: 'c2-assets',
-    sites: { choice: 1 },
-    reason: 'the allele gel’s bands: a band pressed to read it, a part of the figure',
+    sites: { choice: 1, fold: 1 },
+    reason:
+      'the allele gel’s bands: a band pressed to read it, and a gene’s lane opened to its variants (aria-expanded, read since lane cd-fixes-controls), parts of the figure',
   },
   'components/ui/hex-map.tsx': {
     lane: 'c2-chain',
@@ -284,9 +341,11 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
  * a spread, a menu's radio item and a spread it cannot follow on a control (T SHOULD-2): the
  * theme menu's radio item, the network menu's, eight pressed toggles of figures through the
  * readout's binder or a function of their file, two of the sequencing gel's, and two spreads of
- * props passed through.
+ * props passed through. 26 → 29 when the reader learned a disclosure by hand (review-p-tests
+ * SHOULD-6): the shell's two menus (the theme menu's button, the navigation menu's) and the allele
+ * gel's gene lanes, a figure's own selection.
  */
-const NAMED_TOTAL = 26;
+const NAMED_TOTAL = 29;
 
 interface Site {
   kind: Kind;
@@ -325,8 +384,20 @@ const PAGER_TAGS = new Set(['button', 'a', 'Link', 'AppLink']);
  */
 const RETRY_WORDS = /^(↻ ?)?(retry|try again|reload)$/i;
 
-/** The roles of a choice of one of several: the filter chips' radio group and radio, a menu's radio item. */
-const CHOICE_ROLES = new Set(['radiogroup', 'radio', 'menuitemradio']);
+/**
+ * The roles of a choice: the filter chips' radio group and radio, a menu's radio item, and (lane
+ * cd-fixes-controls, review-p-tests NOTE-5) a checkbox, a switch, a listbox's option and a menu's
+ * checkbox item.
+ */
+const CHOICE_ROLES = new Set([
+  'radiogroup',
+  'radio',
+  'menuitemradio',
+  'checkbox',
+  'switch',
+  'option',
+  'menuitemcheckbox',
+]);
 
 /** The elements that are controls by their tag: what a spread it cannot follow may make a choice of. */
 const INTERACTIVE_TAGS = new Set(['button', 'a', 'input', 'select', 'textarea', 'summary']);
@@ -336,9 +407,14 @@ const INTERACTIVE_ATTRS = ['onClick', 'onKeyDown', 'role', 'tabIndex'] as const;
 /** The props that make a component a pager where its words are a pager's: a click, a link. */
 const PAGER_COMPONENT_PROPS = ['onClick', 'onGo', 'href', 'to'] as const;
 
-/** What a spread sets that the scan reads: whether it says pressed, the roles it can set. */
+/**
+ * What a spread sets that the scan reads: whether it says pressed, whether it says open or shut
+ * (`aria-expanded`, a disclosure: lane cd-fixes-controls, review-p-tests SHOULD-6), the roles it
+ * can set.
+ */
 export interface SpreadRead {
   pressed: boolean;
+  expanded?: true;
   roles: string[];
 }
 
@@ -366,6 +442,7 @@ function hookBinders(code: string): Map<string, SpreadRead> {
             if (!ts.isPropertyAssignment(q)) continue;
             const key = ts.isIdentifier(q.name) || ts.isStringLiteral(q.name) ? q.name.text : null;
             if (key === 'aria-pressed') read.pressed = true;
+            if (key === 'aria-expanded') read.expanded = true;
             if (key === 'role' && ts.isStringLiteralLike(q.initializer))
               read.roles.push(q.initializer.text);
           }
@@ -556,6 +633,7 @@ function scanControls(
         ? null
         : {
             pressed: reads.some((r) => r!.pressed),
+            ...(reads.some((r) => r!.expanded) ? { expanded: true as const } : {}),
             roles: reads.flatMap((r) => r!.roles),
           };
     if (
@@ -578,6 +656,7 @@ function scanControls(
         const key =
           p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : null;
         if (key === 'aria-pressed') parts.push({ pressed: true, roles: [] });
+        if (key === 'aria-expanded') parts.push({ pressed: false, expanded: true, roles: [] });
         if (key === 'role') {
           const roles = ts.isPropertyAssignment(p)
             ? strings(p.initializer)
@@ -693,6 +772,10 @@ function scanControls(
     // filter or a range), and the radio group the filter chips draw
     if (attr('aria-pressed'))
       sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} aria-pressed>` });
+    // a disclosure by hand (lane cd-fixes-controls, review-p-tests SHOULD-6): an element that says
+    // whether it is open; FoldToggle is the library's one
+    if (attr('aria-expanded'))
+      sites.push({ kind: 'fold', line: lineOf(node), what: `<${shown} aria-expanded>` });
 
     // a control by its tag, its component or its attributes
     const handled = INTERACTIVE_ATTRS.some((key) => attr(key));
@@ -717,6 +800,8 @@ function scanControls(
       }
       if (read.pressed)
         sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} {…} aria-pressed>` });
+      if (read.expanded)
+        sites.push({ kind: 'fold', line: lineOf(node), what: `<${shown} {…} aria-expanded>` });
       const tabRole = read.roles.find((r) => r === 'tab' || r === 'tablist');
       if (tabRole) {
         tab = true;
@@ -1066,10 +1151,13 @@ describe('the controls scan finds what it must, and only that', () => {
             <button>plain</button>
           </div>
         );`)
+      // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-6): a button that
+      // says it is open is a disclosure by hand, a fold (it passed)
     ).toEqual([
       'choice <button aria-pressed>',
       'choice <span role="radiogroup">',
       'choice <button role="radio">',
+      'fold <button aria-expanded>',
     ]);
   });
 
@@ -1272,6 +1360,48 @@ describe('the controls scan finds what it must, and only that', () => {
       'retry <button>↻try again</button>',
       'retry <span>Reload</span>',
       'retry <TextButton>retry</TextButton>',
+    ]);
+  });
+
+  // Lane cd-fixes-controls (review-p-tests SHOULD-6): a disclosure written by hand, which the gate
+  // did not read: FoldToggle is the one disclosure control, and a button that says whether it is
+  // open (`aria-expanded`) outside the library is a fold by hand, its own words or not
+  it('finds a disclosure by hand: aria-expanded, set or through a spread', () => {
+    expect(
+      kinds(`
+        const TOGGLE = { onClick: () => {}, 'aria-expanded': false };
+        export const A = ({ open }: { open: boolean }) => (
+          <div>
+            <button type="button" aria-expanded={open}>{open ? 'fewer ↑' : '3 more ↓'}</button>
+            <button type="button" aria-expanded>fewer ↑</button>
+            <tr {...TOGGLE} />
+            <button type="button" aria-controls="x">plain</button>
+          </div>
+        );`)
+    ).toEqual([
+      'fold <button aria-expanded>',
+      'fold <button aria-expanded>',
+      'fold <tr {…} aria-expanded>',
+    ]);
+  });
+
+  // Lane cd-fixes-controls (review-p-tests NOTE-5): the choice roles it did not read
+  it('counts a checkbox, a switch, an option and a menu’s checkbox item as a choice', () => {
+    expect(
+      kinds(`
+        export const A = ({ on }: { on: boolean }) => (
+          <div>
+            <button role="checkbox" aria-checked={on}>a</button>
+            <button role="switch" aria-checked={on}>b</button>
+            <li role="option" aria-selected={on}>c</li>
+            <button role="menuitemcheckbox" aria-checked={on}>d</button>
+          </div>
+        );`)
+    ).toEqual([
+      'choice <button role="checkbox">',
+      'choice <button role="switch">',
+      'choice <li role="option">',
+      'choice <button role="menuitemcheckbox">',
     ]);
   });
 

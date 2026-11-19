@@ -734,7 +734,7 @@ function FullAssetFeed({
   const [urlCursor, setUrlCursor] = useState(initialActivityCursor);
   // a change of page size at md starts each walk again (lane c2-finish, 1d); the activities' walk
   // starts from the URL's cursor, so its first page is stamped there (lane cd-fixes-controls)
-  const actsPages = useCursorPagination(pageSize, urlCursor),
+  const actsPages = useCursorPagination(pageSize, { from: urlCursor }),
     txPages = useCursorPagination(pageSize);
   const activityCursor = actsPages.cursor;
   useEffect(() => {
