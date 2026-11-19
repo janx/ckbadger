@@ -3,13 +3,13 @@ import { fontPx, textPx } from '@/lib/type-metrics';
 
 /**
  * What a tab row holds at its width (UI review 2026-11-14, phase C, lane C1; the controls board the
- * owner passed on 2026-11-19, gate D0′; the rule in docs/RESPONSIVE_LAYOUT.md "Touch" and the
- * board's `tabRowPx`). A tab row (components/ui/tabs.tsx) is one line: the names at the section
- * step from sm (17 px) and the body step below it (14 px), each count at the meta step (12 px)
- * after its name, and, when the row is a tier-1 section's command line, the prompt square before
- * the first name. The owner's phone rule: when the row is wider than its line the counts leave the
- * row (the list's own count line keeps them); a name is never cut, and the row never scrolls or
- * wraps. The row is measured from what it writes (lib/type-metrics.ts, a glyph 0.6 em) and the
+ * owner passed on 2026-11-19, gate D0′; the board's `tabRowPx`; docs/RESPONSIVE_LAYOUT.md's
+ * principle 4, the measured width decides). A tab row (components/ui/tabs.tsx) is one line: the
+ * names at the section step from sm (17 px) and the body step below it (14 px), each count at the
+ * meta step (12 px) after its name, and, when the row is a tier-1 section's command line, the
+ * prompt square before the first name. The owner's phone rule: when the row is wider than its line
+ * the counts leave the row (the list's own count line keeps them); a name is never cut, and the
+ * row never scrolls or wraps. The row is measured from what it writes (lib/type-metrics.ts, a glyph 0.6 em) and the
  * insets below, which the component draws as classes; its test reads the drawn row through
  * __tests__/utils/tailwind-box.ts against `tabRowPx`, so the two cannot drift.
  *
