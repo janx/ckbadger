@@ -101,16 +101,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the header’s search field: a combobox with its own cursor and list, the well TextField copies (WELL_MATERIAL)',
   },
-  // ---- shared: the old pager ----
-  'components/ui/cursor-pagination.tsx': {
-    lane: 'shared',
-    sites: { pager: 2 },
-    reason: 'the old pager’s previous / next buttons: it goes with its last use (the orphan gate)',
-  },
+  // ---- shared: the old pager (components/ui/cursor-pagination.tsx) went with its last use ----
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 5;
+const TOLERATED_TOTAL = 3;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
