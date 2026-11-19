@@ -338,11 +338,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 5, ink: 2 },
     reason: '5 without a look; inks by hand (hover:underline, text-text-bright, text-text)',
   },
-  'app/inventory/inventory-page-client.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, text-text-dim)',
-  },
   'app/scripts/page.tsx': {
     lane: 'p-lists',
     sites: { look: 2, ink: 3, raw: 1 },
@@ -524,7 +519,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 612;
+const TOLERATED_TOTAL = 610;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
