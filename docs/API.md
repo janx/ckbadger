@@ -758,7 +758,8 @@ network store too), no re-sync:
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
 - `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
-  script families by role; `locks` and `types` each count a family used as both
+  script families by role, a family's role its use or, with no cell yet, the
+  registry's declaration; `locks` and `types` each count a family that is both
   (`both`), `neither` the families with no role, so the four make the whole
   (`locks + types - both + neither = all`, checked in the route; the list's
   first sentence says each).

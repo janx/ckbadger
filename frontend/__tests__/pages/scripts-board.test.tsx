@@ -370,6 +370,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
   // of 12 px", so rows stand in the first screen): no display figure; the counts the API states,
   // in one sentence in the reading ink, and no CKB total, which summed the classes in the page
   // (renamed: "leads with the CKB under these scripts as the one figure …")
+  // re-pinned on purpose (the third read's La N5): a family's role is its use, or, with no cell
+  // yet, the registry's declaration, so the sentence says what each family is ("41 are locks"); it
+  // said "41 used as locks" of families the registry only declares
   it('says the scripts with neither role where the route counts some', async () => {
     vi.mocked(api.getScripts).mockResolvedValue({
       ...withSummary,
@@ -380,7 +383,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
       (_, el) => el?.getAttribute('data-role') === 'summary'
     );
     expect(sentence).toHaveTextContent(
-      /^72\sscripts; 41 used as locks, 34 as types, 5 as both, 2 as neither\./
+      /^72\sscripts; 41 are locks, 34 are types, 5 are both, 2 are neither\./
     );
   });
 
@@ -393,7 +396,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // read as a partition (75 parts of 70); the sentence says what each count is, the overlap the
     // route's
     expect(sentence).toHaveTextContent(
-      /^70\sscripts; 41 used as locks, 34 as types, 5 as both\. Who can change the locks’ code, by the CKB under them:$/
+      /^70\sscripts; 41 are locks, 34 are types, 5 are both\. Who can change the locks’ code, by the CKB under them:$/
     );
     expect(sentence).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(figure()).toBeNull();
@@ -503,7 +506,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The hero's request never carries the role: the tab is the table's.
     for (const [params] of vi.mocked(api.getScripts).mock.calls)
       if (params?.limit === 1) expect(params.role).toBeUndefined();
-    expect(sentence).toHaveTextContent(/^70\sscripts; 41 used as locks, 34 as types, 5 as both\./);
+    expect(sentence).toHaveTextContent(/^70\sscripts; 41 are locks, 34 are types, 5 are both\./);
   });
 
   it('writes no coloured text in tier 1: the figure is bright and the bar keeps its colours (R11)', async () => {
