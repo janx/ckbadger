@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useDetailTier } from '@/components/ui/detail-tier';
 import { cn } from '@/lib/utils';
 
-interface SectionDisclosureProps {
+interface SectionDisclosureBase {
   /** Its words, the summary a reader opens it by: what it holds ("Raw data", "Decoded fields"). */
   summary: ReactNode;
   /**
@@ -11,12 +11,22 @@ interface SectionDisclosureProps {
    * every row), with no rule of its own, its content its caller's, 8 px under its words.
    */
   form?: 'section' | 'inner';
-  /** Drawn open (the reader folds and opens it after; the browser holds its state). */
-  open?: boolean;
   /** Its place in its caller's layout: a margin, never its look. */
   className?: string;
   children: ReactNode;
 }
+
+/**
+ * Its state: the browser's (`open` draws it open, the reader folds and opens it after), or its
+ * page's (lane cd-fixes-controls, the disclosure sweep): `open` with `onToggle`, for a page that
+ * reads whether it is open (the transaction page's Cell graph loads only when it is open); the
+ * browser still opens it, the page is told, and the page's state is what it draws.
+ */
+type SectionDisclosureState =
+  | { open?: boolean; onToggle?: never }
+  | { open: boolean; onToggle: (open: boolean) => void };
+
+type SectionDisclosureProps = SectionDisclosureBase & SectionDisclosureState;
 
 /**
  * The tier rule: a disclosure's words are a control's words, at the small step (13 px) in both
@@ -34,13 +44,15 @@ const WORDS_INK = {
  * A disclosure a reader opens (lane cd-fixes-controls, the lead's ruling on review-fix-tests
  * SHOULD-4: a native disclosure is a control like any other, and this is the one place a
  * `<details>` is written; the controls gate reads one anywhere else as a disclosure by hand). The
- * browser's own `<details>`: its summary set by the tier rule above, in either form (`form`); the
- * section form is what components/ui/detail-layout.tsx drew for its "Raw data", its first use.
+ * browser's own `<details>`: its summary set by the tier rule above, in either form (`form`), its
+ * state the browser's or its page's (`onToggle`); the section form is what
+ * components/ui/detail-layout.tsx drew for its "Raw data", its first use.
  */
 export function SectionDisclosure({
   summary,
   form = 'section',
   open,
+  onToggle,
   className,
   children,
 }: SectionDisclosureProps) {
@@ -49,6 +61,7 @@ export function SectionDisclosure({
   return (
     <details
       open={open}
+      onToggle={onToggle && ((event) => onToggle(event.currentTarget.open))}
       className={cn('min-w-0', !inner && 'border-row-rule border-t pt-4', className)}
     >
       <summary className={cn('text-small cursor-pointer', WORDS_INK[tier])}>{summary}</summary>

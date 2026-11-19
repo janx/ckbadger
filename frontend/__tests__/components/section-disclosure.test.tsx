@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { DetailTier2 } from '@/components/ui/detail-layout';
 import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
@@ -127,5 +128,51 @@ describe('SectionDisclosure: the inner form', () => {
     );
     expect(inkOf(screen.getByText('Media dependencies · 2 sources'))).toBe(READING);
     expect(container.querySelector('details')).toHaveClass('mt-3', 'min-w-0');
+  });
+});
+
+/**
+ * A state its page holds (lane cd-fixes-controls, the disclosure sweep): `open` with `onToggle`,
+ * for a disclosure whose page reads whether it is open (the transaction page's Cell graph loads its
+ * graph only when it is open, and opens it from the address `?tab=graph`). The browser still opens
+ * it; the page is told, and the page's state is what it draws.
+ */
+describe('SectionDisclosure: a state its page holds', () => {
+  function Graph() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <p>{open ? 'the graph is asked for' : 'the graph is not asked for'}</p>
+        <button type="button" onClick={() => setOpen(false)}>
+          fold it
+        </button>
+        <SectionDisclosure form="inner" summary="Cell graph" open={open} onToggle={setOpen}>
+          <p>the graph</p>
+        </SectionDisclosure>
+      </>
+    );
+  }
+
+  it('tells its page when the reader opens it, and folds when its page folds it', async () => {
+    const { container } = render(<Graph />);
+    const details = container.querySelector('details')!;
+    expect(details).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Cell graph'));
+    expect(details).toHaveAttribute('open');
+    await waitFor(() => expect(screen.getByText('the graph is asked for')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'fold it' }));
+    expect(details).not.toHaveAttribute('open');
+    expect(screen.getByText('the graph is not asked for')).toBeInTheDocument();
+  });
+
+  it('takes onToggle only with the open it holds', () => {
+    // a page that is told of a toggle holds the state it draws: `open` with it
+    const told = (
+      // @ts-expect-error onToggle without the open it holds
+      <SectionDisclosure summary="Cell graph" onToggle={() => {}}>
+        {null}
+      </SectionDisclosure>
+    );
+    expect(told).toBeTruthy();
   });
 });

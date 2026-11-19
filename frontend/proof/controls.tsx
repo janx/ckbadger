@@ -431,7 +431,27 @@ function Disclosures() {
       <Note>
         the inner form in tier 1: its words 13 px in the reading ink, bright under the pointer
       </Note>
+      <HeldDisclosure />
     </Item>
+  );
+}
+
+/** A disclosure whose state its page holds (`open` + `onToggle`): the Cell graph's form. */
+function HeldDisclosure() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SectionDisclosure form="inner" summary="Cell graph" open={open} onToggle={setOpen}>
+        <p className="text-small text-text">the graph, read only while this is open</p>
+      </SectionDisclosure>
+      <Note>
+        a state its page holds: the page is told when the reader opens it ({open ? 'open' : 'shut'}
+        now) and draws its own state; the page can fold it too{' '}
+        <button type="button" className="text-jade" onClick={() => setOpen(false)}>
+          fold
+        </button>
+      </Note>
+    </>
   );
 }
 
