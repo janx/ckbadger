@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  NARROWEST_LINE_PX,
-  tabCountText,
-  tabRowPx,
-  tabRowShowsCounts,
-  type TabRowItem,
-} from '@/lib/tab-row-fit';
+import { NARROWEST_LINE_PX, tabRowPx, tabRowShowsCounts, type TabRowItem } from '@/lib/tab-row-fit';
 import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 
 /**
@@ -70,11 +64,14 @@ describe('the tab row’s width (the board’s tabRowPx)', () => {
     });
   });
 
-  it('writes a count grouped, and refuses one that is not a count', () => {
-    expect(tabCountText(5653)).toBe('5,653');
-    expect(tabCountText(0)).toBe('0');
-    expect(() => tabCountText(-1)).toThrow('not a count');
-    expect(() => tabCountText(1.5)).toThrow('not a count');
+  it('measures a count as it is written, grouped, and refuses one that is not a count', () => {
+    // `5,653`: five glyphs at 7.2 and the 6 px margin
+    expect(tabRowPx([{ label: 'a', count: 5653 }], 'body', false).counts).toBe(42);
+    expect(tabRowPx([{ label: 'a', count: 0 }], 'body', false).counts).toBe(13.2);
+    expect(() => tabRowPx([{ label: 'a', count: -1 }], 'body', false)).toThrow('Invalid count -1');
+    expect(() => tabRowPx([{ label: 'a', count: 1.5 }], 'body', false)).toThrow(
+      'Invalid count 1.5'
+    );
   });
 });
 

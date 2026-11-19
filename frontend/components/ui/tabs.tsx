@@ -4,7 +4,8 @@ import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { useFromSm } from '@/hooks/useFromMd';
 import { rovingTarget } from '@/lib/roving-focus';
-import { tabCountText, tabRowShowsCounts, type TabRowItem } from '@/lib/tab-row-fit';
+import { groupCount } from '@/lib/format-count';
+import { tabRowShowsCounts, type TabRowItem } from '@/lib/tab-row-fit';
 import { cn } from '@/lib/utils';
 
 /** One tab: its key, the name it writes and its count where it has one. */
@@ -115,7 +116,7 @@ export function Tabs<K extends string>({
                     <span className="sr-only"> </span>
                     {/* a count: 12 px in the quiet ink, at every state of its tab */}
                     <span className="text-meta text-text-dim ml-1.5 font-normal">
-                      {tabCountText(tab.count)}
+                      {groupCount(tab.count)}
                     </span>
                   </>
                 )}

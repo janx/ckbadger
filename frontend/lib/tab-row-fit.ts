@@ -1,3 +1,4 @@
+import { groupCount } from '@/lib/format-count';
 import { fontPx, textPx } from '@/lib/type-metrics';
 
 /**
@@ -45,13 +46,6 @@ export const NARROWEST_LINE_PX = 328;
 /** A sum of widths to the hundredth of a pixel the budgets are written in. */
 const hundredth = (px: number) => Math.round(px * 100) / 100;
 
-/** A tab's count as the row writes it: grouped (`5,653`); a zero is a count too. */
-export function tabCountText(count: number): string {
-  if (!Number.isSafeInteger(count) || count < 0)
-    throw new Error(`tab row: ${count} is not a count`);
-  return count.toLocaleString('en-US');
-}
-
 /** The widths of a tab row at a step: its names, its counts, the square and the gaps. */
 export interface TabRowWidths {
   names: number;
@@ -75,7 +69,7 @@ export function tabRowPx(
     (sum, item) =>
       item.count === undefined || item.count === null
         ? sum
-        : sum + textPx(tabCountText(item.count).length, COUNT_PX) + COUNT_GAP_PX,
+        : sum + textPx(groupCount(item.count).length, COUNT_PX) + COUNT_GAP_PX,
     0
   );
   const chrome =
