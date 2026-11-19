@@ -430,37 +430,31 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/network/advertisement-graph.tsx': {
     family: 'topics',
-    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink
-    sites: { prose: 3 },
-    reason: 'the loading, refresh and empty lines in the quiet ink',
+    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink; 3 → 2 (P4 topics):
+    // the empty line reads
+    sites: { prose: 2 },
+    reason: 'the loading and refreshing lines, transient notes in the quiet ink',
   },
   'app/network/client-page.tsx': {
     family: 'topics',
     // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
-    // the reading ink
-    sites: { prose: 3 },
-    reason: 'the round lines and the MaxMind credit in the quiet ink',
-  },
-  'app/network/distributions.tsx': {
-    family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the empty line and the exact counts line under a distribution',
+    // the reading ink; prose 3 → 1 (P4 topics): the two round lines' counts and age are values
+    sites: { prose: 1 },
+    reason: 'the MaxMind credit, a note in the quiet ink',
   },
   'app/network/network-map.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the loading line and the one-node countries line under the map',
-  },
-  'app/network/nodes-table.tsx': {
-    family: 'topics',
-    sites: { prose: 9 },
-    reason: "a node's observation sentences and empty states in its detail",
+    // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country
+    // is a row of the ranked list beside the map
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/network/trends.tsx': {
     family: 'topics',
-    // prose 5 → 4 (B7): the top-label note explains, in the reading ink
-    sites: { td: 1, prose: 4 },
-    reason: 'a bucket count in a table cell; the loading, empty and round lines',
+    // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2
+    // (P4 topics): a day's label count is a value, and the two empty lines read
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
   'components/dao/dao-board.tsx': {
     family: 'topics',
