@@ -8,7 +8,10 @@ import {
   shareBarWidth,
 } from '@/components/ui/share-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
-import { phoneLines } from '@/__tests__/utils/phone-row';
+import { phoneHeadPx, phoneLines } from '@/__tests__/utils/phone-row';
+import { gapPx } from '@/__tests__/utils/tailwind-box';
+import { PHONE_PART_GAP_PX } from '@/lib/type-metrics';
+import { RowSeal, ROW_SEAL } from '@/components/ui/row-seal';
 
 describe('PhoneRow (boards L1–L8)', () => {
   it('lays out named lines in three voices, each a wrapping left part and a right figure', () => {
@@ -110,6 +113,58 @@ describe('PhoneRow (boards L1–L8)', () => {
     expect(row).toHaveClass('flex', 'flex-col');
     expect(row).not.toHaveClass('grid');
     expect(row.querySelector('[data-part="mark"]')).toBeNull();
+  });
+
+  // Lane D4: a list states its first line (`phoneHead`) with the 12 px between the parts its lines
+  // draw, and writes it on the row, so its tests read the drawn line against the stated one.
+  it('draws the 12 px between a line’s parts that a stated first line counts', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        head={237.6}
+        mark={<RowSeal id={{ kind: 'block', hash: `0x${'5e'.repeat(32)}`, txs: 1 }} />}
+        lines={[{ key: 'identity', tone: 'head', left: '#21,009,134', right: '1 tx · 20s ago' }]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    expect(row).toHaveAttribute('data-head-px', '237.6');
+    const line = row.querySelector('[data-line="identity"]')!;
+    for (const viewport of [360, 390]) expect(gapPx(line, viewport)).toBe(PHONE_PART_GAP_PX);
+    // the stone's footprint (24), the key at 14 px (92.4), the gap and the figure at 13 px (109.2):
+    // the board's head
+    expect(ROW_SEAL.block.footprint).toBe(24);
+    expect(phoneHeadPx(row, 360)).toBe(237.6);
+  });
+
+  // Lane D4 (PB-09): a line that holds its right part keeps it at the line's right edge, so where a
+  // chip lands does not depend on how long the left part is; the left wraps beside it, between the
+  // items of its separated list.
+  it('holds a right part at its line’s edge where the line says so, and wraps the rest otherwise', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        lines={[
+          { key: 'identity', tone: 'head', left: 'Wyltek Founding Members', right: '100 CKB' },
+          {
+            key: 'what',
+            tone: 'body',
+            hold: true,
+            left: <Dotted parts={['Spore', '93 objects', '32 holders']} />,
+            right: 'Pure CKB',
+          },
+        ]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    const [head, what] = Array.from(row.querySelectorAll(':scope > [data-line]'));
+    expect(head).toHaveClass('flex-wrap');
+    expect(head).not.toHaveClass('flex-nowrap');
+    expect(what).toHaveClass('flex-nowrap');
+    expect(what).not.toHaveClass('flex-wrap');
+    // its left part shrinks and its list wraps between items; its right part does not shrink
+    expect(what.querySelector(':scope > [data-part="left"]')).toHaveClass('min-w-0');
+    expect(what.querySelector('[data-dotted]')).toHaveClass('flex-wrap');
+    expect(what.querySelector(':scope > [data-part="right"]')).toHaveClass('shrink-0');
   });
 
   it('refuses a row without a line', () => {

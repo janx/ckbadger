@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { screen, waitFor, within, fireEvent } from '@testing-library/react';
@@ -519,63 +527,56 @@ describe('Scripts list phone row (board L6)', () => {
 
   // The coordinator's overflow sweep (F3-e): at a 360 px window the counts, one nowrap run of 45
   // glyphs at 13 px ("817,008 live · of 78,764,381 · 0.13% occupied", 351 px), stood 7 px past
-  // the 328 px row. A phone row's line is budgeted as a column is: below 560 px the counts are two
-  // lines by construction, live of ever over the occupied share, each whole, the widest of them
-  // "99,999,999 live · of 99,999,999" (31 characters, 241.8 px) inside 328.
-  it('writes its counts as two lines inside a 328 px row: live of ever, then the share', async () => {
+  // the 328 px row. Re-pinned on purpose (lane D4, the phone-rows board): the counts are the bar's
+  // figures on line 3, "N live · N% occupied", a separated list that breaks between its two items,
+  // each whole; the cells ever left the row (its title keeps them). Beside the bar's least track
+  // (48 px) and the 12 px, the widest of them, "99,999,999 live · 100.00% occupied" (34 characters
+  // at 12 px, 244.8), stands inside 328 (304.8). They were two nowrap lines at the right of line 2,
+  // live of ever over the share.
+  it('writes the bar’s two figures on line 3, each whole, the widest beside the bar inside 328 px', async () => {
     atContainerWidth(328);
     render(<ScriptsPage />);
     const rows = await screen.findAllByTestId('script-row-mobile');
-    const right = rows[0].querySelector('[data-line="code"] > [data-part="right"]')!;
-    const lines = Array.from(right.querySelectorAll(':scope > * > *'));
-    expect(lines.map((l) => l.textContent)).toEqual([
-      '161,049 live · of 2,707,778',
-      '4.19% occupied',
-    ]);
-    for (const line of lines) expect(line).toHaveClass('whitespace-nowrap');
+    const right = rows[0].querySelector('[data-line="share"] > [data-part="right"]')!;
+    const items = Array.from(right.querySelectorAll('[data-role="figure-label"]')).map(
+      (label) => label.parentElement!
+    );
+    expect(items.map((l) => l.textContent)).toEqual(['161,049 live', '4.19% occupied']);
+    for (const item of items) expect(item).toHaveClass('whitespace-nowrap');
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
-    for (const widest of [
-      '99,999,999 live · of 99,999,999',
-      'unavailable live · of unavailable',
-      '100.00% occupied',
-    ])
-      expect(at(widest, 13)).toBeLessThanOrEqual(328);
+    expect(48 + 12 + at('99,999,999 live · 100.00% occupied', 12)).toBeLessThanOrEqual(328);
   });
 
-  it('is three lines at 358 px: name and CKB · role, code, counts · the description in full', async () => {
+  // Re-pinned on purpose (lane D4, the phone-rows board; the new describe below pins the row): the
+  // role, the code class and its facts are line 2 in words ("lock · upgradable · 5 versions · by a
+  // multisig", was "lock·Upgradable · 5 versions· by a multisig · since 2023-10-07" beside the
+  // counts), the bar and its two figures are line 3, and the description left the row for the
+  // script page and the row's title (it was line 3, whole).
+  it('is three lines at 358 px: name and CKB · role and code · the share bar and its figures', async () => {
     atContainerWidth(358);
     render(<ScriptsPage />);
     const rows = await screen.findAllByTestId('script-row-mobile');
     expect(screen.queryByRole('table', { name: 'Scripts' })).toBeNull();
     expect(phoneLines(rows[0])).toEqual([
-      // a phone row's summary form (readability R5, re-pinned on purpose: was "456,002,179.57000000
-      // CKB")
+      // a phone row's summary form (readability R5: was "456,002,179.57000000 CKB")
       { key: 'identity', tone: 'head', left: 'JoyID', right: '456,002,179 CKB' },
       {
         key: 'code',
         tone: 'body',
-        left: 'lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
-        // re-pinned on purpose (the coordinator's sweep, F3-e): the counts are two lines below
-        // 560 px, live of ever over the share (they were one, "… · of 2,707,778 · 4.19% occupied")
-        right: '161,049 live · of 2,707,7784.19% occupied',
-      },
-      {
-        key: 'description',
-        tone: 'quiet',
-        left: 'An universal Account Protocol for Web3 Mass-adoption',
+        left: 'lock · upgradable · 5 versions · by a multisig',
         right: null,
       },
+      { key: 'share', tone: 'quiet', left: '', right: '161,049 live · 4.19% occupied' },
     ]);
-    // Never clamped (C#12): the whole sentence, no line clamp anywhere in the row.
+    // Never clamped (C#12): no line clamp anywhere in the row.
     expect(rows[0].querySelector('[class*="line-clamp"]')).toBeNull();
     // Lane F follow-up: immutable is the line's accent tag, lower-case as in the table (was the
     // dim word "Immutable"); upgradable is plain text, no longer the bright one beside the name.
-    expect(phoneLines(rows[1])[1].left).toMatch(/^lock·immutable· genesis · code cell unspendable/);
+    expect(phoneLines(rows[1])[1].left).toMatch(/^lock · immutable · code cell unspendable/);
     expect(within(rows[1]).getByText('immutable')).toHaveAttribute('data-row-tag', 'accent');
-    expect(within(rows[0]).getByText('Upgradable · 5 versions')).not.toHaveClass(
-      'text-text-bright'
-    );
-    expect(rows[2]).toHaveTextContent('Godwoken Custodian Lockdeprecated');
+    expect(within(rows[0]).getByText('upgradable')).not.toHaveClass('text-text-bright');
+    // the deprecation opens line 2 (it stood after the name on line 1)
+    expect(phoneLines(rows[2])[1].left).toMatch(/^deprecated · lock · /);
     // Lane F follow-up 2: the phone row's "deprecated" is the warn tag too (was dim text).
     expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
@@ -605,22 +606,90 @@ describe('Scripts list phone row (board L6)', () => {
     }
   });
 
-  it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
+  // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts (it was two
+  // lines, the role and code beside the name and the counts beside the description).
+  it('is the phone row’s three parts at 608 px', async () => {
     atContainerWidth(608);
     render(<ScriptsPage />);
     const [row] = await screen.findAllByTestId('script-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      [
-        'identity',
-        'JoyID · lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
-        // a phone row's summary form (readability R5, re-pinned on purpose)
-        '456,002,179 CKB',
-      ],
-      [
-        'description',
-        'An universal Account Protocol for Web3 Mass-adoption',
-        '161,049 live · of 2,707,778 · 4.19% occupied',
-      ],
+      // a phone row's summary form (readability R5)
+      ['identity', 'JoyID', '456,002,179 CKB'],
+      ['code', 'lock · upgradable · 5 versions · by a multisig', null],
+      ['share', '', '161,049 live · 4.19% occupied'],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board, its scripts pane): up to ten lines a row today (PA-08). Line 1 the
+// name and the CKB its cells hold, the figure the list sorts by, at the key's step in the bright
+// ink; line 2 what the script is, in words that wrap between their items: its role, the code's
+// class (the pip and "immutable", or "upgradable", its versions and who can change it), a
+// deprecation; line 3 the list's one bar, the occupied share, with the two figures that name it,
+// "N live · N% occupied". The description leaves the list (the script page and the row's title
+// hold it), as do the cells ever and the date the code is known from.
+describe('the scripts phone row on the phone-rows board (lane D4)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getScripts).mockResolvedValue(response);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three parts at 358 px: name and CKB, what it is, the share bar with its figures', async () => {
+    atContainerWidth(358);
+    render(<ScriptsPage />);
+    const [joy, base, old] = await screen.findAllByTestId('script-row-mobile');
+    expect(phoneLines(joy).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', 'JoyID', '456,002,179 CKB'],
+      ['code', 'body', 'lock · upgradable · 5 versions · by a multisig', null],
+      ['share', 'quiet', '', '161,049 live · 4.19% occupied'],
+    ]);
+    expect(phoneLines(base)[1].left).toBe(
+      'lock · immutable · code cell unspendable · pinned by data hash'
+    );
+    expect(within(base).getByText('immutable')).toHaveAttribute('data-row-tag', 'accent');
+    expect(phoneLines(old)[1].left).toBe('deprecated · lock · code evidence unavailable');
+    expect(within(old).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
+    // the figure the list sorts by stands at the key's step, bright
+    const held = joy.querySelector('[data-line="identity"] > [data-part="right"] > *')!;
+    expect(held).toHaveClass('text-body', 'text-text-bright');
+    // the bar and the two figures that name it, each after its value's name, quiet
+    const share = joy.querySelector('[data-line="share"]')!;
+    expect(share.querySelector('[data-share-track]')).not.toBeNull();
+    expect(dottedItems(share)).toEqual(['161,049 live', '4.19% occupied']);
+    const labels = Array.from(share.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['live', 'occupied']);
+    for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');
+    // the description, the cells ever and the date leave the row (its title keeps them)
+    expect(joy.textContent).not.toMatch(/Mass-adoption|2,707,778|2023-10-07/);
+    expect(joy.closest('[role="listitem"]')!.getAttribute('title')).toMatch(
+      /Mass-adoption.*since 2023-10-07.*of 2,707,778|Mass-adoption.*2,707,778/
+    );
+  });
+
+  // The board's head(): a 20-character name at the key's 14 px (168), the 12 px between the parts
+  // and the widest CKB a row's cells hold, "99,999,999,999" at 14 px (117.6) and " CKB" at the
+  // unit's 12 px (28.8): 326.4 of a 360 px phone's 328 px line. Ten of the 75 names the registry
+  // writes are longer (21 to 25 characters): beside the widest figure the figure drops under them.
+  it('states its first line, 326.4 of 328 px, and draws a 20-character name with the widest figure', async () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...response,
+      data: [
+        family({
+          codeHash: 'family:intent',
+          name: 'UTXOSwap Intent Lock',
+          ownedCapacitySum: '9999999999999999999',
+          ownedKnowledgeSum: '100000000',
+        }),
+      ],
+    });
+    render(<ScriptsPage />);
+    const [row] = await screen.findAllByTestId('script-row-mobile');
+    expect(phoneLines(row)[0].right).toBe('99,999,999,999 CKB');
+    expect(statedHeadPx(row)).toBe(326.4);
+    expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });

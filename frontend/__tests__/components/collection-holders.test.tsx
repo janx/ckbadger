@@ -525,7 +525,11 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(phoneLines(rows[0])[1].left).toBe('06');
     // The rank is inline at the start of the first line, not a line of its own (B#19).
     expect(rows[1].querySelector('[data-line="holder"] [data-role="rank"]')).toHaveTextContent('2');
-    expect(second[0].left).toMatch(/^2.*JoyID$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock stands at the bar line's right edge, held
+    // there (it was after the holder on line 1, where a long one dropped the count under it)
+    expect(second[0].left).toMatch(/^2/);
+    expect(second[0].left).not.toMatch(/JoyID/);
+    expect(second[1].right).toBe('JoyID');
     expect(second[0].right).toBe('2 items');
     // Re-pinned with ruling R7: on the table's scale for its Items bars, the page's rounded
     // maximum (here 6, the largest itself is round).

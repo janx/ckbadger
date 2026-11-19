@@ -8,7 +8,7 @@ import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
 import { ckbAmountText } from '@/lib/amount-form';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { RowTag } from '@/components/ui/row-tag';
 import {
   getClusterDetailHref,
@@ -23,7 +23,8 @@ import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { groupCount } from '@/lib/format-count';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { UNAVAILABLE, WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
 
 /**
@@ -85,29 +86,21 @@ function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
     border: '1px solid transparent',
   };
 }
-/**
- * CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)", as
- * parts of the row's one separated list (a list is never nested in another).
- */
-function heldAndOccupiedParts(a: Asset): ReactNode[] {
+/** The occupied CKB of a phone row's quiet line, with its share of what the cells hold. */
+function occupiedPart(a: Asset): ReactNode {
   const { held, occupied } = heldAndOccupied(a);
-  if (held === null) return ['CKB held unavailable'];
-  return [
-    <span key="held" className="whitespace-nowrap">
-      <CkbAmount form="summary" shannons={held} signed={false} tone="plain" /> held
-    </span>,
-    occupied === null ? (
-      'occupied unavailable'
-    ) : (
-      <span key="occupied" className="whitespace-nowrap">
-        <OccupiedCkb shannons={occupied} /> occupied
-        {held > BigInt(0) && ` (${percentOf(occupied, held)})`}
-      </span>
-    ),
-  ];
+  if (occupied === null) return 'occupied unavailable';
+  return (
+    <span key="occupied" className="whitespace-nowrap">
+      <Labelled label="occupied" after>
+        <CkbAmount form="summary" shannons={occupied} signed={false} tone="plain" />
+      </Labelled>
+      {held !== null && held > BigInt(0) && ` (${percentOf(occupied, held)})`}
+    </span>
+  );
 }
 
-/** An exact count and its noun, singular for one ("1 holder", "93 objects"). */
+/** An exact count and its noun, singular for one ("1 holder", "93 objects"): a named figure. */
 function Counted({
   value,
   noun,
@@ -118,181 +111,185 @@ function Counted({
   one?: string;
 }) {
   return (
-    <span className="whitespace-nowrap">
-      <AssetCount value={value} />{' '}
-      <span className="text-text-dim">{value === 1 || value === '1' ? one : noun}</span>
-    </span>
+    <Labelled label={value === 1 || value === '1' ? one : noun} after>
+      <AssetCount value={value} />
+    </Labelled>
+  );
+}
+
+/** The H-multiplier, named, to 2 dp and grouped as the table writes it (PA-09). */
+function hMultiplierPart(a: Asset): ReactNode {
+  return (
+    <Labelled key="hm" label="H-mult.">
+      <HMultiplier value={a.hMultiplier} />
+    </Labelled>
   );
 }
 
 /**
- * An inventory row on a phone (boards L3 tokens, L4 objects; identities by the same rules): name
- * and the sort figure, then standard and activity, then supply and the CKB its cells hold. In a
- * wide container (640) two lines: the standard joins the name and the figures share the second.
+ * Line 1 of an inventory row on a phone (the phone-rows board's head(): 287 of 328 px there for
+ * "Wrapped CKB" and its tag beside "30,879,240 CKB"): the class's mark and its 6 px (18), a name of
+ * 18 characters at the key's 14 px (151.2), the 12 px between the parts and the widest CKB a row's
+ * cells hold at the key's step, "99,999,999,999" (WIDEST_CKB_HELD, 117.6) and " CKB" at the unit's
+ * 12 px (28.8): 327.6 of a 360 px phone's 328 px line, 357.6 at 390 leaving 21 characters. The
+ * tags stand on line 2, where the board drew the symbol's beside the name: beside the widest figure
+ * a name and its tags would have 18 characters between them. A longer name drops the widest figure
+ * under it, whole and right-aligned (PhoneRow's rule).
  */
-function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) {
+const INVENTORY_PHONE_HEAD_PX = phoneHead(
+  'inventory',
+  12 +
+    6 +
+    textPx(18, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(WIDEST_CKB_HELD.length, fontPx('body')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
+
+const INVENTORY_MARK = { token: 'tokens', object: 'objects', identity: 'identities' } as const;
+
+/**
+ * An inventory row on a phone (the phone-rows board, its tokens pane; objects and identities by its
+ * rules): the class's mark, the name and the CKB its cells hold, the figure the list sorts by; what
+ * it is and who uses it, named figures that wrap between them, an object collection's composition
+ * chip held at the line's right edge (the owner's rule: on every row of an object list); the rest,
+ * quiet. The cards from 560 px take the same three parts.
+ */
+function InventoryPhoneRow({ asset: a }: { asset: Asset }) {
   const standard = formatStandard(a.standard);
-  const href = assetHref(a);
+  const { held } = heldAndOccupied(a);
+  const identity = {
+    key: 'identity',
+    tone: 'head' as const,
+    left: (
+      <>
+        {/* its 12 px written as a class too, so the first line's measure reads it */}
+        <ClassMark kind={INVENTORY_MARK[a.assetType]} size={12} className="mr-1.5 h-3 w-3" />
+        <AppLink href={assetHref(a)} look="key" className="font-medium">
+          {(a.assetType === 'token' ? (a.name ?? a.symbol) : a.name) || (
+            <Hash hash={a.id} size="tight" className="text-small" />
+          )}
+        </AppLink>
+      </>
+    ),
+    right: (
+      <span className="text-body text-text-bright">
+        {held === null ? (
+          'CKB held unavailable'
+        ) : (
+          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
+        )}
+      </span>
+    ),
+  };
   if (a.assetType === 'token') {
-    const name = (
-      <AppLink href={href} className="text-text-bright">
-        <span className="font-medium">
-          {a.symbol ?? a.name ?? <Hash hash={a.id} size="tight" className="text-small" />}
-        </span>
-        {a.symbol && a.name && <span className="text-text"> {a.name}</span>}
-      </AppLink>
-    );
-    const activity = [
-      <Counted key="t" value={a.transfersCount} noun="transfers" one="transfer" />,
-      <Counted key="24" value={a.transfers24h} noun="in 24 h" />,
-    ];
-    const hm = a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`;
     const supply = (
-      <span>
-        supply{' '}
+      <Labelled key="supply" label="supply">
         {a.totalSupply === null ? (
           'unavailable'
         ) : (
           <TokenAmount form="summary" amount={a.totalSupply} decimals={a.decimals} />
-        )}{' '}
-        {a.symbol}
-      </span>
+        )}
+        {a.symbol && ` ${a.symbol}`}
+      </Labelled>
     );
     return (
       <PhoneRow
         testId="inventory-row-mobile"
+        head={INVENTORY_PHONE_HEAD_PX}
         lines={[
+          identity,
           {
-            key: 'identity',
-            tone: 'head',
-            left: wide ? (
-              <>
-                {name}
-                <span className="text-text-dim text-small"> · {standard}</span>
-              </>
-            ) : (
-              name
+            key: 'what',
+            tone: 'body',
+            left: (
+              <Dotted
+                parts={[
+                  a.name && a.symbol && <RowTag key="symbol">{a.symbol}</RowTag>,
+                  a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
+                    <RowTag key="standard">{standard}</RowTag>
+                  ),
+                  <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
+                  <Counted key="t" value={a.transfersCount} noun="transfers" one="transfer" />,
+                  hMultiplierPart(a),
+                ]}
+              />
             ),
-            right: <Counted value={a.holdersCount} noun="holders" one="holder" />,
           },
-          wide
-            ? {
-                key: 'figures',
-                tone: 'quiet',
-                left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
-                right: <Dotted parts={[...activity, hm]} />,
-              }
-            : {
-                key: 'activity',
-                tone: 'body',
-                left: <Dotted parts={[standard, ...activity]} />,
-                right: hm,
-              },
-          !wide && {
-            key: 'figures',
-            tone: 'quiet',
-            left: <Dotted parts={[supply, ...heldAndOccupiedParts(a)]} />,
-          },
+          { key: 'figures', tone: 'quiet', left: <Dotted parts={[supply, occupiedPart(a)]} /> },
         ]}
       />
     );
   }
-  const title = (
-    <AppLink href={href} className="text-text-bright font-medium">
-      {a.name || <Hash hash={a.id} size="tight" className="text-small" />}
-    </AppLink>
-  );
   if (a.assetType === 'object') {
     const composition = a.compositionTier ? (
       <CompositionBadge tier={a.compositionTier} size="sm" />
     ) : (
       <span className="text-text-dim">Composition unavailable</span>
     );
-    const people = [
-      <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
-      // Round 3 (contracts L2): a count the indexer has not derived yet says nothing.
-      a.activitiesCount === null ? null : (
-        <Counted key="a" value={a.activitiesCount} noun="activities" one="activity" />
-      ),
-    ];
-    const figures = [
-      <span key="m" className="whitespace-nowrap">
-        of <AssetCount value={a.totalSupply} /> minted
-      </span>,
-      ...heldAndOccupiedParts(a),
-      a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`,
-      <Hash key="id" hash={a.id} size="tight" className="text-meta" />,
-    ];
     return (
       <PhoneRow
         testId="inventory-row-mobile"
+        head={INVENTORY_PHONE_HEAD_PX}
         lines={[
+          identity,
           {
-            key: 'identity',
-            tone: 'head',
-            left: wide ? (
-              <>
-                {title}
-                <span className="text-text-dim text-small"> · {standard}</span>
-              </>
-            ) : (
-              title
+            key: 'what',
+            tone: 'body',
+            hold: true,
+            left: (
+              <Dotted
+                parts={[
+                  <RowTag key="standard">{standard}</RowTag>,
+                  <Counted key="l" value={a.liveCount} noun="objects" one="object" />,
+                  <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
+                  // Round 3 (contracts L2): a count the indexer has not derived yet says nothing.
+                  a.activitiesCount === null ? null : (
+                    <Counted key="a" value={a.activitiesCount} noun="activities" one="activity" />
+                  ),
+                ]}
+              />
             ),
-            right: <Counted value={a.liveCount} noun="objects" one="object" />,
+            right: composition,
           },
-          wide
-            ? {
-                key: 'figures',
-                tone: 'quiet',
-                left: <Dotted parts={[...people, ...figures]} />,
-                right: composition,
-              }
-            : {
-                key: 'activity',
-                tone: 'body',
-                left: <Dotted parts={[standard, ...people]} />,
-                right: composition,
-              },
-          !wide && { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+          {
+            key: 'figures',
+            tone: 'quiet',
+            left: (
+              <Dotted
+                parts={[
+                  <Counted key="m" value={a.totalSupply} noun="minted" />,
+                  occupiedPart(a),
+                  hMultiplierPart(a),
+                ]}
+              />
+            ),
+          },
         ]}
       />
     );
   }
-  const sub = a.name === standard ? null : standard;
-  const counts = [
-    <Counted key="e" value={a.totalSupply} noun="ever registered" />,
-    <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
-  ];
   return (
     <PhoneRow
       testId="inventory-row-mobile"
+      head={INVENTORY_PHONE_HEAD_PX}
       lines={[
+        identity,
         {
-          key: 'identity',
-          tone: 'head',
-          left:
-            wide && sub ? (
-              <>
-                {title}
-                <span className="text-text-dim text-small"> · {sub}</span>
-              </>
-            ) : (
-              title
-            ),
-          right: <Counted value={a.liveCount} noun="live" />,
+          key: 'what',
+          tone: 'body',
+          left: (
+            <Dotted
+              parts={[
+                a.name !== standard && <RowTag key="standard">{standard}</RowTag>,
+                <Counted key="l" value={a.liveCount} noun="live" />,
+                <Counted key="e" value={a.totalSupply} noun="ever registered" />,
+                <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
+              ]}
+            />
+          ),
         },
-        wide
-          ? {
-              key: 'figures',
-              tone: 'quiet',
-              left: <Dotted parts={[...counts, ...heldAndOccupiedParts(a)]} />,
-            }
-          : { key: 'activity', tone: 'body', left: <Dotted parts={[sub, ...counts]} /> },
-        !wide && {
-          key: 'figures',
-          tone: 'quiet',
-          left: <Dotted parts={heldAndOccupiedParts(a)} />,
-        },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={[occupiedPart(a)]} /> },
       ]}
     />
   );
@@ -341,9 +338,14 @@ const countText = (value: number | string | null | undefined, one: string, many:
     ? `${many} unavailable`
     : `${exactUnsignedInteger(String(value), many).toLocaleString('en-US')} ${value === 1 || value === '1' ? one : many}`;
 
-/** The H-multiplier to 2 dp for the row (its exact value is in the title). */
+/**
+ * The H-multiplier to 2 dp for the row (its exact value is in the title), its whole part grouped as
+ * every figure of the site is (PA-09: "×15019.09" read as no figure of ours).
+ */
 function HMultiplier({ value }: { value: string | null }) {
-  return <span>{value === null ? 'Unavailable' : `×${formatDecimal(value, 2)}`}</span>;
+  if (value === null) return <span>Unavailable</span>;
+  const [whole, fraction] = formatDecimal(value, 2).split('.');
+  return <span>{`×${groupCount(BigInt(whole))}.${fraction}`}</span>;
 }
 
 /**
@@ -680,7 +682,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         empty="No tokens."
         density="row"
         rowTitle={tokenTitle}
-        mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
+        mobileRow={(a) => <InventoryPhoneRow asset={a} />}
       />
     );
   if (assetType === 'object')
@@ -693,7 +695,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         empty="No objects."
         density="row"
         rowTitle={objectTitle}
-        mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
+        mobileRow={(a) => <InventoryPhoneRow asset={a} />}
       />
     );
   return (
@@ -705,7 +707,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       empty="No identities."
       density="row"
       rowTitle={identityTitle}
-      mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
+      mobileRow={(a) => <InventoryPhoneRow asset={a} />}
     />
   );
 }

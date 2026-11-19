@@ -7,7 +7,7 @@ import {
   COUNT_TRACK_PX,
   ScaleHeader,
 } from '@/components/ui/aligned-bar';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
@@ -15,7 +15,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS } from '@/lib/shorten';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import {
   LARGEST_TX_BYTES,
   MAX_TX_INPUTS,
@@ -25,6 +25,7 @@ import {
   WIDEST_COUNT_DIGITS,
   WIDEST_TX_FEE,
   WIDEST_TX_OUTPUT,
+  WIDEST_TX_OUTPUT_SUMMARY,
   shortChars,
 } from '@/lib/list-bounds';
 
@@ -47,31 +48,17 @@ const cell = (text: string) => textPx(text.length, fontPx('small'));
 const SIZE_SCALE = resourceScale([LARGEST_TX_BYTES]).toLocaleString('en-US');
 const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
 
-/** Output capacity with its unit, for the phone row. */
-function capacity(tx: Transaction) {
+/** A CKB figure of the phone row in the summary form, after its name (`Labelled`). */
+function named(label: string, shannons: string, field: string, tx: Transaction) {
   return (
-    <span className="text-text-bright">
+    <Labelled label={label}>
       <CkbAmount
         form="summary"
-        shannons={parseShannons(tx.outputCapacity!, `transaction ${tx.hash} output capacity`)}
+        shannons={parseShannons(shannons, `transaction ${tx.hash} ${field}`)}
         signed={false}
         tone="plain"
       />
-    </span>
-  );
-}
-
-function fee(tx: Transaction) {
-  return (
-    <span className="whitespace-nowrap">
-      fee{' '}
-      <CkbAmount
-        form="summary"
-        shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
-        signed={false}
-        tone="plain"
-      />
-    </span>
+    </Labelled>
   );
 }
 
@@ -97,6 +84,21 @@ function resources(tx: Transaction) {
     </span>,
   ];
 }
+
+/**
+ * Line 1 of a block's transaction on a phone (the phone-rows board's head()): the tight hash at the
+ * key's 14 px (92.4; no stone, as the table's), the 12 px between the parts and its output named at
+ * 13 px, at its widest the CKB a transaction outputs, eleven whole digits in the summary form,
+ * "output 99,999,999,999" (WIDEST_TX_OUTPUT_SUMMARY; 21 characters, 163.8), and its unit, " CKB",
+ * at the meta step an amount's unit takes (28.8): 297 of a 360 px phone's 328 px line.
+ */
+const BLOCK_TX_PHONE_HEAD_PX = phoneHead(
+  'block transactions',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`output ${WIDEST_TX_OUTPUT_SUMMARY}`.length, fontPx('small')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
 
 /**
  * The BlockTxs board: one raw row per transaction of a block, cellbase first and set back
@@ -282,38 +284,49 @@ export function BlockTransactionsTable({
       rowKey={(tx) => tx.hash}
       rowClassName={(tx) => (tx.isCellbase ? 'text-text-dim' : '')}
       empty="No transactions."
+      // The phone-rows board's row: the hash and its output; where it was proposed; quiet, its
+      // index, its cells and its fee (the cards from 560 px keep its bytes and cycles there too).
       mobileRow={(tx, wide) => (
         <PhoneRow
           testId="block-tx-row-mobile"
+          head={BLOCK_TX_PHONE_HEAD_PX}
           lines={[
             {
               key: 'identity',
               tone: 'head',
               left: (
-                <>
-                  <span className="text-text-dim mr-2">{tx.index}</span>
-                  <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                    <Hash hash={tx.hash} size="tight" className="text-body" />
-                  </Link>
-                </>
+                <Link href={`/tx/${tx.hash}`} look="key">
+                  <Hash hash={tx.hash} size="tight" className="text-body" />
+                </Link>
               ),
-              right: wide ? capacity(tx) : <>proposed in {proposedIn(tx)}</>,
+              right: named('output', tx.outputCapacity!, 'output capacity', tx),
             },
-            !wide && {
-              key: 'amounts',
+            {
+              key: 'proposal',
               tone: 'body',
-              left: capacity(tx),
-              right: fee(tx),
+              left:
+                blockNumber === 0 || tx.isCellbase ? (
+                  proposedIn(tx)
+                ) : (
+                  <Labelled label="proposed in">{proposedIn(tx)}</Labelled>
+                ),
             },
             {
               key: 'figures',
               tone: 'quiet',
-              left: wide ? (
-                <Dotted parts={[<>proposed in {proposedIn(tx)}</>, fee(tx)]} />
-              ) : (
-                cells(tx)
+              left: (
+                <Dotted
+                  parts={[
+                    <Labelled key="index" label="index">
+                      {tx.index}
+                    </Labelled>,
+                    cells(tx),
+                    // a cellbase pays no fee
+                    !tx.isCellbase && named('fee', tx.fee, 'fee', tx),
+                    ...(wide ? resources(tx) : []),
+                  ]}
+                />
               ),
-              right: <Dotted parts={[...(wide ? [cells(tx)] : []), ...resources(tx)]} />,
             },
           ]}
         />

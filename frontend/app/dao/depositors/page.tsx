@@ -23,8 +23,28 @@ import { cn } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { WIDEST_COUNT, WIDEST_DAO_DEPOSIT, WIDEST_RANK, shortChars } from '@/lib/list-bounds';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import {
+  WIDEST_COUNT,
+  WIDEST_DAO_DEPOSIT,
+  WIDEST_DAO_DEPOSIT_SUMMARY,
+  WIDEST_RANK,
+  shortChars,
+} from '@/lib/list-bounds';
+
+/**
+ * Line 1 of a depositor on a phone (the phone-rows board's head()): a rank of two digits in its 22 px
+ * box, the depositor's address at the tight size and the key's 14 px (92.4), the 12 px between the
+ * parts and the widest deposit in the summary form with its unit, at the key's step, "9,999,999,999
+ * CKB" (WIDEST_DAO_DEPOSIT_SUMMARY, 17 characters, 142.8): 269.2 of a 360 px phone's 328 px line.
+ */
+const DEPOSITOR_PHONE_HEAD_PX = phoneHead(
+  'DAO depositors',
+  22 +
+    textPx(shortChars(SHORT_FORMS.tight.address), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_DAO_DEPOSIT_SUMMARY} CKB`.length, fontPx('body'))
+);
 
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
@@ -254,6 +274,7 @@ export default function DaoDepositorsPage() {
                       color: CLASS_COLORS.dao,
                     }}
                     axis={page.data[0] === d ? formatShareTick(shareScale(page.data)) : undefined}
+                    head={DEPOSITOR_PHONE_HEAD_PX}
                     wide={wide}
                   />
                 )}

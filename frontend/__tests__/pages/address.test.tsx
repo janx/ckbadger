@@ -1118,8 +1118,11 @@ describe('Address v3', () => {
     await loaded();
     await tab('Transactions');
     const mobile = await screen.findByTestId('address-tx-row-mobile');
-    expect(within(mobile).getByText('Proposed')).toBeInTheDocument();
-    expect(within(mobile).getByText(/in pool for 2m/)).toBeInTheDocument();
+    // re-pinned on purpose (lane D4): the phone row writes the status and the wait as its first
+    // line's figure, one run of text (it was the table's badge over the wait, two elements)
+    expect(mobile.querySelector('[data-line="identity"] [data-part="right"]')).toHaveTextContent(
+      'Proposed · in pool for 2m'
+    );
     expect(within(mobile).getByText(/partial: input not yet resolvable/)).toBeInTheDocument();
   });
   it('prints transaction amount, fee, byte size and cycle status without loss', async () => {

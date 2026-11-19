@@ -8,7 +8,7 @@ import { rankedPageAt } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
@@ -37,7 +37,7 @@ import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/a
 import { CAPACITY_RANGE_OPTIONS, type CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { ckbAmountText } from '@/lib/amount-form';
 import { MIN_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
@@ -170,7 +170,7 @@ function OccupiedBytes({ cell }: { cell: Cell }) {
   return <span className="text-text">{toBytes(cell.commonKnowledgeSize)}</span>;
 }
 
-function CellAnatomy({ cell }: { cell: Cell }) {
+function CellAnatomy({ cell, className }: { cell: Cell; className?: string }) {
   const bytes = cell.commonKnowledgeSizeBreakdown;
   if (!bytes)
     return (
@@ -182,6 +182,7 @@ function CellAnatomy({ cell }: { cell: Cell }) {
     <CellBar
       subject={`${cell.txHash}:${cell.outputIndex}`}
       capacity={cell.capacity}
+      className={className}
       hideLegend
       anatomy={{
         lock: String(bytes.lockScriptBytes),
@@ -305,9 +306,25 @@ const CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_COUNT_DIGITS}`;
 /** A version's number: two digits. */
 const VERSION_NUMBER = 'v99';
 /** A cell's capacity: under ten billion CKB (the genesis allocation's cells hold billions). */
-const WIDEST_CELL_CAPACITY = ckbAmountText(BigInt('999999999999999999'), 'column');
+const WIDEST_CELL_SHANNONS = BigInt('999999999999999999');
+const WIDEST_CELL_CAPACITY = ckbAmountText(WIDEST_CELL_SHANNONS, 'column');
 /** A cell's occupied bytes: under ten million (the genesis's largest cell holds a 1 MB table). */
 const WIDEST_OCCUPIED = `${(9_999_999).toLocaleString('en-US')} B`;
+
+/**
+ * Line 1 of a script's cell on a phone (the phone-rows board's head()): the out point at its tight
+ * size with an index of four digits at the key's 14 px ("0x1234…abcd:9999", 16 characters, 134.4;
+ * no stone, as the table's), the 12 px between the parts and the cell's capacity in the summary
+ * form at its widest, "9,999,999,999" (WIDEST_CELL_CAPACITY cut to whole CKB, 13 characters at
+ * 13 px, 101.4) and " CKB" at the unit's 12 px (28.8): 276.6 of a 360 px phone's 328 px line.
+ */
+const SCRIPT_CELL_PHONE_HEAD_PX = phoneHead(
+  'script cells',
+  textPx(shortChars(SHORT_FORMS.tight.hash) + `:${WIDEST_COUNT_DIGITS}`.length, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(ckbAmountText(WIDEST_CELL_SHANNONS, 'summary').length, fontPx('small')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
 
 /**
  * Tier 2's "The script" (consistency C6, board ScriptDetail): its cells in one line, the script's
@@ -1297,34 +1314,7 @@ export function ScriptFamilyPage({
                       ),
                     },
                   ]}
-                  mobileRow={(cell) => (
-                    <div className="text-small min-w-0 space-y-1.5">
-                      <Link
-                        href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                        className="text-text hover:text-jade"
-                      >
-                        <ShortId value={cell.txHash} kind="hash" size="tight" />
-                        <OutpointIndex index={cell.outputIndex} />
-                      </Link>
-                      <div>
-                        <CellOwner cell={cell} size="tight" /> ·{' '}
-                        <AlsoGuardedBy cell={cell} size="tight" />
-                      </div>
-                      <CellAnatomy cell={cell} />
-                      <div className="flex flex-wrap justify-between gap-2">
-                        <CkbAmount
-                          form="summary"
-                          shannons={BigInt(cell.capacity)}
-                          signed={false}
-                          tone="plain"
-                        />
-                        <span>
-                          <OccupiedBytes cell={cell} /> occupied
-                        </span>
-                      </div>
-                      <div className="text-text-dim">Created {blockLink(cell.createdAtBlock)}</div>
-                    </div>
-                  )}
+                  mobileRow={(cell) => <ScriptCellPhoneRow cell={cell} />}
                 />
               )}
               {cells.rows.length > 0 && (
@@ -1369,5 +1359,71 @@ export function ScriptFamilyPage({
         </div>
       </main>
     </div>
+  );
+}
+
+/**
+ * A script's cell on a phone (the phone-rows board): the out point and its capacity; who owns it,
+ * the type script that also guards it (none said where it has none) and where it was made, each
+ * after its name; the list's one bar, what the cell holds, beside the bytes it occupies.
+ */
+function ScriptCellPhoneRow({ cell }: { cell: Cell }) {
+  return (
+    <PhoneRow
+      testId="script-cell-row-mobile"
+      head={SCRIPT_CELL_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'cell',
+          tone: 'head',
+          left: (
+            <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`} look="key">
+              <ShortId value={cell.txHash} kind="hash" size="tight" />
+              <OutpointIndex index={cell.outputIndex} />
+            </Link>
+          ),
+          right: (
+            <CkbAmount
+              form="summary"
+              shannons={BigInt(cell.capacity)}
+              signed={false}
+              tone="plain"
+            />
+          ),
+        },
+        {
+          key: 'held',
+          tone: 'body',
+          left: (
+            <Dotted
+              parts={[
+                <Labelled key="owner" label="owner">
+                  <CellOwner cell={cell} size="tight" />
+                </Labelled>,
+                cell.typeScriptHash && (
+                  <Labelled key="type" label="type">
+                    <AlsoGuardedBy cell={cell} size="tight" />
+                  </Labelled>
+                ),
+                <Labelled key="created" label="created">
+                  {blockLink(cell.createdAtBlock)}
+                </Labelled>,
+              ]}
+            />
+          ),
+        },
+        {
+          key: 'anatomy',
+          tone: 'quiet',
+          grow: true,
+          left: <CellAnatomy cell={cell} className="w-full min-w-12" />,
+          right: (
+            <Labelled label="occupied" after>
+              <OccupiedBytes cell={cell} />
+            </Labelled>
+          ),
+        },
+      ]}
+    />
   );
 }

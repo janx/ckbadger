@@ -223,6 +223,32 @@ function toHundredth(px: number): number {
 }
 
 /**
+ * The line a phone list row stands on (the phone-rows board the owner passed at gate D0′,
+ * `phonerows.js`): a phone's content width, its window less the two 16 px gutters — 328 px at
+ * 360, 358 at 390.
+ */
+export const PHONE_LINE_PX = { 360: 328, 390: 358 } as const;
+
+/** The room between a phone row line's left part and its right part: PhoneRow's `gap-x-3`. */
+export const PHONE_PART_GAP_PX = 12;
+
+/**
+ * A phone row's first line as its list states it (the board's `head()`): the stone and its gap, the
+ * key at its widest real value and step, the room between the parts and the figure at the right,
+ * summed by the caller from this module's runs. A list that states a first line wider than a 360 px
+ * phone's line does not load, as the board did not build with one: the line is to fit, or the list
+ * says which values drop the figure under the key. Returns the width to the hundredth.
+ */
+export function phoneHead(name: string, px: number): number {
+  const at = toHundredth(px);
+  if (!(at <= PHONE_LINE_PX[360]))
+    throw new Error(
+      `phone row "${name}": its first line is ${at} px, wider than a 360 px phone's ${PHONE_LINE_PX[360]} px line`
+    );
+  return at;
+}
+
+/**
  * A list column's minimum width (`ListTable`): what it must hold — its widest text measured here,
  * the marks and gaps beside it — rounded up to a whole pixel, and the whole pixels it keeps spare
  * on top. A table budgeted to its container hands its spare to the columns that need it; each

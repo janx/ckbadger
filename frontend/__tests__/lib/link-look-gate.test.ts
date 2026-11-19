@@ -109,8 +109,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/blocks/block-transactions-table.tsx': {
     lane: 'p-chain',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:underline)',
+    sites: { look: 2, ink: 1 },
+    reason: '2 without a look; inks by hand (hover:underline)',
   },
   'components/blocks/reward-breakdown.tsx': {
     lane: 'p-chain',
@@ -154,8 +154,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/transaction/transaction-list-table.tsx': {
     lane: 'p-chain',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (hover:text-jade, hover:underline, text-text-bright)',
+    sites: { look: 3, ink: 3 },
+    reason: '3 without a look; inks by hand (hover:text-jade, hover:underline)',
   },
   'components/transaction/tx-structure.tsx': {
     lane: 'p-chain',
@@ -235,8 +235,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/asset/inventory-table.tsx': {
     lane: 'p-assets',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (text-text-bright)',
+    sites: { look: 3, ink: 3 },
+    reason: '3 without a look; inks by hand (text-text-bright)',
   },
   'components/asset/item-evidence.tsx': {
     lane: 'p-assets',
@@ -319,9 +319,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/scripts/script-family-page.tsx': {
     lane: 'p-assets',
-    sites: { look: 11, ink: 12, raw: 1 },
+    sites: { look: 10, ink: 11, raw: 1 },
     reason:
-      '11 without a look; inks by hand (hover:text-jade, text-text, hover:underline); 1 raw <a>',
+      '10 without a look; inks by hand (hover:text-jade, text-text, hover:underline); 1 raw <a>',
   },
   'components/scripts/script-newest-cells.tsx': {
     lane: 'p-assets',
@@ -352,14 +352,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/scripts/page.tsx': {
     lane: 'p-lists',
-    sites: { look: 2, ink: 3, raw: 1 },
+    sites: { look: 1, ink: 2, raw: 1 },
     reason:
-      '2 without a look; inks by hand (hover:underline, text-text-bright, hover:text-emphasis); 1 raw <a>',
+      '1 without a look; inks by hand (hover:underline, text-text-bright, hover:text-emphasis); 1 raw <a>',
   },
   'app/transactions/page.tsx': {
     lane: 'p-lists',
-    sites: { look: 4, ink: 2 },
-    reason: '4 without a look; inks by hand (hover:underline, text-text-dim, hover:text-jade)',
+    sites: { look: 3, ink: 1 },
+    reason: '3 without a look; inks by hand (text-text-dim, hover:text-jade)',
   },
   'components/activity-event-row.tsx': {
     lane: 'p-lists',
@@ -424,9 +424,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/client-page.tsx': {
     lane: 'p-topics',
-    sites: { look: 4, ink: 5, raw: 1 },
+    sites: { look: 3, ink: 4, raw: 1 },
     reason:
-      '4 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
+      '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
   },
   'app/forks/[height]/[orphan]/client-page.tsx': {
     lane: 'p-topics',
@@ -509,9 +509,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // transaction page's facts rail and its block link went (1), the block page's facts aside and its
 // two links (2), the cell page's Created block link (2: look, ink), the address page's kind-line
 // lock link and its Lock metric's (4: two looks, two inks), the uncle page's canonical-hash link
-// (1), the identity owner line's address (1) → 575 (lane c2-finish, rulings round 1: the .cell
+// (1), the identity owner line's address (1) → 559 (lane D4, 18 more: the phone rows' keys, block
+// links and names state their look — transactions 4, pool 2, block transactions 2, scripts 2, a
+// script's cells 2, inventory 4, Fiber channels 2) → 557 (lane c2-finish, rulings round 1: the .cell
 // party's lock-hash link states `block` and its hand-written underline went, 2)
-const TOLERATED_TOTAL = 575;
+const TOLERATED_TOTAL = 557;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
