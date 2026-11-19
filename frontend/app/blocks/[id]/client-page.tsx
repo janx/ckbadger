@@ -21,9 +21,11 @@ import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakd
 import { decodeDaoHeader } from '@/lib/dao-header';
 import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { getUncleDetailHref } from '@/lib/detail-routes';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { cursorPageFigures } from '@/lib/pagination';
 import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
@@ -114,6 +116,8 @@ export default function BlockDetailPage() {
     if (!block) return;
     const navigate = (event: KeyboardEvent) => {
       if (
+        // a key a control took (the tab row's ← and →) is not also a step through the chain
+        event.defaultPrevented ||
         isEditableElement(event.target) ||
         event.metaKey ||
         event.ctrlKey ||
@@ -618,111 +622,109 @@ export default function BlockDetailPage() {
           )}
           <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
             <div className="min-w-0">
-              <div className="border-row-rule mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-                <div
-                  role="group"
-                  aria-label="Block contents"
-                  className="flex flex-wrap gap-6 max-md:gap-x-4"
-                >
-                  {(['activities', 'transactions'] as const).map((tab) => (
-                    <button
-                      type="button"
-                      key={tab}
-                      aria-pressed={view === tab}
-                      onClick={() => setView(tab)}
-                      className={`text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
-                    >
-                      <span>{tab === 'activities' ? 'Activities' : 'Transactions'}</span>
-                      {/* One activity row per transaction of the block (the block feed's contract). */}
-                      <span className="text-text-dim text-small max-md:text-meta font-normal">
-                        {block.transactionsCount.toLocaleString('en-US')}
-                      </span>
-                    </button>
-                  ))}
+              {/* The block's contents open on their command line, the tab row (the controls
+                  board); the section keeps its name for the outline. */}
+              <h2 className="sr-only">Block contents</h2>
+              <Tabs
+                label="block contents"
+                command
+                // One activity row per transaction of the block (the block feed's contract).
+                tabs={[
+                  { key: 'activities', label: 'activities', count: block.transactionsCount },
+                  { key: 'transactions', label: 'transactions', count: block.transactionsCount },
+                ]}
+                value={view}
+                onChange={setView}
+              >
+                <div className="pt-4">
+                  {transactions.data && !transactions.data.hasMore && !pagination.hasPrevious && (
+                    <CommittedFrom transactions={transactions.data.data} block={block} />
+                  )}
+                  {view === 'activities' ? (
+                    <>
+                      {isAwaited(activities) && <p role="status">Loading activities…</p>}
+                      {activities.error && (
+                        <p className="max-w-measure" role="alert">
+                          Unable to read activities: {activities.error.message}
+                        </p>
+                      )}
+                      {activities.data && activityRows && (
+                        <>
+                          {activityRows.map((activity) => (
+                            <ActivityRow
+                              key={activity.txHash}
+                              activity={activity}
+                              headline={
+                                activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
+                              }
+                              evidence={
+                                <>
+                                  #{activity.txIndex} ·{' '}
+                                  <Link
+                                    href={`/tx/${activity.txHash}`}
+                                    className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                                  >
+                                    <ShortId value={activity.txHash} kind="hash" size="row" />
+                                  </Link>
+                                </>
+                              }
+                            />
+                          ))}
+                          {activityRows.length === 0 && (
+                            <p className="text-text-dim text-small">No activities in this block.</p>
+                          )}
+                          {(activities.data.hasMore || activityPagination.hasPrevious) && (
+                            // in tx order, counted of the block's transactions, one row each
+                            <Pager
+                              mode="pages"
+                              label="activities"
+                              {...cursorPageFigures({
+                                page: activityPagination.page,
+                                pageSize,
+                                rows: activities.data.data.length,
+                                total: block.transactionsCount,
+                              })}
+                              onPrevious={activityPagination.goToPrevious}
+                              onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
+                            />
+                          )}
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
+                      {transactions.error && (
+                        <p className="max-w-measure" role="alert">
+                          Unable to read transactions: {transactions.error.message}
+                        </p>
+                      )}
+                      {transactions.data && (
+                        <>
+                          <BlockTransactionsTable
+                            transactions={transactions.data.data}
+                            blockNumber={block.number}
+                          />
+                          {(transactions.data.hasMore || pagination.hasPrevious) && (
+                            <Pager
+                              mode="pages"
+                              label="transactions"
+                              {...cursorPageFigures({
+                                page: pagination.page,
+                                pageSize,
+                                rows: transactions.data.data.length,
+                                total: block.transactionsCount,
+                              })}
+                              onPrevious={pagination.goToPrevious}
+                              onNext={() => pagination.goToNext(transactions.data.nextCursor)}
+                            />
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
                 </div>
-                {transactions.data && !transactions.data.hasMore && !pagination.hasPrevious && (
-                  <CommittedFrom transactions={transactions.data.data} block={block} />
-                )}
-              </div>
-              {view === 'activities' ? (
-                <>
-                  {isAwaited(activities) && <p role="status">Loading activities…</p>}
-                  {activities.error && (
-                    <p className="max-w-measure" role="alert">
-                      Unable to read activities: {activities.error.message}
-                    </p>
-                  )}
-                  {activities.data && activityRows && (
-                    <>
-                      {activityRows.map((activity) => (
-                        <ActivityRow
-                          key={activity.txHash}
-                          activity={activity}
-                          headline={
-                            activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
-                          }
-                          evidence={
-                            <>
-                              #{activity.txIndex} ·{' '}
-                              <Link
-                                href={`/tx/${activity.txHash}`}
-                                className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
-                              >
-                                <ShortId value={activity.txHash} kind="hash" size="row" />
-                              </Link>
-                            </>
-                          }
-                        />
-                      ))}
-                      {activityRows.length === 0 && (
-                        <p className="text-text-dim text-small">No activities in this block.</p>
-                      )}
-                      {(activities.data.hasMore || activityPagination.hasPrevious) && (
-                        <CursorPagination
-                          totalLabel="activities"
-                          pageSize={pageSize}
-                          page={activityPagination.page}
-                          currentCount={activities.data.data.length}
-                          hasMore={activities.data.hasMore}
-                          hasPrevious={activityPagination.hasPrevious}
-                          onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
-                          onPrevious={activityPagination.goToPrevious}
-                        />
-                      )}
-                    </>
-                  )}
-                </>
-              ) : (
-                <>
-                  {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
-                  {transactions.error && (
-                    <p className="max-w-measure" role="alert">
-                      Unable to read transactions: {transactions.error.message}
-                    </p>
-                  )}
-                  {transactions.data && (
-                    <>
-                      <BlockTransactionsTable
-                        transactions={transactions.data.data}
-                        blockNumber={block.number}
-                      />
-                      {(transactions.data.hasMore || pagination.hasPrevious) && (
-                        <CursorPagination
-                          total={block.transactionsCount}
-                          totalLabel="transactions"
-                          pageSize={pageSize}
-                          page={pagination.page}
-                          currentCount={transactions.data.data.length}
-                          hasMore={transactions.data.hasMore}
-                          hasPrevious={pagination.hasPrevious}
-                          onNext={() => pagination.goToNext(transactions.data.nextCursor)}
-                          onPrevious={pagination.goToPrevious}
-                        />
-                      )}
-                    </>
-                  )}
-                </>
-              )}
+              </Tabs>
             </div>
             <aside aria-label="Block facts" className="text-small min-w-0">
               <p className="text-jade max-w-measure mb-5">
@@ -904,8 +906,10 @@ function CommittedFrom({
     );
   }
   const [only] = origins.keys();
+  // the same quiet note, now its own line under the tab row (it stood at the row's right end,
+  // which is the tab list now)
   return (
-    <span className="text-text-dim text-small">
+    <span className="text-text-dim text-small mb-3 block">
       {unitNode(
         origins.size === 1
           ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`

@@ -151,7 +151,8 @@ describe('the genesis block page', () => {
     expect(rows.map((row) => row.getAttribute('data-feed-row'))).toEqual(
       genesisTransactions.map((tx) => tx.hash)
     );
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (were pressed buttons)
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('No proposals in this block.')).toBeInTheDocument();

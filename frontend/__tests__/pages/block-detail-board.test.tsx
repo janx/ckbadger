@@ -375,7 +375,8 @@ describe('Block board · first tier', () => {
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
-    expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (was a group of buttons)
+    expect(head).not.toContainElement(screen.getByRole('tablist', { name: 'block contents' }));
   });
 
   // The review's item E: the plate's id is the block's copy control; a click writes the WHOLE hash
@@ -433,7 +434,8 @@ describe('Block board · first tier', () => {
     expect(holder.firstElementChild).toBe(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
     expectBefore(screen.getByText(block.hash), summary);
-    expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (was a group of buttons)
+    expectBefore(summary, screen.getByRole('tablist', { name: 'block contents' }));
     // The header keeps the 32 px to the content; the summary carries no margin of its own.
     expect(summary).not.toHaveClass('mb-8');
   });
@@ -493,19 +495,29 @@ describe('Block board · first tier', () => {
 
   it('counts both views in quiet 12 px beside 17 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
     render(<BlockDetailPage />);
-    const views = await screen.findByRole('group', { name: 'Block contents' });
-    const [activities, transactions] = within(views).getAllByRole('button');
+    // Re-pinned on purpose (lane c2-chain, the controls board): the views are the library's tab
+    // row, the section's command line (the prompt square, the names lowercase), each name 17 px
+    // from sm and 14 px below it, its count 12 px in the quiet ink (were pressed buttons, the
+    // count 13 px); the section keeps its name for the outline, and the note on where the
+    // transactions came from stands under the row (it stood at the row's right end).
+    const views = await screen.findByRole('tablist', { name: 'block contents' });
+    expect(views.querySelector('.section-mark')).not.toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'Block contents' })).toHaveClass(
+      'sr-only'
+    );
+    const [activities, transactions] = within(views).getAllByRole('tab');
     for (const [tab, name] of [
-      [activities, 'Activities'],
-      [transactions, 'Transactions'],
+      [activities, 'activities'],
+      [transactions, 'transactions'],
     ] as const) {
-      expect(tab).toHaveClass('text-section');
-      expect(tab.firstChild).toHaveTextContent(name);
-      expect(within(tab).getByText('4')).toHaveClass('text-small');
+      expect(tab).toHaveClass('text-body', 'sm:text-section', 'lowercase');
+      expect(tab).toHaveTextContent(new RegExp(`^${name} 4$`));
+      expect(within(tab).getByText('4')).toHaveClass('text-meta', 'text-text-dim');
     }
-    expect(
-      await screen.findByText(fullText("3 committed from #20,827,930's proposals, 2 blocks later"))
-    ).toBeInTheDocument();
+    const note = await screen.findByText(
+      fullText("3 committed from #20,827,930's proposals, 2 blocks later")
+    );
+    expect(screen.getByRole('tabpanel')).toContainElement(note);
   });
 
   it('lists activities in block order, cellbase first, with the tx index instead of the height (BA-12, BA-14)', async () => {
@@ -688,7 +700,7 @@ describe('BlockTxs board', () => {
   // "0 … 2,000,000").
   it('reads the cellbase row as "cellbase", grey, 0 → 1, under 0 … 1k / 0 … 2M scales (BA-20)', async () => {
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: /^transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     const ths = Array.from(table.querySelectorAll('th'));
     expect(ths.find((th) => th.textContent?.startsWith('Size, bytes'))).toHaveTextContent(
@@ -850,12 +862,18 @@ describe('Block board · R2b-a fields', () => {
   });
 
   it('shows no pager for a block that fits one page, in either view', async () => {
+    // re-pinned (lane c2-chain): the library's pager is a nav named for its list, its ways to go
+    // `← prev` and `next →` (was a Previous / Next button pair); none is drawn for one page
+    const pagers = () => [
+      ...screen.queryAllByRole('navigation', { name: /^(activities|transactions)$/ }),
+      ...screen.queryAllByText(/^(← prev|next →)$/),
+    ];
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    expect(pagers()).toEqual([]);
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     await screen.findByRole('table', { name: 'Transactions in this block' });
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    expect(pagers()).toEqual([]);
   });
 
   it('stacks an uncle row so it reads at 390 px, with short hashes', async () => {

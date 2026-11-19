@@ -115,11 +115,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { tab: 1 },
     reason: 'the activities / transactions / live cells tabs (buttons, aria-pressed)',
   },
-  'app/blocks/[id]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { tab: 1, pager: 2 },
-    reason: 'the transactions / activities tabs and their two pagers',
-  },
   'components/address/address-holdings.tsx': {
     lane: 'c2-chain',
     sites: { pager: 2 },
@@ -207,7 +202,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 47;
+const TOLERATED_TOTAL = 44;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
