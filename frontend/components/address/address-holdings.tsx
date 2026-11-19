@@ -386,15 +386,13 @@ export function addressStripFacts(
                     ? unitNode(`in ${formatCount(holdings.classes.token.cellCount, 'cell')}`)
                     : undefined,
             }
-          : {
+          : // each class's count as the API states it, the first the value and the rest its
+            // notes: DAO cells, token kinds, objects and identities are unlike things, never
+            // added into one "holdings" figure in the page (review of phases C and D, NOTE 12)
+            {
               label: 'holdings',
-              value: unitNode(
-                formatCount(
-                  held.reduce((n, c) => n + c.count, 0),
-                  'holding'
-                )
-              ),
-              note: held.map((c) => unitNode(formatCount(c.count, c.one, c.many))),
+              value: unitNode(formatCount(held[0].count, held[0].one, held[0].many)),
+              note: held.slice(1).map((c) => unitNode(formatCount(c.count, c.one, c.many))),
             }
     );
   }
