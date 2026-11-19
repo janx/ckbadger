@@ -90,7 +90,7 @@ describe('FiberChannelsPage', () => {
     const how = within(lede).getByRole('link', { name: 'How it works' });
     expect(how).toHaveAttribute('href', '#evidence');
     expect(how).toHaveClass('text-jade');
-    expect(how).toHaveTextContent(/^How it works\u00a0↓$/);
+    expect(how.textContent).toBe('How it works\u00a0↓');
     // no jade uppercase eyebrow in tier 1 (FF-F6)
     expect(screen.queryByText(/Payment channels · on-chain view/)).toBeNull();
     // the display figure: open now, in Fiber's jade, its unit quieter, its locked CKB beside it
@@ -133,7 +133,7 @@ describe('FiberChannelsPage', () => {
         .split(/\s+/)
         .some((c) => /^text-jade(\/\d+)?$/.test(c))
     );
-    expect(jade).toEqual([figure, how]);
+    expect(jade).toEqual([how, figure]);
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 

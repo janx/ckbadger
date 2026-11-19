@@ -21,6 +21,7 @@ import {
   WIDEST_BLOCK_NUMBER,
   WIDEST_BLOCK_REWARD,
   WIDEST_CKB_HELD,
+  WIDEST_FIBER_LIFETIME,
   WIDEST_COMPACT_TICK,
   WIDEST_COUNT,
   WIDEST_COUNT_DIGITS,
@@ -58,6 +59,8 @@ describe('the widest values a list column holds (lib/list-bounds)', () => {
     expect(WIDEST_DAO_DEPOSIT).toBe('9,999,999,999.99999999');
     // the summary form, whole from 1,000 up
     expect(WIDEST_CKB_HELD).toBe('99,999,999,999');
+    // the one duration form, its two largest units (lane P4)
+    expect(WIDEST_FIBER_LIFETIME).toBe('9999d 23h');
   });
 
   it('is the age the one age form writes for a block ten years and 364 days old', () => {
@@ -170,6 +173,8 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_ROW_COUNT',
         // lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): occupied bytes
         'WIDEST_OCCUPIED_CHANGE',
+        // lane P4: a Fiber channel's lifetime, out of the channel list's own module
+        'WIDEST_FIBER_LIFETIME',
       ].sort(),
     });
   });

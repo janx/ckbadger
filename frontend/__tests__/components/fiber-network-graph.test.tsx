@@ -62,10 +62,17 @@ describe('FiberNetworkGraph', () => {
     expect(Number(name.getAttribute('x'))).toBeLessThanOrEqual(8);
     // the legend heads the column at the plot's right, before any party or pair is chosen
     const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    // each item's words, its drawn glyph (a circle's number) apart
     expect(
       within(key)
         .getAllByRole('listitem')
-        .map((item) => item.textContent)
+        .map((item) =>
+          Array.from(item.childNodes)
+            .filter((n) => n.nodeName.toLowerCase() !== 'svg')
+            .map((n) => n.textContent)
+            .join('')
+            .trim()
+        )
       // Re-pinned on purpose (lane P4, the plan's P4 sentence: the Fiber graph's numbers and sizes
       // come up from tier 2 as a legend): the key names what a circle's size and number are and
       // what each line's width is; it named the lines' colours and the ring only, the rest was
@@ -122,7 +129,17 @@ describe('FiberNetworkGraph', () => {
   });
 
   it('says an empty network in the reading ink (R3: an empty state reads)', () => {
-    render(<Graph network={{ ...(network as FiberNetwork), parties: [], pairs: [] }} />);
+    const net = network as FiberNetwork;
+    render(
+      <Graph
+        network={{
+          ...net,
+          summary: { ...net.summary, observedParties: 0, observedPairs: 0 },
+          parties: [],
+          pairs: [],
+        }}
+      />
+    );
     const empty = screen.getByText('No on-chain parties observed yet.');
     expect(empty).toHaveClass('text-text');
     expect(empty).not.toHaveClass('text-text-dim');

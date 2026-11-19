@@ -417,12 +417,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '3 without a look; inks by hand (text-aqua, no-underline, text-interactive)',
   },
   // ---- p-topics ----
-  'app/fiber/channels/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
-  },
   'app/forks/[height]/[orphan]/client-page.tsx': {
     lane: 'p-topics',
     sites: { look: 10, ink: 7 },
@@ -466,11 +460,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 1, ink: 1 },
     reason: '1 without a look; inks by hand (style, color)',
   },
-  'components/fiber/fiber-network-graph.tsx': {
-    lane: 'p-topics',
-    sites: { look: 4, ink: 4 },
-    reason: '4 without a look; inks by hand (hover:text-jade, text-text-bright)',
-  },
   'components/forks/miner-link.tsx': {
     lane: 'p-topics',
     sites: { look: 1, ink: 1 },
@@ -502,8 +491,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
 // and one ink) → 535 (lane P4, the Fiber channel page, 16: the breadcrumb's link inline, 2; the
 // board's party, lock-script, commitment-cell and output links, 10, each `inline` or `key`; the
-// step's transaction `key` and block `inline`, 4)
-const TOLERATED_TOTAL = 535;
+// step's transaction `key` and block `inline`, 4) → 519 (lane P4, the Fiber channels page, 16: the
+// list's channel `key`, its parties `inline` in the table and the phone row, the lede's way down
+// `onward` (the raw anchor and its typed arrow gone), 8; the graph's party and block links, 8)
+const TOLERATED_TOTAL = 519;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

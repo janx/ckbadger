@@ -406,8 +406,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/client-page.tsx': {
     family: 'topics',
-    sites: { td: 1, prose: 2 },
-    reason: "a channel row's time in a table cell; the loading lines",
+    // td 1 → 0 (lane P4): a channel's opening day reads in the reading ink
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
   'app/forks/[height]/[orphan]/client-page.tsx': {
     family: 'topics',
@@ -486,11 +487,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
     sites: { prose: 1 },
     reason: "the step's loading line, a transient note in the quiet ink",
-  },
-  'components/fiber/fiber-network-graph.tsx': {
-    family: 'topics',
-    sites: { link: 2, prose: 1 },
-    reason: "a pair's party links in its readout and the empty-graph sentence",
   },
   'components/hardforks/script-deployment-timeline.tsx': {
     family: 'topics',
