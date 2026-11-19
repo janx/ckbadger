@@ -63,7 +63,9 @@ async fn supply_and_secondary_history_exclude_in_progress_tip_day() {
             "trailing blockless days must carry exact state: {path}"
         );
         if path == "total-supply" {
-            assert_eq!(json["data"][0]["values"]["nervosdao"], "123.00000001");
+            // re-pinned for the four bands (lane D1, second follow-up): the DAO's deposits are
+            // keyed daoDeposited (were nervosdao)
+            assert_eq!(json["data"][0]["values"]["daoDeposited"], "123.00000001");
         }
         if path == "secondary-issuance" {
             assert_eq!(json["data"][0]["values"]["mining"], "1.50000001");

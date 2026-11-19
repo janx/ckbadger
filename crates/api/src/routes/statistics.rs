@@ -3734,11 +3734,49 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
+/// The keys of `/charts/total-supply`'s four bands, in the order they stack.
+const TOTAL_SUPPLY_BAND_KEYS: [&str; 4] = [
+    "outsideDao",
+    "daoDeposited",
+    "unclaimedCompensation",
+    "burnt",
+];
+
+/// The four bands of `/charts/total-supply`, in shannons, in the order they stack: the CKB
+/// circulating outside the DAO (`liquid`), the DAO's deposits, the DAO compensation not yet claimed
+/// and the burnt (lane D1, second follow-up). They partition C, the day's total issuance:
+/// `liquid + dao_locked + unclaimed + burnt == C` holds by construction (`treasury + unclaimed ==
+/// S`), and a row where it does not is an error naming the date and the four operands, never a
+/// repaired stack.
+pub(crate) fn total_supply_bands(
+    date: &str,
+    total_issuance: i128,
+    bands: [i128; 4],
+) -> Result<[i128; 4], String> {
+    let [outside_dao, dao_deposited, unclaimed_compensation, burnt] = bands;
+    let operands = format!(
+        "outside_dao={outside_dao}, dao_deposited={dao_deposited}, \
+         unclaimed_compensation={unclaimed_compensation}, burnt={burnt}, \
+         total_issuance={total_issuance}"
+    );
+    let sum = bands
+        .iter()
+        .try_fold(0i128, |sum, band| sum.checked_add(*band))
+        .ok_or_else(|| format!("total supply bands overflow for {date}: {operands}"))?;
+    if sum != total_issuance {
+        return Err(format!(
+            "total supply bands do not make C for {date}: they sum to {sum}; {operands}"
+        ));
+    }
+    Ok(bands)
+}
+
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:total-supply:v3", chain)?;
+    // v4: four bands that partition C, and the protocol circulation (lane D1, second follow-up)
+    let cache_key = complete_days_cache_key("chart:total-supply:v4", chain)?;
     if let Some(cached) = state
         .cache
         .get::<StackedAreaChartResponse>(&cache_key)
@@ -3768,21 +3806,31 @@ async fn get_total_supply_chart(
             )));
         };
 
+        let bands = total_supply_bands(
+            &snapshot.date,
+            snapshot.total_issuance,
+            [
+                supply.liquid,
+                supply.dao_locked,
+                snapshot.unclaimed_compensation,
+                supply.burnt,
+            ],
+        )
+        .map_err(ApiError::internal)?;
         let mut values = std::collections::HashMap::new();
-        values.insert(
-            "circulating".to_string(),
-            shannon_to_ckb_string(supply.liquid),
-        );
-        values.insert(
-            "nervosdao".to_string(),
-            shannon_to_ckb_string(supply.dao_locked),
-        );
-        values.insert("burnt".to_string(), shannon_to_ckb_string(supply.burnt));
-        // C, the day's total issuance: the whole the page's sentence states (the bands are what
-        // has left the unissued secondary pool, so they do not sum to it)
+        for (key, band) in TOTAL_SUPPLY_BAND_KEYS.iter().zip(bands) {
+            values.insert(key.to_string(), shannon_to_ckb_string(band));
+        }
+        // C, the day's total issuance, which the four bands partition
         values.insert(
             "totalIssuance".to_string(),
             shannon_to_ckb_string(snapshot.total_issuance),
+        );
+        // the protocol circulation, C − genesis burnt − S: what the site calls circulating (the
+        // band outside the DAO and the DAO's deposits), the page's head figure
+        values.insert(
+            "circulating".to_string(),
+            shannon_to_ckb_string(supply.circulating),
         );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
@@ -3802,26 +3850,21 @@ async fn get_total_supply_chart(
     )
     .await?;
 
-    let series = vec![
-        StackedAreaSeries {
+    let series = TOTAL_SUPPLY_BAND_KEYS
+        .iter()
+        .zip([
+            ("Outside the DAO", "#00c389"),
+            ("In the Nervos DAO", "#3b82f6"),
+            ("Unclaimed DAO compensation", "#a68b57"),
+            ("Burnt", "#6b7280"),
+        ])
+        .map(|(key, (label, color))| StackedAreaSeries {
             id: None,
-            key: "circulating".to_string(),
-            label: "Circulating".to_string(),
-            color: "#00c389".to_string(),
-        },
-        StackedAreaSeries {
-            id: None,
-            key: "nervosdao".to_string(),
-            label: "Nervos DAO Locked".to_string(),
-            color: "#3b82f6".to_string(),
-        },
-        StackedAreaSeries {
-            id: None,
-            key: "burnt".to_string(),
-            label: "Burnt".to_string(),
-            color: "#6b7280".to_string(),
-        },
-    ];
+            key: key.to_string(),
+            label: label.to_string(),
+            color: color.to_string(),
+        })
+        .collect();
 
     let response = StackedAreaChartResponse {
         data,
@@ -6607,6 +6650,28 @@ mod tests {
         assert_eq!(deserialized.top_tokens[1].holders_count, 100);
         assert_eq!(deserialized.capacity_breakdown[0].category, "dao");
         assert_eq!(deserialized.capacity_breakdown[1].percentage, "60.00");
+    }
+
+    #[test]
+    fn total_supply_bands_must_make_c() {
+        assert_eq!(
+            total_supply_bands("2026-11-18", 1_000, [600, 250, 50, 100]),
+            Ok([600, 250, 50, 100])
+        );
+        // a row whose bands miss C by one shannon is an error naming the date and the operands
+        let error = total_supply_bands("2026-11-18", 1_000, [600, 250, 50, 99]).unwrap_err();
+        assert!(error.contains("2026-11-18"), "{error}");
+        assert!(error.contains("they sum to 999"), "{error}");
+        assert!(
+            error.contains(
+                "outside_dao=600, dao_deposited=250, unclaimed_compensation=50, burnt=99, \
+                 total_issuance=1000"
+            ),
+            "{error}"
+        );
+        assert!(total_supply_bands("2026-11-18", 0, [i128::MAX, 1, 0, 0])
+            .unwrap_err()
+            .contains("overflow"));
     }
 
     #[test]

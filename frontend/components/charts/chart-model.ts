@@ -23,6 +23,7 @@ import {
   type AssetClass,
 } from '@/lib/design-tokens';
 import { shortenAddress, shortenHash } from '@/lib/shorten';
+import { color } from '@/lib/palette';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { decimalAmountText } from '@/lib/amount-form';
 
@@ -136,6 +137,8 @@ function readingAt(
 export interface ChartModel {
   title: string;
   points: ChartPoint[];
+  /** The unit a stack's whole is stated in where it is not its bands' (`wholeUnit`). */
+  wholeUnit?: string;
   /**
    * A histogram's whole, the route's: what its page's shares of a bucket divide by (cell size's
    * live cells; the D1 hand-back, item 2). A stack's wholes are its points' own.
@@ -282,6 +285,7 @@ const RATE_UNITS = new Set(['%', 'PH/s', 'P', 'h', 's']);
 /** Units that count discrete things; an exact whole count is shown without decimals. */
 const COUNT_UNITS = new Set([
   'activities',
+  'kind counts',
   'addresses',
   'blocks',
   'cells',
@@ -646,11 +650,18 @@ export const MAX_BANDS = 5;
 
 /**
  * The whole each split stack's page divides by: the route's figure at every point (the D1
- * hand-back, item 2), never the page's sum of its bands, and where the payload sends it. The day's
- * activity kinds, its knowledge size and its secondary issuance are partitioned by their bands;
- * total supply's is C, the DAO field's total issuance, which its bands do not sum to (what has not
- * left the unissued secondary pool is no band). A route that sends none is refused.
+ * hand-back, item 2), never the page's sum of its bands, and where the payload sends it. Each is
+ * partitioned by its bands: the day's activity kinds, its knowledge size, its secondary issuance,
+ * and total supply's C, the DAO field's total issuance, in four bands the route checks make it
+ * (lane D1, second follow-up). A route that sends none is refused.
  */
+/**
+ * A figure a stack's route sends beside its bands, which its page heads with: Supply's
+ * `circulating`, the protocol circulation C − genesis burnt − S (lane D1, second follow-up), the
+ * amount the site calls circulating everywhere.
+ */
+const HEAD_FIELDS: Readonly<Record<string, string>> = { 'total-supply': 'circulating' };
+
 const STATED_WHOLES: Readonly<
   Record<
     string,
@@ -722,6 +733,8 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
     return point.whole;
   };
   const isSecondaryIssuance = definition.slug === 'secondary-issuance';
+  // a figure the route sends beside the bands, the page's head (Supply: the protocol circulation)
+  const headField = HEAD_FIELDS[definition.slug];
   const protocolTotal = (point: (typeof payload.data)[number]): string => {
     if (point.protocolTotalShannons === undefined || point.phase1CompensationShannons === undefined)
       throw new Error(
@@ -740,13 +753,16 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   };
   if (isSecondaryIssuance) payload.data.forEach(protocolTotal);
   // The figure each page heads with (chart-head.ts): the protocol total of secondary issuance,
-  // the oldest age band of the HODL wave, else the stack's whole, the route's.
+  // the oldest age band of the HODL wave, Supply's circulating CKB, else the stack's whole, the
+  // route's.
   const headOf = (index: number): string =>
     isSecondaryIssuance
       ? protocolTotal(payload.data[index])
       : banded
         ? points[index].values[drawn[0].key]
-        : whole(points[index]);
+        : headField
+          ? read(payload.data[index], headField)
+          : whole(points[index]);
   const holderCount = banded && payload.data.length > 0;
   if (holderCount && payload.data.some((point) => point.values.holderCount === undefined))
     throw new Error(`${definition.slug}: missing holderCount at returned point`);
@@ -793,6 +809,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
         : undefined,
   };
   if (banded) model.yDomain = [0, 100];
+  if (definition.wholeUnit) model.wholeUnit = definition.wholeUnit;
   if (!last) return model;
   // Each band's figure at its right end and on the card's key, from one place (lane D1, CH-07): a
   // share the API states is as sent; a share of the whole, the route's, is cut from the exact part.
@@ -1361,9 +1378,13 @@ const CLASSED_SERIES: Readonly<
     nftSpore: { label: 'Objects', color: CLASS_COLORS.objects },
     otherContracts: { label: 'Other scripts', color: CLASS_COLORS.other },
   },
+  // C in four bands that partition it (lane D1, second follow-up): the circulating CKB outside the
+  // DAO in the data's celadon, the DAO's deposits gold, its compensation not yet claimed the gold a
+  // step down (its neighbour, not a class of its own), the burnt the neutral slate
   'total-supply': {
-    circulating: { label: 'Circulating', color: DATA_COLOR },
-    nervosdao: { label: 'Nervos DAO', color: CLASS_COLORS.dao },
+    outsideDao: { label: 'Outside the DAO', color: DATA_COLOR },
+    daoDeposited: { label: 'In the Nervos DAO', color: CLASS_COLORS.dao },
+    unclaimedCompensation: { label: 'Unclaimed DAO compensation', color: color('gold-ramp') },
     burnt: { label: 'Burnt', color: CLASS_COLORS.ckb },
   },
   'secondary-issuance': {

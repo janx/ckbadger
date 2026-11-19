@@ -134,8 +134,24 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'secondary-issuance') return secondaryProducer;
   if (definition.slug === 'hodl-wave')
     return banded(keyed(HODL_KEYS, { holderCount: '123' }), { '1m6m': '9', lt1m: '21' });
-  if (definition.slug === 'total-supply')
-    return withWhole(keyed(['circulating', 'nervosdao', 'burnt']), 'totalIssuance', 1);
+  // re-pinned for the four bands (lane D1, second follow-up, item 1): four bands that make C,
+  // and the protocol circulation beside them
+  if (definition.slug === 'total-supply') {
+    const bands = withWhole(
+      keyed(['outsideDao', 'daoDeposited', 'unclaimedCompensation', 'burnt']),
+      'totalIssuance'
+    );
+    return {
+      ...bands,
+      data: bands.data.map((point) => ({
+        ...point,
+        values: {
+          ...point.values,
+          circulating: String(Number(point.values.outsideDao) + Number(point.values.daoDeposited)),
+        },
+      })),
+    };
+  }
   if (definition.slug === 'common-knowledge-composition')
     return withWhole(
       keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']),
@@ -481,26 +497,29 @@ describe('29 chart variants', () => {
   });
 
   // Re-pinned for the D1 hand-back, item 2: a stack's whole is the route's, exactly, never the
-  // page's sum of its bands (this test summed 1.123456789 and 2.000000001 to 3.12345679).
+  // page's sum of its bands (this test summed 1.123456789 and 2.000000001 to 3.12345679); and
+  // re-pinned for the four bands (lane D1, second follow-up, item 1): Supply heads with the
+  // route's circulating, its whole C
   it('takes a stack’s whole from its route at every digit, never the sum of its bands', () => {
     const model = chartModel(CHART_BY_SLUG.get('total-supply')!, {
       title: 'Supply',
       series: [
-        { key: 'circulating', label: 'Circulating', color: '#a' },
-        { key: 'nervosdao', label: 'Nervos DAO', color: '#b' },
+        { key: 'outsideDao', label: 'Outside the DAO', color: '#a' },
+        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#b' },
       ],
       data: [
         {
           date: '2024-01-01',
           values: {
-            circulating: '1.123456789',
-            nervosdao: '2.000000001',
+            outsideDao: '1.123456789',
+            daoDeposited: '2.000000001',
             totalIssuance: '10.123456790000000001',
+            circulating: '3.12345679',
           },
         },
       ],
     });
-    expect(model.latest?.raw).toBe('10.123456790000000001');
+    expect(model.latest?.raw).toBe('3.12345679');
     expect(model.points[0].whole).toBe('10.123456790000000001');
   });
 
@@ -591,9 +610,13 @@ describe('29 chart variants', () => {
     expect(supply.points).toHaveLength(13);
     expect(supply.points.map((point) => point.label).at(0)).toBe('2020-05-12');
     expect(supply.points.map((point) => point.label).at(-1)).toBe('2020-05-24');
-    expect(supply.points[0].values.nervosdao).toBe('123.00000001');
+    // re-pinned for the four bands (lane D1, second follow-up, item 1): the DAO's deposits keyed
+    // daoDeposited (were nervosdao), and the head the route's circulating, 1,000 CKB (was C,
+    // 8,400,001,000)
+    expect(supply.points[0].values.daoDeposited).toBe('123.00000001');
     expect(supply.points[1].values).toEqual(supply.points[0].values);
-    expect(supply.latest?.raw).toBe('8400001000');
+    expect(supply.points[0].whole).toBe('8400001000');
+    expect(supply.latest?.raw).toBe('1000');
     expect(secondary.points).toHaveLength(13);
     expect(secondary.points[1].values).toEqual(secondary.points[0].values);
     expect(secondary.points[0].values.mining).toBe('1.50000001');

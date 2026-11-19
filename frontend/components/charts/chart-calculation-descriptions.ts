@@ -172,9 +172,9 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-total-supply': () => ({
     overview:
-      'Shows where the issued CKB is at the end of each complete UTC+8 day: circulating, locked in the Nervos DAO, or burnt.',
+      'Shows where the issued CKB, C, is at the end of each complete UTC+8 day, in four parts that make it: circulating outside the Nervos DAO, deposited in it, DAO compensation not yet claimed, and burnt. Circulating CKB is the first two.',
     formula:
-      'circulating = C − genesis burnt − S − total_deposited; nervosdao = total_deposited; burnt = genesis burnt + the treasury part of S.',
+      'outsideDao = C − genesis burnt − S − total_deposited; daoDeposited = total_deposited; unclaimedCompensation = DAO compensation not yet claimed, in S; burnt = genesis burnt + the rest of S; the four make C; circulating = C − genesis burnt − S.',
     legendItems: [],
   }),
   'chart-nominal-apc': () => ({
@@ -208,18 +208,19 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Splits all CKB by the time since it last moved, at the end of each complete UTC+8 day.',
     formula:
-      'share = band capacity × 100 ÷ Σ band capacities (DailyHodlWave.band_24h … band_gt_3y), half up at two decimals; 1 to 6 months = band_3m_6m + band_1m_3m; under 1 month = band_1w_1m + band_1d_1w + band_24h; holderCount = addresses with a positive balance.',
+      'share = band capacity × 100 ÷ Σ band capacities (DailyHodlWave.band_24h … band_gt_3y), cut at two decimals; 1 to 6 months = band_3m_6m + band_1m_3m; under 1 month = band_1w_1m + band_1d_1w + band_24h; holderCount = addresses with a positive balance.',
     legendItems: [],
   }),
   'chart-activity-volume': () => ({
     overview:
-      'Counts the indexed activity events of each complete UTC+8 day, across transfers, DAO changes, tokens, objects, identities and script calls.',
+      'Counts each complete UTC+8 day’s activities under every kind they are, across transfers, DAO changes, tokens, objects, identities and script calls: an activity of two kinds counts under both, so the series is the day’s kind counts, more than its activities.',
     formula:
-      'value = transferCount + daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount + tokenCount + objectCount + identityCount + scriptCallCount; one transaction can yield more than one.',
+      'value = kindOccurrences = transferCount + daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount + tokenCount + objectCount + identityCount + scriptCallCount, as the route sums them.',
     legendItems: [],
   }),
   'chart-activity-type-breakdown': () => ({
-    overview: 'Splits each day’s activity count by the kind the activity index records.',
+    overview:
+      'Splits each day’s kind counts by kind: a band is the day’s activities of its kind, and the stack, the kinds summed, counts an activity of two kinds under both.',
     formula:
       'transfer = transferCount; dao = daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount; token = tokenCount; object = objectCount; identity = identityCount; scriptCall = scriptCallCount.',
     legendItems: [],

@@ -85,6 +85,13 @@ const dark = {
   gold: '#e4bf76',
   'gold-dim': '#ceb077',
   'gold-bright': '#f6cf87',
+  /**
+   * The DAO's second band in a stack, its compensation not yet claimed (the Supply chart, lane D1):
+   * old gold mixed into the page ground at 70 %, so it reads as the gold band beside it, not a
+   * class of its own, and clears that gold (1.86:1), the burnt slate (1.86:1) and the ground
+   * (5.73:1) by the board's 1.5:1 for a stack's fills.
+   */
+  'gold-ramp': '#a68b57',
   rouge: '#ff9e88',
   /**
    * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
@@ -269,6 +276,8 @@ const light: Palette = {
   gold: '#80600f',
   'gold-dim': '#786234',
   'gold-bright': '#684e0d',
+  /** By day the gold mixed into the paper at 30 %: 3.34:1 to the gold, 1.55 to the slate, 1.51 to the paper. */
+  'gold-ramp': '#d0c3a4',
   rouge: '#a8392a',
   'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',

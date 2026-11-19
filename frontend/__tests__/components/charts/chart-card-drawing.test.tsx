@@ -53,7 +53,8 @@ describe('an index card draws its page’s default scale and cap (item 3)', () =
   it('Activities: the page’s log scale, said on the axis', async () => {
     const chart = await drawn('activity-volume');
     expect(chart).toHaveAttribute('data-y-scale', 'log');
-    expect(chart).toHaveAttribute('data-plot-name', 'activities · log scale');
+    // re-pinned for lane D1's second follow-up, item 2: the series is the day's kind counts
+    expect(chart).toHaveAttribute('data-plot-name', 'kind counts · log scale');
   });
 
   it('Activity by type: linear, its spike named above the scale with the day’s whole', async () => {
@@ -63,7 +64,8 @@ describe('an index card draws its page’s default scale and cap (item 3)', () =
     // day 50 of 120: 1,000,000 script calls and 698 more of the other kinds, the API's figure
     expect(chart).toHaveAttribute(
       'data-cap',
-      `${days(120)[50]} · 1,000,698 activities, above this scale`
+      // re-pinned for lane D1's second follow-up, item 2: the stack's whole is kind counts
+      `${days(120)[50]} · 1,000,698 kind counts, above this scale`
     );
   });
 });

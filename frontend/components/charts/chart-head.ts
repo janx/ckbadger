@@ -1,5 +1,5 @@
 import type { ChartPoint } from '@/components/ui/chart';
-import type { ChartDefinition } from '@/components/charts/chart-catalogue';
+import { ACTIVITY_COUNT_WORDS, type ChartDefinition } from '@/components/charts/chart-catalogue';
 import {
   axisOutliers,
   axisStyle,
@@ -70,6 +70,7 @@ const COUNT_WORDS = new Set([
   'transactions',
   'addresses',
   'activities',
+  'kind counts',
   'cells',
   'blocks',
   'epochs',
@@ -283,7 +284,8 @@ const HEADS: Record<string, HeadOf> = {
     dated(m, 'confirmed in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'active-addresses': (_, m) => dated(m, 'active in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'ckb-volume': (_, m) => dated(m, 'moved in a day', (x) => sinceSentence(x, FLOW_CKB)),
-  'activity-volume': (_, m) => dated(m, 'recorded in a day', (x) => sinceSentence(x, FLOW_COUNT)),
+  // counted, not recorded: the series is the day's kind counts (ACTIVITY_COUNT_WORDS)
+  'activity-volume': (_, m) => dated(m, 'counted in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'activity-type-breakdown': (_, m) => {
     const last = m.points.at(-1);
     if (!last) return dated(m, 'the largest kind in a day', () => '');
@@ -299,7 +301,7 @@ const HEADS: Record<string, HeadOf> = {
         display: formatChartHead(last.values[first], m.unit),
         unit: m.unit,
       },
-      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's kind occurrences, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
+      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's ${ACTIVITY_COUNT_WORDS.noun}, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
     };
   },
   'cell-count': (_, m) => dated(m, 'live', peakSentence),
@@ -318,20 +320,18 @@ const HEADS: Record<string, HeadOf> = {
         : `${capitalise(moved)}.`,
     };
   },
+  // Circulating is the protocol circulation, C − genesis burnt − S, the route's (lane D1, second
+  // follow-up): the site's one circulating amount. The sentence states C once, what circulates, of
+  // that what is in the DAO, and what is burnt, each share cut from the route's figures.
   'total-supply': (_, m) => {
     const last = m.points.at(-1);
     const head = dated(m, 'circulating', () => '');
-    if (!last) return head;
-    // C, the day's total issuance, the route's: its bands do not sum to it
+    if (!last || !m.latest) return head;
     const whole = wholeAt(last, 'supply whole');
+    const circulating = m.latest.raw;
     return {
       ...head,
-      figure: {
-        raw: last.values.circulating,
-        display: formatChartHead(last.values.circulating, 'CKB'),
-        unit: 'CKB',
-      },
-      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(last.values.nervosdao, whole, 'supply')} is deposited in the Nervos DAO and ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
+      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it in the Nervos DAO; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
     };
   },
   'total-deposit': (_, m) => dated(m, 'deposited in the Nervos DAO', peakSentence),
@@ -531,6 +531,11 @@ export function chartHead(definition: ChartDefinition, model: ChartModel): Chart
   const figure = head.figure;
   return {
     ...head,
+    // what the series counts, said once where it needs saying (ACTIVITY_COUNT_WORDS.note)
+    sentence:
+      definition.countNote && model.points.length
+        ? `${head.sentence} ${definition.countNote}`
+        : head.sentence,
     figure: figure && {
       ...figure,
       title:
@@ -556,7 +561,10 @@ export function capNote(
     // a stack is above the scale by its whole, the day's, as the route states it
     if (model.kind === 'stacked') {
       const whole = wholeAt(point, `${model.title} cap`);
-      return { ratio: ratio(whole, 'cap whole'), text: stated(whole, model.unit, true) };
+      return {
+        ratio: ratio(whole, 'cap whole'),
+        text: stated(whole, model.wholeUnit ?? model.unit, true),
+      };
     }
     const key = model.series.reduce((best, entry) =>
       compare(at(point, entry.key), at(point, best.key)) > 0 ? entry : best

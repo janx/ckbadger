@@ -170,7 +170,8 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     const outliers = axisOutliers(model.points, model.series, model.kind)!;
     expect(outliers.indexes).toEqual([50]);
     expect(capNote(model, model.points, outliers.indexes, (label) => label, 'day')).toBe(
-      `${model.points[50].label} · 1,000,699 activities, above this scale`
+      // re-pinned for lane D1's second follow-up, item 2: the stack's whole is kind counts
+      `${model.points[50].label} · 1,000,699 kind counts, above this scale`
     );
   });
 });
