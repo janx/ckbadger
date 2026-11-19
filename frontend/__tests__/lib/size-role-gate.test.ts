@@ -343,13 +343,15 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   assets: 13,
   lists: 6,
   topics: 2,
-  charts: 1,
+  // charts 1 → 0 (the ink and size round): the index card's ranking writes its rows at 13 px
+  charts: 0,
   shared: 3,
 };
-// chain 3 → 0, files 18 → 15 (lane P1, the ink and size roles):
+// 18 → 17: components/charts/chart-small-multiple.tsx left the list
+// chain 3 → 0, files 17 → 14 (lane P1, the ink and size roles):
 // components/cell/code-cell-board.tsx, components/transaction/script-group-matrix.tsx,
 // components/transaction/what-moved.tsx left the list
-const TOLERATED_FILES = 15;
+const TOLERATED_FILES = 14;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -412,12 +414,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'topics',
     sites: { link: 2 },
     reason: `the block links of the capacity-use caption and the 365-day anchor line, 12 px notes; ${WORK}`,
-  },
-  // ---- charts ----
-  'components/charts/chart-small-multiple.tsx': {
-    family: 'charts',
-    sites: { link: 1 },
-    reason: `a small multiple's chart link at 12 px; ${WORK}`,
   },
   // ---- shared ----
   'components/stats-bar.tsx': {

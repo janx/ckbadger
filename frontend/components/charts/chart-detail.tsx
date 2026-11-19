@@ -170,9 +170,9 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
         })}
       </ol>
       {rows.some((row) => row.lockHashOnly) && (
-        <span className="text-text-dim text-small mt-4 block">
+        <p className="text-text text-small max-w-measure mt-4">
           A row beginning 0x is a miner known only by its lock hash.
-        </span>
+        </p>
       )}
     </div>
   );
@@ -225,7 +225,16 @@ function HeroFigure({ head, gold }: { head: ChartHead; gold: boolean }) {
     <section data-role="chart-figure" aria-label="figure" className="min-w-0">
       <div data-testid="figure-eyebrow" className="eyebrow text-text-dim text-meta mb-1.5">
         {head.eyebrow}
-        {head.at && ` · ${head.at}`}
+        {/* the date the figure is read at is the datum: the reading ink at 13 px (the ink and size
+            roles, finished); the eyebrow's words a label */}
+        {head.at && (
+          <>
+            {' · '}
+            <span data-role="eyebrow-date" className="text-text text-small">
+              {head.at}
+            </span>
+          </>
+        )}
       </div>
       {figure && (
         <div
@@ -478,9 +487,9 @@ function DetailBody({
           solidBands={kind === 'stacked'}
         />
       ) : (
-        <span className="text-text-dim text-small block py-8">
+        <p className="text-text text-small max-w-measure py-8">
           No indexed observations for this scope.
-        </span>
+        </p>
       )}
     </DetailSection>
   );
@@ -516,9 +525,9 @@ function DetailBody({
           {!fromSm && !ranked && controls && <div className="mt-4">{controls}</div>}
           <div className="mt-3.5 min-w-0">
             {model.latest === null && model.points.length === 0 && !ranked ? (
-              <span className="text-text-dim text-small block py-8">
+              <p className="text-text text-small max-w-measure py-8">
                 No indexed observations for this chart.
-              </span>
+              </p>
             ) : ranked ? (
               <RankedDetail model={model} definition={definition} />
             ) : (
