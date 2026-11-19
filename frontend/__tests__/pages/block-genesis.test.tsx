@@ -60,8 +60,17 @@ describe('the genesis block page', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryAllByRole('link', { name: /^Previous block,/, hidden: true })).toEqual([]);
     expect(screen.getByRole('link', { name: 'Next block, 1', hidden: true })).toBeInTheDocument();
-    expect(screen.getByTestId('block-summary')).toHaveTextContent(
-      /^2 transactions on 2019-11-16 at 05:09:50 UTC\+8\.$/
+    // Re-pinned on purpose (lane P1, the plan: the genesis lede says what was issued, from fields
+    // the API already sends; review chain-a block-genesis): the header's total issuance, its DAO
+    // field's C, 33,600,001,452.384882 CKB, in the summary form, exact in its title; the time is
+    // the status strip's. It read "2 transactions on 2019-11-16 at 05:09:50 UTC+8."
+    const summary = screen.getByTestId('block-summary');
+    expect(summary).toHaveTextContent(
+      /^2 transactions, which issued the chain’s first 33,600,001,452 CKB\.$/
+    );
+    expect(summary.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '33,600,001,452.384882 CKB'
     );
   });
 

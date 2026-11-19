@@ -13,6 +13,8 @@ import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/ap
 import type { SealId } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { numberStrings } from '@/__tests__/utils/lede-rule';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -238,9 +240,46 @@ describe('Block board · first tier', () => {
     expect(screen.getByRole('link', { name: 'Next block, 20,827,933' })).toBeInTheDocument();
     const summary = screen.getByTestId('block-summary');
     expect(summary).toHaveClass('text-body');
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph and lane D2's note: the lede repeated
+    // the miner, the time and the reward the status strip states): the lede says what the block
+    // holds, the uncle it includes and which block's reward its cellbase pays. It was "4
+    // transactions, mined by … on 2026-10-25 at 08:55:37 UTC+8. The miner earns 684.32120795 CKB
+    // for this block, paid 11 blocks later."
     expect(summary).toHaveTextContent(
-      /^4 transactions, mined by .+ on 2026-10-25 at 08:55:37 UTC\+8\. The miner earns 684\.32120795 CKB for this block, paid 11 blocks later\.$/
+      /^4 transactions and 1 uncle, #20,827,931; its cellbase pays the reward for #20,827,921\.$/
     );
+    expect(within(summary).getByRole('link', { name: '#20,827,931' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827932/uncles/0'
+    );
+    expect(within(summary).getByRole('link', { name: '#20,827,921' })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${h('ec')}`
+    );
+  });
+
+  // Lane P1 (said once): the lede states no figure the strip states, and links no miner.
+  it('says in the lede none of the facts the status strip states (P1)', async () => {
+    render(<BlockDetailPage />);
+    const summary = await screen.findByTestId('block-summary');
+    const strip = screen.getByRole('group', { name: 'Block status' });
+    const ledeNumbers = new Set(numberStrings(summary.textContent ?? ''));
+    expect(numberStrings(strip.textContent ?? '').filter((n) => ledeNumbers.has(n))).toEqual([]);
+    expect(within(summary).queryByRole('link', { name: /ckb1/ })).toBeNull();
+    expect(summary).not.toHaveTextContent(/mined|earns|UTC/);
+  });
+
+  it('says a block of no uncle and a cellbase that pays no reward yet in fewer words (P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...block,
+      uncles: [],
+      unclesCount: 0,
+      cellbasePays: null,
+      transactionsCount: 1,
+      transactionSizes: [355],
+    });
+    render(<BlockDetailPage />);
+    expect(await screen.findByTestId('block-summary')).toHaveTextContent(/^1 transaction\.$/);
   });
 
   // The name plate (seals by kind, C10, superseding C7): the height stands first, on the plate's
@@ -496,12 +535,15 @@ describe('Block board · first tier', () => {
     }
   });
 
+  // Re-pinned on purpose (lane P1, said once): the pool stands in the status strip, its miner
+  // fact; the lede named it too ("4 transactions, mined by Example Pool on 2026-10-25 …").
   it('says which pool mined the block when pools.toml names it (R-12)', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...block, minerPool: 'Example Pool' });
     render(<BlockDetailPage />);
     const summary = await screen.findByTestId('block-summary');
-    expect(summary).toHaveTextContent(/^4 transactions, mined by Example Pool on 2026-10-25/);
-    expect(within(summary).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
+    expect(summary).not.toHaveTextContent('Example Pool');
+    const strip = screen.getByRole('group', { name: 'Block status' });
+    expect(within(strip).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
       'href',
       `/mainnet/address/${block.minerAddress}`
     );
@@ -732,11 +774,40 @@ describe('BlockTxs board', () => {
 
 // F2 blocks visual pass + R2b-a wiring (BA-12, BA-13, BA-14, BA-19).
 describe('Block board · R2b-a fields', () => {
-  it('says which block the cellbase pays (BA-12)', async () => {
+  // Re-pinned on purpose (lane P1, the plan: CellbaseHeadline reads "reward for #N, to …"; review
+  // chain-a block-busy and block-with-uncle: two near-equal rewards, this block's in the strip and
+  // the cellbase's in its row, told apart only by a quiet note): the row says whose reward it
+  // pays and to whom. It read "Cellbase pays the reward of #20,827,921".
+  it('says which block the cellbase pays and to whom (BA-12, P1)', async () => {
+    const payee = seededAddress('ratvu9');
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [0, 1, 2, 3].map((i) =>
+        i === 0
+          ? {
+              ...activity(0),
+              participants: [
+                {
+                  address: payee,
+                  lockHash: h('9a'),
+                  lockHashPrefix: null,
+                  roles: [],
+                  ckbDelta: '55951224916',
+                  usedDelta: '6100000000',
+                  itemDeltas: [],
+                  tags: 0,
+                },
+              ],
+            }
+          : activity(i)
+      ),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    });
     render(<BlockDetailPage />);
     const row = (await screen.findByText('Cellbase')).closest('[data-feed-row]') as HTMLElement;
     expect(row.querySelector('[data-role="headline"]')).toHaveTextContent(
-      'Cellbase pays the reward of #20,827,921'
+      `Cellbase reward for #20,827,921, to ckb1…${payee.slice(-8)}`
     );
     expect(within(row).getByRole('link', { name: '#20,827,921' }).getAttribute('href')).toMatch(
       new RegExp(`/blocks/${h('ec')}$`)
