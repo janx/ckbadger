@@ -943,6 +943,73 @@ export function flexWrapsAt(el: Element, viewport: number): boolean {
 }
 
 /**
+ * The least height an element's target has at a viewport, as its classes set it (the controls lane
+ * C1: a control's hit area, docs/RESPONSIVE_LAYOUT.md "Touch"): its own height (`h-*`, a length:
+ * the preflight's border-box puts its padding and border inside it), at least its minimum
+ * (`min-h-*`), and the reach of a pseudo box drawn over it (`before:` / `after:` with `absolute`, on
+ * an element that is `relative`) standing out of it above and below (`-inset-*`, `-inset-y-*`). It
+ * reads no height from content, so an element whose classes set none is refused, as is a value it
+ * cannot convert (`h-full`, `h-auto`, a `var()`), a height under a state (`hover:h-8`) or a variant
+ * it cannot place, a bound (`max-h-*`), two classes setting one height at one breakpoint, and a
+ * pseudo box it does not read (one positioned against an ancestor, an inset on one side, a height).
+ */
+export function targetHeightPx(el: Element, viewport: number): number {
+  const set = new Map<'height' | 'minHeight', { px: number; level: number; cls: string }>();
+  const reach = new Map<string, { absolute: boolean; inset: number }>();
+  for (const cls of Array.from(el.classList)) {
+    const { variants, utility } = splitVariants(cls);
+    const pseudo = variants.find((v) => PSEUDO.test(v));
+    if (pseudo) {
+      const box = reach.get(pseudo) ?? { absolute: false, inset: 0 };
+      const inset = /^-inset(-y)?-(.+)$/.exec(utility);
+      if (utility === 'absolute') box.absolute = true;
+      else if (inset) box.inset = lengthPx(themeValue('inset', inset[2])!);
+      else if (/^-?(top|bottom|inset|inset-y)-/.test(utility))
+        throw new Error(
+          `tailwind-box: ${cls} sets an inset of the ${pseudo} box, which is not read`
+        );
+      else if (/^-?(h|min-h|max-h|py|pt|pb|my|mt|mb)-/.test(utility))
+        throw new Error(
+          `tailwind-box: ${cls} sets a height of the ${pseudo} box, which is not read`
+        );
+      reach.set(pseudo, box);
+      continue;
+    }
+    if (/^max-h-/.test(utility))
+      throw new Error(`tailwind-box: ${cls} bounds a height, which is not read`);
+    const height = /^(h|min-h)-(.+)$/.exec(utility);
+    if (!height) continue;
+    const state = variants.find((v) => STATE.test(v));
+    if (state) throw new Error(`tailwind-box: ${cls} sets a height under a state ${state}:`);
+    const level = levelAt(cls, variants, viewport, el, () => true);
+    if (level === null) continue;
+    const prop = height[1] === 'h' ? 'height' : 'minHeight';
+    const px = lengthPx(themeValue(prop, height[2])!);
+    const before = set.get(prop);
+    if (before && before.level === level && before.px !== px)
+      throw new Error(`tailwind-box: ${before.cls} and ${cls} both set ${prop} at one breakpoint`);
+    if (!before || level >= before.level) set.set(prop, { px, level, cls });
+  }
+  const own = set.get('height')?.px;
+  const min = set.get('minHeight')?.px;
+  if (own === undefined && min === undefined)
+    throw new Error(
+      `tailwind-box: <${el.tagName.toLowerCase()} class="${el.className}"> sets no height of its own`
+    );
+  const box = Math.max(own ?? 0, min ?? 0);
+  let target = box;
+  for (const [pseudo, { absolute, inset }] of reach) {
+    if (!absolute || inset <= 0) continue;
+    if (!el.classList.contains('relative'))
+      throw new Error(
+        `tailwind-box: the ${pseudo} box of <${el.tagName.toLowerCase()}> is placed against an ancestor: the element is not relative`
+      );
+    target = Math.max(target, box + 2 * inset);
+  }
+  return target;
+}
+
+/**
  * Whether a word of an element's text may break inside itself where it overflows (an inherited
  * `overflow-wrap: anywhere | break-word`, or `word-break: break-all | break-word`).
  */

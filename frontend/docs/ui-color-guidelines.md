@@ -93,7 +93,8 @@ text grade ("The ghost ink" below).
 | value                    | a hash, an address, an out point, a name, a state ("live", "consumed"), a full id under its h1                                                       | reading |
 | link                     | every link wherever it stands: a block height in a sentence, an out point in a tile, a menu's entry; it turns jade on hover                          | reading |
 | date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
-| number                   | a count, a percentage, a size in bytes, a pager's "Showing 1–25 of 1,234" (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
+| number                   | a count, a percentage, a size in bytes, where a pager is (`page 3 of 37`) (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
+| pager                    | where you are (`page 3 of 37`) reading; a way to go (`next →`) jade; the count line (`41–60 of 727`) and an end that cannot be taken quiet           | by part |
 | unit                     | the "CKB" after each amount, "B", a display figure's unit                                                                                            | quiet   |
 | separator                | the "·" between the parts of a line, JSON's braces and commas, "→"                                                                                   | quiet   |
 | note                     | a line under a figure that says how to read it or what it leaves out, a figure's sub-line, a hint ("tap or hover"), the word "selected" before a pin | quiet   |

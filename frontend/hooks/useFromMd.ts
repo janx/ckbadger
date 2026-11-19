@@ -3,10 +3,15 @@
 import { useSyncExternalStore } from 'react';
 
 /**
- * Tailwind's `md` and `lg` as media queries: from `md` the site has its desktop arrangement, below
- * it the phone's; from `lg` the page's gutter and the header's spacing widen.
+ * Tailwind's `sm`, `md` and `lg` as media queries: below `sm` a phone (an id's tight size, a
+ * control's 32 px box); from `md` the site has its desktop arrangement, below it the phone's; from
+ * `lg` the page's gutter and the header's spacing widen.
  */
-const QUERIES = { md: '(min-width: 768px)', lg: '(min-width: 1024px)' } as const;
+const QUERIES = {
+  sm: '(min-width: 640px)',
+  md: '(min-width: 768px)',
+  lg: '(min-width: 1024px)',
+} as const;
 
 type Breakpoint = keyof typeof QUERIES;
 
@@ -23,7 +28,17 @@ function viewportFrom(breakpoint: Breakpoint) {
   };
 }
 
-const FROM = { md: viewportFrom('md'), lg: viewportFrom('lg') };
+const FROM = { sm: viewportFrom('sm'), md: viewportFrom('md'), lg: viewportFrom('lg') };
+
+/**
+ * Whether the viewport is at least `sm` wide (640 px), following it across the breakpoint: below
+ * it a phone. For what a component decides in script at the width its classes switch at: an id's
+ * size (`useTightBelowSm`), a control's phone form (the controls of `components/ui/`: a tab row's
+ * step, a filter whose chips do not fit a phone's line drawn as a select).
+ */
+export function useFromSm(): boolean {
+  return useSyncExternalStore(FROM.sm.subscribe, FROM.sm.getSnapshot, () => true);
+}
 
 /**
  * Whether the viewport is at least `md` wide, following it across the breakpoint. For what CSS

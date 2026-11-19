@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCount } from '@/lib/format-count';
+import { formatCount, groupCount } from '@/lib/format-count';
 
 describe('formatCount', () => {
   // Re-pinned with U-16: the count and its noun are joined by a no-break space (one unit).
@@ -22,5 +22,21 @@ describe('formatCount', () => {
   it('rejects a count that is not a non-negative integer', () => {
     expect(() => formatCount(-1, 'block')).toThrow('Invalid count -1 for block');
     expect(() => formatCount(1.5, 'block')).toThrow('Invalid count 1.5 for block');
+  });
+});
+
+// The controls lane (C1): a count written alone — a tab's, a chip's, a pager's figures — is grouped
+// by the one rule formatCount writes its number by.
+describe('groupCount', () => {
+  it('groups a count in en-US, a zero and a bigint too', () => {
+    expect(groupCount(5653)).toBe('5,653');
+    expect(groupCount(2651295)).toBe('2,651,295');
+    expect(groupCount(0)).toBe('0');
+    expect(groupCount(BigInt('18446744073709551615'))).toBe('18,446,744,073,709,551,615');
+  });
+  it('rejects a count that is not a non-negative integer', () => {
+    expect(() => groupCount(-1)).toThrow('Invalid count -1');
+    expect(() => groupCount(1.5)).toThrow('Invalid count 1.5');
+    expect(() => groupCount(Number.NaN)).toThrow('Invalid count NaN');
   });
 });

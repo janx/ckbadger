@@ -190,7 +190,15 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Scrollbars**: painted in the page's palette and thin inside the page (`app/globals.css`), so a
   region that legitimately scrolls shows no platform-grey bar.
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the
-  figure; hints say "tap or hover".
+  figure; hints say "tap or hover". A control is a target a thumb can take (the controls board, UI
+  review 2026-11-14 phase C; the controls of `components/ui/`): below 640 its box is at least 32 px
+  high — a filter chip, a range, a pager's way to go, a text field and a select are 32 px there and
+  28 px from 640, their words 13 px; a tab is 32 px at every width; the copy button is a 24 px
+  square from 640 and a 32 px one below it; the help mark's box stays 18 px in its line and its
+  target reaches 7 px past each edge, 32 px at every width. A row's inline toggle (an activity
+  run's "N transactions ↓") is at least 24 px at every width, WCAG 2.2's minimum target. Each is
+  read from the classes as drawn (`targetHeightPx`, `__tests__/utils/tailwind-box.ts`) in its
+  component's test.
 - **Non-breaking units**: an address with its lock label, a number with its unit, an outpoint with
   its index, a date, a shortened id, a hyphenated term in a label or a figure — never broken
   inside; a count breaks only between its number and its noun, where it is wider than its line.

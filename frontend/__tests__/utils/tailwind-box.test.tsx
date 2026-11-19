@@ -8,6 +8,7 @@ import {
   inFlowAt,
   insetsPx,
   outerPx,
+  targetHeightPx,
 } from './tailwind-box';
 
 /**
@@ -189,6 +190,65 @@ describe('tailwind-box reads a box from its classes', () => {
     expect(at('border-l-[var(--w)]')).toThrow('cannot read [var(--w)] as a borderWidth');
     // an unknown key of a size scale
     expect(at('px-banana')).toThrow('no padding banana in the theme');
+  });
+});
+
+// The controls lane (C1): a control's hit area is a height, read from the same theme (h-7 is 28 px,
+// h-8 32, min-h-8 32, a [18px] box 18) and refused where the classes do not set it.
+describe('tailwind-box reads a target’s height from its classes', () => {
+  it('reads a height and a minimum off the spacing scale, by breakpoint', () => {
+    expect(targetHeightPx(first(<button className="h-7" />), 1280)).toBe(28);
+    // mobile first, as the width reader reads a breakpoint: 32 px, 28 from sm
+    const box = first(<button className="h-8 px-2.5 sm:h-7" />);
+    expect([1280, 640, 639, 390, 360].map((w) => targetHeightPx(box, w))).toEqual([
+      28, 28, 32, 32, 32,
+    ]);
+    expect(targetHeightPx(first(<a className="min-h-8 py-1" />), 390)).toBe(32);
+    expect(targetHeightPx(first(<a className="h-6 min-h-8" />), 390)).toBe(32);
+    expect(targetHeightPx(first(<a className="h-[18px]" />), 1280)).toBe(18);
+    // a state or a pseudo box that sets no height leaves it alone
+    expect(
+      targetHeightPx(first(<a className="hover:text-jade h-7 before:content-['']" />), 1280)
+    ).toBe(28);
+  });
+
+  it('adds the reach of a pseudo box drawn absolute over the element', () => {
+    const mark = first(
+      <button className="relative h-[18px] w-[18px] before:absolute before:-inset-[7px] before:content-['']" />
+    );
+    expect(targetHeightPx(mark, 1280)).toBe(32);
+    expect(
+      targetHeightPx(
+        first(
+          <button className="relative h-6 after:absolute after:-inset-y-1 after:content-['']" />
+        ),
+        1280
+      )
+    ).toBe(32);
+  });
+
+  it('refuses a height it cannot read', () => {
+    const at =
+      (className: string, viewport = 1280) =>
+      () =>
+        targetHeightPx(first(<button className={className} />), viewport);
+    expect(at('px-2')).toThrow('sets no height of its own');
+    expect(at('h-full')).toThrow('cannot read the length "100%"');
+    expect(at('h-auto')).toThrow('cannot read the length "auto"');
+    expect(at('h-[var(--h)]')).toThrow('cannot read [var(--h)] as a height');
+    expect(at('h-7 h-8')).toThrow('h-7 and h-8 both set height');
+    // a max- breakpoint is placed as no breakpoint, as the width reader places it
+    expect(at('h-7 max-sm:h-8', 390)).toThrow('h-7 and max-sm:h-8 both set height');
+    expect(at('h-7 hover:h-8')).toThrow('hover:h-8 sets a height under a state');
+    expect(at('h-7 [&>a]:h-8')).toThrow('cannot read the variant [&>a]: of [&>a]:h-8');
+    expect(at('h-7 max-h-6')).toThrow('max-h-6 bounds a height, which is not read');
+    expect(at('h-6 before:absolute before:-inset-2')).toThrow('not relative');
+    expect(at('relative h-6 before:absolute before:-top-2')).toThrow(
+      'before:-top-2 sets an inset of the before box, which is not read'
+    );
+    expect(at('relative h-6 before:h-10')).toThrow(
+      'before:h-10 sets a height of the before box, which is not read'
+    );
   });
 });
 

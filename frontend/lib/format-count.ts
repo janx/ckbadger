@@ -15,6 +15,17 @@ export function countNoun(
   return one ? singular : plural;
 }
 
+/**
+ * A count written grouped (`5,653`; a zero is a count too): the number of `formatCount`, and a
+ * count a control writes alone (a tab's, a filter chip's, a pager's figures; the controls lane C1).
+ */
+export function groupCount(count: number | bigint): string {
+  const valid =
+    typeof count === 'bigint' ? count >= BigInt(0) : Number.isSafeInteger(count) && count >= 0;
+  if (!valid) throw new Error(`Invalid count ${count}`);
+  return count.toLocaleString('en-US');
+}
+
 /** The no-break space that joins a count and its noun into one unit. */
 const NBSP = '\u00a0';
 
@@ -32,5 +43,5 @@ export function formatCount(
   plural = `${singular}s`
 ): string {
   const noun = countNoun(count, singular, plural);
-  return `${count.toLocaleString('en-US')}${NBSP}${noun.split(' ').join(NBSP)}`;
+  return `${groupCount(count)}${NBSP}${noun.split(' ').join(NBSP)}`;
 }

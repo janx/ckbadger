@@ -38,7 +38,30 @@ const ENTRIES: Record<string, { owner: string; named: string }> = {
 const CONFIG_IMPORTERS = ['tailwind.config.ts', 'vite.config.ts'];
 
 /** Unreachable modules the gate tolerates, as path → why the module stays without an importer. */
-const ALLOWLIST: Record<string, string> = {};
+const ALLOWLIST: Record<string, string> = {
+  // The controls library (UI review 2026-11-14, phase C, lane C1): built before any page uses it,
+  // placed by the four C2 lanes, whose work list is __tests__/lib/controls-gate.test.ts; the dev
+  // proof page (proof/controls.tsx, outside the build) mounts it meanwhile. An entry goes when its
+  // module is first imported by a page (this test then fails until it does).
+  'components/ui/tabs.tsx':
+    'the controls library’s tab row (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/filter-chips.tsx':
+    'the controls library’s filter chips (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/range-select.tsx':
+    'the controls library’s range (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/text-field.tsx':
+    'the controls library’s text field (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/pager.tsx':
+    'the controls library’s pager (lane C1): placed by the C2 lanes in the place of CursorPagination, mounted meanwhile by proof/controls.tsx',
+  'components/ui/copy-button.tsx':
+    'the controls library’s copy button (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/select.tsx':
+    'the controls library’s select (lane C1): drawn by the filter chips’ phone form and placed by the C2 lanes',
+  'lib/control-row-fit.ts':
+    'the tab row’s and the filter chips’ fit, imported by components/ui/tabs.tsx and filter-chips.tsx until a page does',
+  'lib/roving-focus.ts':
+    'the keyboard of the tab row, the filter chips and the range (lane C1), imported by them alone',
+};
 
 const isModule = (path: string) => /\.tsx?$/.test(path) && !path.endsWith('.d.ts');
 const inScope = (path: string) => isModule(path) && SOURCE_DIRS.includes(path.split('/')[0]);

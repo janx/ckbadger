@@ -1,0 +1,156 @@
+import { groupCount } from '@/lib/format-count';
+import { fontPx, textPx } from '@/lib/type-metrics';
+
+/**
+ * What a tab row holds at its width (UI review 2026-11-14, phase C, lane C1; the controls board the
+ * owner passed on 2026-11-19, gate D0′; the board's `tabRowPx`; docs/RESPONSIVE_LAYOUT.md's
+ * principle 4, the measured width decides). A tab row (components/ui/tabs.tsx) is one line: the
+ * names at the section step from sm (17 px) and the body step below it (14 px), each count at the
+ * meta step (12 px) after its name, and, when the row is a tier-1 section's command line, the
+ * prompt square before the first name. The owner's phone rule: when the row is wider than its line
+ * the counts leave the row (the list's own count line keeps them); a name is never cut, and the
+ * row never scrolls or wraps. The row is measured from what it writes (lib/type-metrics.ts, a glyph 0.6 em) and the
+ * insets below, which the component draws as classes; its test reads the drawn row through
+ * __tests__/utils/tailwind-box.ts against `tabRowPx`, so the two cannot drift.
+ *
+ * The names alone must hold the narrowest line, a 360 px window's 328 px, at the body step: a row
+ * that does not is a design fault its caller must see, so `tabRowShowsCounts` throws for it at
+ * every width, not only on a phone. The board's two cases: the address page's three tabs with
+ * their counts are 356.4 px, so at 360 the counts leave (316.8 px without them) and at 390 (358 px)
+ * they stay; the inventory's are 324 px and stay at 360, one more digit in a count and they leave.
+ *
+ * A row of filter chips is measured the same way (`chipRowFits`, below): below 640 a filter's
+ * values are chips where their row fits one line of the narrowest phone, a select where it does not.
+ */
+
+/** The two steps a tab row is set at: the section step from sm, the body step below it. */
+export type TabRowStep = 'section' | 'body';
+
+/** A tab as the row writes it: its name, and its count when it has one. */
+export interface TabRowItem {
+  label: string;
+  count?: number | null;
+}
+
+/** The gap between two tabs, px (`gap-4 sm:gap-[22px]` in components/ui/tabs.tsx). */
+const GAP_PX: Record<TabRowStep, number> = { body: 16, section: 22 };
+
+/** The prompt square (`.section-mark`, 8 px), pulled toward the first name (`-mr-2 sm:-mr-3`). */
+const SQUARE_PX = 8;
+const SQUARE_PULL_PX: Record<TabRowStep, number> = { body: 8, section: 12 };
+
+/** A count's margin after its name (`ml-1.5`), and the step it is set at (`text-meta`). */
+const COUNT_GAP_PX = 6;
+const COUNT_PX = fontPx('meta');
+
+/** The line of a 360 px window (its content less the 16 px gutters): the names must hold it. */
+export const NARROWEST_LINE_PX = 328;
+
+/** A sum of widths to the hundredth of a pixel the budgets are written in. */
+const hundredth = (px: number) => Math.round(px * 100) / 100;
+
+/** The widths of a tab row at a step: its names, its counts, the square and the gaps. */
+export interface TabRowWidths {
+  names: number;
+  counts: number;
+  chrome: number;
+  /** The row with its counts. */
+  withCounts: number;
+  /** The row without them. */
+  bare: number;
+}
+
+/** The width a tab row's parts take at `step`, with the prompt square when it is a command line. */
+export function tabRowPx(
+  items: readonly TabRowItem[],
+  step: TabRowStep,
+  command: boolean
+): TabRowWidths {
+  const namePx = fontPx(step);
+  const names = items.reduce((sum, item) => sum + textPx([...item.label].length, namePx), 0);
+  const counts = items.reduce(
+    (sum, item) =>
+      item.count === undefined || item.count === null
+        ? sum
+        : sum + textPx(groupCount(item.count).length, COUNT_PX) + COUNT_GAP_PX,
+    0
+  );
+  const chrome =
+    (command ? SQUARE_PX - SQUARE_PULL_PX[step] + GAP_PX[step] : 0) +
+    Math.max(items.length - 1, 0) * GAP_PX[step];
+  return {
+    names: hundredth(names),
+    counts: hundredth(counts),
+    chrome: hundredth(chrome),
+    withCounts: hundredth(names + counts + chrome),
+    bare: hundredth(names + chrome),
+  };
+}
+
+/**
+ * Whether a tab row draws its counts in a line `linePx` wide at `step`: while the row with them
+ * holds the line; before the line is measured (`null`, the render before the layout effect) it
+ * draws them. Throws when the names alone do not hold the narrowest line at the body step.
+ */
+export function tabRowShowsCounts(
+  items: readonly TabRowItem[],
+  step: TabRowStep,
+  command: boolean,
+  linePx: number | null
+): boolean {
+  const narrow = tabRowPx(items, 'body', command);
+  if (narrow.bare > NARROWEST_LINE_PX)
+    throw new Error(
+      `tab row "${items.map((item) => item.label).join(' · ')}" is ${narrow.bare} px without its counts at ${fontPx('body')} px: wider than the ${NARROWEST_LINE_PX} px line of a 360 px window`
+    );
+  if (linePx === null) return true;
+  return tabRowPx(items, step, command).withCounts <= linePx;
+}
+
+/** A filter chip as the row writes it: its label, its count and its mark where it has them. */
+export interface ChipRowItem {
+  label: string;
+  count?: number | null;
+  /** The palette key of its 7 px mark; only whether it has one bears on the row. */
+  mark?: string;
+}
+
+/**
+ * A chip's box (`chipClass`, components/ui/filter-chips.tsx): its 1 px frame and its 10 px padding
+ * each side (`border px-2.5`), the gap between its parts (`gap-1.5`), its mark (`h-[7px] w-[7px]`),
+ * its label at the small step (`text-small`, 13 px), its count at the meta step; the gap between
+ * two chips (`gap-1.5` on the row).
+ */
+const CHIP_INSET_PX = 2 * 1 + 2 * 10;
+const CHIP_PART_GAP_PX = 6;
+const CHIP_MARK_PX = 7;
+const CHIP_LABEL_PX = fontPx('small');
+const CHIP_GAP_PX = 6;
+
+/** The width a row of filter chips takes on one line, to the hundredth of a pixel. */
+export function chipRowPx(items: readonly ChipRowItem[]): number {
+  const chips = items.reduce(
+    (sum, item) =>
+      sum +
+      CHIP_INSET_PX +
+      (item.mark === undefined ? 0 : CHIP_MARK_PX + CHIP_PART_GAP_PX) +
+      textPx([...item.label].length, CHIP_LABEL_PX) +
+      (item.count === undefined || item.count === null
+        ? 0
+        : CHIP_PART_GAP_PX + textPx(groupCount(item.count).length, COUNT_PX)),
+    0
+  );
+  return hundredth(chips + Math.max(items.length - 1, 0) * CHIP_GAP_PX);
+}
+
+/**
+ * Whether a filter's values are chips below 640 (the controls board's pictures at 390): when their
+ * row fits one line of the narrowest phone (`NARROWEST_LINE_PX`, a 360 px window's 328 px); else a
+ * select after the filter's label. A fixed line, not the one measured, so a filter takes one form
+ * on every phone and the same filter the same control on sibling pages. From 640 they are chips.
+ * The board's cases: the address page's `all 3 · ckb 2 · dao 1` 200.8 px, chips; the inventory's
+ * four standards 397.6 px and the six kinds of activity 783.2 px, selects.
+ */
+export function chipRowFits(items: readonly ChipRowItem[]): boolean {
+  return chipRowPx(items) <= NARROWEST_LINE_PX;
+}
