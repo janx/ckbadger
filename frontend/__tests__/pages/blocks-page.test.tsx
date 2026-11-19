@@ -242,6 +242,34 @@ describe('BlocksPage · the genesis row', () => {
     expect(lines[1]).toEqual(['miner', 'miner Genesis', 'fees 0 CKB']);
     expect(lines[2][1]).toMatch(/· 1,236,271 B, 1,235,678 B overhead · 0 cycles · Genesis$/);
   });
+
+  // The lead's follow-up to lane P3: PhoneRow's quiet line is 13 px (the shared lane's 9470e172),
+  // and the hash, a value, reads at it: text-small on the hash itself, since Hash sets its own size
+  // (the body step by default), so the line's size cannot reach it (it was text-meta, the line's
+  // one 12 px value). The line's budget at 13 px: its parts never break inside (each is one unit)
+  // and the line wraps between them, so the widest part must fit the text column beside the stone,
+  // the window less its two 16 px gutters and the stone's 24: 304 px at 360, 264 at 320. The widest
+  // part is genesis's size, "1,236,271 B, 1,235,678 B overhead", 33 glyphs at 13 px, 257.4 px: 6.6
+  // px inside 320's 264 and 46.6 inside 360's 304 (the busiest of the others, "3,500,000,000
+  // cycles", 156; "1,500 proposals", 117; the hash, 85.8).
+  it('writes the phone row’s hash at the quiet line’s 13 px, the line’s widest part inside 320', async () => {
+    atContainerWidth(358);
+    render(<BlocksPage />);
+    const cards = await screen.findAllByTestId('block-row-mobile');
+    const figures = cards[2].querySelector('[data-line="figures"]') as HTMLElement;
+    const hash = figures.querySelector('[title]') as HTMLElement;
+    expect(hash).toHaveTextContent(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/);
+    expect(hash).toHaveClass('text-small');
+    expect(hash).not.toHaveClass('text-meta');
+    const column = (window: number) => window - 32 - ROW_SEAL.block.footprint;
+    expect([column(360), column(320)]).toEqual([304, 264]);
+    const widest = '1,236,271 B, 1,235,678 B overhead';
+    expect(figures).toHaveTextContent(widest);
+    expect(chars(widest.length, 13)).toBeCloseTo(257.4, 6);
+    expect(chars(widest.length, 13)).toBeLessThanOrEqual(column(320));
+    for (const part of ['3,500,000,000 cycles', '1,500 proposals', hash.textContent!])
+      expect(chars(part.length, 13)).toBeLessThan(chars(widest.length, 13));
+  });
 });
 
 // F2 blocks (BA-01/02/03/04/05/06/46): the approved Blocks v3 board.

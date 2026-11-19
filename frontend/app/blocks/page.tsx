@@ -533,9 +533,10 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <Dotted
               parts={[
-                // the quiet line's size, said on the hash (Hash's own default is the body step):
-                // it follows the line when the shared lane sets the quiet line at 13 px
-                <Hash key="h" hash={block.hash} size="tight" className="text-meta" />,
+                // the quiet line's 13 px (PhoneRow, since the shared lane's 9470e172), said on the
+                // hash: Hash sets its own size (the body step by default), so the line's size cannot
+                // reach it; it was 12 px, the line's one 12 px value
+                <Hash key="h" hash={block.hash} size="tight" className="text-small" />,
                 block.proposalsCount > 0 && (
                   <span key="p" className="whitespace-nowrap">
                     {formatCount(block.proposalsCount, 'proposal')}
