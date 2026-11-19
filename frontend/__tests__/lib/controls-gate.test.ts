@@ -193,12 +193,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the raw section’s Cells, Scripts, Witness bytes, Header deps and JSON, inner disclosures with no rule (a form the component lacks); its Cell graph, whose state the page holds (onToggle: a form it lacks); and the page’s own Raw data, the section disclosure as it stands',
   },
-  'components/cell/code-cell-board.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 1 },
-    reason:
-      'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
-  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -240,7 +234,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 11 (an object's media dependencies are SectionDisclosure's inner form)
 // → 10 (a custody's committed key hashes are SectionDisclosure's inner form)
 // → 9 (a family's every reference in full is SectionDisclosure's inner form; the p-assets sites are all the library's, the p-chain ones wait for the exactness lane)
-const TOLERATED_TOTAL = 9;
+// → 8 (the disclosure sweep, second part: the code cell's Type ID lineage is SectionDisclosure's inner form)
+const TOLERATED_TOTAL = 8;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
