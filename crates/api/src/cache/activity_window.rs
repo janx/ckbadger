@@ -357,6 +357,7 @@ mod tests {
                 protocol_actions: vec![],
                 type_calls: vec![],
                 lock_calls: vec![],
+                recognized_type_codes: vec![],
                 participants: vec![ParticipantDelta {
                     id: ParticipantId::Lock([hash_byte % 3; 32]),
                     ckb_delta: 7,
@@ -526,6 +527,7 @@ mod tests {
                     protocol_actions: vec![],
                     type_calls: vec![],
                     lock_calls: vec![],
+                    recognized_type_codes: vec![],
                     participants: vec![ParticipantDelta {
                         id: ParticipantId::Lock([hash_byte; 32]),
                         ckb_delta: 7,

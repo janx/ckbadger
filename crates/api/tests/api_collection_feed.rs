@@ -103,6 +103,7 @@ fn put_feed_tx(batch: &mut StoreBatch, tx: &FeedTx) {
         protocol_actions: tx.protocol_actions.clone(),
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: tx.participants.clone(),
     });
 }

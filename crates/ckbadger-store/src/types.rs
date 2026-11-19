@@ -2628,6 +2628,9 @@ pub const TAG_IDENTITY: u16 = 1 << 2;
 pub const TAG_DAO: u16 = 1 << 3;
 pub const TAG_PROTOCOL: u16 = 1 << 4;
 pub const TAG_CELLBASE: u16 = 1 << 5;
+/// A type script ran for this party that moved none of its items: an unrecognised one (the
+/// transaction's `type_calls`), or a recognised one with no item change and no DAO step (C7: a
+/// wallet merging its own token cells). The transaction is then a script call.
 pub const TAG_TYPE_CALL: u16 = 1 << 6;
 pub const TAG_LOCK_CALL: u16 = 1 << 7;
 /// The participant's lock is the lock of at least one input of the
@@ -2783,6 +2786,21 @@ pub struct TxActions {
     pub type_calls: Vec<TypeCallEntry>,
     pub lock_calls: Vec<LockCallEntry>,
     pub participants: Vec<ParticipantDelta>,
+    /// Every type script code the indexer RECOGNISES (an asset's or a protocol's: sUDT, xUDT,
+    /// the Nervos DAO, Spore, Cluster, m-NFT, `.bit`, `.bit Cell`, did:ckb, `.cell`) that ran in
+    /// this transaction, on an input cell or an output cell, each (code hash, hash type) once, in
+    /// that order. The codes the indexer does not recognise are `type_calls` (with their args);
+    /// together they are every type script code that ran. Set by the activity builder, the one
+    /// for live sync and bulk build, from the cells themselves.
+    pub recognized_type_codes: Vec<TypeCode>,
+}
+
+/// A type script by its code: the code hash and the hash type, never the args (a page names and
+/// folds by the code, as ruled at Gate B).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TypeCode {
+    pub code_hash: [u8; 32],
+    pub hash_type: i16,
 }
 
 /// The stored part of an `activities` row: what the transaction did. The row's
@@ -2797,6 +2815,9 @@ pub struct StoredTxActions {
     pub type_calls: Vec<TypeCallEntry>,
     pub lock_calls: Vec<LockCallEntry>,
     pub participants: Vec<ParticipantDelta>,
+    /// [`TxActions::recognized_type_codes`]: last, so a row of the layout before it (which ended
+    /// at the participants) does not decode.
+    pub recognized_type_codes: Vec<TypeCode>,
 }
 
 /// [`StoredTxActions`] borrowed from a [`TxActions`] ([`TxActions::stored_ref`]),
@@ -2809,12 +2830,14 @@ pub struct StoredTxActionsRef<'a> {
     type_calls: &'a [TypeCallEntry],
     lock_calls: &'a [LockCallEntry],
     participants: &'a [ParticipantDelta],
+    recognized_type_codes: &'a [TypeCode],
 }
 
 /// Decode an `activities` value. The bytes must be exactly one
-/// [`StoredTxActions`]: a value of the earlier layout (which also stored the
-/// tx hash, block hash, block number, tx index, timestamp and cellbase flag)
-/// does not decode or leaves bytes over — re-sync required.
+/// [`StoredTxActions`]: a value of an earlier layout (the one that also stored
+/// the tx hash, block hash, block number, tx index, timestamp and cellbase
+/// flag, or the one that ended at the participants, before the recognised type
+/// codes) does not decode or leaves bytes over — re-sync required.
 pub fn decode_stored_tx_actions(value: &[u8]) -> anyhow::Result<StoredTxActions> {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
@@ -2838,6 +2861,7 @@ impl TxActions {
             type_calls: &self.type_calls,
             lock_calls: &self.lock_calls,
             participants: &self.participants,
+            recognized_type_codes: &self.recognized_type_codes,
         }
     }
 
@@ -2866,6 +2890,7 @@ impl TxActions {
             type_calls: stored.type_calls,
             lock_calls: stored.lock_calls,
             participants: stored.participants,
+            recognized_type_codes: stored.recognized_type_codes,
         }
     }
 
@@ -3591,6 +3616,7 @@ mod tests {
         tags: u16,
     ) -> TxActions {
         TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![index as u8; 32],
             block_hash: vec![0x22; 32],
             block_number: 7,
@@ -3835,6 +3861,7 @@ mod tests {
         let first = tags & 0b0101_0101_0101_0101;
         let second = tags & !first;
         TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0x61; 32],
             block_hash: vec![0x62; 32],
             block_number: 9,
@@ -4252,6 +4279,7 @@ mod tests {
             )],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::lock(&[0x11; 32]).unwrap(),
                 ckb_delta: -5,
@@ -4289,6 +4317,44 @@ mod tests {
             full,
             "completion restores every field"
         );
+    }
+
+    /// C7 (resync/type-codes): a stored row keeps the recognised type codes that ran in its
+    /// transaction, each (code hash, hash type) once, after the participants; a row of the layout
+    /// before them (it ended at the participants) is refused, never read as a row in which no
+    /// recognised type script ran.
+    #[test]
+    fn stored_tx_actions_keep_the_recognized_type_codes_and_refuse_a_row_without_them() {
+        let mut actions = tx_actions_for_layout();
+        actions.recognized_type_codes = vec![
+            TypeCode {
+                code_hash: [0x50; 32],
+                hash_type: 2,
+            },
+            TypeCode {
+                code_hash: [0x82; 32],
+                hash_type: 1,
+            },
+        ];
+        let stored = decode_stored_tx_actions(&actions.encode_stored()).unwrap();
+        assert_eq!(stored.recognized_type_codes, actions.recognized_type_codes);
+
+        #[derive(Serialize)]
+        struct BeforeTypeCodes<'a> {
+            protocol_actions: &'a [ProtocolAction],
+            type_calls: &'a [TypeCallEntry],
+            lock_calls: &'a [LockCallEntry],
+            participants: &'a [ParticipantDelta],
+        }
+        let before = bincode::serialize(&BeforeTypeCodes {
+            protocol_actions: &actions.protocol_actions,
+            type_calls: &actions.type_calls,
+            lock_calls: &actions.lock_calls,
+            participants: &actions.participants,
+        })
+        .unwrap();
+        let err = decode_stored_tx_actions(&before).unwrap_err().to_string();
+        assert!(err.contains("re-sync required"), "{err}");
     }
 
     #[test]
@@ -4329,6 +4395,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: [-110, 80, 20, 0]
                 .into_iter()
                 .enumerate()
@@ -4354,6 +4421,7 @@ mod tests {
     #[test]
     fn test_tx_actions_roundtrip() {
         let actions = TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0x01; 32],
             block_hash: vec![0xF1; 32],
             block_number: 12345,
@@ -4424,6 +4492,7 @@ mod tests {
             )],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0xAB; 32]),
                 ckb_delta: 7,

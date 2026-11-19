@@ -3994,6 +3994,7 @@ mod activity_stats_tests {
             protocol_actions,
             type_calls,
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants,
         }
     }

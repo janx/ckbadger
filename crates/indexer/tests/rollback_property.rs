@@ -554,6 +554,74 @@ async fn a_rollback_keeps_and_restores_the_senders_bit() {
 }
 
 // ---------------------------------------------------------------------------
+// C7: the recognised type codes, both write paths and a rollback
+// ---------------------------------------------------------------------------
+
+/// C7 (resync/type-codes): the protocol chain's activity rows record the recognised type codes
+/// that ran (its xUDT by data1, the Nervos DAO and did:ckb by type among them); a store
+/// bulk-built to the tip and one synced live hold byte-identical activity rows; and a rollback
+/// keeps, removes and replays them as every other row (the rollback property, both forms, over the
+/// chain whose rows carry them).
+#[tokio::test]
+async fn the_recognized_type_codes_are_written_alike_by_both_paths_and_survive_a_rollback() {
+    use ckbadger_store::types::{decode_stored_tx_actions, TypeCode};
+    let chain = protocol_chain(0);
+    let plan = single_block_plan(chain.len());
+    let tip = 16usize;
+    let activity_rows = |store: &CkbadgerStore| -> Dump {
+        dump_domain(store)
+            .into_iter()
+            .filter(|((cf, _), _)| *cf == ckbadger_store::CF_TX_ACTIONS)
+            .collect()
+    };
+
+    let live = open_stores();
+    sync_prefix(&live, &chain, &plan, 0, tip).await;
+    let live_rows = activity_rows(&live.domain);
+    let codes: std::collections::BTreeSet<TypeCode> = live_rows
+        .values()
+        .flat_map(|value| {
+            decode_stored_tx_actions(value)
+                .unwrap()
+                .recognized_type_codes
+        })
+        .collect();
+    let code = |hex: &str, hash_type: i16| TypeCode {
+        code_hash: hex::decode(hex.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        hash_type,
+    };
+    for (name, expected) in [
+        ("xUDT by data1", code(XUDT_CODE_HASH_DATA1, 2)),
+        ("the Nervos DAO by type", code(DAO_CODE_HASH, 1)),
+        ("did:ckb by type", code(DID_CKB_CODE_HASH, 1)),
+    ] {
+        assert!(
+            codes.contains(&expected),
+            "{name} is not recorded: {codes:?}"
+        );
+    }
+
+    let FixtureStores {
+        domain,
+        _append: append,
+        _dirs,
+    } = open_fixture_stores();
+    ckbadger_indexer::sync::bulk_build_into_stores_for_test(&domain, &append, &chain[..=tip])
+        .unwrap_or_else(|e| panic!("bulk build to {tip}: {e:#}"));
+    compare_dumps(
+        &activity_rows(&domain),
+        &live_rows,
+        "bulk vs live activity rows",
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+
+    assert_rollback_property(&chain, &plan, tip, 10).await;
+}
+
+// ---------------------------------------------------------------------------
 // The journal oracle (store refactor lane B, B-2 … B-4)
 // ---------------------------------------------------------------------------
 

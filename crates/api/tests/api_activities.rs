@@ -438,6 +438,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             type_args: type_args.clone(),
         }],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::lock(&lock_hash).unwrap(),
             ckb_delta: 0,
@@ -569,6 +570,7 @@ async fn test_latest_activities_return_type_calls() {
             type_args: type_args.clone(),
         }],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::Lock([0x13; 32]),
             ckb_delta: -30000,
@@ -1447,6 +1449,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(&other).unwrap(),
@@ -1560,6 +1563,7 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(&lock_hash).unwrap(),
@@ -1699,6 +1703,7 @@ async fn test_global_activities_expose_participant_ids_and_roles() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(&lock_hash).unwrap(),
@@ -2003,6 +2008,7 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::Lock(*lock_hash),
@@ -2060,6 +2066,7 @@ async fn every_participant_states_whether_it_sent() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             party(ParticipantId::Lock(payer), -100, TAG_INPUT),
             party(ParticipantId::Lock(payee), 100, TAG_TOKEN),
@@ -2290,6 +2297,7 @@ async fn identity_item_deltas_name_their_standard() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::Lock(lock_hash),
             ckb_delta: 0,
@@ -2512,6 +2520,7 @@ async fn object_item_deltas_name_collection_class_and_composition() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::Lock(lock_hash),
             ckb_delta: 0,
@@ -2597,6 +2606,7 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::Lock(lock_hash),
             ckb_delta: 0,
@@ -2701,6 +2711,7 @@ async fn committed_object_delta_naming_no_indexed_object_is_a_500() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::Lock(lock_hash),
             ckb_delta: 0,
@@ -3523,6 +3534,7 @@ async fn item_types_name_every_items_type_script_by_its_code() {
             protocol_actions,
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x40 + n; 32]),
                 ckb_delta: 0,
@@ -3656,6 +3668,7 @@ async fn item_types_name_what_the_indexer_classified_not_a_crafted_output() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x30 + n; 32]),
                 ckb_delta: 0,
@@ -3723,6 +3736,7 @@ async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x40 + n; 32]),
                 ckb_delta: 0,

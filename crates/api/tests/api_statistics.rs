@@ -2905,6 +2905,7 @@ async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
                 })
                 .collect(),
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x70 + n as u8; 32]),
                 ckb_delta: 10,
@@ -2932,6 +2933,7 @@ async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         },
     );
@@ -3042,6 +3044,7 @@ async fn test_activity_summary_24h_counts_each_transaction_in_one_kind_and_dao_a
             protocol_actions,
             type_calls,
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x50 + tx_index as u8; 32]),
                 ckb_delta: 10,
@@ -3068,6 +3071,7 @@ async fn test_activity_summary_24h_counts_each_transaction_in_one_kind_and_dao_a
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         },
     );
@@ -3147,6 +3151,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: participants
                 .into_iter()
                 .map(|(hash, ckb_delta)| ParticipantDelta {
@@ -3187,6 +3192,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 1,
@@ -3308,6 +3314,7 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
     let tx =
         |index: i32, tags: u16, protocols: &[(&str, &str)], type_call: bool, lock_call: bool| {
             TxActions {
+                recognized_type_codes: vec![],
                 tx_hash: vec![0x40 + index as u8; 32],
                 block_hash: vec![1; 32],
                 block_number: 1,

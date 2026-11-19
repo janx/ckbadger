@@ -1361,6 +1361,7 @@ pub fn make_test_tx_actions(
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ckbadger_store::types::ParticipantId::lock(lock_hash).unwrap(),
             ckb_delta,

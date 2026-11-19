@@ -539,6 +539,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::lock(&lock_hash).unwrap(),
                 ckb_delta: block as i128 * 100_000_000,
@@ -1182,6 +1183,7 @@ fn test_rollback_deletes_multi_participant_activities() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ParticipantId::lock(&lock_a).unwrap(),
             ckb_delta: -5_000_000_000,
@@ -1211,6 +1213,7 @@ fn test_rollback_deletes_multi_participant_activities() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(&lock_a).unwrap(),
@@ -1251,6 +1254,7 @@ fn test_rollback_deletes_multi_participant_activities() {
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(&lock_a).unwrap(),
@@ -1414,6 +1418,7 @@ fn prefix_participant_actions(
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![
             ParticipantDelta {
                 id: ParticipantId::lock(lock).unwrap(),
