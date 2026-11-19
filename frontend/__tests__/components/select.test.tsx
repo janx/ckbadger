@@ -50,6 +50,25 @@ describe('Select', () => {
     ]);
   });
 
+  // Lane cd-fixes-controls (review-fix-logic-pages NOTE 4): a select whose label does not say
+  // which choice it is (a tab row's narrow form stands after "showing") takes a name of its own,
+  // and the panel its choice shows; the label stays the word it stands after
+  it('takes a name of its own where its label does not say which choice it is, and its panel', () => {
+    render(
+      <Select
+        label="showing"
+        name="Transaction views"
+        controls="views-panel"
+        value="holders"
+        options={SORTS}
+        onChange={() => {}}
+      />
+    );
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Transaction views' });
+    expect([...(select.labels ?? [])].map((l) => l.textContent)).toEqual(['showing']);
+    expect(select).toHaveAttribute('aria-controls', 'views-panel');
+  });
+
   it('writes its label in the quiet ink and its chosen value in the reading ink, 13 px', () => {
     render(<Sorted />);
     const select = screen.getByRole('combobox');
