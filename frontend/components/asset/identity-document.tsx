@@ -1,9 +1,9 @@
 'use client';
+import { HeadId } from '@/components/ui/head-id';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import type { MnftProtocol, DotCellPartyRef } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { CopyButton } from '@/components/ui/copy-button';
 export function NamedParty({ party, label }: { party: DotCellPartyRef; label: string }) {
   return (
     <div className="min-w-0">
@@ -20,13 +20,10 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
           </AppLink>
         ) : (
           <>
-            <Hash hash={party.hashPrefix} truncate={false} className="text-meta" />{' '}
-            {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
-            <CopyButton
-              value={party.hashPrefix}
-              label="copy lock hash prefix"
-              className="align-middle"
-            />
+            {/* Lane P2's follow-up (item 8): the 20-byte prefix as a head's id, its copy after it:
+                42 characters at the line's 11 px are 277.2 px, one line in the tier's column at
+                1280, 1024 and 640, and at 390 (358 less the copy's 40) and 360 (328 less 40) */}
+            <HeadId value={party.hashPrefix} kind="hash" copy="copy lock hash prefix" />
             <span className="text-text-dim text-meta mt-1 block">
               Named lock-hash prefix · no uniquely resolved address
             </span>

@@ -22,7 +22,6 @@ import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
-import { CopyButton } from '@/components/ui/copy-button';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
@@ -432,16 +431,13 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           />
           <DetailSection title="Issuer record">
             <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
-            <p className="text-meta max-w-measure">
-              Issuer ID ·{' '}
-              <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />{' '}
-              {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
-              <CopyButton
-                value={item.issuer.issuerId}
-                label="copy issuer id"
-                className="align-middle"
-              />
-            </p>
+            {/* Lane P2's follow-up (item 8): the issuer id as a head's id, its copy after it (it
+                was a box that scrolled): 42 characters at 11 px, 277.2 px, one line at every
+                width from 360 (328 less the copy's 40) */}
+            <div className="text-meta max-w-measure">
+              <span className="text-text-dim">Issuer ID</span>
+              <HeadId value={item.issuer.issuerId} kind="hash" copy="copy issuer id" />
+            </div>
             <p className="text-text text-meta max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets

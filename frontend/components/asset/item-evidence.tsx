@@ -1,18 +1,17 @@
 'use client';
+import { HeadId } from '@/components/ui/head-id';
 import { useState } from 'react';
 import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { AppLink } from '@/components/ui/app-link';
-import { Hash } from '@/components/ui/hash';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
-import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
 import { Select } from '@/components/ui/select';
 import { cellLockWords } from '@/components/ui/lock-kind';
@@ -52,13 +51,15 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
         onChange={setSelected}
         className="max-w-full"
       />
-      <div className="text-meta [overflow-wrap:anywhere]">
-        Outpoint{' '}
-        {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a
-            1024 column's 460 px; at 13 px it took 514.8 and scrolled */}
+      {/* Lane P2's follow-up (item 8): the out point's hash is set as a head's id (HeadId), one
+          line where its line holds it, else two halves, never a box that scrolls. At the line's
+          11 px it is 66 × 6.6 = 435.6 px: one line in the tier's column at 1280 (588 px) and 1024
+          (460), and at 640 (608); two halves of 34 characters (224.4 px) at 390 (358) and 360
+          (328). Its index is said in words before it, the link opening the cell. */}
+      <div className="text-meta min-w-0">
+        <span className="text-text-dim">Outpoint · output {cell.outputIndex} of</span>
         <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-          <Hash hash={cell.txHash} truncate={false} className="text-meta" />
-          <OutpointIndex index={cell.outputIndex} />
+          <HeadId value={cell.txHash} kind="hash" />
         </AppLink>
       </div>
       {/* the lock script's name is the one decision's (lane P2's follow-up, item 6): a lock on the

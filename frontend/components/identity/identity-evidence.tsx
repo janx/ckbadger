@@ -1,4 +1,5 @@
 'use client';
+import { HeadId } from '@/components/ui/head-id';
 import { cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
@@ -209,9 +210,13 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       label: 'account → next',
       value: (
         <>
-          <Field name="account id">
-            <span className="[overflow-wrap:anywhere]">{d.accountId}</span>
-          </Field>
+          {/* Lane P2's follow-up (items 8, 9): the account id is set as a head's id (HeadId), not
+              held on one line: 42 characters at 13 px are 327.6 px, past the 288 px of the
+              value column at 320 (the page ran 24 px wide); one line from 360 (328), two halves
+              of 22 characters (171.6) at 320 */}
+          <span title="account id" className="block">
+            <HeadId value={d.accountId} kind="hash" />
+          </span>
           <Dim> → </Dim>
           <Field name="next" label="next">
             {d.nextAccountId === null ? (

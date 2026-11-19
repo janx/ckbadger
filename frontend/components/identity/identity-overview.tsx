@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { HeadId } from '@/components/ui/head-id';
 import { PartReadError, readPart } from '@/components/read-failure';
 import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
@@ -180,7 +181,9 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
         <Hash hash={party.lockHash} kind="hash" size="row" className="text-body" />
       </AppLink>
     ) : (
-      <Hash hash={party.hashPrefix} truncate={false} className="text-small" />
+      // a 20-byte prefix whole, as a head's id (lane P2's follow-up, item 8: it was a box that
+      // scrolled): 42 characters at 13 px, 327.6 px, one line from 360, two halves at 320
+      <HeadId value={party.hashPrefix} kind="hash" />
     ),
     note: party.lockHash
       ? (party.scriptName ?? 'lock not named')
@@ -207,7 +210,8 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
     </>
   ) : (
     <>
-      <Hash hash={party.hashPrefix} truncate={false} className="text-small" />
+      {/* the prefix whole, as a head's id (lane P2's follow-up, item 8) */}
+      <HeadId value={party.hashPrefix} kind="hash" />
       <Sub>prefix · no uniquely resolved lock</Sub>
     </>
   );
