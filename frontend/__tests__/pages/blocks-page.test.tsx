@@ -131,6 +131,20 @@ describe('BlocksPage', () => {
   });
 
   // Lane L (charts ↔ topics): the blocks list links the charts drawn from blocks.
+  // The controls lane (C2, c2-lists), regression test first: a list with no row has no page to be
+  // on (0 pages), and the time pager refuses "page 1 of 0"; the page says it is empty and draws no
+  // pager, as an empty ranked list does.
+  it('says an empty list is empty and draws no pager for it', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...mockBlocksResponse,
+      data: [],
+      total: 0,
+    });
+    render(<BlocksPage />);
+    expect(await screen.findByText('No blocks indexed.')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'blocks' })).toBeNull();
+  });
+
   it('links every chart whose numbers come from blocks (lane L)', async () => {
     render(<BlocksPage />);
     const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
