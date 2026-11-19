@@ -53,30 +53,40 @@ const COLUMNS = [
   'RTT',
 ];
 
-/** The filters' choices, `all` (no filter: the empty value) first, as the board's select writes it. */
+/** The crawler's dial states, in the filter's order. */
+const DIAL_STATES: readonly NetworkPeerDisplayState[] = [
+  'reachable',
+  'verifiedUnavailable',
+  'advertisedUnverified',
+  'foreignNetwork',
+  'noCompletedObservation',
+];
+
+/** The typed address observations, in the filter's order. */
+const OBSERVATIONS: readonly NetworkAddressProbeResult[] = [
+  'dialRequestFailed',
+  'noAuthenticatedSessionBeforeDeadline',
+  'authenticatedSessionWithoutIdentifyBeforeDeadline',
+  'malformedIdentify',
+  'foreignNetwork',
+  'sameNetworkIdentified',
+];
+
+/**
+ * The filters' choices, `all` (no filter: the empty value) first, as the board's select writes it,
+ * then each state in the words the rows use for it: a dial state as its row's badge says it
+ * (crawlerDialStateTag), an observation as the evidence says it (observationLabel). Every choice
+ * holds a 360 px phone's line alone in its well: 37 glyphs at 13 px (291 px of 328 less the well's
+ * border and the select's padding).
+ */
 const STATE_OPTIONS: SelectOption<'' | NetworkPeerDisplayState>[] = [
   { value: '', label: 'all' },
-  { value: 'reachable', label: 'Same-network Identify completed' },
-  { value: 'verifiedUnavailable', label: 'Latest aliases exhausted · previously verified' },
-  { value: 'advertisedUnverified', label: 'Aliases exhausted · no retained verification' },
-  { value: 'foreignNetwork', label: 'Foreign-network Identify' },
-  { value: 'noCompletedObservation', label: 'Not dialed by this crawler' },
+  ...DIAL_STATES.map((state) => ({ value: state, label: crawlerDialStateTag(state).label })),
 ];
 
 const OBSERVATION_OPTIONS: SelectOption<'' | NetworkAddressProbeResult>[] = [
   { value: '', label: 'all' },
-  { value: 'dialRequestFailed', label: 'Dial request failed' },
-  {
-    value: 'noAuthenticatedSessionBeforeDeadline',
-    label: 'No authenticated session before deadline',
-  },
-  {
-    value: 'authenticatedSessionWithoutIdentifyBeforeDeadline',
-    label: 'Authenticated session without Identify before deadline',
-  },
-  { value: 'malformedIdentify', label: 'Malformed Identify' },
-  { value: 'foreignNetwork', label: 'Foreign network' },
-  { value: 'sameNetworkIdentified', label: 'Same-network Identify completed' },
+  ...OBSERVATIONS.map((result) => ({ value: result, label: observationLabel(result) })),
 ];
 
 function orDash(value: string | null | undefined): string {
@@ -95,7 +105,7 @@ function optionalAge(timestamp: number | null): ReactNode {
 /**
  * The crawler's dial state, a kind, as a row tag (table-rows T8): accent for a completed
  * same-network Identify, plain for a verification seen before or a foreign network, set back
- * (ghost) where nothing was verified.
+ * (ghost) where nothing was verified. The dial-state filter offers these same words.
  */
 function crawlerDialStateTag(state: NetworkPeerDisplayState): {
   label: string;
@@ -105,7 +115,9 @@ function crawlerDialStateTag(state: NetworkPeerDisplayState): {
     case 'reachable':
       return { label: 'Same-network Identify', variant: 'accent' };
     case 'verifiedUnavailable':
-      return { label: 'Aliases exhausted · prior verification', variant: 'default' };
+      // the aliases of the latest round exhausted; a same-network Identify verified before is
+      // retained (35 glyphs; "· prior verification" took 38, one past a phone's select)
+      return { label: 'Aliases exhausted · verified before', variant: 'default' };
     case 'advertisedUnverified':
       return { label: 'Aliases exhausted', variant: 'ghost' };
     case 'foreignNetwork':
@@ -115,14 +127,21 @@ function crawlerDialStateTag(state: NetworkPeerDisplayState): {
   }
 }
 
+/**
+ * A typed address observation in the evidence's words, which the observation filter offers too.
+ * The two that end at the probe's deadline say "in time" (before it): no authenticated session
+ * by then (32 glyphs), or a session authenticated and no Identify by then (34); the words that
+ * kept "deadline" took 40 and 54, and "Authenticated, no Identify by deadline" 38, past the 37 a
+ * phone's select holds.
+ */
 function observationLabel(result: NetworkAddressProbeResult): string {
   switch (result) {
     case 'dialRequestFailed':
       return 'Dial request failed';
     case 'noAuthenticatedSessionBeforeDeadline':
-      return 'No authenticated session before deadline';
+      return 'No authenticated session in time';
     case 'authenticatedSessionWithoutIdentifyBeforeDeadline':
-      return 'Authenticated session without Identify before deadline';
+      return 'Authenticated, no Identify in time';
     case 'malformedIdentify':
       return 'Malformed Identify';
     case 'foreignNetwork':
