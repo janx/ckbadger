@@ -10,9 +10,13 @@ beforeEach(mockItemReads);
 // Re-pinned (lane c2-assets): the name search is the controls board's search field (a searchbox,
 // was a textbox) and the status is its filter chips, a radio group named "status" whose radios
 // are "all", "live", "inactive" (was a select "Item status" with options All, Live, Inactive).
+// Re-pinned (lane c2-finish, 1a): the gallery's pager is the library's, its next 'next →' (was
+// 'Next'); the page counts 75 items (was 1, a count the library's pager refuses beside "more":
+// page 2 of 1).
 it('resets server pagination when search or status changes and preserves item-specific links', async () => {
   vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
     ...emptyPage([identityItem('bit-cell')]),
+    total: 75,
     hasMore: true,
     nextCursor: 'later',
   });
@@ -22,7 +26,7 @@ it('resets server pagination when search or status changes and preserves item-sp
     'href',
     `/mainnet/identities/bit-cell/${item.nftId}`
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  fireEvent.click(screen.getByRole('button', { name: 'next →' }));
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith(
       'bit-cell',
@@ -169,4 +173,48 @@ it('refuses an m-NFT row without its token index', async () => {
   render(<CollectionItems id="class" kind="object" />);
   expect(await screen.findByText(/m-NFT item 0x8f67.* has no tokenIndex/)).toBeInTheDocument();
   log.mockRestore();
+});
+
+// Lane c2-finish, item 1a: the gallery pages with the library's pager, counted only where its own
+// response counts the items (the chosen status's total), and as an ordered list with no count on
+// a search page (the API gives a search no total): its rows, its size, 'page 2', the next by the
+// response's "more".
+it('pages counted by its own total, and a search page as a list with no count', async () => {
+  const items = (cursor: string | undefined) =>
+    Array.from({ length: 24 }, (_, i) => {
+      const item = identityItem('dotbit');
+      return { ...item, nftId: `${item.nftId}${cursor ?? ''}${i}` };
+    });
+  vi.mocked(api.getIdentityCollectionItems).mockImplementation(async (_id, params) => ({
+    data: items(params?.cursor),
+    limit: 24,
+    total: params?.search ? undefined : 250,
+    hasMore: true,
+    nextCursor: `${params?.cursor ?? ''}n`,
+  }));
+  render(<CollectionItems id="dotbit" kind="identity" />);
+  const counted = await screen.findByRole('navigation', { name: 'identities' });
+  expect(counted).toHaveTextContent(/^1–24 of 250 · 24 a page/);
+  expect(within(counted).getByText('page 1 of 11')).toBeInTheDocument();
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search collection' }), {
+    target: { value: 'alice' },
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('navigation', { name: 'identities' })).toHaveTextContent(
+      /^1–24 · 24 a page/
+    )
+  );
+  const uncounted = screen.getByRole('navigation', { name: 'identities' });
+  expect(within(uncounted).getByText('page 1')).toBeInTheDocument();
+  expect(uncounted).not.toHaveTextContent(/ of /);
+  fireEvent.click(within(uncounted).getByRole('button', { name: 'next →' }));
+  await waitFor(() =>
+    expect(screen.getByRole('navigation', { name: 'identities' })).toHaveTextContent(
+      /^25–48 · 24 a page/
+    )
+  );
+  expect(
+    within(screen.getByRole('navigation', { name: 'identities' })).getByText('page 2')
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/per page/)).toBeNull();
 });

@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type CollectionItem, type ItemStatusFilter } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { rankedPageAt } from '@/lib/pagination';
 import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
 import { TextField } from '@/components/ui/text-field';
 import { Hash } from '@/components/ui/hash';
@@ -103,6 +104,9 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
             status,
           }),
   });
+  const itemsAt = query.data
+    ? rankedPageAt(kind === 'identity' ? 'identities' : 'objects', pages.page, query.data)
+    : null;
   const href = (item: CollectionItem) =>
     kind === 'identity'
       ? getIdentityItemDetailHref(item.standard, item.nftId)
@@ -186,17 +190,18 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
             ))}
           </div>
           {query.data.data.length === 0 && <p className="text-text-dim">No items.</p>}
-          <CursorPagination
-            total={query.data.total}
-            totalLabel="items"
-            pageSize={pageSize}
-            page={pages.page}
-            currentCount={query.data.data.length}
-            hasMore={query.data.hasMore}
-            hasPrevious={pages.hasPrevious}
-            onNext={() => pages.goToNext(query.data!.nextCursor)}
-            onPrevious={pages.goToPrevious}
-          />
+          {/* The library's pager (lane c2-finish, 1a): counted of the chosen status's total
+              where this page's response states it, an ordered list with no count on a search
+              page (the API gives a search no total), nothing for one page. */}
+          {itemsAt && (
+            <Pager
+              mode="pages"
+              label={kind === 'identity' ? 'identities' : 'objects'}
+              {...itemsAt}
+              onPrevious={pages.goToPrevious}
+              onNext={() => pages.goToNext(query.data!.nextCursor)}
+            />
+          )}
         </>
       ) : (
         <AssetReadState label="collection items" error={query.error} read={query} />

@@ -85,12 +85,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
-  'components/asset/collection-gallery.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason:
-      'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
-  },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
   // ---- shell: the header's search field and the command palette ----
   // The two named exceptions (lane c2-topics): comboboxes with their own behaviour, not
@@ -116,7 +110,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 6;
+const TOLERATED_TOTAL = 5;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
