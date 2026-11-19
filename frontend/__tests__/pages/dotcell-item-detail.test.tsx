@@ -1,6 +1,12 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import Page from '@/app/identities/dotcell/[identityId]/client-page';
-import { api, ApiRequestError, type ItemProtocol, type ItemCellVersions } from '@/lib/api';
+import {
+  api,
+  ApiRequestError,
+  type ItemProtocol,
+  type ItemCellVersion,
+  type ItemCellVersions,
+} from '@/lib/api';
 import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
@@ -385,4 +391,77 @@ it("names a .cell version's physical lock as a lock, not its owner (visual pass)
   const versions = await screen.findByLabelText('alice.cell cell versions');
   expect(versions).toHaveTextContent('Lock ckb1');
   expect(versions).not.toHaveTextContent('Owner ckb1');
+});
+
+/**
+ * Versions of one cell, oldest first, the last live: the same capacity, byte counts and lock
+ * address throughout, each given its own data hash (and its own type, where `types` says so), as a
+ * name's cell is recreated under one lock by a transfer, a renewal or an edit of the same length.
+ */
+function sameShapeVersions(
+  base: ItemCellVersion,
+  dataHashes: readonly string[],
+  types: readonly (ItemCellVersion['type'] | undefined)[] = []
+): ItemCellVersions {
+  const data = dataHashes.map((dataHash, i): ItemCellVersion => {
+    const last = i === dataHashes.length - 1;
+    return {
+      ...base,
+      txHash: `0x${String(i + 1)
+        .padStart(2, '0')
+        .repeat(32)}`,
+      outputIndex: 0,
+      blockNumber: 100 + i,
+      txIndex: 0,
+      dataHash,
+      type: types[i] ?? base.type,
+      isLive: last,
+      consumedByTx: last
+        ? null
+        : `0x${String(i + 2)
+            .padStart(2, '0')
+            .repeat(32)}`,
+      consumedAtBlock: last ? null : 101 + i,
+    };
+  });
+  return { data, total: data.length };
+}
+const hashOf = (b: string) => `0x${b.repeat(32)}`;
+
+// Lane P2's fifth round (item 1, MUST): a .cell name's Transfer, Renew, RingLink and Touch recreate
+// its cell under the one shared account lock with a fixed-length header: the same capacity, byte
+// counts and address; the owner is in data bytes 58..78. The fold compared capacity, bytes and the
+// address only, so "mint by A, relink, transfer to B, renewal" folded the transfer into "2 more
+// versions alike: … the same bytes and owner". It compares the data and the type too, and on a
+// .cell page, whose rows name the shared Lock, its words never call that lock an owner.
+describe('a .cell name’s versions fold only where nothing changed', () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  it('never folds a transfer, a relink or a renewal: each changes the data under the one lock', async () => {
+    vi.mocked(api.getItemCellVersions).mockResolvedValue(
+      sameShapeVersions(base, [hashOf('a1'), hashOf('a2'), hashOf('a3'), hashOf('a4')])
+    );
+    render(<Page identityId="alice" />);
+    const list = await screen.findByLabelText(/cell versions$/);
+    expect(within(list).getAllByRole('article')).toHaveLength(4);
+    expect(list.querySelector('[data-versions-fold]')).toBeNull();
+  });
+
+  it('folds versions alike in everything, and calls the shared lock a lock', async () => {
+    vi.mocked(api.getItemCellVersions).mockResolvedValue(
+      sameShapeVersions(base, [
+        hashOf('a1'),
+        hashOf('a2'),
+        hashOf('a2'),
+        hashOf('a2'),
+        hashOf('a2'),
+      ])
+    );
+    render(<Page identityId="alice" />);
+    const list = await screen.findByLabelText(/cell versions$/);
+    const fold = list.querySelector<HTMLElement>('[data-versions-fold]')!;
+    expect(fold).toHaveTextContent(
+      /^2\smore versions alike: 1,000\sCKB held, the same lock, type and data/
+    );
+    expect(fold).not.toHaveTextContent('owner');
+  });
 });

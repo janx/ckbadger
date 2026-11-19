@@ -107,8 +107,11 @@ describe('cell versions: the owner where it changes, alike versions folded', () 
     const list = screen.getByLabelText('alice.bit cell versions');
     expect(within(list).getAllByRole('article')).toHaveLength(3);
     const fold = list.querySelector<HTMLElement>('[data-versions-fold]')!;
+    // re-pinned on purpose (lane P2's fifth round, item 1): the words say what the fold compares,
+    // the capacity, the owner (the lock address), the type and the data; it said "the same bytes
+    // and owner" of versions it compared by their byte counts only
     expect(fold).toHaveTextContent(
-      /^2\smore versions alike: .+ CKB held, the same bytes and owner/
+      /^2\smore versions alike: .+ CKB held, the same owner, type and data/
     );
     const toggle = within(fold).getByRole('button', { name: /^all 2\sversions ↓$/ });
     toggle.focus();
