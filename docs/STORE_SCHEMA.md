@@ -241,7 +241,7 @@ participant's lock is the lock of at least one input of the transaction. It live
 domain store only, `CF_CELLS` untouched, and no value changes size (`tags` was already a `u16`).
 A rollback deletes the rows of the blocks it removes, and the bit with them. A store built before
 the bit holds rows without it, which would read as "nobody sent": the store layout stamp
-(`STORE_LAYOUT` 2) refuses such a store before any read or write; delete RocksDB and re-sync
+(`STORE_LAYOUT` 2 and later) refuses such a store before any read or write; delete RocksDB and re-sync
 from genesis.
 
 **`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
@@ -307,8 +307,26 @@ hash_type`: Zero Lock is `(0x00…00, data)`, Type ID is `(0x…545950455f4944, 
 Until lane rd/api-lock-names, `script_info` was keyed by the code hash alone and also carried usage
 counters lumped over every hash type of the code hash (and four deployment fields nothing wrote):
 a lock by `(X, data)` was named and counted as `(X, type)`. The new key, the dropped counters and
-the pseudo-only rows take effect by a genesis re-sync (`STORE_LAYOUT` 2, the re-sync set's one
-stamp, refuses an older store); there is no migration.
+the pseudo-only rows take effect by a genesis re-sync (`STORE_LAYOUT` 2, the re-sync set's
+stamp, and later refuse an older store); there is no migration.
+
+**Protocols by their pair (resync/protocol-pairs).** The indexer recognises a protocol, and a
+standard lock, by the pair its script runs: one registry (`parser::registry::PROTOCOL_REGISTRY`,
+built from `docs/metadata/scripts/*.toml`) keyed by `(code hash, hash type)`, one lookup
+(`ProtocolRegistry::script`) for every detector, lock and type alike, the bulk path's semantic
+tags and the API's cell protocol slug. A registered script runs at each deployment's registered
+reference (`canonical_ref_hash` by `canonical_hash_type`, or a pseudo deployment's pair) and at
+each registered version's binary by every data hash type (`version_hash` by data, data1 and
+data2). Nothing else is that protocol: a cell locked by a protocol lock's code hash under another
+hash type (anyone can create one; it runs a binary whose data hash is that code hash, which no
+deployment holds) writes no channel, action, listing or claim and is a lock the transaction calls
+(`lock_calls`). For a type script the pair is exact by construction (a type runs when its cell is
+created). The upgrade catch: a `type` reference runs whatever its Type ID cell holds now, so the
+pair stays the protocol's across upgrades; a binary pair names one version's code, so a new
+version's binary is the protocol's only once that version is registered in the metadata, and a
+cell under the new binary's data hash before then is no protocol's (registering it later needs a
+re-sync to reclassify history). The rows this decides (protocol actions, Fiber channels, `.cell`
+listings, max-supply claims, semantic tags, `lock_calls`) are `STORE_LAYOUT` 3's.
 
 The pair is not yet a version: `type` references are current-state dependent and may resolve
 differently across upgrades, and exact version attribution for historical execution must come from
@@ -467,7 +485,8 @@ namespace includes:
   `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
   2 is the re-sync set's one number (resync/all): pair-keyed script labels (pseudo deployments
   only), usage counters of generic type references by their live code, one-kind activity rows,
-  the senders bit; 1 was the script changes alone, never re-synced, and is refused.
+  the senders bit; 1 was the script changes alone, never re-synced, and is refused. Layout 3
+  (resync/protocol-pairs) adds protocols recognised by their pair; a store stamped 2 is refused.
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
 - exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and
@@ -744,7 +763,7 @@ transaction filters ([`tx_actions_by_bucket`](#tx_actions_by_bucket-the-global-a
 each sync path classifies a transaction once (`ClassifiedTxActions`) and writes its bucket row and
 its kind count from that value, so a kind's count is what its filter lists and the kinds sum to the
 bucket's non-cellbase transactions (verify `daily_activity_kinds_partition_transactions`, S39).
-Whether a build may read the store at all is the store layout stamp's to say (`STORE_LAYOUT` 2,
+Whether a build may read the store at all is the store layout stamp's to say (`STORE_LAYOUT`,
 [`sync_meta`](#sync_meta-fixed-keys)): it refuses a store without these rows before any read or write.
 `DailyActivityStats::decode` is the rows' strict decode beside it and refuses a row of any other
 layout — the one before 2026-11-18 began with eleven overlapping per-layer counters

@@ -47,16 +47,16 @@ pub const DOTCELL_GRACE_SECONDS: u64 = 2_592_000;
 pub struct DotCellParser;
 
 impl DotCellParser {
-    pub fn is_account_type_script(code_hash: &[u8]) -> bool {
-        PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotCellAccount)
+    pub fn is_account_type_script(code_hash: &[u8], hash_type: i16) -> bool {
+        PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DotCellAccount)
     }
 
-    pub fn is_account_lock(code_hash: &[u8]) -> bool {
-        PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotCellAccountLock)
+    pub fn is_account_lock(code_hash: &[u8], hash_type: i16) -> bool {
+        PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DotCellAccountLock)
     }
 
-    pub fn is_sale_lock(code_hash: &[u8]) -> bool {
-        PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotCellSaleLock)
+    pub fn is_sale_lock(code_hash: &[u8], hash_type: i16) -> bool {
+        PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DotCellSaleLock)
     }
 
     /// `blake2b(label)[..20]`. One implementation, in the store crate, because
@@ -293,7 +293,10 @@ impl DotCellParser {
         let Some(type_script) = output.type_.as_ref() else {
             return Ok(None);
         };
-        if !Self::is_account_type_script(&parse_hex_to_bytes(&type_script.code_hash)) {
+        if !Self::is_account_type_script(
+            &parse_hex_to_bytes(&type_script.code_hash),
+            super::script::ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return Ok(None);
         }
         Self::parse_name_data(&parse_hex_to_bytes(data_hex)).map(Some)
@@ -304,7 +307,11 @@ impl DotCellParser {
         let Some(code_hash) = cell.type_code_hash.as_ref() else {
             return Ok(None);
         };
-        if !Self::is_account_type_script(code_hash) {
+        if !Self::is_account_type_script(
+            code_hash,
+            cell.type_hash_type
+                .ok_or_else(|| anyhow::anyhow!("a typed cell without a hash type"))?,
+        ) {
             return Ok(None);
         }
         Self::parse_name_data(&cell.data).map(Some)
@@ -368,7 +375,7 @@ mod tests {
             fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET,
         ] {
             assert!(
-                DotCellParser::is_account_type_script(&parse_hex_to_bytes(hex)),
+                DotCellParser::is_account_type_script(&parse_hex_to_bytes(hex), 1),
                 "{hex} must be the Cells Account type script"
             );
         }
@@ -378,7 +385,7 @@ mod tests {
             fixture::PRICE_TYPE_CODE_HASH_MAINNET,
         ] {
             assert!(
-                !DotCellParser::is_account_type_script(&parse_hex_to_bytes(hex)),
+                !DotCellParser::is_account_type_script(&parse_hex_to_bytes(hex), 1),
                 "{hex} is not the Account type script"
             );
         }
@@ -391,16 +398,19 @@ mod tests {
             fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET,
         ] {
             let bytes = parse_hex_to_bytes(hex);
-            assert!(DotCellParser::is_account_lock(&bytes), "{hex} account lock");
-            assert!(!DotCellParser::is_sale_lock(&bytes));
+            assert!(
+                DotCellParser::is_account_lock(&bytes, 1),
+                "{hex} account lock"
+            );
+            assert!(!DotCellParser::is_sale_lock(&bytes, 1));
         }
         for hex in [
             fixture::SALE_LOCK_CODE_HASH_MAINNET,
             fixture::SALE_LOCK_CODE_HASH_TESTNET,
         ] {
             let bytes = parse_hex_to_bytes(hex);
-            assert!(DotCellParser::is_sale_lock(&bytes), "{hex} sale lock");
-            assert!(!DotCellParser::is_account_lock(&bytes));
+            assert!(DotCellParser::is_sale_lock(&bytes, 1), "{hex} sale lock");
+            assert!(!DotCellParser::is_account_lock(&bytes, 1));
         }
     }
 

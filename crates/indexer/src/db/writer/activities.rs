@@ -37,111 +37,45 @@ enum AssetKind {
     DotCell,
 }
 
-/// Pre-computed code hashes for asset detection via HashMap lookup.
-struct CodeHashes {
-    type_lookup: HashMap<Vec<u8>, AssetKind>,
-    standard_locks: HashSet<Vec<u8>>,
-}
+/// What the activity builder reads of a script, by its pair, through the one
+/// registry lookup (`PROTOCOL_REGISTRY.script`).
+struct CodeHashes;
 
 impl CodeHashes {
     fn new() -> Self {
+        Self
+    }
+
+    /// The asset a type script's pair carries. Only the asset-bearing
+    /// protocols receive an AssetKind. `.bit Cell`, AccountCell, Spore, and the
+    /// Web5 did:ckb contract are distinct protocol identities and must not
+    /// share lifecycle calculations; every other registry protocol (mNFT
+    /// issuer/class, all locks, the fiber/stablepp/utxoswap scripts, the
+    /// `.cell` Account Lock, Sale Lock and Price cell) carries none. UDTs use
+    /// UdtParser's shared classifier so activity, live sync and bulk sync
+    /// cannot disagree about xUDT-compatible deployments.
+    fn classify(&self, code_hash: &[u8], hash_type: i16) -> Option<AssetKind> {
         use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
-        use crate::rpc::parse_hex_to_bytes;
-
-        // Build the type-script → AssetKind lookup from the bundled protocol
-        // registry (a network-agnostic union of mainnet + testnet code_hashes),
-        // replacing the previous hardcoded parser-const list. This is what lets
-        // testnet assets (e.g. testnet sUDT / mNFT token) classify in activities.
-        //
-        // Only the asset-bearing protocols below receive an AssetKind. `.bit
-        // Cell`, AccountCell, Spore, and the Web5 did:ckb contract are distinct
-        // protocol identities and must not share lifecycle calculations. Every
-        // other registry protocol — mNFT issuer/class, all locks, and the
-        // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm.
-        // UDTs use UdtParser's shared classifier below so activity, live sync,
-        // and bulk sync cannot disagree about xUDT-compatible deployments.
-        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = HashMap::new();
-        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
-            let kind = match protocol {
-                ProtocolScript::Sudt | ProtocolScript::Xudt => continue,
-                ProtocolScript::Dao => AssetKind::Dao,
-                ProtocolScript::DidCkb => AssetKind::DidCkb,
-                // Legacy variant: no metadata slug maps to it, and did:ckb has
-                // its own identity above — it must never classify here.
-                ProtocolScript::SporeDid => continue,
-                ProtocolScript::SporeNft => AssetKind::Spore,
-                ProtocolScript::Cluster => AssetKind::Cluster,
-                ProtocolScript::MnftToken => AssetKind::MnftToken,
-                ProtocolScript::DotbitAccount => AssetKind::Dotbit,
-                ProtocolScript::BitCell => AssetKind::BitCell,
-                ProtocolScript::DotCellAccount => AssetKind::DotCell,
-                // The `.cell` Account Lock and Sale Lock are locks, and the
-                // Price cell is a protocol parameter: none of them is an asset
-                // a party owns, so none gets an AssetKind.
-                ProtocolScript::DotCellAccountLock
-                | ProtocolScript::DotCellSaleLock
-                | ProtocolScript::DotCellPrice => continue,
-                _ => continue,
-            };
-            type_lookup.insert(code_hash.clone(), kind);
-        }
-
-        // Standard lock code_hashes (access-control only, no protocol semantics)
-        let standard_lock_hashes: &[&str] = &[
-            // secp256k1-blake160
-            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
-            // secp256k1-multisig (mainnet)
-            "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
-            // secp256k1-multisig (mainnet legacy)
-            "0xd1a9f877aed3f5e07cb9c52b61ab96d06f250ae6883cc7f0a2423db0976fc821",
-            // secp256k1-multisig (testnet)
-            "0x765b3ed6ae264b335d07e73ac332bf2c0f38f8d3340ed521cb447b4c42dd5f09",
-            // secp256k1-multisig (v2)
-            "0x36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29",
-            // anyone-can-pay (mainnet)
-            "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354",
-            // anyone-can-pay (testnet)
-            "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356",
-            // anyone-can-pay (testnet deprecated)
-            "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b",
-            // omni-lock v2 (mainnet)
-            "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
-            // omni-lock v1 (mainnet)
-            "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d",
-            // omni-lock v2 (testnet)
-            "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb",
-            // omni-lock v1 (testnet)
-            "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e",
-            // PW-lock (mainnet)
-            "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc",
-            // PW-lock (testnet)
-            "0x58c5f491aba6d61678b7cf7edf4910b1f5e00ec0cde2f42e0abb4fd9aff25a63",
-            // JoyID (mainnet)
-            "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
-            // JoyID (testnet)
-            "0xd23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac",
-        ];
-
-        let standard_locks: HashSet<Vec<u8>> = standard_lock_hashes
-            .iter()
-            .map(|hex| parse_hex_to_bytes(hex))
-            .collect();
-
-        Self {
-            type_lookup,
-            standard_locks,
-        }
+        let kind = match PROTOCOL_REGISTRY.protocol(code_hash, hash_type) {
+            Some(ProtocolScript::Dao) => Some(AssetKind::Dao),
+            Some(ProtocolScript::DidCkb) => Some(AssetKind::DidCkb),
+            Some(ProtocolScript::SporeNft) => Some(AssetKind::Spore),
+            Some(ProtocolScript::Cluster) => Some(AssetKind::Cluster),
+            Some(ProtocolScript::MnftToken) => Some(AssetKind::MnftToken),
+            Some(ProtocolScript::DotbitAccount) => Some(AssetKind::Dotbit),
+            Some(ProtocolScript::BitCell) => Some(AssetKind::BitCell),
+            Some(ProtocolScript::DotCellAccount) => Some(AssetKind::DotCell),
+            _ => None,
+        };
+        kind.or_else(|| {
+            UdtParser::is_udt_code_hash_bytes(code_hash, hash_type).map(|_| AssetKind::Udt)
+        })
     }
 
-    fn classify(&self, code_hash: &[u8]) -> Option<AssetKind> {
-        self.type_lookup
-            .get(code_hash)
-            .copied()
-            .or_else(|| UdtParser::is_udt_code_hash_bytes(code_hash, 0).map(|_| AssetKind::Udt))
-    }
-
-    fn is_standard_lock(&self, code_hash: &[u8]) -> bool {
-        self.standard_locks.contains(code_hash)
+    /// A standard lock (access control only, no protocol semantics): a pair
+    /// the registry's standard locks run.
+    fn is_standard_lock(&self, code_hash: &[u8], hash_type: i16) -> bool {
+        crate::parser::registry::PROTOCOL_REGISTRY.is_standard_lock(code_hash, hash_type)
     }
 }
 
@@ -430,6 +364,112 @@ pub fn build_tx_actions_for_block_no_detectors(txs: &[TxView<'_>]) -> Result<Vec
     build_tx_actions_for_block(txs, &[])
 }
 
+/// `tx` with every cell locked by `code_hash` locked by it with `hash_type`
+/// instead: a protocol lock's code hash under a pair the protocol does not
+/// run (resync/protocol-pairs' tests).
+#[cfg(test)]
+pub(crate) fn with_lock_by<'a>(tx: &TxView<'a>, code_hash: &[u8], hash_type: i16) -> TxView<'a> {
+    TxView {
+        tx_hash: tx.tx_hash,
+        block_hash: tx.block_hash,
+        tx_index: tx.tx_index,
+        block_number: tx.block_number,
+        timestamp: tx.timestamp,
+        is_cellbase: tx.is_cellbase,
+        dotbit_action: tx.dotbit_action,
+        inputs: tx
+            .inputs
+            .iter()
+            .map(|cell| {
+                let mut cell = *cell;
+                if cell.lock_code_hash == code_hash {
+                    cell.lock_hash_type = hash_type;
+                }
+                cell
+            })
+            .collect(),
+        outputs: tx
+            .outputs
+            .iter()
+            .map(|cell| {
+                let mut cell = *cell;
+                if cell.lock_code_hash == code_hash {
+                    cell.lock_hash_type = hash_type;
+                }
+                cell
+            })
+            .collect(),
+    }
+}
+
+/// The resync/protocol-pairs check of one protocol lock: `tx` as built (the
+/// registered pair) carries an action of `protocol`; the same transaction with
+/// the lock's code hash under `data` carries none, and that lock stays a
+/// called lock (`lock_calls`).
+#[cfg(test)]
+pub(crate) fn assert_protocol_runs_only_its_pair(
+    tx: &TxView<'_>,
+    detectors: &[Box<dyn ProtocolDetector>],
+    code_hashes: &[&[u8]],
+    protocol: &str,
+) {
+    let registered = build_tx_actions_for_block(std::slice::from_ref(tx), detectors).unwrap();
+    assert!(
+        registered[0]
+            .protocol_actions
+            .iter()
+            .any(|a| a.protocol == protocol),
+        "the registered pair: a {protocol} action ({:?})",
+        registered[0].protocol_actions
+    );
+    let mut other = with_lock_by(tx, code_hashes[0], 0);
+    for code_hash in &code_hashes[1..] {
+        other = with_lock_by(&other, code_hash, 0);
+    }
+    let actions = build_tx_actions_for_block(&[other], detectors).unwrap();
+    assert!(
+        !actions[0]
+            .protocol_actions
+            .iter()
+            .any(|a| a.protocol == protocol),
+        "by data, not {protocol}: {:?}",
+        actions[0].protocol_actions
+    );
+    // The called locks are the registered pair's, that lock by data: a lock
+    // that is not the protocol's is still a lock the transaction calls.
+    let expected: Vec<(Vec<u8>, i16, Vec<u8>)> = registered[0]
+        .lock_calls
+        .iter()
+        .map(|call| {
+            let hash_type = if code_hashes.contains(&call.lock_code_hash.as_slice()) {
+                0
+            } else {
+                call.lock_hash_type
+            };
+            (
+                call.lock_code_hash.clone(),
+                hash_type,
+                call.lock_args.clone(),
+            )
+        })
+        .collect();
+    let called: Vec<(Vec<u8>, i16, Vec<u8>)> = actions[0]
+        .lock_calls
+        .iter()
+        .map(|call| {
+            (
+                call.lock_code_hash.clone(),
+                call.lock_hash_type,
+                call.lock_args.clone(),
+            )
+        })
+        .collect();
+    let (mut called, mut expected) = (called, expected);
+    called.sort();
+    expected.sort();
+    assert_eq!(called, expected, "by data, still called locks");
+}
+
 /// Build `TxActions` for all transactions in a block with protocol detectors.
 pub fn build_tx_actions_for_block(
     txs: &[TxView<'_>],
@@ -704,7 +744,7 @@ fn build_tx_actions<'a>(
 
     // Detect non-standard output locks and record as lock_calls for sending owners
     for cell in &tx.outputs {
-        if !hashes.is_standard_lock(cell.lock_code_hash) {
+        if !hashes.is_standard_lock(cell.lock_code_hash, cell.lock_hash_type) {
             // Record on all owners who are sending CKB (input_capacity > 0)
             // and who are NOT the output cell's owner
             for (lock_hash, accum) in owners.iter_mut() {
@@ -1133,7 +1173,13 @@ fn classify_input<'a>(
     capacity: i64,
 ) -> Result<()> {
     accum.has_type_script = true;
-    match hashes.classify(type_code_hash) {
+    let type_hash_type = type_hash_type.ok_or_else(|| {
+        anyhow!(
+            "a type script without a hash type: code_hash=0x{}",
+            hex::encode(type_code_hash)
+        )
+    })?;
+    match hashes.classify(type_code_hash, type_hash_type) {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = udt_amount {
@@ -1183,7 +1229,7 @@ fn classify_input<'a>(
         // cell creation did not index), or the real data in the tx-pool mirror.
         Some(AssetKind::Dotbit) => {
             if let Some(account_id) =
-                DotbitParser::resolve_account_id(type_code_hash, type_args, data)
+                DotbitParser::resolve_account_id(type_code_hash, type_hash_type, type_args, data)
             {
                 accum.dotbit_inputs.push(account_id);
             }
@@ -1206,7 +1252,7 @@ fn classify_input<'a>(
                 }
                 identity_id.to_vec()
             } else {
-                BitCellParser::parse_identity_id_from_data(type_code_hash, type_args, data)
+                BitCellParser::parse_identity_id_from_data(type_code_hash, type_hash_type, type_args, data)
                     .ok_or_else(|| {
                         anyhow!(
                             "failed to parse .bit Cell input identity ID: code_hash=0x{}, type_args_len={}, data_len={}",
@@ -1219,7 +1265,7 @@ fn classify_input<'a>(
             accum.bit_cell_inputs.push(identity_id);
         }
         None => {
-            record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
+            record_script_call(accum, type_code_hash, Some(type_hash_type), type_args)?;
         }
     }
     Ok(())
@@ -1236,7 +1282,13 @@ fn classify_output<'a>(
     capacity: i64,
 ) -> Result<()> {
     accum.has_type_script = true;
-    match hashes.classify(type_code_hash) {
+    let type_hash_type = type_hash_type.ok_or_else(|| {
+        anyhow!(
+            "a type script without a hash type: code_hash=0x{}",
+            hex::encode(type_code_hash)
+        )
+    })?;
+    match hashes.classify(type_code_hash, type_hash_type) {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = UdtParser::parse_amount(cell_data) {
@@ -1298,15 +1350,19 @@ fn classify_output<'a>(
         // The DAS root AccountCell and too-short data name no account, exactly
         // as identity materialization skips them.
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) =
-                DotbitParser::parse_account_id_from_data(type_code_hash, type_args, cell_data)
-            {
+            if let Some(account_id) = DotbitParser::parse_account_id_from_data(
+                type_code_hash,
+                type_hash_type,
+                type_args,
+                cell_data,
+            ) {
                 accum.dotbit_outputs.push(account_id);
             }
         }
         Some(AssetKind::BitCell) => {
             let identity_id = BitCellParser::parse_identity_id_from_data(
                 type_code_hash,
+                type_hash_type,
                 type_args,
                 cell_data,
             )
@@ -1324,7 +1380,7 @@ fn classify_output<'a>(
         // lock, so the name never becomes an item of the cell's lock owner.
         Some(AssetKind::DotCell) => {}
         None => {
-            record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
+            record_script_call(accum, type_code_hash, Some(type_hash_type), type_args)?;
         }
     }
     Ok(())
@@ -1442,6 +1498,18 @@ pub(crate) mod test_fixtures {
     use super::{InputCellView, OutputCellView, TxView};
 
     /// Owned data for constructing test OutputCellView instances.
+    /// A fixture's typed cell is under its code hash's registered pair (the
+    /// registry's first pair with that code hash; `type` for a code hash the
+    /// registry does not know), unless the fixture sets a hash type.
+    pub(crate) fn registered_hash_type(code_hash: &[u8]) -> i16 {
+        crate::parser::registry::PROTOCOL_REGISTRY
+            .protocol_pairs()
+            .filter(|((hash, _), _)| *hash == code_hash)
+            .map(|((_, hash_type), _)| i16::from(hash_type))
+            .min()
+            .unwrap_or(1)
+    }
+
     pub(crate) struct OwnedOutput {
         pub(crate) lock_script_hash: Vec<u8>,
         pub(crate) lock_code_hash: Vec<u8>,
@@ -1463,7 +1531,9 @@ pub(crate) mod test_fixtures {
                 lock_args: &self.lock_args,
                 lock_script_hash: &self.lock_script_hash,
                 type_code_hash: self.type_code_hash.as_deref(),
-                type_hash_type: self.type_hash_type,
+                type_hash_type: self
+                    .type_hash_type
+                    .or_else(|| self.type_code_hash.as_deref().map(registered_hash_type)),
                 type_args: self.type_args.as_deref(),
                 type_script_hash: self.type_script_hash.as_deref(),
                 data_hash: &[],
@@ -1524,7 +1594,9 @@ pub(crate) mod test_fixtures {
                 capacity: self.capacity,
                 occupied_capacity: self.occupied_capacity,
                 type_code_hash: self.type_code_hash.as_deref(),
-                type_hash_type: self.type_hash_type,
+                type_hash_type: self
+                    .type_hash_type
+                    .or_else(|| self.type_code_hash.as_deref().map(registered_hash_type)),
                 type_script_hash: self.type_script_hash.as_deref(),
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
@@ -2833,7 +2905,7 @@ mod tests {
             "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
         );
         assert_eq!(
-            hashes.classify(&stablepp),
+            hashes.classify(&stablepp, 1),
             Some(AssetKind::Udt),
             "Stable++ Asset should be classified as Udt"
         );
@@ -2843,13 +2915,13 @@ mod tests {
             "0x092c2c4a26ea475a8e860c29cf00502103add677705e2ccd8d6fe5af3caa5ae3",
         );
         assert_eq!(
-            hashes.classify(&ccbtc),
+            hashes.classify(&ccbtc, 1),
             Some(AssetKind::Udt),
             "ccBTC Asset should be classified as Udt"
         );
 
         // Random unknown code_hash should still be None
-        assert_eq!(hashes.classify(&[0x99; 32]), None);
+        assert_eq!(hashes.classify(&[0x99; 32], 1), None);
     }
 
     #[test]
@@ -2888,8 +2960,10 @@ mod tests {
             (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
         ];
         for (hex, kind) in expected {
+            // each by its registered pair (resync/protocol-pairs)
+            let code_hash = parse_hex_to_bytes(hex);
             assert_eq!(
-                hashes.classify(&parse_hex_to_bytes(hex)),
+                hashes.classify(&code_hash, registered_hash_type(&code_hash)),
                 Some(*kind),
                 "old-const code_hash {hex} must still classify as {kind:?}"
             );
@@ -2898,16 +2972,18 @@ mod tests {
         // Negative coverage must also hold: mNFT issuer/class and lock scripts
         // were NOT asset-classified by the old map and must stay unclassified.
         assert_eq!(
-            hashes.classify(&parse_hex_to_bytes(
-                crate::parser::mnft::MNFT_ISSUER_CODE_HASH
-            )),
+            hashes.classify(
+                &parse_hex_to_bytes(crate::parser::mnft::MNFT_ISSUER_CODE_HASH),
+                1
+            ),
             None,
             "mNFT issuer must not be classified as an asset"
         );
         assert_eq!(
-            hashes.classify(&parse_hex_to_bytes(
-                crate::parser::mnft::MNFT_CLASS_CODE_HASH
-            )),
+            hashes.classify(
+                &parse_hex_to_bytes(crate::parser::mnft::MNFT_CLASS_CODE_HASH),
+                1
+            ),
             None,
             "mNFT class must not be classified as an asset"
         );
@@ -2923,7 +2999,7 @@ mod tests {
             "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
         );
         assert_eq!(
-            hashes.classify(&testnet_sudt),
+            hashes.classify(&testnet_sudt, 1),
             Some(AssetKind::Udt),
             "testnet sUDT should classify as Udt via the registry"
         );
@@ -2945,7 +3021,7 @@ mod tests {
             "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f",
         );
         assert_eq!(
-            hashes.classify(&testnet_mnft),
+            hashes.classify(&testnet_mnft, 1),
             Some(AssetKind::MnftToken),
             "testnet mNFT token should classify as MnftToken via the registry"
         );
@@ -3218,6 +3294,124 @@ mod tests {
 
         let rgbpp_p = find_participant(actions, rgbpp_owner);
         assert!(rgbpp_p.tags & TAG_PROTOCOL != 0);
+    }
+
+    /// resync/protocol-pairs: a standard lock (no protocol, no lock call) is a
+    /// pair the registry's standard locks run: their registered references
+    /// and their binaries by the data hash types. The default lock's code
+    /// hash by `data` (no such binary runs) is a lock the transaction calls;
+    /// its binary by `data1` (the default lock's code) is not.
+    #[test]
+    fn standard_locks_are_the_pairs_they_run() {
+        let default_lock = crate::rpc::parse_hex_to_bytes(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
+        let default_binary = crate::rpc::parse_hex_to_bytes(
+            "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+        );
+        let called = |code_hash: &[u8], hash_type: i16| -> Vec<(Vec<u8>, i16)> {
+            let input = make_input_with_lock(
+                0xAA,
+                default_lock.clone(),
+                vec![0x22; 20],
+                200_00000000,
+                None,
+                None,
+            );
+            let outputs = [make_output_with_lock(
+                0xAB,
+                code_hash.to_vec(),
+                vec![0x33; 20],
+                200_00000000,
+                None,
+                None,
+            )];
+            let tx = TxView {
+                tx_hash: &[0x42; 32],
+                block_hash: &[0xC2; 32],
+                tx_index: 1,
+                block_number: 5002,
+                timestamp: 1_700_200_020,
+                is_cellbase: false,
+                dotbit_action: None,
+                inputs: vec![input.view()],
+                outputs: outputs.iter().map(|o| o.view()).collect(),
+            };
+            // the sender's lock stays the default lock by type
+            let mut tx = with_lock_by(&tx, code_hash, hash_type);
+            tx.inputs[0].lock_hash_type = 1;
+            build_tx_actions_for_block(&[tx], &[]).unwrap()[0]
+                .lock_calls
+                .iter()
+                .map(|call| (call.lock_code_hash.clone(), call.lock_hash_type))
+                .collect()
+        };
+        assert!(
+            called(&default_lock, 1).is_empty(),
+            "the default lock by type"
+        );
+        assert!(
+            called(&default_binary, 2).is_empty(),
+            "the default lock's binary by data1 runs the default lock"
+        );
+        assert_eq!(
+            called(&default_lock, 0),
+            vec![(default_lock.clone(), 0)],
+            "the default lock's code hash by data runs nothing registered"
+        );
+    }
+
+    /// resync/protocol-pairs: the RGB++ lock and the BTC time lock are
+    /// protocol locks by their registered pairs only. A cell under either code
+    /// hash by `data` (a pair anyone can lock a cell with; no such binary
+    /// runs) writes no RGB++ action and stays a called lock.
+    #[test]
+    fn rgbpp_locks_act_only_by_their_registered_pairs() {
+        let rgbpp_code_hash = crate::rpc::parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
+        let btc_time_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::rgbpp::BTC_TIME_LOCK_CODE_HASH_MAINNET);
+        let xudt_code_hash = vec![0x77; 32];
+        let type_args = vec![0x88; 32];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
+        for (code_hash, args) in [
+            (
+                rgbpp_code_hash,
+                make_rgbpp_lock_args(
+                    0,
+                    "1111111111111111111111111111111111111111111111111111111111111111",
+                ),
+            ),
+            (btc_time_code_hash, vec![0x5a; 80]),
+        ] {
+            let input = make_input_with_lock(
+                0xAA,
+                code_hash.clone(),
+                args,
+                200_00000000,
+                Some(xudt_code_hash.clone()),
+                Some(type_args.clone()),
+            );
+            let outputs = [make_output_with_lock(
+                0xAB,
+                vec![0x11; 32],
+                vec![0x22; 20],
+                200_00000000,
+                Some(xudt_code_hash.clone()),
+                Some(type_args.clone()),
+            )];
+            let tx = TxView {
+                tx_hash: &[0x41; 32],
+                block_hash: &[0xC1; 32],
+                tx_index: 1,
+                block_number: 5001,
+                timestamp: 1_700_200_010,
+                is_cellbase: false,
+                dotbit_action: None,
+                inputs: vec![input.view()],
+                outputs: outputs.iter().map(|o| o.view()).collect(),
+            };
+            assert_protocol_runs_only_its_pair(&tx, &detectors, &[&code_hash], "rgbpp");
+        }
     }
 
     #[test]

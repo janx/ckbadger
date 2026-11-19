@@ -201,7 +201,7 @@ impl ValidatedHashType {
         }
     }
 
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -229,7 +229,7 @@ pub(crate) enum ImportDeployment {
 /// live code cell's actual data hash, so a label attached to anything else
 /// decorates a version that will never receive usage while the real one stays
 /// unlabeled (the failure that zeroed the Fiber families).
-enum VersionAttachment {
+pub(crate) enum VersionAttachment {
     /// A plausible bytecode identity to attach the label to.
     Attachable(Vec<u8>),
     /// Legacy all-zero sentinel: the entry declares no version.
@@ -243,7 +243,7 @@ enum VersionAttachment {
 /// attachable. The version-write path goes through here, and a family's
 /// `versions_count` counts the version rows it attached
 /// (`family_versions_counts`), so the two can never disagree.
-fn version_attachment(entry: &ScriptDeploymentEntry) -> Result<VersionAttachment> {
+pub(crate) fn version_attachment(entry: &ScriptDeploymentEntry) -> Result<VersionAttachment> {
     let version_hash = decode_hex(&entry.version_hash)
         .map_err(|e| anyhow::anyhow!("invalid version_hash `{}`: {}", entry.version_hash, e))?;
     if version_hash.iter().all(|&b| b == 0) {
@@ -1804,7 +1804,7 @@ disabled = true
             ),
         ] {
             assert_eq!(
-                PROTOCOL_REGISTRY.get(&parse_hex_to_bytes(hash)),
+                PROTOCOL_REGISTRY.protocol(&parse_hex_to_bytes(hash), 1),
                 Some(expected),
                 "{hash} must classify as {expected:?}"
             );

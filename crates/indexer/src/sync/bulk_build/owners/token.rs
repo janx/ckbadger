@@ -85,7 +85,7 @@ impl TokenOwner {
 
     fn observe_max_supply_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
-        if !crate::sync::token_helpers::is_omnilock_code_hash(lock_code_hash) {
+        if !crate::sync::token_helpers::is_omnilock(lock_code_hash, cell.lock_hash_type) {
             return;
         }
         let lock_args = ctx.resolve_identity(cell.lock_args_id);

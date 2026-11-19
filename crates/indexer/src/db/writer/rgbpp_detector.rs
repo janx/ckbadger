@@ -150,16 +150,20 @@ impl ProtocolDetector for RgbppDetector {
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
         _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
     ) -> bool {
-        lock_code_hashes
-            .iter()
-            .any(|h| RgbppParser::detect_lock_type(h) != RgbppLockType::Other)
+        lock_code_hashes.iter().any(|h| {
+            crate::parser::registry::HASH_TYPES
+                .iter()
+                .any(|&ht| RgbppParser::detect_lock_type(h, ht) != RgbppLockType::Other)
+        })
     }
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs.iter().any(|input| {
-            RgbppParser::detect_lock_type(input.lock_code_hash) != RgbppLockType::Other
+            RgbppParser::detect_lock_type(input.lock_code_hash, input.lock_hash_type)
+                != RgbppLockType::Other
         }) || tx.outputs.iter().any(|output| {
-            RgbppParser::detect_lock_type(output.lock_code_hash) != RgbppLockType::Other
+            RgbppParser::detect_lock_type(output.lock_code_hash, output.lock_hash_type)
+                != RgbppLockType::Other
         })
     }
 
@@ -183,7 +187,8 @@ impl ProtocolDetector for RgbppDetector {
         for input in &tx.inputs {
             if let (Some(type_code_hash), Some(type_args)) = (input.type_code_hash, input.type_args)
             {
-                let lock_type = RgbppParser::detect_lock_type(input.lock_code_hash);
+                let lock_type =
+                    RgbppParser::detect_lock_type(input.lock_code_hash, input.lock_hash_type);
                 let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Input,
@@ -199,7 +204,8 @@ impl ProtocolDetector for RgbppDetector {
             if let (Some(type_code_hash), Some(type_args)) =
                 (output.type_code_hash, output.type_args)
             {
-                let lock_type = RgbppParser::detect_lock_type(output.lock_code_hash);
+                let lock_type =
+                    RgbppParser::detect_lock_type(output.lock_code_hash, output.lock_hash_type);
                 let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Output,

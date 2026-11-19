@@ -1287,7 +1287,10 @@ async fn get_dotcell_item_detail(
     let sale = match owner_lock {
         None => None,
         Some(ResolvedLock { entry, .. })
-            if !ckbadger_indexer::parser::DotCellParser::is_sale_lock(&entry.code_hash) =>
+            if !ckbadger_indexer::parser::DotCellParser::is_sale_lock(
+                &entry.code_hash,
+                entry.hash_type,
+            ) =>
         {
             None
         }

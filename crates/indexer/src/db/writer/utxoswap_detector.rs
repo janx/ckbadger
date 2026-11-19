@@ -28,17 +28,21 @@ impl ProtocolDetector for UtxoSwapDetector {
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
         _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
     ) -> bool {
-        lock_code_hashes.iter().any(|h| is_intent_lock(h))
+        lock_code_hashes.iter().any(|h| {
+            crate::parser::registry::HASH_TYPES
+                .iter()
+                .any(|&ht| is_intent_lock(h, ht))
+        })
     }
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs
             .iter()
-            .any(|input| is_intent_lock(input.lock_code_hash))
+            .any(|input| is_intent_lock(input.lock_code_hash, input.lock_hash_type))
             || tx
                 .outputs
                 .iter()
-                .any(|output| is_intent_lock(output.lock_code_hash))
+                .any(|output| is_intent_lock(output.lock_code_hash, output.lock_hash_type))
     }
 
     /// One action per intent cell, not one per transaction: a single tx can
@@ -69,7 +73,7 @@ impl ProtocolDetector for UtxoSwapDetector {
         // Mainnet tx 0x8fa2c828… submits two intents and only one submitter has
         // a negative delta; the other (+8,799,994,175 shannons) was dropped.
         for output in &tx.outputs {
-            if !is_intent_lock(output.lock_code_hash) {
+            if !is_intent_lock(output.lock_code_hash, output.lock_hash_type) {
                 continue;
             }
             let parsed = match parse_intent_args(output.lock_args) {
@@ -93,7 +97,7 @@ impl ProtocolDetector for UtxoSwapDetector {
 
         // --- Settled: intent lock on inputs, owner_lock_hash prefix match ---
         for input in &tx.inputs {
-            if !is_intent_lock(input.lock_code_hash) {
+            if !is_intent_lock(input.lock_code_hash, input.lock_hash_type) {
                 continue;
             }
             let parsed = match parse_intent_args(input.lock_args) {
@@ -241,6 +245,40 @@ mod tests {
         buf[58..74].copy_from_slice(&amount_in.to_le_bytes());
         buf[74..90].copy_from_slice(&amount_out_min.to_le_bytes());
         buf
+    }
+
+    /// resync/protocol-pairs: the intent lock is UTXOSwap's by its registered
+    /// pair only. An intent output under its code hash by `data` (a pair
+    /// anyone can lock a cell with; no such binary runs) writes no UTXOSwap
+    /// action and stays a called lock.
+    #[test]
+    fn the_intent_lock_acts_only_by_its_registered_pair() {
+        let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let alice: u8 = 0xAA;
+        let intent_args = build_intent_args(&[alice; 20], 3, 0, 1000, 500);
+        let input = make_input(alice, vec![0x11; 32], vec![0x22; 20], 500_00000000);
+        let outputs = vec![
+            make_output(0xF0, intent_code_hash.clone(), intent_args, 300_00000000),
+            make_output(alice, vec![0x11; 32], vec![0x22; 20], 200_00000000),
+        ];
+        let tx = TxView {
+            tx_hash: &[0x50; 32],
+            block_hash: &[0xD0; 32],
+            tx_index: 1,
+            block_number: 6000,
+            timestamp: 1_700_300_000,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
+        crate::db::writer::activities::assert_protocol_runs_only_its_pair(
+            &tx,
+            &detectors,
+            &[&intent_code_hash],
+            "utxoswap",
+        );
     }
 
     #[test]

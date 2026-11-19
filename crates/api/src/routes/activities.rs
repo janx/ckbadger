@@ -675,7 +675,9 @@ fn item_type_script(
                             .flatten()
                             .filter(|cell| cell.type_args.as_deref() == Some(id))
                             .filter_map(cell_type)
-                            .filter(|(code, _)| PROTOCOL_REGISTRY.is(code, ProtocolScript::Cluster))
+                            .filter(|(code, hash_type)| {
+                                PROTOCOL_REGISTRY.is(code, *hash_type, ProtocolScript::Cluster)
+                            })
                             .collect();
                         Ok(the_one(codes, "cluster cell in its creating transaction"))
                     }

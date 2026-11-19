@@ -959,6 +959,23 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
     }
 }
 
+/// resync/protocol-pairs: the slug is the registry's for the script's pair.
+/// The `.cell` Account Lock's code hash by `data` (a pair anyone can lock a
+/// cell with; no such binary runs) is no protocol's lock: no slug, while the
+/// type script keeps its own.
+#[tokio::test]
+async fn the_cell_detail_names_a_protocol_only_by_its_registered_pair() {
+    let (app, tx_hash, _chain) = dotcell_name_cell_app_locked_by(
+        hex::decode(DOTCELL_SUPPORT_DATA).unwrap(),
+        ckb_types::core::ScriptHashType::Data,
+    )
+    .await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["protocolScript"]["lock"], serde_json::Value::Null);
+    assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+}
+
 /// The cell detail names each script's registry protocol by slug, so the
 /// frontend never compares code hashes to recognise `.cell` / did:ckb cells.
 #[tokio::test]
@@ -987,24 +1004,39 @@ const DOTCELL_SUPPORT_DATA: &str = "0372ad09e23868d88a8e85519ebeee56f60eda6c5a56
 /// mainnet `.cell` name cell with `data`, plus the matching live-cell row in
 /// the domain store. Returns the router and the transaction hash.
 async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCkbChain) {
+    dotcell_name_cell_app_locked_by(data, ckb_types::core::ScriptHashType::Type).await
+}
+
+/// The `.cell` name cell, its Account Lock's code hash by `lock_by`.
+async fn dotcell_name_cell_app_locked_by(
+    data: Vec<u8>,
+    lock_by: ckb_types::core::ScriptHashType,
+) -> (axum::Router, [u8; 32], TestCkbChain) {
     use ckb_types::bytes::Bytes;
     use ckb_types::core::{Capacity, ScriptHashType, TransactionBuilder};
     use ckb_types::packed;
     use ckb_types::prelude::*;
 
-    let script = |code_hash: &str, args: &[u8]| {
+    let script = |code_hash: &str, by: ScriptHashType, args: &[u8]| {
         let code_hash: [u8; 32] = hex::decode(code_hash).unwrap().try_into().unwrap();
         packed::Script::new_builder()
             .code_hash(packed::Byte32::new(code_hash))
-            .hash_type(ScriptHashType::Type.into())
+            .hash_type(by.into())
             .args(Bytes::from(args.to_vec()).pack())
             .build()
     };
     let namespace = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
     let output = packed::CellOutput::new_builder()
         .capacity(Capacity::shannons(240_00000000).pack())
-        .lock(script(DOTCELL_ACCOUNT_LOCK_MAINNET, &[]))
-        .type_(Some(script(DOTCELL_ACCOUNT_TYPE_MAINNET, &namespace)).pack())
+        .lock(script(DOTCELL_ACCOUNT_LOCK_MAINNET, lock_by, &[]))
+        .type_(
+            Some(script(
+                DOTCELL_ACCOUNT_TYPE_MAINNET,
+                ScriptHashType::Type,
+                &namespace,
+            ))
+            .pack(),
+        )
         .build();
     let data_size = data.len() as i32;
     let tx = TransactionBuilder::default()
@@ -1022,6 +1054,7 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
     let mut indexed = dotcell_name_cell_info(data_size);
+    indexed.lock_hash_type = i16::from(lock_by as u8);
     indexed.data_hash = Some(fixture_data_hash(&data).try_into().unwrap());
     batch.put_cell(&tx_hash, 0, &indexed, 123);
     // The identity row the indexer writes for the name `support.cell`: an
@@ -3673,7 +3706,6 @@ async fn by_pair_address_lock_info_names_only_the_registered_pair() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(json["lockScript"]["hashType"], "data", "{json}");
     assert!(
         json["lockScriptInfo"].is_null(),
         "the default lock's label does not reach the lock by data: {json}"

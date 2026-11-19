@@ -98,19 +98,25 @@ pub fn has_display(script: Option<&ScriptResponse>) -> Result<bool> {
         return Ok(false);
     };
     let code_hash = hex::decode(script.code_hash.trim_start_matches("0x"))?;
-    Ok(UdtParser::is_udt_code_hash_bytes(&code_hash, 0).is_some()
-        || matches!(
-            PROTOCOL_REGISTRY.get(&code_hash),
-            Some(
-                ProtocolScript::SporeNft
-                    | ProtocolScript::MnftToken
-                    | ProtocolScript::DidCkb
-                    | ProtocolScript::BitCell
-                    | ProtocolScript::DotbitAccount
-                    | ProtocolScript::DotCellAccount
-                    | ProtocolScript::Ckbfs
-            )
-        ))
+    let hash_type = i16::from(
+        ckbadger_common::hash_type_from_label(&script.hash_type)
+            .ok_or_else(|| anyhow!("invalid script hash type {}", script.hash_type))?,
+    );
+    Ok(
+        UdtParser::is_udt_code_hash_bytes(&code_hash, hash_type).is_some()
+            || matches!(
+                PROTOCOL_REGISTRY.protocol(&code_hash, hash_type),
+                Some(
+                    ProtocolScript::SporeNft
+                        | ProtocolScript::MnftToken
+                        | ProtocolScript::DidCkb
+                        | ProtocolScript::BitCell
+                        | ProtocolScript::DotbitAccount
+                        | ProtocolScript::DotCellAccount
+                        | ProtocolScript::Ckbfs
+                )
+            ),
+    )
 }
 
 pub fn from_parts(
@@ -147,11 +153,10 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
         .type_script_hash
         .as_deref()
         .ok_or_else(|| anyhow!("display requires type script hash"))?;
-    if let Some(standard) = UdtParser::is_udt_code_hash_bytes(
-        code_hash,
-        cell.type_hash_type
-            .ok_or_else(|| anyhow!("display requires type hash type"))?,
-    ) {
+    let type_hash_type = cell
+        .type_hash_type
+        .ok_or_else(|| anyhow!("display requires type hash type"))?;
+    if let Some(standard) = UdtParser::is_udt_code_hash_bytes(code_hash, type_hash_type) {
         let mut result = CellDisplay::new("token", standard.as_str(), type_hash);
         match read_udt_amount(&standard, &cell.data) {
             UdtAmountReading::Amount(amount) => result.amount = Some(amount.to_string()),
@@ -177,7 +182,7 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
         }
         return Ok(Some(result));
     }
-    let protocol = PROTOCOL_REGISTRY.get(code_hash);
+    let protocol = PROTOCOL_REGISTRY.protocol(code_hash, type_hash_type);
     if protocol == Some(ProtocolScript::Ckbfs) {
         let mut result = CellDisplay::new("file", "ckbfs", type_hash);
         result.name = ckbfs_filename(&cell.data).context("invalid CKBFS cell data")?;
@@ -737,14 +742,14 @@ mod tests {
     fn pending_spore_has_exact_identity_without_inventing_media_or_collection_name() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let code_hash = PROTOCOL_REGISTRY
-            .iter()
+        // a pair Spore runs, its hash type with it (resync/protocol-pairs)
+        let ((code_hash, hash_type), _) = PROTOCOL_REGISTRY
+            .protocol_pairs()
             .find(|(_, p)| *p == ProtocolScript::SporeNft)
-            .unwrap()
-            .0;
+            .unwrap();
         let script = ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
-            hash_type: "type".into(),
+            hash_type: ckbadger_common::hash_type_label(hash_type).unwrap().into(),
             args: format!("0x{}", "33".repeat(32)),
         };
         let data = table(&[bytes(b"text/plain"), bytes(b"test"), bytes(&[0x44; 32])]);
@@ -1020,14 +1025,14 @@ mod tests {
                 },
             )
             .unwrap();
-        let code_hash = PROTOCOL_REGISTRY
-            .iter()
+        // a pair Spore runs, its hash type with it (resync/protocol-pairs)
+        let ((code_hash, hash_type), _) = PROTOCOL_REGISTRY
+            .protocol_pairs()
             .find(|(_, p)| *p == ProtocolScript::SporeNft)
-            .unwrap()
-            .0;
+            .unwrap();
         let script = ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
-            hash_type: "type".into(),
+            hash_type: ckbadger_common::hash_type_label(hash_type).unwrap().into(),
             args: format!("0x{}", hex::encode(id)),
         };
         let data = table(&[bytes(b"text/plain"), bytes(b"test"), vec![]]);

@@ -52,18 +52,21 @@ fn checked_usize_to_i32(value: usize, context: &str) -> anyhow::Result<i32> {
 }
 
 impl DaoParser {
-    pub fn is_dao_code_hash(code_hash: &[u8]) -> bool {
-        crate::parser::registry::PROTOCOL_REGISTRY
-            .is(code_hash, crate::parser::registry::ProtocolScript::Dao)
+    pub fn is_dao_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            hash_type,
+            crate::parser::registry::ProtocolScript::Dao,
+        )
     }
 
     pub fn is_dao_cell(output: &CellOutput) -> bool {
         if let Some(ref type_script) = output.type_ {
-            if type_script.hash_type != "type" {
-                return false;
-            }
             let code_hash = parse_hex_to_bytes(&type_script.code_hash);
-            return Self::is_dao_code_hash(&code_hash);
+            return Self::is_dao_code_hash(
+                &code_hash,
+                crate::parser::script::ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            );
         }
         false
     }
@@ -129,7 +132,7 @@ impl DaoParser {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                if !Self::is_dao_code_hash(type_code_hash) {
+                if !Self::is_dao_code_hash(type_code_hash, cell.type_hash_type.ok_or_else(|| anyhow::anyhow!("a typed cell without a hash type: tx=0x{} output={idx}", hex::encode(tx_hash)))?) {
                     return Ok(None);
                 }
                 // hash_type must be "type" (value 1) to match is_dao_cell() behavior
@@ -229,15 +232,15 @@ mod tests {
         let dao_hash = parse_hex_to_bytes(
             "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
         );
-        assert!(DaoParser::is_dao_code_hash(&dao_hash));
+        assert!(DaoParser::is_dao_code_hash(&dao_hash, 1));
 
         let other_hash = vec![0u8; 32];
-        assert!(!DaoParser::is_dao_code_hash(&other_hash));
+        assert!(!DaoParser::is_dao_code_hash(&other_hash, 1));
 
         let secp_hash = parse_hex_to_bytes(
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
         );
-        assert!(!DaoParser::is_dao_code_hash(&secp_hash));
+        assert!(!DaoParser::is_dao_code_hash(&secp_hash, 1));
     }
 
     #[test]
@@ -246,12 +249,12 @@ mod tests {
         // flows through PROTOCOL_REGISTRY. The canonical DAO hash must classify,
         // and a *different* registered protocol (sUDT) must NOT be seen as DAO.
         let dao = parse_hex_to_bytes(DAO_CODE_HASH);
-        assert!(DaoParser::is_dao_code_hash(&dao));
+        assert!(DaoParser::is_dao_code_hash(&dao, 1));
 
         let sudt = parse_hex_to_bytes(
             "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
         );
-        assert!(!DaoParser::is_dao_code_hash(&sudt));
+        assert!(!DaoParser::is_dao_code_hash(&sudt, 1));
     }
 
     #[test]

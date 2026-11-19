@@ -157,8 +157,8 @@ fn resolve_live_dotbit_account_id_for_consume(
         Some(info) => info
             .type_code_hash
             .as_ref()
-            .map(|hash| hash.as_slice())
-            .filter(|tc| DotbitParser::is_account_cell_type_script(tc))
+            .zip(info.type_hash_type)
+            .filter(|(tc, hash_type)| DotbitParser::is_account_cell_type_script(*tc, *hash_type))
             .and_then(|_| dotbit_map.get(key).cloned()),
         None => dotbit_map.get(key).cloned(),
     }
@@ -207,7 +207,8 @@ fn parsed_cell_summary_projection(
     let is_dao = cell
         .type_code_hash
         .as_deref()
-        .is_some_and(DaoParser::is_dao_code_hash);
+        .zip(cell.type_hash_type)
+        .is_some_and(|(hash, hash_type)| DaoParser::is_dao_code_hash(hash, hash_type));
     LiveCellSummaryProjection::from_parts(
         has_type_script,
         has_type_code_hash,
@@ -229,8 +230,8 @@ fn positioned_cell_summary_projection(
     let is_dao = cell
         .type_code_hash
         .as_ref()
-        .map(|hash| hash.as_slice())
-        .is_some_and(DaoParser::is_dao_code_hash);
+        .zip(cell.type_hash_type)
+        .is_some_and(|(hash, hash_type)| DaoParser::is_dao_code_hash(hash.as_slice(), hash_type));
     LiveCellSummaryProjection::from_parts(
         has_type_script,
         has_type_code_hash,
@@ -592,8 +593,9 @@ fn build_activity_input_views<'a>(
             // is a lost index row and stops the batch.
             let consumed_is_account_cell = info
                 .type_code_hash
-                .as_ref().map(|hash| hash.as_slice())
-                .is_some_and(DotbitParser::is_account_cell_type_script);
+                .as_ref()
+                .zip(info.type_hash_type)
+                .is_some_and(|(hash, hash_type)| DotbitParser::is_account_cell_type_script(hash.as_slice(), hash_type));
             let data: &[u8] = match (consumed_is_account_cell, indexes.dotbit_ids.get(&key)) {
                 (true, Some(account_id)) => account_id.as_slice(),
                 (true, None) if indexes.dotbit_unindexed.contains(&key) => &[],
@@ -2580,11 +2582,12 @@ impl Indexer {
                                 let consumed_type_code_hash = input_cell_info
                                     .get(&key)
                                     .or_else(|| batch_cell_infos.get(&key))
-                                    .and_then(|info| info.type_code_hash);
+                                    .and_then(|info| info.type_code_hash.zip(info.type_hash_type));
                                 let consumed_is_dotcell = consumed_type_code_hash
                                     .as_ref()
-                                    .map(|hash| hash.as_slice())
-                                    .is_some_and(DotCellParser::is_account_type_script);
+                                    .is_some_and(|(hash, hash_type)| {
+                                        DotCellParser::is_account_type_script(hash, *hash_type)
+                                    });
 
                                 // `.cell` consumption. It shares the outpoint
                                 // reverse index with spores but NOT the spore
@@ -2624,11 +2627,16 @@ impl Indexer {
                                 else if let Some(spore_id) = spore_map.get(&key) {
                                     let identity_collection_id = consumed_type_code_hash
                                         .as_ref()
-                                        .map(|hash| hash.as_slice())
-                                        .and_then(|type_code_hash| {
-                                            if BitCellParser::is_type_script(type_code_hash) {
+                                        .and_then(|(type_code_hash, hash_type)| {
+                                            if BitCellParser::is_type_script(
+                                                type_code_hash,
+                                                *hash_type,
+                                            ) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
-                                            } else if DidCkbParser::is_type_script(type_code_hash) {
+                                            } else if DidCkbParser::is_type_script(
+                                                type_code_hash,
+                                                *hash_type,
+                                            ) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.as_slice())
                                             } else {
                                                 None
@@ -2668,12 +2676,10 @@ impl Indexer {
                                             false,
                                         );
                                     }
-                                } else if let Some(tch) =
-                                    consumed_type_code_hash.as_ref().map(|hash| hash.as_slice())
-                                {
-                                    if SporeParser::is_spore_nft_type_script(tch)
-                                        || DidCkbParser::is_type_script(tch)
-                                        || BitCellParser::is_type_script(tch)
+                                } else if let Some((tch, tht)) = consumed_type_code_hash.as_ref() {
+                                    if SporeParser::is_spore_nft_type_script(tch, *tht)
+                                        || DidCkbParser::is_type_script(tch, *tht)
+                                        || BitCellParser::is_type_script(tch, *tht)
                                     {
                                         bail!(
                                             "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
@@ -2717,8 +2723,10 @@ impl Indexer {
                                     .get(&key)
                                     .or_else(|| batch_cell_infos.get(&key))
                                 {
-                                    if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if MnftParser::is_token_type_script(tch) {
+                                    if let Some((tch, tht)) =
+                                        info.type_code_hash.as_ref().zip(info.type_hash_type)
+                                    {
+                                        if MnftParser::is_token_type_script(tch, tht) {
                                             bail!(
                                                 "mNFT outpoint-id mapping missing for consumed mNFT cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
                                                 parsed.number,
@@ -2744,9 +2752,11 @@ impl Indexer {
                                 .get(&key)
                                 .or_else(|| batch_cell_infos.get(&key))
                                 .and_then(|info| {
-                                    info.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                                    info.type_code_hash.as_ref().zip(info.type_hash_type)
                                 })
-                                .is_some_and(DotbitParser::is_account_cell_type_script)
+                                .is_some_and(|(hash, hash_type)| {
+                                    DotbitParser::is_account_cell_type_script(hash, hash_type)
+                                })
                             {
                                 // An AccountCell without an indexed id must have been
                                 // recorded as never an account when it was created.
@@ -3488,7 +3498,10 @@ impl Indexer {
                     if cell
                         .type_code_hash
                         .as_deref()
-                        .is_some_and(DaoParser::is_dao_code_hash)
+                        .zip(cell.type_hash_type)
+                        .is_some_and(|(hash, hash_type)| {
+                            DaoParser::is_dao_code_hash(hash, hash_type)
+                        })
                     {
                         touched_lock_hashes.insert(cell.lock_script_hash.clone());
                     }
@@ -3510,8 +3523,10 @@ impl Indexer {
                         .is_some_and(|info| {
                             info.type_code_hash
                                 .as_ref()
-                                .map(|hash| hash.as_slice())
-                                .is_some_and(DaoParser::is_dao_code_hash)
+                                .zip(info.type_hash_type)
+                                .is_some_and(|(hash, hash_type)| {
+                                    DaoParser::is_dao_code_hash(hash.as_slice(), hash_type)
+                                })
                         })
                     {
                         let (lock_script_hash, _) =
@@ -4752,8 +4767,9 @@ mod tests {
             lock_args: vec![],
             lock_script_hash: vec![0x11; 32],
             type_script_hash: type_code_hash.as_ref().map(|_| vec![0x12; 32]),
+            // a type script is a pair: by type, as the DAO's is registered
+            type_hash_type: type_code_hash.as_ref().map(|_| 1),
             type_code_hash,
-            type_hash_type: None,
             type_args: None,
             data_hash: [0x13; 32],
             data_size,
@@ -7004,7 +7020,9 @@ mod tests {
                         cell.type_args.as_ref(),
                     ) {
                         if let Some(collection_id) =
-                            crate::sync::dao_helpers::classify_object_collection_id(code_hash, args)
+                            crate::sync::dao_helpers::classify_object_collection_id(
+                                code_hash, 1, args,
+                            )
                         {
                             indexes.entry(tx.block_number).or_default().insert(
                                 type_hash.clone(),
@@ -7051,6 +7069,7 @@ mod tests {
                         if let Some(collection_id) =
                             crate::sync::dao_helpers::classify_object_collection_id(
                                 code_hash,
+                                1,
                                 info.type_args.as_deref().unwrap_or(&[]),
                             )
                         {
@@ -14142,6 +14161,73 @@ mod tests {
 
             assert_eq!(across_batches.max_supply, Some(TOKEN_MAX_SUPPLY));
             assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
+        }
+
+        /// resync/protocol-pairs: an Omnilock supply-info cell claims the
+        /// token's max supply by Omnilock's registered pair only. Live and
+        /// bulk agree: the info cell under Omnilock's code hash by `type`
+        /// claims it, the same cell by `data` (a pair anyone can lock a cell
+        /// with; no such binary runs) claims nothing.
+        #[tokio::test]
+        async fn omnilock_claims_a_max_supply_only_by_its_registered_pair() {
+            let info_type = Script {
+                code_hash: format!("0x{}", hex::encode([0x55; 32])),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode([0x66; 32])),
+            };
+            let info_type_hash = crate::parser::ScriptParser::compute_script_hash(&info_type);
+            // above the info cell's occupied capacity (225 CKB)
+            const INFO_CAPACITY: u64 = 300_00000000;
+            let mut args = vec![0u8; 21];
+            args.push(0b0000_1000);
+            args.extend_from_slice(&info_type_hash);
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u128.to_le_bytes());
+            data.extend_from_slice(&TOKEN_MAX_SUPPLY.to_le_bytes());
+            data.extend_from_slice(&ext_type_hash());
+            for (hash_type, claimed) in [("type", Some(TOKEN_MAX_SUPPLY)), ("data", None)] {
+                let omnilock = Script {
+                    code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2
+                        .to_string(),
+                    hash_type: hash_type.to_string(),
+                    args: format!("0x{}", hex::encode(&args)),
+                };
+                // The claim rides a token transfer: live reads the claims of a
+                // batch that moves a UDT (a batch without one drops them, while
+                // bulk keeps them: a divergence of its own, outside this test).
+                let claim = d3_tx(
+                    0xe3,
+                    vec![input(0xe1, 0), input(0xe1, 1)],
+                    vec![
+                        (
+                            output(INFO_CAPACITY, omnilock, Some(info_type.clone())),
+                            format!("0x{}", hex::encode(&data)),
+                        ),
+                        (
+                            output(
+                                EXT_CELL_CAPACITY,
+                                lock_script_b(),
+                                Some(xudt_ext_type_script()),
+                            ),
+                            amount_data(TOKEN_AMOUNT),
+                        ),
+                        (
+                            output(
+                                FUNDING_CAPACITY - EXT_CELL_CAPACITY - INFO_CAPACITY,
+                                lock_script(),
+                                None,
+                            ),
+                            "0x".to_string(),
+                        ),
+                    ],
+                    vec!["0x".to_string()],
+                );
+                let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, claim)];
+                let row =
+                    assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &ext_type_hash())
+                        .await;
+                assert_eq!(row.max_supply, claimed, "Omnilock by {hash_type}");
+            }
         }
 
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback

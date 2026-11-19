@@ -746,6 +746,7 @@ mod tests {
         assert_eq!(
             DotbitParser::parse_account_id_from_data(
                 nameless.type_code_hash.as_deref().unwrap(),
+                1,
                 nameless.type_args.as_deref(),
                 &nameless.data,
             ),

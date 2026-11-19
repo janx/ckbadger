@@ -702,8 +702,7 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
     // fail to compile here rather than silently classify as `Plain`, which is
     // how did:ckb went unindexed through every from-genesis re-sync while the
     // live-sync classifiers handled it correctly.
-    match PROTOCOL_REGISTRY.get(code_hash) {
-        // DAO does not enforce hash_type — matches historical behavior.
+    match PROTOCOL_REGISTRY.protocol(code_hash, hash_type) {
         Some(ProtocolScript::Dao) => CellSemanticTag::Dao,
         Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
         Some(ProtocolScript::BitCell) => CellSemanticTag::BitCell,
@@ -1327,8 +1326,9 @@ mod tests {
     #[test]
     fn classify_from_code_hash_sudt() {
         let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        // sUDT's mainnet reference is by type; by data it is no sUDT.
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Sudt);
-        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Sudt);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Plain);
     }
 
     #[test]
@@ -1336,10 +1336,11 @@ mod tests {
         let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_DATA1);
         // hash_type 2 (data1) → Xudt
         assert_eq!(code_hash_to_semantic_tag(&hash, 2), CellSemanticTag::Xudt);
-        // Registry migration trusts each xUDT code_hash's on-chain hash_type, so
-        // hash_type 1 on the data1 code_hash is also accepted (was Plain before).
-        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
+        // The binary runs by every data hash type; by type it runs nothing
+        // registered (resync/protocol-pairs).
         assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Xudt);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 4), CellSemanticTag::Xudt);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Plain);
     }
 
     #[test]
@@ -1369,7 +1370,9 @@ mod tests {
     #[test]
     fn classify_from_code_hash_spore_mainnet_v2() {
         let hash = crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
-        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Spore);
+        // registered by data1 (resync/protocol-pairs: the pair, not the code hash)
+        assert_eq!(code_hash_to_semantic_tag(&hash, 2), CellSemanticTag::Spore);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Plain);
     }
 
     #[test]
@@ -1458,8 +1461,9 @@ mod tests {
     fn classify_from_code_hash_cluster() {
         let hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
+        // registered by data1 (resync/protocol-pairs)
         assert_eq!(
-            code_hash_to_semantic_tag(&hash, 1),
+            code_hash_to_semantic_tag(&hash, 2),
             CellSemanticTag::Cluster
         );
     }
@@ -1705,7 +1709,7 @@ mod tests {
 
     #[test]
     fn ckbfs_recognition_preserves_plain_bulk_semantics() {
-        for (hash, protocol) in PROTOCOL_REGISTRY.iter() {
+        for ((hash, _), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
             if protocol == ProtocolScript::Ckbfs {
                 for hash_type in [0, 1, 2, 4] {
                     assert_eq!(
@@ -1729,7 +1733,7 @@ mod tests {
         use crate::parser::registry::PROTOCOL_REGISTRY;
 
         let mut divergences = Vec::new();
-        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+        for ((code_hash, _), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
             for hash_type in [0i16, 1, 2, 4] {
                 let cell = ParsedCell {
                     capacity: 0,
@@ -1737,7 +1741,7 @@ mod tests {
                     lock_hash_type: 1,
                     lock_args: Vec::new(),
                     lock_script_hash: vec![0u8; 32],
-                    type_code_hash: Some(code_hash.clone()),
+                    type_code_hash: Some(code_hash.to_vec()),
                     type_hash_type: Some(hash_type),
                     type_args: Some(Vec::new()),
                     type_script_hash: Some(vec![0u8; 32]),

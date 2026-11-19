@@ -124,8 +124,10 @@ pub(crate) fn compute_parser_input_capacities_and_fees(
             if info
                 .type_code_hash
                 .as_ref()
-                .map(|hash| hash.as_slice())
-                .is_some_and(DaoParser::is_dao_code_hash)
+                .zip(info.type_hash_type)
+                .is_some_and(|(hash, hash_type)| {
+                    DaoParser::is_dao_code_hash(hash.as_slice(), hash_type)
+                })
             {
                 has_dao_input = true;
             }
@@ -328,16 +330,18 @@ pub fn classify_type_script_semantic_tag(
     type_code_hash: Option<&[u8]>,
     type_hash_type: Option<i16>,
 ) -> CellSemanticTag {
-    let Some(type_code_hash) = type_code_hash else {
+    // A type script is a pair: a cell with no type script, or a code hash
+    // without its hash type, carries no type.
+    let (Some(type_code_hash), Some(type_hash_type)) = (type_code_hash, type_hash_type) else {
         return CellSemanticTag::Plain;
     };
 
-    if DaoParser::is_dao_code_hash(type_code_hash) {
+    if DaoParser::is_dao_code_hash(type_code_hash, type_hash_type) {
         return CellSemanticTag::Dao;
     }
 
-    if let Some(hash_type) = type_hash_type {
-        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
+    {
+        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type) {
             return match standard {
                 UdtStandard::Sudt => CellSemanticTag::Sudt,
                 UdtStandard::Xudt => CellSemanticTag::Xudt,
@@ -345,34 +349,34 @@ pub fn classify_type_script_semantic_tag(
         }
     }
 
-    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+    if DotbitParser::is_account_cell_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::Dotbit;
     }
 
-    if BitCellParser::is_type_script(type_code_hash) {
+    if BitCellParser::is_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::BitCell;
     }
 
-    if MnftParser::is_issuer_type_script(type_code_hash)
-        || MnftParser::is_class_type_script(type_code_hash)
-        || MnftParser::is_token_type_script(type_code_hash)
+    if MnftParser::is_issuer_type_script(type_code_hash, type_hash_type)
+        || MnftParser::is_class_type_script(type_code_hash, type_hash_type)
+        || MnftParser::is_token_type_script(type_code_hash, type_hash_type)
     {
         return CellSemanticTag::Mnft;
     }
 
-    if SporeParser::is_cluster_type_script(type_code_hash) {
+    if SporeParser::is_cluster_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::Cluster;
     }
 
-    if DidCkbParser::is_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::DidCkb;
     }
 
-    if DotCellParser::is_account_type_script(type_code_hash) {
+    if DotCellParser::is_account_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::DotCell;
     }
 
-    if SporeParser::is_spore_nft_type_script(type_code_hash) {
+    if SporeParser::is_spore_nft_type_script(type_code_hash, type_hash_type) {
         return CellSemanticTag::Spore;
     }
 
@@ -907,6 +911,7 @@ fn parse_script_reference_hash_type(
 /// collection's daily row permanently inflated by the consumed cell.
 pub(crate) fn consumed_object_collection_id(
     type_code_hash: &[u8],
+    type_hash_type: i16,
     type_args: Option<&[u8]>,
 ) -> Option<Vec<u8>> {
     // ONE classifier for all three sides. The consume side used to carry its
@@ -920,7 +925,7 @@ pub(crate) fn consumed_object_collection_id(
     // (`parser/mnft.rs:201`) — but the lookup answers `None` for a cell the
     // index never captured while creation still counted it. Pinned by
     // `consumed_mnft_collection_matches_the_type_index`.
-    classify_object_collection_id(type_code_hash, type_args.unwrap_or(&[]))
+    classify_object_collection_id(type_code_hash, type_hash_type, type_args.unwrap_or(&[]))
 }
 
 /// Everything the parser stage precomputes for one live batch from the parsed
@@ -1260,12 +1265,20 @@ pub(crate) fn precompute_live_batch(
                     cell_occupied,
                 ));
             }
-            if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+            if let (
+                Some(type_script_hash),
+                Some(type_code_hash),
+                Some(type_hash_type),
+                Some(type_args),
+            ) = (
                 cell.type_script_hash.as_ref(),
                 cell.type_code_hash.as_ref(),
+                cell.type_hash_type,
                 cell.type_args.as_ref(),
             ) {
-                if type_args.len() >= 32 && SporeParser::is_spore_nft_type_script(type_code_hash) {
+                if type_args.len() >= 32
+                    && SporeParser::is_spore_nft_type_script(type_code_hash, type_hash_type)
+                {
                     let spore_id = type_args[..32].to_vec();
                     let cluster_id = SporeParser::parse_spore_cluster_id_from_data(&cell.data);
                     let index = SporeTypeIndex {
@@ -1299,12 +1312,19 @@ pub(crate) fn precompute_live_batch(
                     }
                 }
             }
-            if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+            if let (
+                Some(type_script_hash),
+                Some(type_code_hash),
+                Some(type_hash_type),
+                Some(type_args),
+            ) = (
                 cell.type_script_hash.as_ref(),
                 cell.type_code_hash.as_ref(),
+                cell.type_hash_type,
                 cell.type_args.as_ref(),
             ) {
-                let collection_id = classify_object_collection_id(type_code_hash, type_args);
+                let collection_id =
+                    classify_object_collection_id(type_code_hash, type_hash_type, type_args);
                 if let Some(collection_id) = collection_id {
                     let index = MnftTypeIndex {
                         collection_id: collection_id.clone(),
@@ -1463,10 +1483,12 @@ pub(crate) fn precompute_live_batch(
                             info.occupied_capacity(),
                         ));
                     }
-                    if let (Some(type_script_hash), Some(type_code_hash)) =
-                        (type_script_hash.as_ref(), info.type_code_hash.as_ref())
-                    {
-                        if SporeParser::is_spore_nft_type_script(type_code_hash) {
+                    if let (Some(type_script_hash), Some(type_code_hash), Some(type_hash_type)) = (
+                        type_script_hash.as_ref(),
+                        info.type_code_hash.as_ref(),
+                        info.type_hash_type,
+                    ) {
+                        if SporeParser::is_spore_nft_type_script(type_code_hash, type_hash_type) {
                             let spore_index = match load_optional_index_from_store(
                                 &mut spore_type_index_cache,
                                 type_script_hash,
@@ -1511,9 +1533,11 @@ pub(crate) fn precompute_live_batch(
                                 }
                             }
                         }
-                        if let Some(collection_id) =
-                            consumed_object_collection_id(type_code_hash, info.type_args.as_deref())
-                        {
+                        if let Some(collection_id) = consumed_object_collection_id(
+                            type_code_hash,
+                            type_hash_type,
+                            info.type_args.as_deref(),
+                        ) {
                             accumulate_daily!(
                                 object_daily_changes,
                                 tx_data.block_number,
@@ -3809,13 +3833,13 @@ mod tests {
 
         for code_hash_hex in [BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET] {
             let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
-            let created = classify_object_collection_id(&code_hash, &[]);
+            let created = classify_object_collection_id(&code_hash, 1, &[]);
             assert_eq!(
                 created,
                 Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
                 "the creation side already classifies `.bit Cell` ({code_hash_hex})"
             );
-            let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
+            let consumed = consumed_object_collection_id(&code_hash, 1, Some(&[]));
             assert_eq!(
                 consumed, created,
                 "consume must classify `.bit Cell` exactly as creation does ({code_hash_hex})"
@@ -3841,13 +3865,13 @@ mod tests {
         let mut object_daily: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
 
         // Block A output — the live creation branch.
-        if let Some(collection_id) = classify_object_collection_id(&code_hash, &[]) {
+        if let Some(collection_id) = classify_object_collection_id(&code_hash, 1, &[]) {
             let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
             entry.0 += CAPACITY;
             entry.1 += OCCUPIED;
         }
         // Block B input — the live consume branch.
-        let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
+        let consumed = consumed_object_collection_id(&code_hash, 1, Some(&[]));
         if let Some(collection_id) = consumed {
             let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
             entry.0 -= CAPACITY;

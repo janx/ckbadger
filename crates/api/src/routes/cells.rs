@@ -254,18 +254,20 @@ pub struct CellProtocolScript {
 }
 
 fn cell_protocol_script(info: &ckbadger_store::LiveCellInfo) -> CellProtocolScript {
-    let slug_of = |code_hash: &[u8]| {
+    // The registry's protocol of each script's pair: a code hash by a hash
+    // type no deployment registers is no protocol's (resync/protocol-pairs).
+    let slug_of = |code_hash: &[u8], hash_type: i16| {
         PROTOCOL_REGISTRY
-            .get(code_hash)
+            .protocol(code_hash, hash_type)
             .map(|protocol| protocol.slug().to_string())
     };
     CellProtocolScript {
-        lock: slug_of(&info.lock_code_hash),
+        lock: slug_of(&info.lock_code_hash, info.lock_hash_type),
         type_script: info
             .type_code_hash
             .as_ref()
-            .map(|hash| hash.as_slice())
-            .and_then(slug_of),
+            .zip(info.type_hash_type)
+            .and_then(|(hash, hash_type)| slug_of(hash, hash_type)),
     }
 }
 
@@ -305,32 +307,32 @@ pub(crate) fn parse_dep_group(data: &[u8]) -> DepGroupParseResult {
     }
 }
 
-fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeNft)
+fn is_spore_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::SporeNft)
 }
 
-fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Cluster)
+fn is_cluster_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::Cluster)
 }
 
-fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotbitAccount)
+fn is_dotbit_account_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DotbitAccount)
 }
 
-fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Dao)
+fn is_dao_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::Dao)
 }
 
-fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftIssuer)
+fn is_mnft_issuer_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::MnftIssuer)
 }
 
-fn is_mnft_class_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftClass)
+fn is_mnft_class_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::MnftClass)
 }
 
-fn is_mnft_token_type_code_hash(code_hash: &[u8]) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftToken)
+fn is_mnft_token_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
+    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::MnftToken)
 }
 
 fn read_molecule_bytes_field(
@@ -359,7 +361,8 @@ fn maybe_parse_spore_decode(
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
-    if !is_spore_type_code_hash(type_code_hash) {
+    let type_hash_type = info.type_hash_type?;
+    if !is_spore_type_code_hash(type_code_hash, type_hash_type) {
         return None;
     }
     if data.len() < 16 {
@@ -524,7 +527,8 @@ fn maybe_parse_cluster_decode(
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
-    if !is_cluster_type_code_hash(type_code_hash) {
+    let type_hash_type = info.type_hash_type?;
+    if !is_cluster_type_code_hash(type_code_hash, type_hash_type) {
         return None;
     }
     if data.len() < 12 {
@@ -627,8 +631,9 @@ fn maybe_parse_mnft_decode(
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
+    let type_hash_type = info.type_hash_type?;
 
-    if is_mnft_issuer_type_code_hash(type_code_hash) {
+    if is_mnft_issuer_type_code_hash(type_code_hash, type_hash_type) {
         if data.len() < 9 {
             return None;
         }
@@ -703,7 +708,7 @@ fn maybe_parse_mnft_decode(
         });
     }
 
-    if is_mnft_class_type_code_hash(type_code_hash) {
+    if is_mnft_class_type_code_hash(type_code_hash, type_hash_type) {
         if data.len() < 10 {
             return None;
         }
@@ -806,7 +811,7 @@ fn maybe_parse_mnft_decode(
         });
     }
 
-    if is_mnft_token_type_code_hash(type_code_hash) {
+    if is_mnft_token_type_code_hash(type_code_hash, type_hash_type) {
         if data.len() < 11 {
             return None;
         }
@@ -871,7 +876,8 @@ fn maybe_parse_dao_decode(
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
-    if !is_dao_type_code_hash(type_code_hash) {
+    let type_hash_type = info.type_hash_type?;
+    if !is_dao_type_code_hash(type_code_hash, type_hash_type) {
         return None;
     }
     // The indexer's one rule (`DaoParser`): 8 zero bytes are a deposit, any
@@ -912,8 +918,8 @@ fn maybe_parse_dao_decode(
     }
 }
 
-fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
-    ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, 0)
+fn detect_udt_standard_from_code_hash(code_hash: &[u8], hash_type: i16) -> Option<&'static str> {
+    ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, hash_type)
         .map(|standard| standard.as_str())
 }
 
@@ -922,7 +928,8 @@ fn maybe_parse_udt_decode(
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
-    let standard = detect_udt_standard_from_code_hash(type_code_hash)?;
+    let type_hash_type = info.type_hash_type?;
+    let standard = detect_udt_standard_from_code_hash(type_code_hash, type_hash_type)?;
     // The one amount rule; data too short for it has no decode here and is
     // described as `dataAnalysis.token.noAmountReason` (lane B, B3).
     let amount = ckbadger_indexer::parser::udt::UdtParser::parse_amount(data)?;
@@ -966,10 +973,12 @@ fn maybe_parse_dotbit_decode(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> anyhow::Result<Option<CellDeterministicDecode>> {
-    let Some(type_code_hash) = info.type_code_hash.as_ref() else {
+    let (Some(type_code_hash), Some(type_hash_type)) =
+        (info.type_code_hash.as_ref(), info.type_hash_type)
+    else {
         return Ok(None);
     };
-    if !is_dotbit_account_type_code_hash(type_code_hash) {
+    if !is_dotbit_account_type_code_hash(type_code_hash, type_hash_type) {
         return Ok(None);
     }
     if data.len() < 52 {
@@ -1071,10 +1080,13 @@ fn maybe_parse_dotcell_decode(
         DOTCELL_RECORDS_HASH_RANGE, DOTCELL_ZERO_ID,
     };
 
-    let Some(type_code_hash) = info.type_code_hash.as_ref().map(|hash| hash.as_slice()) else {
+    let (Some(type_code_hash), Some(type_hash_type)) = (
+        info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
+        info.type_hash_type,
+    ) else {
         return Ok(None);
     };
-    if !DotCellParser::is_account_type_script(type_code_hash) {
+    if !DotCellParser::is_account_type_script(type_code_hash, type_hash_type) {
         return Ok(None);
     }
     let name =
@@ -1516,47 +1528,52 @@ fn build_script_hint_guess(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDataGuess> {
-    let Some(type_code_hash) = info.type_code_hash.as_ref() else {
+    let (Some(type_code_hash), Some(type_hash_type)) =
+        (info.type_code_hash.as_ref(), info.type_hash_type)
+    else {
         return build_lock_script_hint_guess(info, data);
     };
 
-    let (label, expectation, confidence) = if is_dao_type_code_hash(type_code_hash) {
+    let (label, expectation, confidence) = if is_dao_type_code_hash(type_code_hash, type_hash_type)
+    {
         (
             "DAO",
             "expected exactly 8 bytes (deposit marker or deposit block number)",
             "high",
         )
-    } else if is_spore_type_code_hash(type_code_hash) {
+    } else if is_spore_type_code_hash(type_code_hash, type_hash_type) {
         (
             "Spore",
             "expected Molecule table layout: [total_size, offsets, content_type, content, optional cluster_id]",
             "high",
         )
-    } else if is_cluster_type_code_hash(type_code_hash) {
+    } else if is_cluster_type_code_hash(type_code_hash, type_hash_type) {
         (
             "Spore Cluster",
             "expected Molecule table layout: [total_size, offsets, name, description, mutant_id]",
             "high",
         )
-    } else if is_mnft_issuer_type_code_hash(type_code_hash) {
+    } else if is_mnft_issuer_type_code_hash(type_code_hash, type_hash_type) {
         (
             "mNFT Issuer",
             "expected binary layout: version(1) + class_count(4) + set_count(4) + optional info blob",
             "medium",
         )
-    } else if is_mnft_class_type_code_hash(type_code_hash) {
+    } else if is_mnft_class_type_code_hash(type_code_hash, type_hash_type) {
         (
             "mNFT Class",
             "expected binary layout: version(1) + total(4) + issued(4) + configure(1) + vartext fields",
             "medium",
         )
-    } else if is_mnft_token_type_code_hash(type_code_hash) {
+    } else if is_mnft_token_type_code_hash(type_code_hash, type_hash_type) {
         (
             "mNFT Token",
             "expected binary layout: version(1) + characteristic(8) + configure(1) + state(1)",
             "medium",
         )
-    } else if let Some(standard) = detect_udt_standard_from_code_hash(type_code_hash) {
+    } else if let Some(standard) =
+        detect_udt_standard_from_code_hash(type_code_hash, type_hash_type)
+    {
         let upper = standard.to_uppercase();
         return Some(CellDataGuess {
             kind: "script_hint".to_string(),
@@ -1576,13 +1593,17 @@ fn build_script_hint_guess(
                 data.len()
             )),
         });
-    } else if is_dotbit_account_type_code_hash(type_code_hash) {
+    } else if is_dotbit_account_type_code_hash(type_code_hash, type_hash_type) {
         (
             "dotbit account",
             "expected at least 52 bytes: account_hash(32) + account_id(20)",
             "high",
         )
-    } else if PROTOCOL_REGISTRY.is(type_code_hash, ProtocolScript::DotCellAccount) {
+    } else if PROTOCOL_REGISTRY.is(
+        type_code_hash,
+        type_hash_type,
+        ProtocolScript::DotCellAccount,
+    ) {
         // Unreachable in practice: an undecodable Account cell is an error in
         // `maybe_parse_dotcell_decode`, never a hint. Kept so the family is
         // described completely.
@@ -1591,7 +1612,7 @@ fn build_script_hint_guess(
             "expected 98-byte header (version, records hash, next id, u40 expiry, owner, manager) + UTF-8 label",
             "high",
         )
-    } else if PROTOCOL_REGISTRY.is(type_code_hash, ProtocolScript::DotCellPrice) {
+    } else if PROTOCOL_REGISTRY.is(type_code_hash, type_hash_type, ProtocolScript::DotCellPrice) {
         // A price cell is not decoded on this page; say what it is without
         // claiming its bytes are wrong.
         return Some(CellDataGuess {
@@ -1632,7 +1653,7 @@ fn build_lock_script_hint_guess(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDataGuess> {
-    let (reason, expectation) = match PROTOCOL_REGISTRY.get(&info.lock_code_hash) {
+    let (reason, expectation) = match PROTOCOL_REGISTRY.protocol(&info.lock_code_hash, info.lock_hash_type) {
         Some(ProtocolScript::DotCellSaleLock) => (
             "Lock script indicates Cells Sale Lock (.cell offer cell); its payload is not decoded here",
             "lock args = seller_lock_hash(32) + price_shannons(u64 LE); data = molecule Script of the seller's payout lock",
@@ -1689,8 +1710,8 @@ fn analyze_cell_data(
     if info
         .type_code_hash
         .as_ref()
-        .map(|hash| hash.as_slice())
-        .is_some_and(is_spore_type_code_hash)
+        .zip(info.type_hash_type)
+        .is_some_and(|(hash, hash_type)| is_spore_type_code_hash(hash, hash_type))
         && !deterministic
             .as_ref()
             .is_some_and(|decoded| decoded.kind == "spore_cell")
@@ -2342,7 +2363,8 @@ fn cell_info_to_response(
         type_protocol_name: info
             .type_code_hash
             .as_ref()
-            .and_then(|hash| PROTOCOL_REGISTRY.get(hash))
+            .zip(info.type_hash_type)
+            .and_then(|(hash, hash_type)| PROTOCOL_REGISTRY.protocol(hash, hash_type))
             .map(|protocol| protocol.slug().to_string()),
         data_size: info.data_size,
         created_at_block: info.created_at_block,
@@ -4066,9 +4088,9 @@ async fn get_cell(
     let udt_standard = info
         .type_code_hash
         .as_ref()
-        .map(|hash| hash.as_slice())
-        .and_then(|code_hash| {
-            ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, 0)
+        .zip(info.type_hash_type)
+        .and_then(|(code_hash, hash_type)| {
+            ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, hash_type)
         });
     if let (Some(analysis), Some(type_hash), Some(standard), Some(data)) = (
         &mut data_analysis,
@@ -5057,7 +5079,21 @@ mod tests {
         ckbadger_store::PositionedCellInfo::new(make_payload(), 100)
     }
 
-    fn positioned(cell: LiveCellInfo) -> ckbadger_store::PositionedCellInfo {
+    /// A fixture's typed cell is under its code hash's registered pair (the
+    /// registry's first pair with that code hash; `type` for an unknown one)
+    /// unless it sets a hash type: a type script is a pair
+    /// (resync/protocol-pairs).
+    fn positioned(mut cell: LiveCellInfo) -> ckbadger_store::PositionedCellInfo {
+        if let (Some(code_hash), None) = (cell.type_code_hash, cell.type_hash_type) {
+            cell.type_hash_type = Some(
+                PROTOCOL_REGISTRY
+                    .protocol_pairs()
+                    .filter(|((hash, _), _)| *hash == code_hash.as_slice())
+                    .map(|((_, hash_type), _)| i16::from(hash_type))
+                    .min()
+                    .unwrap_or(1),
+            );
+        }
         ckbadger_store::PositionedCellInfo::new(cell, 100)
     }
 
@@ -5507,7 +5543,7 @@ mod tests {
             "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
         ] {
             let bytes = hex::decode(code_hash.trim_start_matches("0x")).unwrap();
-            assert!(!is_spore_type_code_hash(&bytes));
+            assert!(!is_spore_type_code_hash(&bytes, 1));
         }
     }
 

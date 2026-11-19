@@ -165,21 +165,22 @@ pub(crate) fn count_new_addresses(
 
 pub(crate) fn classify_object_collection_id(
     type_code_hash: &[u8],
+    type_hash_type: i16,
     type_args: &[u8],
 ) -> Option<Vec<u8>> {
-    if type_args.len() >= 24 && MnftParser::is_token_type_script(type_code_hash) {
+    if type_args.len() >= 24 && MnftParser::is_token_type_script(type_code_hash, type_hash_type) {
         return Some(type_args[..24].to_vec());
     }
-    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+    if DotbitParser::is_account_cell_type_script(type_code_hash, type_hash_type) {
         return Some(DOTBIT_SENTINEL_COLLECTION.to_vec());
     }
-    if BitCellParser::is_type_script(type_code_hash) {
+    if BitCellParser::is_type_script(type_code_hash, type_hash_type) {
         return Some(BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
-    if DidCkbParser::is_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash, type_hash_type) {
         return Some(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
-    if DotCellParser::is_account_type_script(type_code_hash) {
+    if DotCellParser::is_account_type_script(type_code_hash, type_hash_type) {
         return Some(DOTCELL_SENTINEL_COLLECTION.to_vec());
     }
     None
@@ -1086,7 +1087,7 @@ mod tests {
         let mut args = vec![0xAB; 24];
         args.extend_from_slice(&[0xCD; 8]);
 
-        let collection_id = classify_object_collection_id(&mnft_code_hash, &args)
+        let collection_id = classify_object_collection_id(&mnft_code_hash, 1, &args)
             .expect("mNFT token type should map to collection id");
         assert_eq!(collection_id, vec![0xAB; 24]);
     }
@@ -1095,7 +1096,7 @@ mod tests {
     fn test_classify_object_collection_id_dotbit_uses_sentinel_collection() {
         let dotbit_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        let collection_id = classify_object_collection_id(&dotbit_code_hash, &[])
+        let collection_id = classify_object_collection_id(&dotbit_code_hash, 1, &[])
             .expect("dotbit account type should map to sentinel collection");
         assert_eq!(collection_id, DOTBIT_SENTINEL_COLLECTION.to_vec());
     }
@@ -1104,7 +1105,7 @@ mod tests {
     fn test_classify_object_collection_id_bit_cell_uses_own_sentinel_collection() {
         let bit_cell_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET);
-        let collection_id = classify_object_collection_id(&bit_cell_code_hash, &[0x99; 32])
+        let collection_id = classify_object_collection_id(&bit_cell_code_hash, 1, &[0x99; 32])
             .expect(".bit Cell type should map to sentinel collection");
         assert_eq!(collection_id, BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
@@ -1112,11 +1113,11 @@ mod tests {
     #[test]
     fn test_classify_object_collection_id_rejects_non_object_or_short_mnft_args() {
         let non_object = vec![0x11; 32];
-        assert!(classify_object_collection_id(&non_object, &[0x22; 24]).is_none());
+        assert!(classify_object_collection_id(&non_object, 1, &[0x22; 24]).is_none());
 
         let mnft_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
-        assert!(classify_object_collection_id(&mnft_code_hash, &[0x33; 23]).is_none());
+        assert!(classify_object_collection_id(&mnft_code_hash, 1, &[0x33; 23]).is_none());
     }
 
     // -- derive_pre_batch_live_cells ----------------------------------------

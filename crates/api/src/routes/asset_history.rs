@@ -605,12 +605,11 @@ pub(crate) fn cluster_current(
 ) -> anyhow::Result<Option<CanonicalCellVersion>> {
     use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
     let mut found = None;
-    for (code, _) in PROTOCOL_REGISTRY
-        .iter()
+    // Every pair a Cluster deployment runs at (the registry's own pairs).
+    for ((code, hash_type), _) in PROTOCOL_REGISTRY
+        .protocol_pairs()
         .filter(|(_, kind)| *kind == ProtocolScript::Cluster)
     {
-        for hash_type in
-            (0..=u8::MAX).filter(|byte| ckbadger_common::hash_type_label(*byte).is_some())
         {
             let type_hash = crate::utils::address::compute_script_hash(code, hash_type, id);
             if let Some(version) = canonical_live_type_version(state, &type_hash)

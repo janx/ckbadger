@@ -136,77 +136,211 @@ pub fn protocol_display_name(id: &str) -> Option<&'static str> {
     PROTOCOL_NAMES.get(id).map(String::as_str)
 }
 
+/// The hash type bytes CKB defines (data, type, data1, data2): a batch
+/// pre-filter that knows only code hashes asks [`ProtocolRegistry::script`]
+/// of each.
+pub const HASH_TYPES: [i16; 4] = [0, 1, 2, 4];
+
+/// A lock that carries no protocol: the registry's standard locks (access
+/// control only). A transaction does not "call" one (`lock_calls`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardLock {
+    DefaultLock,
+    DefaultMultisig,
+    AnyoneCanPay,
+    Omnilock,
+    PwLock,
+    JoyId,
+}
+
+/// Map a registry file's slug to a standard lock.
+fn slug_to_standard_lock(slug: &str) -> Option<StandardLock> {
+    Some(match slug {
+        "default-lock" => StandardLock::DefaultLock,
+        "default-multisig" => StandardLock::DefaultMultisig,
+        "anyone-can-pay-lock" => StandardLock::AnyoneCanPay,
+        "omni-lock" => StandardLock::Omnilock,
+        "pw-lock" => StandardLock::PwLock,
+        "joyid" => StandardLock::JoyId,
+        _ => return None,
+    })
+}
+
+/// What a registered pair runs, for the indexer: a protocol's script, or a
+/// standard lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisteredScript {
+    Protocol(ProtocolScript),
+    StandardLock(StandardLock),
+}
+
+/// The scripts the indexer recognises, keyed by the pair CKB names a script
+/// by (code hash, hash type byte: data 0, type 1, data1 2, data2 4).
+///
+/// A registered script runs at: each deployment's registered reference
+/// (`canonical_ref_hash` by `canonical_hash_type`, or a pseudo deployment's
+/// pair), and each registered version's binary by every data hash type
+/// (`version_hash` by data, data1 and data2: the same code on each VM). No
+/// other pair runs it. In particular a code hash registered by `type` is no
+/// protocol by `data` (the Nervos DAO is its consensus reference alone, by
+/// `type`: the consensus pays compensation for that script only): a lock (which runs only when its cell is spent) can
+/// be put on a cell under any pair, and a cell under the protocol's code hash
+/// by another hash type runs a binary whose data hash is that code hash, which
+/// no registered deployment holds.
+///
+/// The upgrade catch: a `type` reference runs whatever its Type ID cell holds
+/// now, so the pair stays the protocol's across upgrades of that cell; a
+/// binary pair names one version's code, and a new version's binary is a
+/// protocol's pair only once its version is registered here.
 pub struct ProtocolRegistry {
-    pub(crate) by_code_hash: HashMap<Vec<u8>, ProtocolScript>,
+    pub(crate) by_pair: HashMap<([u8; 32], u8), RegisteredScript>,
 }
 
 impl ProtocolRegistry {
     fn from_bundled() -> Self {
-        let mut by_code_hash = HashMap::new();
+        let mut by_pair: HashMap<([u8; 32], u8), RegisteredScript> = HashMap::new();
+        let mut insert = |code_hash: Vec<u8>, hash_type: u8, script: RegisteredScript| {
+            let key: [u8; 32] = code_hash.as_slice().try_into().unwrap_or_else(|_| {
+                panic!(
+                    "protocol registry code hash 0x{} is not 32 bytes — build.rs validates this",
+                    hex::encode(&code_hash)
+                )
+            });
+            if let Some(prev) = by_pair.insert((key, hash_type), script) {
+                assert_eq!(
+                    prev, script,
+                    "protocol registry pair collision: 0x{} by {hash_type} maps to both {prev:?} and {script:?} — two scripts/*.toml register one pair",
+                    hex::encode(&code_hash)
+                );
+            }
+        };
         for meta in script_labels() {
             let Some(slug) = meta.metadata_slug.as_deref() else {
                 continue;
             };
-            let Some(protocol) = slug_to_protocol(slug) else {
-                continue;
+            let script = match (slug_to_protocol(slug), slug_to_standard_lock(slug)) {
+                (Some(protocol), _) => RegisteredScript::Protocol(protocol),
+                (None, Some(lock)) => RegisteredScript::StandardLock(lock),
+                (None, None) => continue,
             };
             for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
                 .into_iter()
                 .flatten()
             {
                 for dep in net.import_deployments() {
-                    // Both shapes reference the on-chain script code_hash cell:
-                    // Version → canonical_ref_hash, Pseudo → code_hash.
-                    let code_hash_hex = match &dep {
-                        ImportDeployment::Version(version) => &version.canonical_ref_hash,
-                        ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
-                    };
-                    let bytes = parse_hex_to_bytes(code_hash_hex);
-                    // Fail-fast: the network-agnostic union premise is that a code_hash
-                    // uniquely identifies one protocol. Same-protocol duplicates are
-                    // idempotent; a DIFFERENT protocol on the same key is a data bug.
-                    if let Some(prev) = by_code_hash.insert(bytes.clone(), protocol) {
-                        assert_eq!(
-                            prev, protocol,
-                            "protocol registry code_hash collision: 0x{} maps to both {prev:?} and {protocol:?} — two scripts/*.toml share a canonical_ref_hash",
-                            hex::encode(&bytes)
-                        );
+                    match &dep {
+                        ImportDeployment::Version(version) => {
+                            insert(
+                                parse_hex_to_bytes(&version.canonical_ref_hash),
+                                hash_type_byte(version.canonical_hash_type.as_str(), slug),
+                                script,
+                            );
+                            let attachment = crate::label_import::version_attachment(version)
+                                .unwrap_or_else(|e| {
+                                    panic!("{slug}: bundled version entry: {e} — build.rs validates this")
+                                });
+                            match attachment {
+                                // The Nervos DAO is its consensus script only: the
+                                // consensus computes compensation for the DAO type
+                                // script (its reference by type), never for its
+                                // binary by a data hash type.
+                                crate::label_import::VersionAttachment::Attachable(_)
+                                    if script
+                                        == RegisteredScript::Protocol(ProtocolScript::Dao) => {}
+                                crate::label_import::VersionAttachment::Attachable(binary) => {
+                                    for data_type in [0u8, 2, 4] {
+                                        insert(binary.clone(), data_type, script);
+                                    }
+                                }
+                                crate::label_import::VersionAttachment::NoVersion => {}
+                                crate::label_import::VersionAttachment::Invalid(reason) => {
+                                    panic!("{slug}: bundled version entry: {reason}")
+                                }
+                            }
+                        }
+                        ImportDeployment::Pseudo(pseudo) => insert(
+                            parse_hex_to_bytes(&pseudo.code_hash),
+                            hash_type_byte(pseudo.hash_type.as_str(), slug),
+                            script,
+                        ),
                     }
                 }
             }
         }
-        // Fail-fast: required-core protocols must be present.
         for required in [
             ProtocolScript::Dao,
             ProtocolScript::Sudt,
             ProtocolScript::Xudt,
         ] {
             assert!(
-                by_code_hash.values().any(|p| *p == required),
+                by_pair
+                    .values()
+                    .any(|s| *s == RegisteredScript::Protocol(required)),
                 "protocol registry missing required-core protocol {required:?} — check docs/metadata/scripts"
             );
         }
-        Self { by_code_hash }
+        Self { by_pair }
     }
 
-    pub fn get(&self, code_hash: &[u8]) -> Option<ProtocolScript> {
-        self.by_code_hash.get(code_hash).copied()
-    }
-
-    pub fn is(&self, code_hash: &[u8], script: ProtocolScript) -> bool {
-        self.by_code_hash.get(code_hash) == Some(&script)
-    }
-
-    /// Iterate every `(code_hash, protocol)` entry in the registry.
+    /// THE lookup: what the script `(code_hash, hash_type)` runs, if it is
+    /// registered. Every detector reads a script through it, lock and type
+    /// alike.
     ///
-    /// The `ProtocolScript` is yielded by value (it is `Copy`); the code_hash
-    /// is borrowed. Used by consumers that need to build their own derived
-    /// lookup (e.g. the activity builder's `code_hash → AssetKind` map).
-    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, ProtocolScript)> + '_ {
-        self.by_code_hash
-            .iter()
-            .map(|(code_hash, p)| (code_hash, *p))
+    /// For a type script the pair is exact by construction: a type script
+    /// runs when its cell is created, so a cell carries a type pair only when
+    /// that pair's code ran, and the registered pairs are the pairs a
+    /// protocol's code runs at. For a lock it is the check itself: a lock runs
+    /// only when its cell is spent, so anyone can lock a cell under a protocol
+    /// lock's code hash by another hash type, and that cell is no protocol's.
+    ///
+    /// A hash type outside the CKB bytes is no registered pair.
+    pub fn script(&self, code_hash: &[u8], hash_type: i16) -> Option<RegisteredScript> {
+        // No allocation: the key is the 32 bytes and the hash type byte (a
+        // code hash of another width or a hash type outside the bytes is no
+        // registered pair).
+        let code_hash: [u8; 32] = code_hash.try_into().ok()?;
+        let hash_type = u8::try_from(hash_type).ok()?;
+        self.by_pair.get(&(code_hash, hash_type)).copied()
     }
+
+    /// The protocol the pair runs ([`Self::script`]).
+    pub fn protocol(&self, code_hash: &[u8], hash_type: i16) -> Option<ProtocolScript> {
+        match self.script(code_hash, hash_type)? {
+            RegisteredScript::Protocol(protocol) => Some(protocol),
+            RegisteredScript::StandardLock(_) => None,
+        }
+    }
+
+    /// Whether the pair runs `protocol` ([`Self::script`]).
+    pub fn is(&self, code_hash: &[u8], hash_type: i16, protocol: ProtocolScript) -> bool {
+        self.protocol(code_hash, hash_type) == Some(protocol)
+    }
+
+    /// Whether the pair runs a standard lock ([`Self::script`]).
+    pub fn is_standard_lock(&self, code_hash: &[u8], hash_type: i16) -> bool {
+        matches!(
+            self.script(code_hash, hash_type),
+            Some(RegisteredScript::StandardLock(_))
+        )
+    }
+
+    /// Every registered pair a protocol runs at.
+    pub fn protocol_pairs(&self) -> impl Iterator<Item = ((&[u8], u8), ProtocolScript)> + '_ {
+        self.by_pair
+            .iter()
+            .filter_map(|((code_hash, hash_type), script)| match script {
+                RegisteredScript::Protocol(protocol) => {
+                    Some(((code_hash.as_slice(), *hash_type), *protocol))
+                }
+                RegisteredScript::StandardLock(_) => None,
+            })
+    }
+}
+
+/// A bundled hash type label's byte; build.rs validates the labels.
+fn hash_type_byte(label: &str, slug: &str) -> u8 {
+    ckbadger_common::hash_type_from_label(label)
+        .unwrap_or_else(|| panic!("{slug}: hash type `{label}` — build.rs validates this"))
 }
 
 pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
@@ -380,8 +514,9 @@ mod tests {
             "b5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695",
         ] {
             assert_eq!(
+                // registered by data1
                 PROTOCOL_REGISTRY
-                    .get(&hex::decode(hash).unwrap())
+                    .protocol(&hex::decode(hash).unwrap(), 2)
                     .map(|p| p.slug()),
                 Some("ckbfs")
             );
@@ -389,79 +524,154 @@ mod tests {
     }
 
     #[test]
+    fn a_registered_binary_runs_by_every_data_hash_type_but_the_dao_is_its_reference() {
+        // resync/protocol-pairs: Fiber's funding-lock binary (one binary on
+        // both networks) is the funding lock by data, data1 and data2; its
+        // type reference by type; the reference by data is nothing.
+        let funding_binary = parse_hex_to_bytes(
+            "0x17b1910fbcfdfc146ee2ed05587f0e862b799d33ca3c8e1c52d18f2f67716e47",
+        );
+        let funding_reference = parse_hex_to_bytes(
+            "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+        );
+        for hash_type in [0, 2, 4] {
+            assert_eq!(
+                PROTOCOL_REGISTRY.protocol(&funding_binary, hash_type),
+                Some(ProtocolScript::FiberFunding)
+            );
+        }
+        assert_eq!(PROTOCOL_REGISTRY.protocol(&funding_binary, 1), None);
+        assert_eq!(
+            PROTOCOL_REGISTRY.protocol(&funding_reference, 1),
+            Some(ProtocolScript::FiberFunding)
+        );
+        assert_eq!(PROTOCOL_REGISTRY.protocol(&funding_reference, 0), None);
+        // The DAO's consensus script is its reference by type; its binary by a
+        // data hash type is no DAO.
+        let dao_binary = parse_hex_to_bytes(
+            "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+        );
+        for hash_type in [0, 1, 2, 4] {
+            assert_eq!(PROTOCOL_REGISTRY.protocol(&dao_binary, hash_type), None);
+        }
+        assert_eq!(
+            PROTOCOL_REGISTRY.protocol(&parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH), 1),
+            Some(ProtocolScript::Dao)
+        );
+        // A hash type outside the CKB bytes, or a code hash of another width,
+        // is no registered pair.
+        assert_eq!(PROTOCOL_REGISTRY.protocol(&funding_reference, 300), None);
+        assert_eq!(
+            PROTOCOL_REGISTRY.protocol(&funding_reference[..31], 1),
+            None
+        );
+    }
+
+    #[test]
     fn detects_mainnet_and_testnet_hashes() {
         let r = &*PROTOCOL_REGISTRY;
         // sUDT: mainnet AND testnet both map to Sudt (the testnet fix this plan delivers)
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+                ),
+                1
+            ),
             Some(ProtocolScript::Sudt)
         );
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+                ),
+                1
+            ),
             Some(ProtocolScript::Sudt)
         );
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+                ),
+                0 // registered by data
+            ),
             Some(ProtocolScript::Sudt)
         );
         // `.bit Cell` and the Web5 `did:ckb` contract are separate protocols.
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
+                ),
+                1
+            ),
             Some(ProtocolScript::BitCell)
         );
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET),
+                1
+            ),
             Some(ProtocolScript::DotbitAccount)
         );
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x510150477b10d6ab551a509b71265f3164e9fd4137fcb5a4322f49f03092c7c5"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x510150477b10d6ab551a509b71265f3164e9fd4137fcb5a4322f49f03092c7c5"
+                ),
+                1
+            ),
             Some(ProtocolScript::DidCkb)
         );
         // mNFT issuer testnet
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0xb59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0xb59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed"
+                ),
+                1
+            ),
             Some(ProtocolScript::MnftIssuer)
         );
         // Fiber funding testnet (new file)
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c"
+                ),
+                1
+            ),
             Some(ProtocolScript::FiberFunding)
         );
         // Stable++ vault: the CORRECTED value maps; the old pool-lock value does NOT map to vault
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675"
+                ),
+                1
+            ),
             Some(ProtocolScript::StablePpVault)
         );
         // The old pool-lock value must not map to ANY protocol (not just "not vault").
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67"
+                ),
+                1
+            ),
             None
         );
         // unknown hash → None
         assert_eq!(
-            r.get(&parse_hex_to_bytes(
-                "0x0000000000000000000000000000000000000000000000000000000000000000"
-            )),
+            r.protocol(
+                &parse_hex_to_bytes(
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ),
+                1
+            ),
             None
         );
     }
@@ -474,7 +684,7 @@ mod tests {
     fn slug_round_trips_for_every_registered_code_hash() {
         let r = &*PROTOCOL_REGISTRY;
         let mut seen = 0usize;
-        for (code_hash, protocol) in r.iter() {
+        for ((code_hash, _), protocol) in r.protocol_pairs() {
             assert_eq!(
                 slug_to_protocol(protocol.slug()),
                 Some(protocol),
@@ -491,7 +701,7 @@ mod tests {
     fn slug_is_unique_per_variant() {
         let r = &*PROTOCOL_REGISTRY;
         let mut by_slug: HashMap<&'static str, ProtocolScript> = HashMap::new();
-        for (_, protocol) in r.iter() {
+        for ((_, _), protocol) in r.protocol_pairs() {
             if let Some(prev) = by_slug.insert(protocol.slug(), protocol) {
                 assert_eq!(
                     prev,
@@ -569,11 +779,15 @@ mod tests {
     #[test]
     fn script_layouts_read_cobuild_schemas_from_the_registry() {
         let spore_code = PROTOCOL_REGISTRY
-            .iter()
-            .find(|(_, protocol)| *protocol == ProtocolScript::SporeNft)
+            .protocol_pairs()
+            .find(|((_, hash_type), protocol)| {
+                // Spore's references are data1 deployments
+                *protocol == ProtocolScript::SporeNft && *hash_type == 2
+            })
             .unwrap()
             .0
-            .clone();
+             .0
+            .to_vec();
         let spore = SCRIPT_LAYOUTS
             .get(&spore_code)
             .and_then(|layout| layout.cobuild.clone())
@@ -591,7 +805,7 @@ mod tests {
                 (2, "BurnSpore", 2)
             ]
         );
-        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+        for ((code_hash, _), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
             if protocol == ProtocolScript::Xudt {
                 assert!(
                     SCRIPT_LAYOUTS
@@ -607,8 +821,17 @@ mod tests {
     fn required_core_protocols_present() {
         let r = &*PROTOCOL_REGISTRY;
         // DAO, sUDT, xUDT must be present (fail-fast guard covers this at build())
-        assert!(r.by_code_hash.values().any(|p| *p == ProtocolScript::Dao));
-        assert!(r.by_code_hash.values().any(|p| *p == ProtocolScript::Sudt));
-        assert!(r.by_code_hash.values().any(|p| *p == ProtocolScript::Xudt));
+        assert!(r
+            .by_pair
+            .values()
+            .any(|p| *p == RegisteredScript::Protocol(ProtocolScript::Dao)));
+        assert!(r
+            .by_pair
+            .values()
+            .any(|p| *p == RegisteredScript::Protocol(ProtocolScript::Sudt)));
+        assert!(r
+            .by_pair
+            .values()
+            .any(|p| *p == RegisteredScript::Protocol(ProtocolScript::Xudt)));
     }
 }

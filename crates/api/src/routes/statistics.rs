@@ -1870,10 +1870,10 @@ enum KnowledgeBucket {
     OtherTyped,
 }
 
-fn classify_knowledge_bucket(code_hash: &[u8]) -> KnowledgeBucket {
+fn classify_knowledge_bucket(code_hash: &[u8], hash_type: u8) -> KnowledgeBucket {
     // Single registry lookup; precedence Dao -> Udt -> NftSpore -> OtherTyped is preserved
     // by match-arm order (registry variants are mutually exclusive, so no overlap anyway).
-    match PROTOCOL_REGISTRY.get(code_hash) {
+    match PROTOCOL_REGISTRY.protocol(code_hash, i16::from(hash_type)) {
         Some(ProtocolScript::Dao) => KnowledgeBucket::Dao,
         Some(ProtocolScript::Sudt | ProtocolScript::Xudt) => KnowledgeBucket::Udt,
         Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid | ProtocolScript::Cluster) => {
@@ -2014,14 +2014,14 @@ async fn get_common_knowledge_composition_chart(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        for ((_hash_type, is_type, date), delta) in deltas {
+        for ((hash_type, is_type, date), delta) in deltas {
             if !is_type {
                 continue;
             }
             let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
-            match classify_knowledge_bucket(&code_hash) {
+            match classify_knowledge_bucket(&code_hash, hash_type) {
                 KnowledgeBucket::Dao => *dao_daily_delta.entry(date).or_insert(0) += used_delta,
                 KnowledgeBucket::Udt => *udt_daily_delta.entry(date).or_insert(0) += used_delta,
                 KnowledgeBucket::NftSpore => {
@@ -5653,14 +5653,26 @@ mod tests {
         hex::decode(hex_str.trim_start_matches("0x")).expect("valid 32-byte hex")
     }
 
+    /// The bucket of a type script under its code hash's registered pair (the
+    /// registry's first pair with that code hash; `type` for an unknown one):
+    /// a bucket is the pair's (resync/protocol-pairs).
+    fn bucket(hex_str: &str) -> KnowledgeBucket {
+        let code_hash = code_hash_bytes(hex_str);
+        let hash_type = PROTOCOL_REGISTRY
+            .protocol_pairs()
+            .filter(|((hash, _), _)| *hash == code_hash.as_slice())
+            .map(|((_, hash_type), _)| hash_type)
+            .min()
+            .unwrap_or(1);
+        classify_knowledge_bucket(&code_hash, hash_type)
+    }
+
     #[test]
     fn test_knowledge_bucket_classifies_testnet_udt_as_udt() {
         // Testnet sUDT (simple-udt.toml `[testnet]`). The mainnet-only const set could
         // not reach this hash, so testnet UDT knowledge was undercounted before.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
-            )),
+            bucket("0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"),
             KnowledgeBucket::Udt
         );
     }
@@ -5669,9 +5681,7 @@ mod tests {
     fn test_knowledge_bucket_classifies_testnet_spore_as_nft_spore() {
         // Testnet Spore NFT (spore.toml `[testnet]`).
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
-            )),
+            bucket("0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"),
             KnowledgeBucket::NftSpore
         );
     }
@@ -5681,9 +5691,7 @@ mod tests {
         // `.bit Cell` uses a SporeData envelope in its current layout, but its
         // protocol semantics are DotBit identity rather than a Spore NFT.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
-            )),
+            bucket("0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"),
             KnowledgeBucket::OtherTyped
         );
     }
@@ -5701,7 +5709,7 @@ mod tests {
             "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb",
         ] {
             assert_eq!(
-                classify_knowledge_bucket(&code_hash_bytes(udt)),
+                bucket(udt),
                 KnowledgeBucket::Udt,
                 "old UDT hash {udt} must still bucket as UDT"
             );
@@ -5718,24 +5726,20 @@ mod tests {
             "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
         ] {
             assert_eq!(
-                classify_knowledge_bucket(&code_hash_bytes(nft)),
+                bucket(nft),
                 KnowledgeBucket::NftSpore,
                 "old NFT/Spore hash {nft} must still bucket as NftSpore"
             );
         }
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"
-            )),
+            bucket("0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"),
             KnowledgeBucket::OtherTyped,
             ".bit Cell must not be counted as a Spore NFT"
         );
 
         // DAO hash still classifies as Dao (checked first in the chain).
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
-            )),
+            bucket("0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"),
             KnowledgeBucket::Dao
         );
     }
@@ -5746,9 +5750,7 @@ mod tests {
         // binary, so it remains OtherTyped. This asserts the metadata contract;
         // it does not claim a fresh testnet-node verification.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"
-            )),
+            bucket("0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"),
             KnowledgeBucket::OtherTyped
         );
     }
@@ -5758,9 +5760,7 @@ mod tests {
         // Mainnet node evidence proves this TypeID deploys the standard xUDT
         // binary. Its former compatible-only fixture premise was incorrect.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
-            )),
+            bucket("0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"),
             KnowledgeBucket::Udt
         );
     }

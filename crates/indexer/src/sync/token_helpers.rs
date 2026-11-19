@@ -14,14 +14,11 @@ use super::types::{TxData, XudtExtensionScript};
 // Omnilock constants
 // ---------------------------------------------------------------------------
 
+/// Omnilock's mainnet reference (by `type`), for tests: the pairs Omnilock
+/// runs are the registry's (`is_omnilock`).
+#[cfg(test)]
 pub(crate) const OMNILOCK_CODE_HASH_MAINNET_V2: &str =
     "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26";
-pub(crate) const OMNILOCK_CODE_HASH_MAINNET_V1: &str =
-    "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d";
-pub(crate) const OMNILOCK_CODE_HASH_TESTNET_V2: &str =
-    "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb";
-pub(crate) const OMNILOCK_CODE_HASH_TESTNET_V1: &str =
-    "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e";
 const OMNILOCK_AUTH_LEN: usize = 21;
 const OMNILOCK_SUPPLY_MODE_FLAG: u8 = 0b0000_1000;
 const OMNILOCK_ADMIN_MODE_FLAG: u8 = 0b0000_0001;
@@ -57,7 +54,6 @@ pub(crate) const UNIQUE_CELL_CODE_HASH_MAINNET: &str =
 pub(crate) const UNIQUE_CELL_CODE_HASH_TESTNET: &str =
     "0x8e341bcfec6393dcd41e635733ff2dca00a6af546949f70c57a706c0f344df8b"; // type
 
-static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 static UNIQUE_CELL_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 pub(crate) fn is_unique_cell_code_hash(code_hash: &[u8]) -> bool {
@@ -76,24 +72,14 @@ pub(crate) fn is_unique_cell_code_hash(code_hash: &[u8]) -> bool {
 // Omnilock functions
 // ---------------------------------------------------------------------------
 
-pub(crate) fn omnilock_code_hashes() -> &'static Vec<Vec<u8>> {
-    OMNILOCK_CODE_HASHES.get_or_init(|| {
-        [
-            OMNILOCK_CODE_HASH_MAINNET_V2,
-            OMNILOCK_CODE_HASH_MAINNET_V1,
-            OMNILOCK_CODE_HASH_TESTNET_V2,
-            OMNILOCK_CODE_HASH_TESTNET_V1,
-        ]
-        .iter()
-        .map(|h| crate::rpc::parse_hex_to_bytes(h))
-        .collect()
-    })
-}
-
-pub(crate) fn is_omnilock_code_hash(code_hash: &[u8]) -> bool {
-    omnilock_code_hashes()
-        .iter()
-        .any(|known| known.as_slice() == code_hash)
+/// Whether a lock script's pair runs Omnilock: the registry's Omnilock pairs
+/// (`PROTOCOL_REGISTRY.script`), each registered reference and each version's
+/// binary by the data hash types. Omnilock's code hash by another hash type
+/// runs no Omnilock and claims nothing.
+pub(crate) fn is_omnilock(code_hash: &[u8], hash_type: i16) -> bool {
+    use crate::parser::registry::{RegisteredScript, StandardLock, PROTOCOL_REGISTRY};
+    PROTOCOL_REGISTRY.script(code_hash, hash_type)
+        == Some(RegisteredScript::StandardLock(StandardLock::Omnilock))
 }
 
 pub(crate) fn extract_omnilock_supply_info_type_hash(lock_args: &[u8]) -> Option<[u8; 32]> {
@@ -734,7 +720,7 @@ pub(crate) fn collect_token_max_supply_observations(
             collect_unique_cell_total_supply_by_type_args(&tx_data.cells);
 
         for cell in &tx_data.cells {
-            if !is_omnilock_code_hash(&cell.lock_code_hash) {
+            if !is_omnilock(&cell.lock_code_hash, cell.lock_hash_type) {
                 continue;
             }
 
@@ -1338,13 +1324,27 @@ mod tests {
             data: info_cell_data,
         };
 
-        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell], vec![]);
+        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell.clone()], vec![]);
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
                 .map(|observed| observed.max_supply),
             Some(1_000)
+        );
+
+        // resync/protocol-pairs: the claim is Omnilock's by its registered
+        // pair only. The same info cell under Omnilock's code hash by `data`
+        // (a pair anyone can lock a cell with; no such binary runs) claims no
+        // max supply.
+        let by_data = crate::parser::cell::ParsedCell {
+            lock_hash_type: 0,
+            ..info_cell
+        };
+        let tx = dummy_tx_data([0x89; 32], false, vec![], vec![by_data], vec![]);
+        assert!(
+            collect_token_max_supply_observations(&[tx]).is_empty(),
+            "Omnilock's code hash by data claims nothing"
         );
     }
 

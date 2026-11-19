@@ -9,15 +9,16 @@ use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::types::AddressBalance;
 
 fn script(protocol: ProtocolScript, args: &[u8]) -> packed::Script {
-    let hash = PROTOCOL_REGISTRY
-        .iter()
+    // a pair the protocol runs (resync/protocol-pairs: its hash type with it)
+    let ((hash, hash_type), _) = PROTOCOL_REGISTRY
+        .protocol_pairs()
         .filter(|(_, p)| *p == protocol)
-        .min_by_key(|(hash, _)| *hash)
-        .unwrap()
-        .0;
+        // a reference by type first, as the fixtures' cells are
+        .min_by_key(|((hash, hash_type), _)| (*hash_type != 1, *hash, *hash_type))
+        .unwrap();
     packed::Script::new_builder()
         .code_hash(packed::Byte32::from_slice(hash).unwrap())
-        .hash_type(1u8.into())
+        .hash_type(hash_type.into())
         .args(Bytes::copy_from_slice(args).pack())
         .build()
 }

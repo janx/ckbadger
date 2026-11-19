@@ -431,7 +431,7 @@ fn classify(
         result.class = Class::Token;
         return Ok(result);
     }
-    let protocol = PROTOCOL_REGISTRY.get(code);
+    let protocol = PROTOCOL_REGISTRY.protocol(code, hash_type);
     if protocol == Some(ProtocolScript::Dao) && hash_type == 1 {
         ensure!(
             info.data_size == 8,

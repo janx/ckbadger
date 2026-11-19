@@ -16,15 +16,28 @@ mod bundled_udt {
     ));
 }
 
-static XUDT_COMPATIBLE_CODE_HASHES: OnceLock<HashSet<Vec<u8>>> = OnceLock::new();
+static XUDT_COMPATIBLE_PAIRS: OnceLock<HashSet<([u8; 32], i16)>> = OnceLock::new();
 
-fn xudt_compatible_code_hashes() -> &'static HashSet<Vec<u8>> {
-    XUDT_COMPATIBLE_CODE_HASHES.get_or_init(|| {
+/// The xUDT-compatible deployments' registered pairs (`<code hash>:<hash
+/// type>`, bundled by build.rs): a pair, as the protocol registry reads every
+/// script (resync/protocol-pairs).
+fn xudt_compatible_pairs() -> &'static HashSet<([u8; 32], i16)> {
+    XUDT_COMPATIBLE_PAIRS.get_or_init(|| {
         let encoded: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
-            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
+            .expect("bundled UDT script pairs JSON is invalid — build.rs bug");
         encoded
             .into_iter()
-            .map(|code_hash| parse_hex_to_bytes(&code_hash))
+            .map(|pair| {
+                let (code_hash, label) = pair
+                    .split_once(':')
+                    .expect("bundled UDT script pair is <code hash>:<hash type> — build.rs bug");
+                let hash_type = ckbadger_common::hash_type_from_label(label)
+                    .expect("bundled UDT script hash type — build.rs validates it");
+                let code_hash: [u8; 32] = parse_hex_to_bytes(code_hash)
+                    .try_into()
+                    .expect("bundled UDT code hash is 32 bytes — build.rs validates it");
+                (code_hash, i16::from(hash_type))
+            })
             .collect()
     })
 }
@@ -103,12 +116,18 @@ impl UdtParser {
         )
     }
 
-    pub fn is_udt_code_hash_bytes(code_hash: &[u8], _hash_type: i16) -> Option<UdtStandard> {
+    pub fn is_udt_code_hash_bytes(code_hash: &[u8], hash_type: i16) -> Option<UdtStandard> {
         use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
-        match PROTOCOL_REGISTRY.get(code_hash) {
+        match PROTOCOL_REGISTRY.protocol(code_hash, hash_type) {
             Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
             Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
-            _ if xudt_compatible_code_hashes().contains(code_hash) => Some(UdtStandard::Xudt),
+            // no allocation: the key is the 32 bytes and the hash type
+            _ if <[u8; 32]>::try_from(code_hash).is_ok_and(|code_hash| {
+                xudt_compatible_pairs().contains(&(code_hash, hash_type))
+            }) =>
+            {
+                Some(UdtStandard::Xudt)
+            }
             _ => None,
         }
     }
@@ -457,21 +476,25 @@ mod tests {
     }
 
     #[test]
-    fn test_is_udt_type_script_is_hash_type_string_agnostic() {
-        // Post-registry migration, detection keys on code_hash alone (a 32-byte
-        // collision-resistant deployment id); the hash_type STRING is no longer
-        // a discriminator. A registered code_hash therefore classifies
-        // regardless of the hash_type argument. (Such a code_hash paired with a
-        // mismatched hash_type does not occur on-chain — these are specific
-        // deployment ids, not arbitrary data hashes.)
+    fn test_is_udt_type_script_reads_the_pair() {
+        // resync/protocol-pairs: a UDT is the pair its deployment registers
+        // (the registry's one lookup). sUDT's mainnet reference is by `type`;
+        // the xUDT binary 0x50bd… runs by the data hash types. The same code
+        // hashes by another hash type are no UDT (for a type script the pair
+        // is exact by construction: such a cell's type never ran).
         assert!(matches!(
-            UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data"),
+            UdtParser::is_udt_type_script(SUDT_CODE_HASH, "type"),
             Some(UdtStandard::Sudt)
         ));
+        assert_eq!(UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data"), None);
         assert!(matches!(
-            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type"),
+            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "data1"),
             Some(UdtStandard::Xudt)
         ));
+        assert_eq!(
+            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type"),
+            None
+        );
     }
 
     #[test]

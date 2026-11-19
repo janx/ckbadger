@@ -144,7 +144,7 @@ impl ResolvedCell {
                     // A Cells Account cell whose data does not decode is not a
                     // cell to interpret loosely: say so rather than report the
                     // transaction as if the name were absent.
-                    let dotcell = if DotCellParser::is_account_type_script(&code_hash) {
+                    let dotcell = if DotCellParser::is_account_type_script(&code_hash, hash_type) {
                         Some(
                             DotCellParser::parse_name_data(&data)
                                 .map_err(|e| format!("pool .cell name cell: {e}"))?,
@@ -189,7 +189,8 @@ impl ResolvedCell {
     pub fn is_dao_withdraw_request(&self) -> bool {
         self.type_code_hash
             .as_deref()
-            .is_some_and(DaoParser::is_dao_code_hash)
+            .zip(self.type_hash_type)
+            .is_some_and(|(code_hash, hash_type)| DaoParser::is_dao_code_hash(code_hash, hash_type))
             && DaoParser::parse_dao_state(&self.data) == Some(DaoState::WithdrawRequest)
     }
 }

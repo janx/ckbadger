@@ -42,6 +42,19 @@ fn seed_tx_at_time(
     );
 }
 
+/// The hash type a fixture's script runs by: its code hash's registered pair
+/// (the protocol registry's first pair with that code hash), `type` for a code
+/// hash the registry does not know (resync/protocol-pairs: Spore and Cluster
+/// deployments are data1 deployments).
+fn registered_type(code: &[u8]) -> u8 {
+    ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY
+        .protocol_pairs()
+        .filter(|((hash, _), _)| *hash == code)
+        .map(|((_, hash_type), _)| hash_type)
+        .min()
+        .unwrap_or(1)
+}
+
 fn cell(id: &[u8], capacity: i64, owner: u8) -> LiveCellInfo {
     let code = [0x41; 32];
     let args = vec![owner; 20];
@@ -236,7 +249,7 @@ async fn did_protocol_reads_original_local_cbor_and_rejects_missing_node() {
         .build();
     let type_script = packed::Script::new_builder()
         .code_hash(packed::Byte32::from_slice(payload.type_code_hash.as_ref().unwrap()).unwrap())
-        .hash_type(1u8.into())
+        .hash_type(registered_type(payload.type_code_hash.as_ref().unwrap()).into())
         .args(Bytes::from(id.clone()).pack())
         .build();
     let output = packed::CellOutput::new_builder()
@@ -390,6 +403,9 @@ async fn spore_genetics_fixture_seeded(
             .try_into()
             .unwrap(),
         );
+        payload.type_hash_type = Some(i16::from(registered_type(
+            payload.type_code_hash.as_ref().unwrap(),
+        )));
         payload.data_size = raw.len() as i32;
         payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
         owned += i128::from(payload.capacity);
@@ -397,7 +413,7 @@ async fn spore_genetics_fixture_seeded(
         let script = |code: &[u8], args: Vec<u8>| {
             packed::Script::new_builder()
                 .code_hash(packed::Byte32::from_slice(code).unwrap())
-                .hash_type(1u8.into())
+                .hash_type(registered_type(code).into())
                 .args(Bytes::from(args).pack())
                 .build()
         };
@@ -544,12 +560,15 @@ async fn spore_genetics_fixture_seeded(
     .unwrap();
     let mut payload = cell(&cluster, 1000_00000000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
+    payload.type_hash_type = Some(i16::from(registered_type(
+        payload.type_code_hash.as_ref().unwrap(),
+    )));
     payload.data_size = raw.len() as i32;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
-            .hash_type(1u8.into())
+            .hash_type(registered_type(code).into())
             .args(Bytes::copy_from_slice(args).pack())
             .build()
     };
@@ -814,6 +833,9 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
     let with_type = |id: &[u8], owner: u8, type_code: u8| {
         let mut payload = cell(id, 300_00000000, owner);
         payload.type_code_hash = Some([type_code; 32]);
+        payload.type_hash_type = Some(i16::from(registered_type(
+            payload.type_code_hash.as_ref().unwrap(),
+        )));
         payload
     };
     let token_cell = with_type(&token_id, 2, 0x42);
@@ -1233,6 +1255,9 @@ async fn protocol_fixture(
             .try_into()
             .unwrap(),
     );
+    payload.type_hash_type = Some(i16::from(registered_type(
+        payload.type_code_hash.as_ref().unwrap(),
+    )));
     if let Some(args) = lock_args {
         payload.lock_args = args;
     }
@@ -1241,7 +1266,7 @@ async fn protocol_fixture(
     let script = |code: &[u8], args: Vec<u8>| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
-            .hash_type(1u8.into())
+            .hash_type(registered_type(code).into())
             .args(Bytes::from(args).pack())
             .build()
     };
@@ -1374,7 +1399,7 @@ fn seed_item_versions(
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
-            .hash_type(1u8.into())
+            .hash_type(registered_type(code).into())
             .args(Bytes::copy_from_slice(args).pack())
             .build()
     };
@@ -1388,6 +1413,9 @@ fn seed_item_versions(
     for (k, version) in versions.iter().enumerate() {
         let mut payload = cell(id, 1000_00000000, 1);
         payload.type_code_hash = Some(type_code);
+        payload.type_hash_type = Some(i16::from(registered_type(
+            payload.type_code_hash.as_ref().unwrap(),
+        )));
         payload.data_size = version.data.len() as i32;
         payload.data_hash = Some(
             ckb_hash::blake2b_256(&version.data)
@@ -2704,12 +2732,15 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     .unwrap();
     let mut payload = cell(&id, 1000_00000000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
+    payload.type_hash_type = Some(i16::from(registered_type(
+        payload.type_code_hash.as_ref().unwrap(),
+    )));
     payload.data_size = raw.len() as i32;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
-            .hash_type(1u8.into())
+            .hash_type(registered_type(code).into())
             .args(Bytes::copy_from_slice(args).pack())
             .build()
     };
@@ -2920,6 +2951,9 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     let description = serde_json::json!({"dob":{"ver":0,"decoder":{"type":"type_id","hash":hex::encode(args)},"pattern":pattern}}).to_string();
     let mut payload = cell(&args, 10_000_000_000_000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
+    payload.type_hash_type = Some(i16::from(registered_type(
+        payload.type_code_hash.as_ref().unwrap(),
+    )));
     if matches!(case, DecoderCellCase::NearMissHashType) {
         payload.type_hash_type = Some(0);
     }
@@ -2932,7 +2966,7 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
-            .hash_type(1u8.into())
+            .hash_type(registered_type(code).into())
             .args(Bytes::copy_from_slice(args).pack())
             .build()
     };

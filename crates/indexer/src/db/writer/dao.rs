@@ -361,8 +361,10 @@ impl LiveDaoBatch {
                 .cell
                 .type_code_hash
                 .as_ref()
-                .map(|hash| hash.as_slice())
-                .is_some_and(DaoParser::is_dao_code_hash)
+                .zip(cell.type_hash_type)
+                .is_some_and(|(hash, hash_type)| {
+                    DaoParser::is_dao_code_hash(hash.as_slice(), hash_type)
+                })
             {
                 continue;
             }
@@ -648,7 +650,8 @@ fn dao_tx_outputs(tx: &TxData) -> Result<DaoTxOutputs> {
         let is_dao = cell
             .type_code_hash
             .as_deref()
-            .is_some_and(DaoParser::is_dao_code_hash);
+            .zip(cell.type_hash_type)
+            .is_some_and(|(hash, hash_type)| DaoParser::is_dao_code_hash(hash, hash_type));
         if !is_dao || cell.data_size != 8 {
             withdraw_to_candidates.push((output_index, cell.lock_script_hash.clone()));
             requests.push(None);

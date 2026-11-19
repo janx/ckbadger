@@ -3855,12 +3855,14 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
         funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
     )
     .await;
+    // a Spore pair by data1, as the fixture's type says
     let spore_code = PROTOCOL_REGISTRY
-        .iter()
-        .filter(|(_, p)| *p == ProtocolScript::SporeNft)
-        .min_by_key(|(hash, _)| *hash)
+        .protocol_pairs()
+        .filter(|((_, hash_type), p)| *p == ProtocolScript::SporeNft && *hash_type == 2)
+        .min_by_key(|((hash, _), _)| *hash)
         .unwrap()
         .0
+         .0
         .to_vec();
     let spore_id = [0x41u8; 32];
     let spore_type = serde_json::json!({

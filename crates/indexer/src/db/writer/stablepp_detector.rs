@@ -115,18 +115,26 @@ impl TxFacts {
         };
 
         for input in &tx.inputs {
-            if is_stablepp_vault_lock(input.lock_code_hash) {
+            if is_stablepp_vault_lock(input.lock_code_hash, input.lock_hash_type) {
                 facts.vault_in += 1;
                 facts.structure_involved = true;
             }
-            if is_stablepp_intent_lock(input.lock_code_hash) {
+            if is_stablepp_intent_lock(input.lock_code_hash, input.lock_hash_type) {
                 facts.intent_in += 1;
                 facts.structure_involved = true;
             }
-            if input.type_code_hash.is_some_and(is_stablepp_pool) {
+            if input
+                .type_code_hash
+                .zip(input.type_hash_type)
+                .is_some_and(|(code_hash, hash_type)| is_stablepp_pool(code_hash, hash_type))
+            {
                 facts.structure_involved = true;
             }
-            if input.type_code_hash.is_some_and(is_stablepp_asset) {
+            if input
+                .type_code_hash
+                .zip(input.type_hash_type)
+                .is_some_and(|(code_hash, hash_type)| is_stablepp_asset(code_hash, hash_type))
+            {
                 // Consumed cells carry no raw data on either sync path, so the
                 // amount must come from the pre-resolved `udt_amount` — the
                 // same value `classify_input` uses.
@@ -145,17 +153,25 @@ impl TxFacts {
         }
 
         for output in &tx.outputs {
-            if is_stablepp_vault_lock(output.lock_code_hash) {
+            if is_stablepp_vault_lock(output.lock_code_hash, output.lock_hash_type) {
                 facts.vault_out += 1;
                 facts.structure_involved = true;
             }
-            if is_stablepp_intent_lock(output.lock_code_hash) {
+            if is_stablepp_intent_lock(output.lock_code_hash, output.lock_hash_type) {
                 facts.structure_involved = true;
             }
-            if output.type_code_hash.is_some_and(is_stablepp_pool) {
+            if output
+                .type_code_hash
+                .zip(output.type_hash_type)
+                .is_some_and(|(code_hash, hash_type)| is_stablepp_pool(code_hash, hash_type))
+            {
                 facts.structure_involved = true;
             }
-            if output.type_code_hash.is_some_and(is_stablepp_asset) {
+            if output
+                .type_code_hash
+                .zip(output.type_hash_type)
+                .is_some_and(|(code_hash, hash_type)| is_stablepp_asset(code_hash, hash_type))
+            {
                 // Created cells do carry their raw data on both sync paths.
                 facts
                     .supply_out
@@ -260,21 +276,32 @@ impl ProtocolDetector for StableppDetector {
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
         type_code_hashes: &std::collections::HashSet<[u8; 32]>,
     ) -> bool {
-        lock_code_hashes
-            .iter()
-            .any(|h| is_stablepp_vault_lock(h) || is_stablepp_intent_lock(h))
-            || type_code_hashes.iter().any(|h| is_stablepp_pool(h))
+        lock_code_hashes.iter().any(|h| {
+            crate::parser::registry::HASH_TYPES
+                .iter()
+                .any(|&ht| is_stablepp_vault_lock(h, ht) || is_stablepp_intent_lock(h, ht))
+        }) || type_code_hashes.iter().any(|h| {
+            crate::parser::registry::HASH_TYPES
+                .iter()
+                .any(|&ht| is_stablepp_pool(h, ht))
+        })
     }
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs.iter().any(|input| {
-            is_stablepp_vault_lock(input.lock_code_hash)
-                || is_stablepp_intent_lock(input.lock_code_hash)
-                || input.type_code_hash.is_some_and(is_stablepp_pool)
+            is_stablepp_vault_lock(input.lock_code_hash, input.lock_hash_type)
+                || is_stablepp_intent_lock(input.lock_code_hash, input.lock_hash_type)
+                || input
+                    .type_code_hash
+                    .zip(input.type_hash_type)
+                    .is_some_and(|(code_hash, hash_type)| is_stablepp_pool(code_hash, hash_type))
         }) || tx.outputs.iter().any(|output| {
-            is_stablepp_vault_lock(output.lock_code_hash)
-                || is_stablepp_intent_lock(output.lock_code_hash)
-                || output.type_code_hash.is_some_and(is_stablepp_pool)
+            is_stablepp_vault_lock(output.lock_code_hash, output.lock_hash_type)
+                || is_stablepp_intent_lock(output.lock_code_hash, output.lock_hash_type)
+                || output
+                    .type_code_hash
+                    .zip(output.type_hash_type)
+                    .is_some_and(|(code_hash, hash_type)| is_stablepp_pool(code_hash, hash_type))
         })
     }
 
@@ -448,7 +475,7 @@ mod tests {
     /// Real 32-byte lock/type script hashes are not part of the capture, so each
     /// distinct `(lock_code_hash, lock_args)` pair is given a unique synthetic
     /// script hash. Owner grouping only needs identity, not the real hash.
-    fn stablepp_actions(cells: &[FixtureCell]) -> Vec<(String, serde_json::Value)> {
+    fn stablepp_tx_then<R>(cells: &[FixtureCell], then: impl FnOnce(TxView<'_>) -> R) -> R {
         let mut lock_keys: Vec<(&str, &str)> = Vec::new();
         let mut type_keys: Vec<&str> = Vec::new();
         for c in cells {
@@ -529,7 +556,14 @@ mod tests {
             inputs: inputs.iter().map(|i| i.view()).collect(),
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
+        then(tx)
+    }
 
+    fn stablepp_actions(cells: &[FixtureCell]) -> Vec<(String, serde_json::Value)> {
+        stablepp_tx_then(cells, stablepp_actions_of)
+    }
+
+    fn stablepp_actions_of(tx: TxView<'_>) -> Vec<(String, serde_json::Value)> {
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
         assert_eq!(actions_list.len(), 1);
@@ -1265,6 +1299,57 @@ mod tests {
     /// chain history consume an intent belonging to the very owner whose vault
     /// closes, and pay that owner out. Without a discriminator that fires on
     /// real data, "liquidation" is never emitted.
+    /// resync/protocol-pairs: the vault and intent locks are Stable++ locks
+    /// by their registered pairs only. Opening a vault, with the vault lock
+    /// and the intent lock by `data` (a pair anyone can lock a cell with; no
+    /// such binary runs), opens no vault and carries no intent: what remains is
+    /// the RUSD mint its asset type script (a registered pair) shows. Both
+    /// locks stay called locks.
+    #[test]
+    fn stablepp_locks_act_only_by_their_registered_pairs() {
+        let vault = parse_hex_to_bytes(SPP_VAULT_LOCK);
+        let intent = parse_hex_to_bytes(SPP_INTENT_LOCK);
+        stablepp_tx_then(&tx_open_vault(), |tx| {
+            let registered = stablepp_actions_of(crate::db::writer::activities::with_lock_by(
+                &tx,
+                &[0xFF; 32],
+                1,
+            ));
+            assert!(
+                registered.iter().any(|(action, _)| action == "open_vault"),
+                "{registered:?}"
+            );
+            let by_data = crate::db::writer::activities::with_lock_by(
+                &crate::db::writer::activities::with_lock_by(&tx, &vault, 0),
+                &intent,
+                0,
+            );
+            let detectors: Vec<Box<dyn ProtocolDetector>> =
+                vec![Box::new(StableppDetector::new(true))];
+            let built =
+                build_tx_actions_for_block(std::slice::from_ref(&by_data), &detectors).unwrap();
+            let actions = stablepp_actions_of(by_data);
+            assert!(
+                actions
+                    .iter()
+                    .all(|(action, metadata)| action != "open_vault"
+                        && metadata["vaultCount"] == 0
+                        && metadata["hasIntent"] == false),
+                "by data: no vault, no intent: {actions:?}"
+            );
+            for lock in [&vault, &intent] {
+                assert!(
+                    built[0]
+                        .lock_calls
+                        .iter()
+                        .any(|call| &call.lock_code_hash == lock && call.lock_hash_type == 0),
+                    "0x{} by data stays a called lock",
+                    hex::encode(lock)
+                );
+            }
+        });
+    }
+
     #[test]
     fn liquidation_is_never_emitted() {
         for fixture in [

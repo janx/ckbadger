@@ -399,7 +399,11 @@ fn main() {
             if !deployment.canonical_ref_hash.is_empty()
                 && !excluded_udt_code_hashes.contains(deployment.canonical_ref_hash.as_str())
             {
-                udt_script_code_hashes.push(deployment.canonical_ref_hash.clone());
+                // the registered pair, `<code hash>:<hash type>` (resync/protocol-pairs)
+                udt_script_code_hashes.push(format!(
+                    "{}:{}",
+                    deployment.canonical_ref_hash, deployment.canonical_hash_type.0
+                ));
             }
         }
     }

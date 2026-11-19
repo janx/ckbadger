@@ -143,6 +143,7 @@ fn sale_instances(tx: &TxView<'_>) -> Result<HashMap<[u8; 20], ([u8; 32], u64)>>
         .map(|input| {
             (
                 input.lock_code_hash,
+                input.lock_hash_type,
                 input.lock_args,
                 input.lock_script_hash,
             )
@@ -150,12 +151,13 @@ fn sale_instances(tx: &TxView<'_>) -> Result<HashMap<[u8; 20], ([u8; 32], u64)>>
         .chain(tx.outputs.iter().map(|output| {
             (
                 output.lock_code_hash,
+                output.lock_hash_type,
                 output.lock_args,
                 output.lock_script_hash,
             )
         }));
-    for (code_hash, args, script_hash) in cells {
-        if !DotCellParser::is_sale_lock(code_hash) {
+    for (code_hash, hash_type, args, script_hash) in cells {
+        if !DotCellParser::is_sale_lock(code_hash, hash_type) {
             continue;
         }
         let (seller, price) = match DotCellParser::parse_sale_lock_args(args) {
@@ -330,7 +332,10 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
     for output in &tx.outputs {
         if !output
             .type_code_hash
-            .is_some_and(DotCellParser::is_account_type_script)
+            .zip(output.type_hash_type)
+            .is_some_and(|(code_hash, hash_type)| {
+                DotCellParser::is_account_type_script(code_hash, hash_type)
+            })
         {
             continue;
         }
@@ -841,11 +846,13 @@ struct ClassifiedTx {
 impl DotCellDetector {
     pub(crate) fn new() -> Self {
         let mut account_code_hashes = HashSet::new();
-        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+        // A batch pre-filter: the code hashes of the Cells Account's
+        // registered pairs (the detector then reads each cell's pair).
+        for ((code_hash, _), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
             if protocol != ProtocolScript::DotCellAccount {
                 continue;
             }
-            let hash: [u8; 32] = code_hash.as_slice().try_into().unwrap_or_else(|_| {
+            let hash: [u8; 32] = code_hash.try_into().unwrap_or_else(|_| {
                 panic!(
                     "Cells Account code hash is not 32 bytes: 0x{}",
                     hex::encode(code_hash)
@@ -911,7 +918,10 @@ impl ProtocolDetector for DotCellDetector {
             || tx.outputs.iter().any(|output| {
                 output
                     .type_code_hash
-                    .is_some_and(DotCellParser::is_account_type_script)
+                    .zip(output.type_hash_type)
+                    .is_some_and(|(code_hash, hash_type)| {
+                        DotCellParser::is_account_type_script(code_hash, hash_type)
+                    })
             })
     }
 
@@ -1287,6 +1297,62 @@ mod tests {
         assert_eq!(party.ckb_delta, 0, "no cell of theirs moved");
         assert_eq!(party.item_deltas, vec![identity_plus(&apt_id)]);
         assert_eq!(party.roles, OWNER_TO | MANAGER_TO);
+    }
+
+    /// resync/protocol-pairs: the Sale Lock is `.cell`'s by its registered
+    /// pair only. The real listing with the name moved under the Sale Lock's
+    /// code hash by `data` instead (a pair anyone can lock a cell with; no such
+    /// binary runs) is no listing: no `list` action, no sale instance, and the
+    /// lock stays a called lock.
+    #[test]
+    fn the_sale_lock_lists_only_by_its_registered_pair() {
+        let sale_lock = parse_hex_to_bytes(
+            "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879",
+        );
+        let owned = OwnedTx::from_fixture(&fixture::M5_LIST_SATOSHI);
+        let tx = owned.view();
+        assert!(
+            tx.outputs
+                .iter()
+                .any(|o| o.lock_code_hash == sale_lock && o.lock_hash_type == 1),
+            "the fixture lists under the registered Sale Lock"
+        );
+        let detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+            vec![Box::new(DotCellDetector::new())];
+        let registered =
+            build_tx_actions_for_block_with_io(std::slice::from_ref(&tx), &detectors).unwrap();
+        assert!(registered[0]
+            .actions
+            .protocol_actions
+            .iter()
+            .any(|a| a.protocol == "dotcell" && a.action == "list"));
+
+        let by_data = crate::db::writer::activities::with_lock_by(&tx, &sale_lock, 0);
+        assert!(
+            sale_instances(&by_data).unwrap().is_empty(),
+            "no sale instance"
+        );
+        // a fresh detector: it caches a transaction's transitions by its hash
+        let detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+            vec![Box::new(DotCellDetector::new())];
+        let built = build_tx_actions_for_block_with_io(&[by_data], &detectors).unwrap();
+        let actions = &built[0].actions;
+        assert!(
+            !actions
+                .protocol_actions
+                .iter()
+                .any(|a| a.protocol == "dotcell" && a.action == "list"),
+            "by data is no listing: {:?}",
+            actions.protocol_actions
+        );
+        assert!(
+            actions
+                .lock_calls
+                .iter()
+                .any(|call| call.lock_code_hash == sale_lock && call.lock_hash_type == 0),
+            "the Sale Lock's code hash by data stays a called lock: {:?}",
+            actions.lock_calls
+        );
     }
 
     #[test]

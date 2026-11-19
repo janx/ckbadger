@@ -54,21 +54,30 @@ impl SporeParser {
     /// Spore NFT type scripts only. did:ckb is an independent identity
     /// protocol handled by `DidCkbParser`; it must never enter the Spore
     /// object pipeline.
-    pub fn is_spore_nft_type_script(code_hash: &[u8]) -> bool {
-        crate::parser::registry::PROTOCOL_REGISTRY
-            .is(code_hash, crate::parser::registry::ProtocolScript::SporeNft)
+    pub fn is_spore_nft_type_script(code_hash: &[u8], hash_type: i16) -> bool {
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            hash_type,
+            crate::parser::registry::ProtocolScript::SporeNft,
+        )
     }
 
-    pub fn is_cluster_type_script(code_hash: &[u8]) -> bool {
-        crate::parser::registry::PROTOCOL_REGISTRY
-            .is(code_hash, crate::parser::registry::ProtocolScript::Cluster)
+    pub fn is_cluster_type_script(code_hash: &[u8], hash_type: i16) -> bool {
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            hash_type,
+            crate::parser::registry::ProtocolScript::Cluster,
+        )
     }
 
     pub fn parse_spore_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedSporeCell> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
 
-        if !Self::is_spore_nft_type_script(&type_code_hash) {
+        if !Self::is_spore_nft_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -95,7 +104,7 @@ impl SporeParser {
         let type_args = cell.type_args.as_ref()?;
         let type_script_hash = cell.type_script_hash.as_ref()?;
 
-        if !Self::is_spore_nft_type_script(type_code_hash) {
+        if !Self::is_spore_nft_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -119,7 +128,10 @@ impl SporeParser {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
 
-        if !Self::is_cluster_type_script(&type_code_hash) {
+        if !Self::is_cluster_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -143,7 +155,9 @@ impl SporeParser {
         let type_code_hash = cell.type_code_hash.as_ref()?;
         let type_args = cell.type_args.as_ref()?;
         let type_script_hash = cell.type_script_hash.as_ref()?;
-        if !Self::is_cluster_type_script(type_code_hash) || type_args.len() != 32 {
+        if !Self::is_cluster_type_script(type_code_hash, cell.type_hash_type?)
+            || type_args.len() != 32
+        {
             return None;
         }
 
@@ -410,36 +424,39 @@ mod tests {
         use crate::parser::test_helpers::real_did_ckb;
 
         let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
-        assert!(SporeParser::is_spore_nft_type_script(&spore_hash));
+        // registered by data1
+        assert!(SporeParser::is_spore_nft_type_script(&spore_hash, 2));
 
         let bit_cell_hash = parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET);
-        assert!(!SporeParser::is_spore_nft_type_script(&bit_cell_hash));
+        assert!(!SporeParser::is_spore_nft_type_script(&bit_cell_hash, 1));
 
         // did:ckb is an independent identity protocol, never a Spore NFT.
         for did_hash in [
             real_did_ckb::TYPE_CODE_HASH_TESTNET,
             real_did_ckb::TYPE_CODE_HASH_MAINNET,
         ] {
-            assert!(!SporeParser::is_spore_nft_type_script(&parse_hex_to_bytes(
-                did_hash
-            )));
+            assert!(!SporeParser::is_spore_nft_type_script(
+                &parse_hex_to_bytes(did_hash),
+                1
+            ));
         }
 
         let other_hash = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
-        assert!(!SporeParser::is_spore_nft_type_script(&other_hash));
+        assert!(!SporeParser::is_spore_nft_type_script(&other_hash, 1));
     }
 
     #[test]
     fn test_is_cluster_type_script() {
         let cluster_hash = parse_hex_to_bytes(CLUSTER_CODE_HASH_MAINNET_V2);
-        assert!(SporeParser::is_cluster_type_script(&cluster_hash));
+        // registered by data1
+        assert!(SporeParser::is_cluster_type_script(&cluster_hash, 2));
 
         let other_hash = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
-        assert!(!SporeParser::is_cluster_type_script(&other_hash));
+        assert!(!SporeParser::is_cluster_type_script(&other_hash, 1));
     }
 
     #[test]
@@ -460,8 +477,8 @@ mod tests {
         let t = parse_hex_to_bytes(
             "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
         );
-        assert!(!crate::parser::did_ckb::DidCkbParser::is_type_script(&t));
-        assert!(!SporeParser::is_spore_nft_type_script(&t));
+        assert!(!crate::parser::did_ckb::DidCkbParser::is_type_script(&t, 1));
+        assert!(!SporeParser::is_spore_nft_type_script(&t, 1));
     }
 
     #[test]
