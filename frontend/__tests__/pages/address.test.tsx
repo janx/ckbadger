@@ -124,8 +124,9 @@ const namedRight = {
   name: 'support.cell',
   expiredAt: 1821507678,
 };
+// re-pinned (lane c2-chain): the history's views are the library's tab row (were pressed buttons)
 const tab = async (name: string) =>
-  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${name}`) }));
+  fireEvent.click(await screen.findByRole('tab', { name: new RegExp(`^${name}`, 'i') }));
 // Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
 // and its noun are one unit, a no-break space between them).
 const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });
@@ -256,7 +257,7 @@ describe('Address v3', () => {
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${addressText}$`));
-    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy address' }));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'copy address' }));
     // C10 round 2: the id line in the plate's one voice, set by the plate: the full address
     // (it was text-body in the text ink) takes it; the copy button keeps its own classes
     // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
@@ -272,11 +273,13 @@ describe('Address v3', () => {
     expect(full.className).not.toMatch(/(^|\s)text-/);
     expect(idLine.querySelector('.overflow-x-auto')).toBeNull();
     expect(full.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
-    expect(screen.getByRole('button', { name: 'Copy address' })).toHaveClass(
-      'hover:text-jade',
-      'shrink-0',
-      'p-1'
-    );
+    // Re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
+    // icon in the quiet ink with its answer in words beside it, the pair kept whole beside the id
+    // (was a bare button whose name said what happened, "Address copied", and drew a ✓).
+    const copy = screen.getByRole('button', { name: 'copy address' });
+    expect(copy).toHaveClass('text-text-dim', 'hover:text-jade');
+    expect(copy.parentElement).toHaveClass('shrink-0');
+    expect(within(copy.parentElement!).getByRole('status')).toBeEmptyDOMElement();
   });
 
   // The seals by kind (C3 for the address's cells): the Live cells tab leads every row with the
@@ -415,7 +418,15 @@ describe('Address v3', () => {
       '11 of 14 fully on-chain'
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
-    expect(await screen.findByText('Showing 1–2 of 6 objects · 10 per page')).toBeInTheDocument();
+    // Re-pinned on purpose (lane c2-chain): the library's pager is counted of the collection's
+    // objects this address holds (6) at ten a page, one page, so it draws nothing however the
+    // page answers (the old pager drew "Showing 1–2 of 6 objects · 10 per page" from the
+    // mock's hasMore); the collection's total stays apart from the page's two rows on the way
+    // onward to it.
+    const table = await screen.findByRole('table', { name: '拯救民主 objects held here' });
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(screen.getByRole('link', { name: 'All 6 in the collection →' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: '拯救民主 objects' })).toBeNull();
     expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
   });
   it('links object tiles and exact collection identity', async () => {
@@ -473,9 +484,13 @@ describe('Address v3', () => {
         : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
     );
     render(<AddressDetailPage />);
-    await screen.findByText('Showing 1–9 of 101 token kinds · 20 per page');
+    // re-pinned (lane c2-chain): the library's pager, its range as the board writes it (was
+    // "Showing 1–9 of 101 token kinds · 20 per page" and a Next button)
+    const pages = await screen.findByRole('navigation', { name: 'token kinds' });
+    expect(pages).toHaveTextContent(/^1–9 of 101 · 20 a page/);
+    expect(within(pages).getByText('page 1 of 6')).toBeInTheDocument();
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
-    fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
+    fireEvent.click(within(section).getByRole('button', { name: 'next →' }));
     expect(await screen.findByText('Last token')).toBeInTheDocument();
     expect(api.getAddressTokens).toHaveBeenLastCalledWith(addressHash, {
       limit: 20,
@@ -605,13 +620,20 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
-    expect(within(section).getByText('Showing 1–1 names · 20 per page')).toBeInTheDocument();
-    fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
+    // Re-pinned on purpose (lane c2-chain): the names are a short list the API counts no total
+    // of, so they take the library pager's short-list form, `next 20 ↓`, which adds the next
+    // names under the ones shown (was "Showing 1–1 names · 20 per page" and a Next button that
+    // replaced them); still no count of one page is said as a total.
+    expect(section).not.toHaveTextContent(/of \d|Showing/);
+    fireEvent.click(within(section).getByRole('button', { name: 'next 20 ↓' }));
     expect(await screen.findByText('next.cell')).toBeInTheDocument();
+    expect(within(section).getByText('support.cell')).toBeInTheDocument();
     expect(api.getAddressDotCellNames).toHaveBeenLastCalledWith(addressHash, {
       limit: 20,
       cursor: 'next-name',
     });
+    // the last load has no more after it: the way onward goes
+    expect(within(section).queryByRole('button', { name: 'next 20 ↓' })).toBeNull();
   });
   it('omits named rights when none are present', async () => {
     render(<AddressDetailPage />);
@@ -619,13 +641,19 @@ describe('Address v3', () => {
     expect(screen.queryByTestId('address-dotcell-names')).not.toBeInTheDocument();
   });
   it('requests live-cell class filtering before pagination and resets its cursor', async () => {
+    // Re-pinned on purpose (lane c2-chain): the unfiltered page carries its total, as the API
+    // sends it (/addresses/{addr}/cells: "an exact total of all matching current cells"), since
+    // the library's pager counts the page of it (`1–14 of 40 · 20 a page`, `next →`; it was a
+    // Next button with no count); the class filter is the library's chips, a radio group "class"
+    // (was a group of pressed buttons "Filter live cells").
     vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) => ({
       ...pageFixture(
         p?.class === 'identity'
           ? addressIdentitiesFixture
           : p?.class === 'dao'
             ? addressDaoCellsFixture
-            : addressObjectsFixture
+            : addressObjectsFixture,
+        p?.class ? undefined : holdingsFixture.liveCellsCount
       ),
       hasMore: p?.class !== 'identity',
       nextCursor: p?.class === 'identity' ? null : 'next-cell',
@@ -634,7 +662,11 @@ describe('Address v3', () => {
     await loaded();
     await tab('Live cells');
     const history = screen.getByRole('region', { name: 'History' });
-    fireEvent.click(await within(history).findByRole('button', { name: 'Next' }));
+    const pages = await within(history).findByRole('navigation', { name: 'live cells' });
+    expect(pages).toHaveTextContent(
+      new RegExp(`^1–${addressObjectsFixture.length} of ${holdingsFixture.liveCellsCount} · 20`)
+    );
+    fireEvent.click(within(pages).getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
         limit: 20,
@@ -643,8 +675,8 @@ describe('Address v3', () => {
       })
     );
     fireEvent.click(
-      within(screen.getByRole('group', { name: 'Filter live cells' })).getByRole('button', {
-        name: /Identities/,
+      within(screen.getByRole('radiogroup', { name: 'class' })).getByRole('radio', {
+        name: /^identities/,
       })
     );
     await waitFor(() =>
@@ -667,22 +699,28 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    const activitiesTab = () => screen.getByRole('button', { name: /^Activities/ });
-    await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/));
+    // Re-pinned on purpose (lane c2-chain): the views are the library's tab row, the count after
+    // the lowercase name, read as a word apart ("activities 1,682"; was a pressed button
+    // "Activities1,682"); the activities are a list in time, so the library's pager counts the
+    // pages of the unfiltered total (`page 1 of 85`; was "Showing 1–1 of 1,682 activities").
+    const activitiesTab = () => screen.getByRole('tab', { name: /^activities/ });
+    await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^activities 1,682$/));
     expect(activitiesTab()).not.toHaveTextContent('1,021');
-    expect(
-      await screen.findByText('Showing 1–1 of 1,682 activities · 20 per page')
-    ).toBeInTheDocument();
-    // A filtered page declares no total; the tab keeps the address's count, the range has none.
-    fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
+    const pages = await screen.findByRole('navigation', { name: 'activities' });
+    expect(pages).toHaveTextContent(/^newest first/);
+    expect(within(pages).getByText('page 1 of 85')).toBeInTheDocument();
+    // A filtered page declares no total; the tab keeps the address's count, the pager has none.
+    fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
     // Restored (review of main..fix/readability, test finding 3): readability B5 drew no pager for
     // one page, and the re-pin of this test dropped the range check with it; the filtered mock now
-    // has an older page, so the range is drawn and must carry no unfiltered total ("of 1,682").
-    expect(screen.getByText('Showing 0–0 activities · 20 per page')).toBeInTheDocument();
-    expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
+    // has an older page, so the pager is drawn and must carry no unfiltered total ("of 85").
+    const filtered = screen.getByRole('navigation', { name: 'activities' });
+    expect(within(filtered).getByText('page 1')).toBeInTheDocument();
+    expect(filtered).not.toHaveTextContent(/ of /);
+    expect(activitiesTab()).toHaveTextContent(/^activities 1,682$/);
     await tab('Transactions');
-    expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
+    expect(activitiesTab()).toHaveTextContent(/^activities 1,682$/);
   });
   // PA-17 (UI review 2026-11-14): "Activities 3  Transactions 3  Live cells 3" wrapped at 390,
   // leaving "Live cells 3" alone on a second line like a heading. The labels alone are 32
@@ -694,22 +732,27 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture(addressActivitiesFixture, 3));
     render(<AddressDetailPage />);
     await loaded();
-    const views = screen.getByRole('group', { name: 'History views' });
-    expect(views).toHaveClass('gap-x-6', 'max-md:gap-x-4');
-    const tabs = within(views).getAllByRole('button');
-    expect(tabs.map((t) => t.firstChild?.textContent)).toEqual([
-      'Activities',
-      'Transactions',
-      'Live cells',
-    ]);
-    for (const t of tabs) {
-      expect(t).toHaveClass('text-section', 'max-md:text-body', 'gap-2', 'max-md:gap-1.5');
-      const count = t.querySelector('span');
-      if (count) expect(count).toHaveClass('text-small', 'max-md:text-meta');
-    }
+    // Re-pinned on purpose (lane c2-chain): the history opens on the library's tab row, the
+    // section's command line (the prompt square, the board's names lowercase: activities,
+    // transactions, live cells), whose phone form is the component's own: 17 px names from 640
+    // and 14 px below it, 12 px counts in the quiet ink, the counts leaving the row by measurement
+    // where it is wider than its line (the board's 356.4 px with three one-digit counts: they stay
+    // at 390, leave at 360; lib/control-row-fit.ts). It was a group of buttons a step down below md.
+    const views = screen.getByRole('tablist', { name: 'history' });
+    expect(views.querySelector('.section-mark')).not.toBeNull();
+    const tabs = within(views).getAllByRole('tab');
     await waitFor(() =>
-      expect(tabs.filter((t) => t.querySelector('span') !== null)).toHaveLength(3)
+      expect(tabs.map((t) => t.textContent)).toEqual([
+        'activities 3',
+        'transactions 1,021',
+        'live cells 40',
+      ])
     );
+    for (const t of tabs) {
+      expect(t).toHaveClass('text-body', 'sm:text-section', 'lowercase');
+      expect(within(t).getByText(/^[\d,]+$/)).toHaveClass('text-meta', 'text-text-dim');
+    }
+    expect(screen.getByRole('heading', { level: 2, name: 'History' })).toHaveClass('sr-only');
   });
   // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
   it('uses one script-call filter and resets the activity cursor', async () => {
@@ -721,7 +764,10 @@ describe('Address v3', () => {
     render(<AddressDetailPage />);
     await loaded();
     const history = screen.getByRole('region', { name: 'History' });
-    fireEvent.click(await within(history).findByRole('button', { name: 'Next' }));
+    // re-pinned (lane c2-chain): the activities, a list in time, page on with `older →` (was
+    // Next), and the kinds are the library's chips, a radio group "kind" whose words are lowercase
+    // (were pressed buttons "Filter activity", "All", "CKB", …)
+    fireEvent.click(await within(history).findByRole('button', { name: 'older →' }));
     await waitFor(() =>
       expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
         limit: 20,
@@ -730,11 +776,11 @@ describe('Address v3', () => {
       })
     );
     // C14: each chip carries its count after its label.
-    const chips = within(screen.getByRole('group', { name: 'Filter activity' }))
-      .getAllByRole('button')
-      .map((b) => b.textContent!.replace(/ [\d,]+\+?$/, ''));
-    expect(chips).toEqual(['All', 'CKB', 'Token', 'Object', 'Identity', 'DAO', 'Script', 'RGB++']);
-    fireEvent.click(screen.getByRole('button', { name: /^Script/ }));
+    const chips = within(screen.getByRole('radiogroup', { name: 'kind' }))
+      .getAllByRole('radio')
+      .map((b) => b.textContent!.replace(/ ?[\d,]+\+?$/, ''));
+    expect(chips).toEqual(['all', 'ckb', 'token', 'object', 'identity', 'dao', 'script', 'rgb++']);
+    fireEvent.click(screen.getByRole('radio', { name: /^script/ }));
     expect(await screen.findByText('No Script activities on this page.')).toBeInTheDocument();
     expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
       limit: 20,
@@ -745,7 +791,8 @@ describe('Address v3', () => {
   it('resets filters, tab and cursors when the route changes', async () => {
     const { rerender } = render(<AddressDetailPage />);
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: /^Token/ }));
+    // re-pinned (lane c2-chain): the kind is a chip of the library's radio group, the view a tab
+    fireEvent.click(screen.getByRole('radio', { name: /^token/ }));
     await tab('Transactions');
     route = 'ckb1other';
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -760,10 +807,11 @@ describe('Address v3', () => {
         filter: 'all',
       })
     );
-    expect(screen.getByRole('button', { name: 'Activities' })).toHaveAttribute(
-      'aria-pressed',
+    expect(screen.getByRole('tab', { name: /^activities/ })).toHaveAttribute(
+      'aria-selected',
       'true'
     );
+    expect(screen.getByRole('radio', { name: /^all/ })).toHaveAttribute('aria-checked', 'true');
   });
   it.each(['dotbit', 'did_ckb', 'bit_cell', 'dotcell'] as const)(
     'links %s identity deltas through the shared activity row',
@@ -896,9 +944,13 @@ describe('Address v3', () => {
         .some((l) => l.getAttribute('href')?.includes('/blocks/'))
     ).toBe(false);
   });
-  it('counts only committed activity rows in the page range', async () => {
+  // Renamed and re-pinned on purpose (lane c2-chain; was "counts only committed activity rows in
+  // the page range", which read "Showing 1–1 activities"): the activities are a list in time, and
+  // the library's pager states a list in time by its order and its page alone, no count of rows a
+  // pool row could be added to.
+  it('counts no unconfirmed row in the pager: a list in time states its order and its page', async () => {
     // Re-pinned on purpose (readability B5): one page draws no pager, so the fixture has an older
-    // page; the range it asserts is unchanged.
+    // page.
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       ...pageFixture([poolActivity(), ...addressActivitiesFixture]),
       hasMore: true,
@@ -907,10 +959,15 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('Showing 1–1 activities · 20 per page')).toBeInTheDocument();
+    const pages = await screen.findByRole('navigation', { name: 'activities' });
+    expect(pages).toHaveTextContent(/^newest first← newerpage 1older →$/);
   });
-  // C11: the address lists page through the one CursorPagination; its range follows the page size
-  // the list asked for (twenty below md), where the old pager counted fifty a page everywhere.
+  // C11: the address lists page through the one pager; its pages follow the page size the list
+  // asked for (twenty on every width), where the old pager counted fifty a page everywhere.
+  // Re-pinned on purpose (lane c2-chain): the activities are a list in time, so the library's
+  // pager writes `newest first`, `page 1 of 3` and `older →` (was "Showing 1–20 of 45 activities
+  // · 20 per page", "Page 1 of 3" and a Next button), in a nav named "activities" (was
+  // "activities pages").
   it('pages the address lists with the shared pager at the phone page size (C11)', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
     onTestFinished(() => {
@@ -930,14 +987,12 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    const pages = await screen.findByRole('navigation', { name: 'activities pages' });
-    expect(within(pages).getByText('Showing 1–20 of 45 activities · 20 per page')).toBeVisible();
-    expect(within(pages).getByText('Page 1 of 3')).toBeVisible();
-    fireEvent.click(within(pages).getByRole('button', { name: 'Next' }));
-    expect(
-      await within(pages).findByText('Showing 21–40 of 45 activities · 20 per page')
-    ).toBeVisible();
-    expect(within(pages).getByText('Page 2 of 3')).toBeVisible();
+    const pages = await screen.findByRole('navigation', { name: 'activities' });
+    expect(within(pages).getByText('newest first')).toBeVisible();
+    expect(within(pages).getByText('page 1 of 3')).toBeVisible();
+    fireEvent.click(within(pages).getByRole('button', { name: 'older →' }));
+    expect(await within(pages).findByText('page 2 of 3')).toBeVisible();
+    expect(within(pages).getByRole('button', { name: '← newer' })).toBeVisible();
     expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
       limit: 20,
       cursor: 'second',
@@ -970,13 +1025,14 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
+    // re-pinned (lane c2-chain): `older →` of the library's pager (was Next), the dao chip a radio
     fireEvent.click(
       await within(screen.getByRole('region', { name: 'History' })).findByRole('button', {
-        name: 'Next',
+        name: 'older →',
       })
     );
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^dao/ }));
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
   });
   it('gives compact and desktop transactions the same pool and partial evidence', async () => {
@@ -1144,8 +1200,13 @@ describe('Address v3', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     render(<AddressDetailPage />);
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy address' }));
-    expect(await screen.findByRole('button', { name: 'Address copied' })).toBeInTheDocument();
+    // re-pinned (lane c2-chain): the library's CopyButton keeps its name and answers in words
+    // beside it, `copied`, heard as a status (it renamed itself "Address copied")
+    const copy = screen.getByRole('button', { name: 'copy address' });
+    fireEvent.click(copy);
+    await waitFor(() =>
+      expect(within(copy.parentElement!).getByRole('status')).toHaveTextContent(/^copied$/)
+    );
     expect(writeText).toHaveBeenCalledWith(addressText);
   });
   it('retains all exact object fixture sums in the complete board scope', () => {
@@ -1407,14 +1468,19 @@ describe('Address board · F2 blocks', () => {
     ).toEqual(['50,000', '200,000', '600,000', '3,500,000', '5,240,000']);
   });
 
-  it('puts the activity filters on the tab row, as the board', async () => {
+  // Renamed and re-pinned on purpose (lane c2-chain; was "puts the activity filters on the tab
+  // row, as the board", a row of the view buttons and the chips side by side): the controls board
+  // the owner passed (gate D0′) puts the address's kind chips under the tab row, the first line of
+  // the tab's panel, 14 px down; the row itself is the tab list alone.
+  it('puts the activity filters under the tab row, in its panel, as the controls board', async () => {
     render(<AddressDetailPage />);
     await loaded();
-    const tabs = screen.getByRole('group', { name: 'History views' });
-    const row = tabs.parentElement!;
-    expect(row).not.toHaveAttribute('aria-label', 'History');
-    expect(row).toHaveClass('justify-between');
-    expect(row).toContainElement(screen.getByRole('group', { name: 'Filter activity' }));
+    const tabs = screen.getByRole('tablist', { name: 'history' });
+    const chips = screen.getByRole('radiogroup', { name: 'kind' });
+    expect(tabs).not.toContainElement(chips);
+    expect(screen.getByRole('tabpanel')).toContainElement(chips);
+    expectBefore(tabs, chips);
+    expect(chips).toHaveClass('mt-3.5');
   });
 
   it('writes the class headers as the board: "9 kinds in 15 cells", "14 in 7 collections"', async () => {
@@ -1441,7 +1507,8 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(h1).toHaveClass('text-entity');
     const header = h1.closest('header')!;
     expect(header).toHaveTextContent(addressText);
-    expect(within(header).getByRole('button', { name: 'Copy address' })).toBeInTheDocument();
+    // re-pinned (lane c2-chain): the library's CopyButton, named in the board's lowercase
+    expect(within(header).getByRole('button', { name: 'copy address' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: 'Address' })).toBeNull();
   });
 
@@ -1583,30 +1650,40 @@ describe('Address · consistency round (C13, C14)', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    const chips = screen.getByRole('group', { name: 'Filter activity' });
+    // Re-pinned on purpose (lane c2-chain): the kinds are the library's chips, a radio group
+    // "kind" whose words are lowercase and whose count is a word apart (were pressed buttons
+    // "Filter activity", "DAO 0"); the four classes lead with their 7 px class mark, as the
+    // controls board's address in place draws them.
+    const chips = screen.getByRole('radiogroup', { name: 'kind' });
     await waitFor(() =>
-      expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveTextContent('DAO 0')
+      expect(within(chips).getByRole('radio', { name: /^dao/ })).toHaveTextContent('dao 0')
     );
-    expect(within(chips).getByRole('button', { name: /^All/ })).toHaveTextContent(
-      `All ${addressActivitiesFixture.length}`
+    expect(within(chips).getByRole('radio', { name: /^all/ })).toHaveTextContent(
+      `all ${addressActivitiesFixture.length}`
     );
-    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent(/^Token 1$/);
+    expect(within(chips).getByRole('radio', { name: /^token/ })).toHaveTextContent(/^token 1$/);
     // More than the one row asked for: the API counts no filtered total, so the chip shows no
     // number (never "2+"); what the page proved stays in the chip's title.
-    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
-    expect(ckb).toHaveTextContent(/^CKB$/);
-    expect(ckb.querySelector('[data-chip-count]')).toBeNull();
+    const ckb = within(chips).getByRole('radio', { name: /^ckb/ });
+    expect(ckb).toHaveTextContent(/^ckb$/);
     expect(ckb).toHaveAttribute(
       'title',
       'more than one; the API keeps no count of filtered activity'
     );
     expect(chips).not.toHaveTextContent('2+');
-    for (const chip of within(chips).getAllByRole('button'))
+    for (const chip of within(chips).getAllByRole('radio'))
       if (chip !== ckb) expect(chip).toHaveTextContent(/\d$/);
+    for (const kind of ['token', 'object', 'identity', 'dao'])
+      expect(
+        within(chips)
+          .getByRole('radio', { name: new RegExp(`^${kind}`) })
+          .querySelector('[data-mark]')
+      ).not.toBeNull();
+    expect(ckb.querySelector('[data-mark]')).toBeNull();
     // R4 (UI review 2026-11-14, re-pinned on purpose): an empty filter's "0" is a datum, so the
     // chip is the dim ink of every other chip, never the ghost.
-    const dao = within(chips).getByRole('button', { name: /^DAO/ });
-    expect(dao).toHaveTextContent(/^DAO 0$/);
+    const dao = within(chips).getByRole('radio', { name: /^dao/ });
+    expect(dao).toHaveTextContent(/^dao 0$/);
     expect(dao).toHaveClass('text-text-dim');
     expect(dao).not.toHaveClass('text-text-ghost');
     expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {

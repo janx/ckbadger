@@ -13,7 +13,7 @@ import { formatStandard } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { cursorPageFigures, ENTITY_PAGE_SIZE, pagesOf } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
@@ -22,7 +22,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
 import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -78,41 +78,56 @@ export function AddressStaleNotice({ error, label }: { error: Error | null; labe
   ) : null;
 }
 /**
- * An address list's pages (consistency C11): the one `CursorPagination` — "Showing a–b of N
- * <label> · S per page" and "Page x of y" — in a nav named for the list. `pageSize` is the size
- * the list asked the API for (twenty below md), so the range counts the rows a page really holds.
+ * An address list's pager: the library's Pager (the controls board), in a nav named for the list,
+ * computing no figure. A list in time, newest first (the activities, the transactions), takes its
+ * time mode: its order in words, `← newer` and `older →`, the page the walk is on and the pages
+ * where the API counts the list. A list read from its first by key or by rank (the live cells, the
+ * DAO cells largest first, the token kinds, the identities) takes its pages mode, counted of the
+ * total its caller states, the rows the page holds and the page size the list asked the API for
+ * (twenty on every width). Nothing is drawn for a list on one page.
  */
-export function AddressPagination({
-  pagination,
-  hasMore,
-  nextCursor,
-  currentCount,
-  total,
-  label,
-  pageSize,
-}: {
-  pagination: ReturnType<typeof useCursorPagination>;
-  hasMore: boolean;
-  nextCursor?: string | null;
-  currentCount: number;
-  total?: number | null;
-  label: string;
-  pageSize: number;
-}) {
+export function AddressPagination(
+  props: {
+    pagination: ReturnType<typeof useCursorPagination>;
+    hasMore: boolean;
+    nextCursor?: string | null;
+    label: string;
+    pageSize: number;
+  } & (
+    | { order: string; total?: number; rows?: never }
+    | { order?: never; total: number; rows: number }
+  )
+) {
+  const { pagination, hasMore, nextCursor, label, pageSize } = props;
+  if (!hasMore && !pagination.hasPrevious) return null;
+  const onNext = () => pagination.goToNext(nextCursor);
   return (
-    <nav aria-label={`${label} pages`} className="mt-4">
-      <CursorPagination
-        total={total}
-        totalLabel={label}
-        pageSize={pageSize}
-        page={pagination.page}
-        currentCount={currentCount}
-        hasMore={hasMore}
-        hasPrevious={pagination.hasPrevious}
-        onNext={() => pagination.goToNext(nextCursor)}
-        onPrevious={pagination.goToPrevious}
-      />
-    </nav>
+    <div className="mt-4">
+      {props.order !== undefined ? (
+        <Pager
+          mode="time"
+          label={label}
+          order={props.order}
+          page={pagination.page}
+          pages={props.total === undefined ? undefined : pagesOf(props.total, pageSize)}
+          onNewer={pagination.hasPrevious ? pagination.goToPrevious : undefined}
+          onOlder={hasMore ? onNext : undefined}
+        />
+      ) : (
+        <Pager
+          mode="pages"
+          label={label}
+          {...cursorPageFigures({
+            page: pagination.page,
+            pageSize,
+            rows: props.rows,
+            total: props.total,
+          })}
+          onPrevious={pagination.goToPrevious}
+          onNext={onNext}
+        />
+      )}
+    </div>
   );
 }
 
@@ -776,7 +791,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       pagination={daoPage}
                       hasMore={deposits.data.hasMore}
                       nextCursor={deposits.data.nextCursor}
-                      currentCount={deposits.data.data.length}
+                      rows={deposits.data.data.length}
                       total={holdings.holdings.dao}
                       pageSize={pageSize}
                       label="DAO cells"
@@ -848,7 +863,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   pagination={tokensPage}
                   hasMore={tokens.data.hasMore}
                   nextCursor={tokens.data.nextCursor}
-                  currentCount={tokens.data.data.length}
+                  rows={tokens.data.data.length}
                   total={holdings.holdings.token}
                   pageSize={pageSize}
                   label="token kinds"
@@ -914,7 +929,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   pagination={identitiesPage}
                   hasMore={identities.data.hasMore}
                   nextCursor={identities.data.nextCursor}
-                  currentCount={identities.data.data.length}
+                  rows={identities.data.data.length}
                   total={holdings.holdings.identity}
                   pageSize={pageSize}
                   label="identities"
@@ -1154,17 +1169,21 @@ function AddressCollectionObjects({
             })}
           </div>
           <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
-            <CursorPagination
-              total={group.itemCount}
-              totalLabel="objects"
-              pageSize={COLLECTION_PAGE}
-              page={pages.page}
-              currentCount={rows.length}
-              hasMore={objects.data.hasMore}
-              hasPrevious={pages.hasPrevious}
-              onNext={() => pages.goToNext(objects.data!.nextCursor)}
-              onPrevious={pages.goToPrevious}
-            />
+            {(objects.data.hasMore || pages.hasPrevious) && (
+              // ten a page, counted of the collection's objects this address holds
+              <Pager
+                mode="pages"
+                label={`${label} objects`}
+                {...cursorPageFigures({
+                  page: pages.page,
+                  pageSize: COLLECTION_PAGE,
+                  rows: rows.length,
+                  total: group.itemCount,
+                })}
+                onPrevious={pages.goToPrevious}
+                onNext={() => pages.goToNext(objects.data!.nextCursor)}
+              />
+            )}
             {href && (
               <Link href={href} className="text-small">
                 All {group.itemCount.toLocaleString('en-US')} in the collection →

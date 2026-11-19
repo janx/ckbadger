@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { cursorPageFigures, DEFAULT_PAGE_SIZE, ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { cursorPageFigures, DEFAULT_PAGE_SIZE, ENTITY_PAGE_SIZE, pagesOf } from '@/lib/pagination';
 import { PHONE_PAGE_SIZE, usePageSize } from '@/hooks/usePageSize';
 
 function stubViewport(matches: boolean) {
@@ -32,6 +32,12 @@ describe('page sizes', () => {
 // list whose API sent its total hands it the page's figures from that total, the page size it
 // asked for, the rows the page holds and the page the walk is on.
 describe('cursorPageFigures', () => {
+  it('counts the pages of a total, the last one partial (pagesOf, its one path)', () => {
+    expect([pagesOf(45, 20), pagesOf(40, 20), pagesOf(1, 20), pagesOf(1682, 20)]).toEqual([
+      3, 2, 1, 85,
+    ]);
+  });
+
   it('places a full page, the last partial one and a total that fills its pages exactly', () => {
     expect(cursorPageFigures({ page: 1, pageSize: 20, rows: 20, total: 45 })).toEqual({
       from: 1,

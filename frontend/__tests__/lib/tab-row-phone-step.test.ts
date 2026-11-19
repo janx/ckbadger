@@ -43,10 +43,10 @@ describe('section-size tab rows take one type step down below md (PA-17)', () =>
   }
 
   // Lanes C2: as a row moves onto the library's Tabs (components/ui/tabs.tsx, which sets its own
-  // phone step by measurement) its file leaves this list, on purpose: the block page's row did.
+  // phone step by measurement) its file leaves this list, on purpose: the block page's and the
+  // address page's rows did.
   it('finds the hand-built tab rows of the site', () => {
     expect([...found.keys()].sort()).toEqual([
-      'app/address/[addr]/client-page.tsx',
       'app/scripts/page.tsx',
       'app/transactions/page.tsx',
       'components/asset/asset-feed.tsx',

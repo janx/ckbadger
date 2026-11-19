@@ -9,6 +9,11 @@ export const DEFAULT_PAGE_SIZE = 50;
  */
 export const ENTITY_PAGE_SIZE = 20;
 
+/** The pages a list of `total` rows takes at `pageSize` a page, the last one partial. */
+export function pagesOf(total: number, pageSize: number): number {
+  return Math.ceil(total / pageSize);
+}
+
 /** A page of a cursor list as the pager's pages mode takes it (components/ui/pager.tsx). */
 export interface CursorPageFigures {
   from: number;
@@ -39,5 +44,5 @@ export function cursorPageFigures({
   total: number;
 }): CursorPageFigures {
   const from = (page - 1) * pageSize + 1;
-  return { from, to: from + rows - 1, total, pageSize, page, pages: Math.ceil(total / pageSize) };
+  return { from, to: from + rows - 1, total, pageSize, page, pages: pagesOf(total, pageSize) };
 }
