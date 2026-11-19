@@ -85,8 +85,9 @@ The 640–767 band has one content width to design for. Below 640 the container 
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
   an 844 px first screen on every page. At the 12 / 13 / 14 px steps (readability R4) and the
   widest block number the lists budget (`lib/list-bounds.ts` `WIDEST_BLOCK_NUMBER`, `#99,999,999`:
-  one bound for one quantity) that line is 280.8 of 328 px at 360 and 280.8 of 288 at 320; it is
-  44 px tall at 390. On the home page the epoch's line breaks between its two groups, the epoch
+  one bound for one quantity) that line is 266.4 of 328 px at 360 and 266.4 of 288 at 320 (its
+  first label is "Tip": the strip's figures are the tip's, never read against a block page's own);
+  it is 44 px tall at 390. On the home page the epoch's line breaks between its two groups, the epoch
   with its bar and its position with the time left, never inside either, where the line cannot
   hold both (340.8 px at the widest content: at 360 and below). From `md` the row wraps by whole items: one line at 1280 (1,215.4 of 1,232 px at the
   widest), the difficulty and the live mark on a second line at 1024, the block and the epoch on
