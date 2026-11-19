@@ -45,25 +45,30 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   (`token_helpers::token_max_supply_claim`). A store stamped 3 took, live,
 ///   whichever claim its batch cuts let through and, by bulk, a claim older
 ///   than the token.
-/// - 5: protocols by their pair (resync/protocol-pairs): the indexer
+/// - 5: an Omnilock max-supply claim counts for a token only when the token's
+///   owner lock (the first 32 bytes of its type args) is the supply-mode
+///   Omnilock holding the claim's info cell. A store stamped 4 can show a max
+///   supply that any lock wrote for any token.
+/// - 6: protocols by their pair (resync/protocol-pairs): the indexer
 ///   recognises a protocol and a standard lock by the pair its script runs
 ///   (`ProtocolRegistry::script`), so a cell locked by a protocol lock's code
 ///   hash under another hash type writes no protocol action, Fiber channel,
 ///   `.cell` listing or max-supply claim, and is a called lock
 ///   (`lock_calls`); a standard lock's binary by a data hash type is a
-///   standard lock. A store stamped 4 holds those rows by code hash alone.
+///   standard lock. A store stamped 5 holds those rows by code hash alone.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
 /// type's usage, its activity rows are another layout, its participants
 /// carry no senders bit.
-pub const STORE_LAYOUT: u32 = 5;
+pub const STORE_LAYOUT: u32 = 6;
 
 /// What [`STORE_LAYOUT`] changed, for the refusal's words.
 pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by their pair (code \
      hash, hash type), generic type references counted by their live code, each transaction in \
      one activity kind, the senders bit on participants, a token's max supply its first claim \
-     at or after its first block on both sync paths, protocols recognised by their pair";
+     at or after its first block on both sync paths, made by the token's owner lock, protocols \
+     recognised by their pair";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,16 +270,29 @@ mod tests {
         );
     }
 
-    /// Stamp 4 is the re-sync set before protocols were read by their pair
-    /// (resync/all): its channels, actions, listings, claims and called locks
-    /// took a protocol's code hash by any hash type, so this build refuses it.
+    /// Stamp 4 is the re-sync set before an Omnilock claim was bound to the
+    /// token's owner lock: its tokens can show a max supply any lock wrote.
+    /// Refused.
     #[test]
-    fn a_store_stamped_before_protocols_were_read_by_their_pair_is_refused() {
+    fn a_store_stamped_before_claims_were_bound_to_the_owner_is_refused() {
         let (_dir, store) = store();
         store.set_store_layout(4).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
             Err(StoreLayoutMismatch { found: Some(4) })
+        );
+    }
+
+    /// Stamp 5 is the re-sync set before protocols were read by their pair
+    /// (resync/all): its channels, actions, listings, claims and called locks
+    /// took a protocol's code hash by any hash type, so this build refuses it.
+    #[test]
+    fn a_store_stamped_before_protocols_were_read_by_their_pair_is_refused() {
+        let (_dir, store) = store();
+        store.set_store_layout(5).unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: Some(5) })
         );
     }
 

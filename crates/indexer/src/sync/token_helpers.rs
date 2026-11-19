@@ -451,20 +451,36 @@ impl OnchainTokenInfoTimeline {
     }
 }
 
+/// Who made a max-supply claim: what binds it to the token it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaxSupplyClaimant {
+    /// An Omnilock supply-info cell held under its own supply-mode Omnilock
+    /// (the lock args name the cell's type script): the hash of that lock
+    /// script. Anyone can write such a cell naming any token; it is the
+    /// token's only when the token's owner lock IS this lock (RFC 0042: the
+    /// token is then minted only with this lock in the inputs).
+    SupplyOmnilock([u8; 32]),
+    /// A Unique Cell that the token's own xUDT output names in its extension
+    /// scripts, created by the same transaction: bound by construction (the
+    /// token's own output carries the reference).
+    TokenExtension,
+}
+
 /// One max-supply claim (an Omnilock supply-info cell, or a Unique Cell an
-/// xUDT extension binds) and its place in chain order: the block, the
-/// transaction and the output that carry it. A shallow rollback below its
-/// block must undo it.
+/// xUDT extension binds), who made it, and its place in chain order: the
+/// block, the transaction and the output that carry it. A shallow rollback
+/// below its block must undo it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MaxSupplyObservation {
     pub max_supply: u128,
     pub block_number: i64,
     pub tx_index: i32,
     pub output_index: u32,
+    pub claimant: MaxSupplyClaimant,
 }
 
 impl MaxSupplyObservation {
-    fn place(&self) -> (i64, i32, u32) {
+    pub(crate) fn place(&self) -> (i64, i32, u32) {
         (self.block_number, self.tx_index, self.output_index)
     }
 }
@@ -479,19 +495,43 @@ pub(crate) fn insert_max_supply_claim(claims: &mut MaxSupplyClaims, claim: MaxSu
 }
 
 /// THE max-supply rule, both sync paths: a token's max supply is the first
-/// claim made at or after the token's first block (the block of its first
-/// cell), in chain order. A claim made before the token exists is not the
-/// token's: it names an id nothing carries yet. `through_block` is the last
-/// block the row is being computed for (`i64::MAX` for the row after all of
-/// them). `claims` is in chain order.
+/// of the token's claims made at or after the token's first block (the
+/// block of its first cell), in chain order. `type_args` and `first_block`
+/// are the token row's.
+///
+/// - A claim made before the token exists is not the token's: it names an id
+///   nothing carries yet.
+/// - An Omnilock supply-info claim is the token's only when the token's owner
+///   lock hash (the first 32 bytes of its type args, sUDT and xUDT alike) is
+///   the hash of the claiming supply-mode Omnilock: one comparison. A claim
+///   that fails it is ignored and the next one counts. A token whose type
+///   args are shorter than 32 bytes names no owner lock: no Omnilock claim
+///   is its.
+/// - An xUDT extension claim is bound by construction: the token's own output
+///   names the Unique Cell in its extension scripts, so no owner check
+///   applies.
+///
+/// `through_block` is the last block the row is being computed for
+/// (`i64::MAX` for the row after all of them). `claims` is in chain order.
 pub(crate) fn token_max_supply_claim(
     claims: &[MaxSupplyObservation],
+    type_args: &[u8],
     first_block: i64,
     through_block: i64,
 ) -> Option<MaxSupplyObservation> {
+    let owner_lock_hash = type_args.get(..32);
     claims
         .iter()
-        .find(|claim| claim.block_number >= first_block && claim.block_number <= through_block)
+        .find(|claim| {
+            claim.block_number >= first_block
+                && claim.block_number <= through_block
+                && match &claim.claimant {
+                    MaxSupplyClaimant::SupplyOmnilock(lock_hash) => {
+                        owner_lock_hash == Some(lock_hash.as_slice())
+                    }
+                    MaxSupplyClaimant::TokenExtension => true,
+                }
+        })
         .copied()
 }
 
@@ -714,15 +754,17 @@ fn collect_issuance_cooccurrence_binding(
     minted.map(|token_type_hash| (token_type_hash.clone(), unique_info))
 }
 
-/// Record one claim of `tx`'s output `output_index` on `token_type_hash`.
-/// Every claim is kept, in chain order: which one is the token's is the rule's
-/// to say ([`token_max_supply_claim`]), once the token's first block is known.
+/// Record one claim by `claimant` of `tx`'s output `output_index` on
+/// `token_type_hash`. Every claim is kept, in chain order: which one is the
+/// token's is the rule's to say ([`token_max_supply_claim`]), once the
+/// token's row is known.
 pub(crate) fn observe_max_supply(
     observations: &mut HashMap<Vec<u8>, MaxSupplyClaims>,
     tx: &TxData,
     output_index: usize,
     token_type_hash: Vec<u8>,
     max_supply: u128,
+    claimant: MaxSupplyClaimant,
 ) {
     let output_index = u32::try_from(output_index)
         .expect("a transaction's output index fits u32 (CKB caps outputs)");
@@ -733,8 +775,19 @@ pub(crate) fn observe_max_supply(
             block_number: tx.block_number,
             tx_index: tx.tx_index,
             output_index,
+            claimant,
         },
     );
+}
+
+/// The claimant of a supply-info cell under its own supply-mode Omnilock:
+/// that lock script's hash.
+pub(crate) fn supply_omnilock_claimant(lock_script_hash: &[u8]) -> MaxSupplyClaimant {
+    MaxSupplyClaimant::SupplyOmnilock(
+        lock_script_hash
+            .try_into()
+            .expect("a lock script hash is 32 bytes"),
+    )
 }
 
 /// Every max-supply claim of a batch, per token, in chain order.
@@ -775,6 +828,7 @@ pub(crate) fn collect_token_max_supply_observations(
                 output_index,
                 token_type_hash.to_vec(),
                 max_supply,
+                supply_omnilock_claimant(&cell.lock_script_hash),
             );
         }
 
@@ -825,6 +879,7 @@ pub(crate) fn collect_token_max_supply_observations(
                     output_index,
                     token_type_hash.clone(),
                     max_supply,
+                    MaxSupplyClaimant::TokenExtension,
                 );
             }
         }
@@ -1357,8 +1412,9 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|claims| claims[0].max_supply),
-            Some(1_000)
+                .map(|claims| (claims[0].max_supply, claims[0].claimant)),
+            // the claimant is the info cell's own lock, by its script hash
+            Some((1_000, MaxSupplyClaimant::SupplyOmnilock([0x44; 32])))
         );
 
         // resync/protocol-pairs: the claim is Omnilock's by its registered
@@ -1373,6 +1429,46 @@ mod tests {
         assert!(
             collect_token_max_supply_observations(&[tx]).is_empty(),
             "Omnilock's code hash by data claims nothing"
+        );
+    }
+
+    /// The rule, alone: an Omnilock claim is the token's only when the
+    /// token's owner lock (its first 32 type-args bytes) is the claiming
+    /// lock; an extension claim is bound by construction; a token with no
+    /// 32-byte owner takes no Omnilock claim.
+    #[test]
+    fn test_token_max_supply_claim_binds_an_omnilock_claim_to_the_tokens_owner() {
+        let claim = |block_number, claimant| MaxSupplyObservation {
+            max_supply: u128::try_from(block_number).unwrap(),
+            block_number,
+            tx_index: 0,
+            output_index: 0,
+            claimant,
+        };
+        let owner = [0x44; 32];
+        let mut xudt_args = owner.to_vec();
+        xudt_args.extend_from_slice(&[0, 0, 0, 0]);
+        let forged = claim(10, MaxSupplyClaimant::SupplyOmnilock([0x45; 32]));
+        let genuine = claim(11, MaxSupplyClaimant::SupplyOmnilock(owner));
+        let extension = claim(12, MaxSupplyClaimant::TokenExtension);
+
+        for args in [owner.as_slice(), xudt_args.as_slice()] {
+            assert_eq!(
+                token_max_supply_claim(&[forged, genuine], args, 0, i64::MAX),
+                Some(genuine),
+                "the forged claim is skipped, the owner's counts"
+            );
+            assert_eq!(token_max_supply_claim(&[forged], args, 0, i64::MAX), None);
+        }
+        assert_eq!(
+            token_max_supply_claim(&[forged, extension], &[0x99; 32], 0, i64::MAX),
+            Some(extension),
+            "an extension claim needs no owner check"
+        );
+        assert_eq!(
+            token_max_supply_claim(&[genuine], &owner[..20], 0, i64::MAX),
+            None,
+            "type args shorter than 32 bytes name no owner lock"
         );
     }
 
@@ -1964,12 +2060,14 @@ mod tests {
                         block_number: 11,
                         tx_index: 0,
                         output_index: 1,
+                        claimant: MaxSupplyClaimant::TokenExtension,
                     },
                     MaxSupplyObservation {
                         max_supply: 43_000,
                         block_number: 12,
                         tx_index: 0,
                         output_index: 1,
+                        claimant: MaxSupplyClaimant::TokenExtension,
                     },
                 ]
                 .as_slice()
