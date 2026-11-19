@@ -501,6 +501,41 @@ describe('BlockTransactionsTable', () => {
   });
 });
 
+// Lane D4 follow-up (the coordinator's note): the block a transaction was proposed in is a link
+// inside a line, on the phone row and in the table alike: the inline look, underlined.
+describe('the block a transaction was proposed in is an inline link (lane D4 follow-up)', () => {
+  it('on the phone row', () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    wrap(
+      <BlockTransactionsTable
+        transactions={[
+          {
+            hash: `0x${'1'.repeat(64)}`,
+            blockNumber: 7,
+            index: 1,
+            inputsCount: 1,
+            outputsCount: 1,
+            fee: '0',
+            txSize: 300,
+            cycles: 0,
+            cyclesStatus: 'complete',
+            outputCapacity: '100',
+            proposalOrigin: { blockNumber: 5, distance: 2, uncle: null },
+            isCellbase: false,
+          } as unknown as Transaction,
+        ]}
+        blockNumber={7}
+      />
+    );
+    const link = screen.getByRole('link', { name: '#5' });
+    expect(link).toHaveClass('underline');
+  });
+});
+
 describe('Blocks list pieces', () => {
   // re-pinned on purpose (readability F3-e, the coordinator's ruling): the tick form, "8M" (it was
   // "8,000,000"), on the 48 px track a count bar keeps
