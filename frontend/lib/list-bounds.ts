@@ -205,6 +205,18 @@ export const WIDEST_FEE_RATE = (1_000_000_000).toLocaleString('en-US');
  */
 export const WIDEST_DAO_DEPOSIT = ckbAmountText(ckbNines(10), 'column');
 
+/**
+ * Of record: WIDEST_DAO_DEPOSIT as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `9,999,999,999`. Source: WIDEST_DAO_DEPOSIT.
+ */
+export const WIDEST_DAO_DEPOSIT_SUMMARY = ckbAmountText(ckbNines(10), 'summary');
+
+/**
+ * Of record: the live objects one holder holds of one collection, under a million, `999,999` (the
+ * largest collections hold thousands). Source: mainnet's object collections' live counts.
+ */
+export const WIDEST_HELD_ITEMS = nines(6).toLocaleString('en-US');
+
 /** Of record: a depositor's rank, under a million depositors. Source: mainnet's DAO depositors. */
 export const WIDEST_RANK = nines(6).toLocaleString('en-US');
 

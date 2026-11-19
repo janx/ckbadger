@@ -28,8 +28,8 @@ import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { shortChars } from '@/lib/list-bounds';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { WIDEST_HELD_ITEMS, shortChars } from '@/lib/list-bounds';
 import { PartReadBoundary } from '@/components/read-failure';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
@@ -48,6 +48,21 @@ export interface CollectionHoldersProps {
 
 /** The asset classes a row bar can be drawn in (`AlignedBar` tones). */
 type BarClass = Extract<AssetClass, 'tokens' | 'objects' | 'identities' | 'dao'>;
+
+/**
+ * Line 1 of a collection's holder on a phone (the phone-rows board's head()): a rank of two digits in
+ * its 22 px box, the holder's address at the tight size and the key's 14 px (92.4), the 12 px between
+ * the parts and the most objects one holder holds of one collection, "999,999 " at 14 px (67.2) and
+ * "items" at 13 px (39; WIDEST_HELD_ITEMS): 232.6 of a 360 px phone's 328 px line.
+ */
+const COLLECTION_HOLDER_PHONE_HEAD_PX = phoneHead(
+  'collection holders',
+  22 +
+    textPx(shortChars(SHORT_FORMS.tight.address), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_HELD_ITEMS} `.length, fontPx('body')) +
+    textPx('items'.length, fontPx('small'))
+);
 
 /**
  * The count bars' track; the exact count prints beside it (table-rows L2-4). Readability F3-e:
@@ -333,6 +348,7 @@ function ScopedCollectionHolders({
                               color: CLASS_COLORS[assetClass],
                             }}
                             axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
+                            head={COLLECTION_HOLDER_PHONE_HEAD_PX}
                             wide={wide}
                           />
                         );

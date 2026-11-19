@@ -33,7 +33,7 @@ import {
   COUNT_TRACK_PX,
   ScaleHeader,
 } from '@/components/ui/aligned-bar';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { shortChars } from '@/lib/list-bounds';
 import { PartReadBoundary, PartReadError, readPart } from '@/components/read-failure';
@@ -78,6 +78,21 @@ function bucketRange(lowerBound: string, upperBound: string | null, decimals: nu
     ? `Under ${bound(upperBound)}`
     : `${bound(lowerBound)} – under ${bound(upperBound)}`;
 }
+/**
+ * Line 1 of a token holder on a phone (the phone-rows board's head()): a rank of two digits in its
+ * 22 px box, the holder's address at the tight size and the key's 14 px (92.4), the 12 px between
+ * the parts, and the room that leaves the balance with its symbol at 14 px: 24 characters, 201.6, the
+ * line's 328 px at 360 (28 characters at 390). A token's balance has no bound of its own (a supply
+ * is the issuer's): a longer one drops under the holder, whole and right-aligned (PhoneRow's rule),
+ * and a rank of three digits or more takes 8.4 px a digit from it.
+ */
+const TOKEN_HOLDER_PHONE_HEAD_PX = phoneHead(
+  'token holders',
+  22 +
+    textPx(shortChars(SHORT_FORMS.tight.address), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(24, fontPx('body'))
+);
 export interface TokenDistributionViewProps {
   distribution: TokenDistribution;
   symbol: string | null;
@@ -507,10 +522,17 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                           />
                         )
                       }
-                      amount={<TokenAmount form="summary" amount={h.balance} decimals={decimals} />}
+                      // the balance named by its token's symbol (the table heads its column with it)
+                      amount={
+                        <span className="whitespace-nowrap">
+                          <TokenAmount form="summary" amount={h.balance} decimals={decimals} />
+                          {symbol && ` ${symbol}`}
+                        </span>
+                      }
                       share={share.text}
                       bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
                       axis={rows[0] === h ? formatShareTick(scale) : undefined}
+                      head={TOKEN_HOLDER_PHONE_HEAD_PX}
                       wide={wide}
                     />
                   );

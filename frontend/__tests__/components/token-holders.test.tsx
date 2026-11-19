@@ -430,22 +430,27 @@ describe('Token holders (board L5)', () => {
     const [first] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     expect(phoneLines(first)).toEqual([
+      // Re-pinned on purpose (lane D4, PB-09): the lock left line 1 for the bar line's right edge
+      // and the balance is named by its token's symbol (it was the lock after the address and a
+      // bare balance)
       {
         key: 'holder',
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
-        left: `1ckb1…${JOY_HOLDER.slice(-6)} JoyID`,
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "562,997.00000000")
-        right: '562,997',
+        left: `1ckb1…${JOY_HOLDER.slice(-6)}`,
+        // a phone row's summary form (readability R5: was "562,997.00000000")
+        right: '562,997 RGB++',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
       // mark (41.23 % at most: 60 %, the table's), and the share's number sits right after its
       // fixed track.
       { key: 'axis', tone: 'quiet', left: '060%', right: null },
-      { key: 'share', tone: 'quiet', left: '2.32%', right: null },
+      { key: 'share', tone: 'quiet', left: '2.32%', right: 'JoyID' },
     ]);
     expect(first.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '3.87%');
-    expect(first.querySelector('[data-role="rank"]')).toHaveClass('w-[22px]');
+    // re-pinned on purpose (lane D4): the rank's box is at least 22 px and grows with its digits
+    // (it was a fixed 22 px, which a rank of three digits ran past)
+    expect(first.querySelector('[data-role="rank"]')).toHaveClass('min-w-[22px]');
   });
 });
 
@@ -536,8 +541,11 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     atViewportWidth(390);
     mount();
     const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
-    expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
-    expect(phoneLines(unnamed)[0].left).toMatch(/ lock 0x4343…4343$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock stands at the bar line's right edge (it was
+    // after the address on line 1)
+    expect(phoneLines(named).at(-1)!.right).toBe('JoyID');
+    expect(phoneLines(unnamed)[0].right).toBe('200 T');
+    expect(phoneLines(unnamed).at(-1)!.right).toBe('lock 0x4343…4343');
     expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
       'href',
       scriptPage
@@ -704,7 +712,9 @@ describe('Token holders name a holder whose lock has no address form by its lock
     mount();
     const [row] = await screen.findAllByTestId('holder-row-mobile');
     expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
-    expect(phoneLines(row)[0].left).toMatch(/ JoyID$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock at the bar line's right edge (it was after
+    // the holder on line 1)
+    expect(phoneLines(row).at(-1)!.right).toBe('JoyID');
     expect(row).not.toHaveTextContent(/not indexed/);
   });
 });
@@ -742,10 +752,12 @@ describe('Token holders where the table does not fit (L5)', () => {
     // R9 (re-pinned): a container just under the table is a desktop column (the holders beside the
     // balance bands from 1280, 545 px), so at jsdom's 1024 px viewport the holder takes the row
     // size, 10…6 for a lock hash (it was the tight 6…4)
+    // Re-pinned on purpose (lane D4, PB-09): the lock at the bar line's right edge and the balance
+    // named by its symbol (it was "… JoyID" on line 1 beside a bare "100")
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x11111111…111111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x11111111…111111', right: '100 T' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
-      { key: 'share', tone: 'quiet', left: '10.00%', right: null },
+      { key: 'share', tone: 'quiet', left: '10.00%', right: 'JoyID' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });
