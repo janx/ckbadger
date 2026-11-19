@@ -152,23 +152,84 @@ it('tells a move without a duration when the later header time runs backwards', 
   );
 });
 
-it('explains what changed in the cell between minting and now', () => {
-  const a = v({
-    capacity: '30700000000',
-    occupiedCapacity: '30700000000',
-    anatomy: { capacityBytes: 8, lockBytes: 53, typeBytes: 65, dataBytes: 181 },
+// Re-pinned on purpose (lane P2's fifth round, item 2; review-fix-logic-pages MUST 2): the
+// sentence states what the route sent, both capacities and both sizes of a part that differs, and
+// over how many moves, never a difference the page computed ("so the cell grew by 13 CKB when it
+// moved", which named one move over several); and it says what is true of the state the cell is
+// in: a live cell "holds", a consumed one "held … when it was consumed", nothing in the present.
+describe('the cell’s life in one sentence, in the state it is in', () => {
+  const cell = (capacity: number, lockBytes: number, over: Partial<ItemCellVersion> = {}) =>
+    v({
+      capacity: `${capacity}00000000`,
+      occupiedCapacity: `${capacity}00000000`,
+      anatomy: { capacityBytes: 8, lockBytes, typeBytes: 65, dataBytes: capacity - lockBytes - 73 },
+      isLive: false,
+      ...over,
+    });
+  it('says the live cell holds its CKB, and what minting held, over its one move', () => {
+    const a = v({
+      capacity: '30700000000',
+      occupiedCapacity: '30700000000',
+      anatomy: { capacityBytes: 8, lockBytes: 53, typeBytes: 65, dataBytes: 181 },
+      isLive: false,
+    });
+    const b = v({
+      capacity: '32000000000',
+      occupiedCapacity: '32000000000',
+      anatomy: { capacityBytes: 8, lockBytes: 66, typeBytes: 65, dataBytes: 181 },
+      isLive: true,
+    });
+    expect(cellLifeSentence([a, b], 'object')).toBe(
+      'The object’s cell holds 320 CKB. At minting it held 307 CKB, its lock 53\u00a0bytes; after 1\u00a0move its lock is 66\u00a0bytes.'
+    );
+    expect(
+      cellLifeSentence(
+        [v({ capacity: '13400000000', occupiedCapacity: '13300000000', isLive: true })],
+        'token'
+      )
+    ).toBe('The token’s cell holds 134 CKB, 133 of it occupied by its bytes.');
   });
-  const b = v({
-    capacity: '32000000000',
-    occupiedCapacity: '32000000000',
-    anatomy: { capacityBytes: 8, lockBytes: 66, typeBytes: 65, dataBytes: 181 },
+
+  it('says what a consumed last cell held when it was consumed, nothing in the present', () => {
+    const a = cell(307, 53);
+    const b = cell(320, 66, { consumedByTx: `0x${'56'.repeat(32)}`, consumedAtBlock: 101 });
+    expect(cellLifeSentence([a, b], 'object')).toBe(
+      'The object’s last cell held 320 CKB when it was consumed. At minting it held 307 CKB, its lock 53\u00a0bytes; after 1\u00a0move its lock was 66\u00a0bytes.'
+    );
+    expect(cellLifeSentence([a, b], 'object')).not.toMatch(/holds| is /);
   });
-  expect(cellLifeSentence([a, b], 'object')).toBe(
-    'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13\u00a0bytes, so the cell grew by 13 CKB when it moved.'
-  );
-  expect(
-    cellLifeSentence([v({ capacity: '13400000000', occupiedCapacity: '13300000000' })], 'token')
-  ).toBe('The token’s cell holds 134 CKB, 133 of it occupied by its bytes.');
+
+  it('says a cell minted then melted held its CKB when it was consumed', () => {
+    expect(cellLifeSentence([cell(320, 53)], 'object')).toBe(
+      'The object’s cell held 320 CKB when it was consumed.'
+    );
+    expect(
+      cellLifeSentence(
+        [v({ capacity: '13400000000', occupiedCapacity: '13300000000', isLive: false })],
+        'token'
+      )
+    ).toBe('The token’s cell held 134 CKB, 133 of it occupied by its bytes, when it was consumed.');
+  });
+
+  it('says two growths over two moves as what minting held and what now holds, no difference', () => {
+    const versions = [cell(307, 53), cell(313, 59), cell(320, 66, { isLive: true })];
+    expect(cellLifeSentence(versions, 'object')).toBe(
+      'The object’s cell holds 320 CKB. At minting it held 307 CKB, its lock 53\u00a0bytes; after 2\u00a0moves its lock is 66\u00a0bytes.'
+    );
+    // no figure the page subtracted: neither 13 CKB nor 13 bytes, nor either step's 6 or 7
+    expect(cellLifeSentence(versions, 'object')).not.toMatch(/\b(13|6|7)\b/);
+  });
+
+  it('says moves that changed no part of the cell by their count alone', () => {
+    const versions = [cell(320, 53), cell(320, 53), cell(320, 53, { isLive: true })];
+    expect(cellLifeSentence(versions, 'object')).toBe(
+      'The object’s cell holds 320 CKB. At minting it held 320 CKB; it has moved 2\u00a0times since.'
+    );
+    const gone = [cell(320, 53), cell(320, 53)];
+    expect(cellLifeSentence(gone, 'token')).toBe(
+      'The token’s last cell held 320 CKB when it was consumed. At issue it held 320 CKB; it moved 1\u00a0time before its last cell was consumed.'
+    );
+  });
 });
 
 it('pairs every composition tier with one sentence and keeps Live one style', () => {
