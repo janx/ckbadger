@@ -74,22 +74,29 @@ describe('ActivityFeed', () => {
 
   it('opens on Latest activity with real tab buttons and a view all link', async () => {
     render(<ActivityFeed />);
-    const tabs = screen.getByRole('group', { name: 'Feed' });
-    const activity = within(tabs).getByRole('button', { name: 'Latest activity' });
-    const transactions = within(tabs).getByRole('button', { name: 'Transactions' });
-    expect(activity).toHaveAttribute('aria-pressed', 'true');
-    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
-    // Phase 5 (H4): the tabs are a smaller row under the feed's heading, 13 px (body) at every
-    // width — the heading is the section's name now, not the tabs.
-    expect(activity).toHaveClass('text-body');
-    expect(activity).not.toHaveClass('sm:text-section');
+    // re-pinned (lane C2 topics): the controls board's tab row, a tablist of tabs with
+    // aria-selected and one stop in the tab order (it was a group "Feed" of pressed buttons)
+    const tabs = screen.getByRole('tablist', { name: 'Feed' });
+    const activity = within(tabs).getByRole('tab', { name: 'Latest activity' });
+    const transactions = within(tabs).getByRole('tab', { name: 'Transactions' });
+    expect(activity).toHaveAttribute('aria-selected', 'true');
+    // re-pinned (lane C2 topics): the board's one tab: a 32 px target on the 2 px celadon line
+    // (it was 44 px, h-11)
+    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-8', 'whitespace-nowrap');
+    // Phase 5 (H4): the tabs are a row under the feed's heading, which is the section's name, not
+    // the tabs. Re-pinned (lane C2 topics): the board's tab row has one size, the section step
+    // from 640 and the body step below it (it was the body step at every width); a plain row,
+    // not a command line: the names keep their case and no prompt square leads them.
+    expect(activity).toHaveClass('text-body', 'sm:text-section');
+    expect(activity).not.toHaveClass('lowercase');
+    expect(tabs.querySelector('.section-mark')).toBeNull();
     expect(transactions).toHaveClass('whitespace-nowrap');
     // re-pinned (A4 Chrome sweep): the phrase may break; only its arrow is held to its last word
     const viewAll = screen.getByRole('link', { name: 'view all →' });
     expect(viewAll).not.toHaveClass('whitespace-nowrap');
     expect(viewAll.lastElementChild).toHaveClass('whitespace-nowrap');
     expect(viewAll.lastElementChild!.textContent).toBe(' →');
-    expect(transactions).toHaveAttribute('aria-pressed', 'false');
+    expect(transactions).toHaveAttribute('aria-selected', 'false');
     expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',
       '/mainnet/activities'
@@ -119,15 +126,19 @@ describe('ActivityFeed', () => {
     expect(screen.queryByRole('link', { name: /View all/ })).toBeNull();
     // the heading row first, then the tab row with its rule; no link left among the tabs
     const feed = screen.getByTestId('home-feed');
-    const [headRow, tabRow] = Array.from(feed.children) as HTMLElement[];
+    // re-pinned (lane C2 topics): under the heading row, the board's tab row with its panel; the
+    // rule is the tablist's own (it was a wrapper row around a group of buttons)
+    const [headRow, tabbed] = Array.from(feed.children) as HTMLElement[];
     expect(headRow).toHaveClass(ACTIVITY_HEAD_CLASS);
     expect(headRow).toContainElement(heading);
-    expect(tabRow).toContainElement(screen.getByRole('group', { name: 'Feed' }));
+    const tabRow = screen.getByRole('tablist', { name: 'Feed' });
+    expect(tabbed).toContainElement(tabRow);
+    expect(tabbed).toContainElement(screen.getByRole('tabpanel'));
     // the rule under the tabs is a row rule (R5, re-pinned on purpose: it was the hair)
     expect(tabRow).toHaveClass('border-b', 'border-row-rule');
     expect(within(tabRow).queryByRole('link')).toBeNull();
     // the note follows the tab; the heading stays the feed's
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
@@ -400,9 +411,10 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
 
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
-    expect(screen.getByRole('button', { name: 'Transactions' })).toHaveAttribute(
-      'aria-pressed',
+    // re-pinned (lane C2 topics): a tab of the board's tab row, selected (it was a pressed button)
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(screen.getByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+      'aria-selected',
       'true'
     );
     expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
@@ -471,7 +483,7 @@ describe('ActivityFeed', () => {
       serveTransactions([served]);
       const { unmount } = render(<ActivityFeed />);
       await loadUnderStillClock(() => shown().length > 0);
-      fireEvent.click(screen.getByRole('button', { name: 'Transactions' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
       await loadUnderStillClock(() => shown()[0]?.getAttribute('data-tx-row') === served.hash);
       expectTitleTicks(() => rows()[0], served.hash);
       unmount();
@@ -484,7 +496,7 @@ describe('ActivityFeed', () => {
     const txs = [tx(1), tx(2)];
     serveTransactions(txs);
     render(<ActivityFeed />);
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(2));
     const row = document.querySelector(`[data-tx-row="${txs[1].hash}"]`) as HTMLElement;
     expect(row).toHaveAttribute('data-highlighted', 'false');
@@ -513,7 +525,7 @@ describe('ActivityFeed', () => {
     const txs = [tx(1), tx(2)];
     serveTransactions(txs);
     render(<ActivityFeed />);
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(2));
     const row = document.querySelector(`[data-tx-row="${txs[1].hash}"]`) as HTMLElement;
     act(() => usePipelineHoverStore.getState().pin({ kind: 'tx', hash: txs[1].hash }));
@@ -533,7 +545,7 @@ describe('ActivityFeed', () => {
         <ActivityFeed />
       </QueryClientProvider>
     );
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(1));
 
     // What useRealtimeData does on a new_transaction message.

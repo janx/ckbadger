@@ -43,8 +43,6 @@ const ALLOWLIST: Record<string, string> = {
   // placed by the four C2 lanes, whose work list is __tests__/lib/controls-gate.test.ts; the dev
   // proof page (proof/controls.tsx, outside the build) mounts it meanwhile. An entry goes when its
   // module is first imported by a page (this test then fails until it does).
-  'components/ui/tabs.tsx':
-    'the controls library’s tab row (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
   'components/ui/range-select.tsx':
     'the controls library’s range (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
   'components/ui/copy-button.tsx':
