@@ -23,7 +23,7 @@ import { formatCount, countNoun } from '@/lib/format-count';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { Pager } from '@/components/ui/pager';
-import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
+import type { StripFact } from '@/components/ui/status-strip';
 import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { charPx } from '@/lib/type-metrics';
@@ -316,100 +316,88 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   );
 }
 
-/** A live cell count by class, for the Live cells metric ("827 objects + 1 plain CKB"). */
-const CELL_NOUN: Record<AddressCellClass, [string, string]> = {
-  dao: ['DAO cell', 'DAO cells'],
-  token: ['token cell', 'token cells'],
-  object: ['object', 'objects'],
-  identity: ['identity', 'identities'],
-  script: ['other-script cell', 'other-script cells'],
-  plain: ['plain CKB', 'plain CKB'],
-};
-
 /**
- * The metrics row under the balance (lane P, Address.dc.html): Holdings · Live cells ·
- * Transactions · Lock, as the asset pages' `AssetMetrics` (meta label, 17 px value, dim note).
+ * The address's status strip (lane D2, PA-13; gate D0′'s strip with the address's own four
+ * facts): its lock, its live cells, its transactions and its holdings, under the id line. They
+ * were said twice: on the kind line (lock · live cells · transactions) and again in the metrics
+ * row under the balance (Holdings · Live cells · Transactions · Lock), which the strip replaces.
+ * The lock is a link to its script, its hash type and args as its notes (and "deprecated" in the
+ * warning's ink where the registry says so); the holdings are those of the classes it holds. The
+ * live cells by class stand in the holdings section, a class to a heading ("5 cells · … held"),
+ * so the strip states their count alone. A fact the page does not know yet is not passed: the
+ * live cells and the holdings come with the holdings read, and an address read without its lock
+ * script states no lock (the evidence tier says "Script unavailable").
  */
-export function AddressMetrics({
-  holdings,
-  address,
-}: {
-  holdings: AddressHoldings;
-  address: Address;
-}) {
-  const held = HOLDING_LINE.map((c) => ({ ...c, count: holdings.holdings[c.key] })).filter(
-    (c) => c.count > 0
-  );
-  const holdingsMetric: AssetMetric =
-    held.length === 0
-      ? { label: 'Holdings', value: 'none' }
-      : held.length === 1
-        ? {
-            label: 'Holdings',
-            value: formatCount(held[0].count, held[0].one, held[0].many),
-            note:
-              held[0].key === 'object'
-                ? `in ${formatCount(holdings.objectCollections.length, 'collection')}`
-                : held[0].key === 'token'
-                  ? `in ${formatCount(holdings.classes.token.cellCount, 'cell')}`
-                  : undefined,
-          }
-        : {
-            label: 'Holdings',
-            value: formatCount(
-              held.reduce((n, c) => n + c.count, 0),
-              'holding'
-            ),
-            note: held.map((c) => formatCount(c.count, c.one, c.many)).join(' · '),
-          };
-  const byClass = ADDRESS_CLASSES.map((c) => ({
-    key: c.key,
-    count: holdings.classes[c.key].cellCount,
-  }));
-  const cells = byClass.reduce((n, c) => n + c.count, 0);
-  if (cells !== holdings.liveCellsCount)
-    throw new Error(
-      `Address ${holdings.lockScriptHash}: class cell counts add up to ${cells}, not its ${holdings.liveCellsCount} live cells`
-    );
+export function addressStripFacts(
+  address: Address,
+  holdings: AddressHoldings | undefined
+): StripFact[] {
   const lock = address.lockScript;
   const lockName = address.lockScriptInfo?.name;
-  const items: AssetMetric[] = [
-    holdingsMetric,
-    {
-      label: 'Live cells',
-      value: holdings.liveCellsCount.toLocaleString('en-US'),
-      note:
-        byClass
-          .filter((c) => c.count > 0)
-          .map(
-            (c) => `${c.count.toLocaleString('en-US')} ${CELL_NOUN[c.key][c.count === 1 ? 0 : 1]}`
-          )
-          .join(' + ') || undefined,
-    },
-    { label: 'Transactions', value: address.transactionsCount.toLocaleString('en-US') },
-    lock
-      ? {
-          label: 'Lock',
-          size: 'body',
-          value: (
-            <Link
-              href={getScriptDetailHref({
-                name: lockName,
-                codeHash: lock.codeHash,
-                hashType: lock.hashType,
-                scriptKind: 'lock',
-              })}
-              className="text-text-bright"
-            >
-              {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
-            </Link>
-          ),
-          note: `${lock.hashType} · ${argsNote(lock.args)}`,
-          title: lockName ? undefined : lock.codeHash,
-        }
-      : { label: 'Lock', size: 'body', value: 'unavailable' },
-  ];
-  return <AssetMetrics items={items} />;
+  const facts: StripFact[] = [];
+  if (lock)
+    facts.push({
+      label: 'lock',
+      value: (
+        <Link
+          look="inline"
+          href={getScriptDetailHref({
+            name: lockName,
+            codeHash: lock.codeHash,
+            hashType: lock.hashType,
+            scriptKind: 'lock',
+          })}
+          title={lockName ? undefined : lock.codeHash}
+        >
+          {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
+        </Link>
+      ),
+      note: [
+        lock.hashType,
+        argsNote(lock.args),
+        address.lockScriptInfo?.deprecated && <span className="text-negative">deprecated</span>,
+      ],
+    });
+  if (holdings) {
+    const cells = ADDRESS_CLASSES.reduce((n, c) => n + holdings.classes[c.key].cellCount, 0);
+    if (cells !== holdings.liveCellsCount)
+      throw new Error(
+        `Address ${holdings.lockScriptHash}: class cell counts add up to ${cells}, not its ${holdings.liveCellsCount} live cells`
+      );
+    facts.push({ label: 'live cells', value: holdings.liveCellsCount.toLocaleString('en-US') });
+  }
+  facts.push({ label: 'transactions', value: address.transactionsCount.toLocaleString('en-US') });
+  if (holdings) {
+    const held = HOLDING_LINE.map((c) => ({ ...c, count: holdings.holdings[c.key] })).filter(
+      (c) => c.count > 0
+    );
+    facts.push(
+      held.length === 0
+        ? { label: 'holdings', value: 'none' }
+        : held.length === 1
+          ? {
+              label: 'holdings',
+              value: unitNode(formatCount(held[0].count, held[0].one, held[0].many)),
+              note:
+                held[0].key === 'object'
+                  ? unitNode(`in ${formatCount(holdings.objectCollections.length, 'collection')}`)
+                  : held[0].key === 'token'
+                    ? unitNode(`in ${formatCount(holdings.classes.token.cellCount, 'cell')}`)
+                    : undefined,
+            }
+          : {
+              label: 'holdings',
+              value: unitNode(
+                formatCount(
+                  held.reduce((n, c) => n + c.count, 0),
+                  'holding'
+                )
+              ),
+              note: held.map((c) => unitNode(formatCount(c.count, c.one, c.many))),
+            }
+    );
+  }
+  return facts;
 }
 
 /** A lock's args by their length: "20-byte args", or "no args". */

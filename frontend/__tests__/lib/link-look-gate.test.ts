@@ -57,8 +57,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- p-chain ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 5, ink: 2, raw: 1 },
-    reason: '5 without a look; inks by hand (text-text-bright); 1 raw <a>',
+    // look 5 → 4, ink 2 → 1 (lane D2): the kind line's lock link went to the status strip
+    sites: { look: 4, ink: 1, raw: 1 },
+    reason: '4 without a look; inks by hand (text-text-bright); 1 raw <a>',
   },
   'app/blocks/[id]/client-page.tsx': {
     lane: 'p-chain',
@@ -94,8 +95,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/address/address-holdings.tsx': {
     lane: 'p-chain',
-    sites: { look: 11, ink: 6, raw: 1 },
-    reason: '11 without a look; inks by hand (text-text-bright, hover:text-jade); 1 raw <a>',
+    // look 11 → 10, ink 6 → 5 (lane D2): the Lock metric's link is the status strip's, its look
+    // stated
+    sites: { look: 10, ink: 5, raw: 1 },
+    reason: '10 without a look; inks by hand (text-text-bright, hover:text-jade); 1 raw <a>',
   },
   'components/blocks/block-position.tsx': {
     lane: 'p-chain',
@@ -524,9 +527,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-// 610 → 605 (lane D2): the transaction page's facts rail and its block link went (1), the block
-// page's facts aside and its two links (2), the cell page's Created block link (2: look, ink)
-const TOLERATED_TOTAL = 605;
+// 610 → 601 (lane D2): the transaction page's facts rail and its block link went (1), the block
+// page's facts aside and its two links (2), the cell page's Created block link (2: look, ink), the
+// address page's kind-line lock link and its Lock metric's (4: two looks, two inks)
+const TOLERATED_TOTAL = 601;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
