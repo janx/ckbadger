@@ -5302,6 +5302,194 @@ impl Check for ParticipantRowsConsistency {
     }
 }
 
+// ── Participant sent matches the input locks ───────────────────────────────
+
+/// Every party of a sampled activity states that it sent (`sent`, the
+/// indexer's senders bit `TAG_INPUT`) exactly when its lock is the lock of at
+/// least one input of the transaction. The inputs are read from ckbadger's own
+/// cells (`/transactions/{hash}`'s inputs: each consumed cell as the domain and
+/// append-only stores hold it, no node), their locks hashed here, so the bit is
+/// checked against an independent record. A party sends with no input of its
+/// lock, holds an input without sending, or an input's lock is no sending
+/// party: a finding naming the transaction and the lock. A store synced before
+/// the bit existed reads as "nobody sent" and fails here.
+pub struct ParticipantSentMatchesInputLocks;
+
+/// How many recent activities the check reads (each costs one transaction read).
+const PARTICIPANT_SENT_ACTIVITY_LIMIT: usize = 50;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SentParticipantRecord {
+    lock_hash: Option<String>,
+    lock_hash_prefix: Option<String>,
+    sent: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SentActivityRecord {
+    tx_hash: String,
+    block_number: i64,
+    participants: Vec<SentParticipantRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputLockRecord {
+    code_hash: String,
+    hash_type: String,
+    args: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionInputRecord {
+    lock: Option<InputLockRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionInputsRecord {
+    inputs: Vec<TransactionInputRecord>,
+}
+
+/// The lock hash of an input as the API states its lock script.
+fn input_lock_hash(lock: &InputLockRecord) -> anyhow::Result<String> {
+    let hash_type = ckbadger_common::hash_type_from_label(&lock.hash_type)
+        .ok_or_else(|| anyhow::anyhow!("input lock hash type {:?} is unknown", lock.hash_type))?;
+    let code_hash = parse_hex_bytes(&lock.code_hash)
+        .map_err(|e| anyhow::anyhow!("input lock code hash {:?}: {e}", lock.code_hash))?;
+    let args = parse_hex_bytes(&lock.args)
+        .map_err(|e| anyhow::anyhow!("input lock args {:?}: {e}", lock.args))?;
+    Ok(format!(
+        "0x{}",
+        hex::encode(ckbadger_common::script_hash(&code_hash, hash_type, &args))
+    ))
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    let stripped = value
+        .strip_prefix("0x")
+        .ok_or_else(|| "no 0x prefix".to_string())?;
+    hex::decode(stripped).map_err(|e| e.to_string())
+}
+
+/// The findings of one activity against its inputs' locks: every party's
+/// `sent` must equal "its lock is an input's lock", and every input's lock
+/// must be a party that sent.
+fn participant_sent_findings(
+    activity: &SentActivityRecord,
+    inputs: &TransactionInputsRecord,
+) -> anyhow::Result<Vec<Finding>> {
+    let entity = format!("tx={} (block {})", activity.tx_hash, activity.block_number);
+    let mut details = vec![];
+    let mut input_locks = std::collections::BTreeSet::new();
+    for (index, input) in inputs.inputs.iter().enumerate() {
+        match &input.lock {
+            Some(lock) => {
+                input_locks.insert(normalize_hex_key(
+                    &input_lock_hash(lock)
+                        .map_err(|e| anyhow::anyhow!("{entity}: input {index}: {e}"))?,
+                ));
+            }
+            None => details.push(format!(
+                "input {index} states no lock: its cell is not in the store"
+            )),
+        }
+    }
+    let mut senders = std::collections::BTreeSet::new();
+    for party in &activity.participants {
+        let (name, holds) = match (&party.lock_hash, &party.lock_hash_prefix) {
+            (Some(lock_hash), _) => {
+                let key = normalize_hex_key(lock_hash);
+                let holds = input_locks.contains(&key);
+                if party.sent {
+                    senders.insert(key);
+                }
+                (format!("lock {lock_hash}"), holds)
+            }
+            // A protocol-named party no lock resolves: it holds no cell here.
+            (None, Some(prefix)) => (format!("prefix {prefix}"), false),
+            (None, None) => {
+                details.push("a party carries neither lockHash nor lockHashPrefix".to_string());
+                continue;
+            }
+        };
+        if party.sent != holds {
+            details.push(if party.sent {
+                format!("{name} states sent, but no input of the transaction has its lock")
+            } else {
+                format!("{name} holds an input of the transaction but states it did not send")
+            });
+        }
+    }
+    for lock in input_locks.difference(&senders) {
+        if !activity
+            .participants
+            .iter()
+            .any(|p| p.lock_hash.as_deref().map(normalize_hex_key).as_deref() == Some(lock))
+        {
+            details.push(format!("input lock 0x{lock} is no party of the activity"));
+        }
+    }
+    Ok(if details.is_empty() {
+        vec![]
+    } else {
+        vec![Finding { entity, details }]
+    })
+}
+
+impl Check for ParticipantSentMatchesInputLocks {
+    fn name(&self) -> &'static str {
+        "participant_sent_matches_input_locks"
+    }
+    fn description(&self) -> &'static str {
+        "Each party of a recent activity states it sent exactly when its lock is an input's lock"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    /// The recent-activity sample is sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(PARTICIPANT_SENT_ACTIVITY_LIMIT) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let limit = ctx.sample_count.min(PARTICIPANT_SENT_ACTIVITY_LIMIT);
+        if limit == 0 {
+            anyhow::bail!(
+                "participant_sent_matches_input_locks was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let page: CursorPage<SentActivityRecord> =
+            api_get(ctx, &format!("activities?limit={limit}"))?;
+        if page.data.is_empty() {
+            anyhow::bail!("/activities lists no activity: there is nothing to check the bit on");
+        }
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for activity in &page.data {
+            let inputs: TransactionInputsRecord =
+                api_get(ctx, &format!("transactions/{}", activity.tx_hash))?;
+            findings.extend(participant_sent_findings(activity, &inputs)?);
+            checked += 1;
+            progress.inc(1);
+        }
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ── Token live cell count ──────────────────────────────────────────────────
 
 /// A token's persisted live cell count (`cellsCount`: the running sum of its
@@ -7183,6 +7371,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(IdentityCollectionHolderConsistency),
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
+        Box::new(ParticipantSentMatchesInputLocks),
         Box::new(GlobalActivityBucketIndexConsistency),
         Box::new(DailyActivityKindsPartitionTransactions),
         Box::new(TokenLiveCellsConsistency),
@@ -7393,8 +7582,8 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        // 8 fast + 37 sampling (S39 daily_activity_kinds_partition_transactions the newest).
-        assert_eq!(checks.len(), 45);
+        // 8 fast + 38 sampling (S40 participant_sent_matches_input_locks the newest).
+        assert_eq!(checks.len(), 46);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -7421,6 +7610,7 @@ mod tests {
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
         assert!(names.contains(&"daily_activity_kinds_partition_transactions"));
+        assert!(names.contains(&"participant_sent_matches_input_locks"));
         assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
@@ -7508,8 +7698,8 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 8);
-        // 37 here; with the entity-history and DAO-cell checks, the 39 of S1-S39.
-        assert_eq!(sampling_count, 37);
+        // 38 here; with the entity-history and DAO-cell checks, the 40 of S1-S40.
+        assert_eq!(sampling_count, 38);
     }
 
     #[test]
@@ -10902,6 +11092,135 @@ mod tests {
                 .any(|d| d.starts_with("type index lists cell 0x0101") && d.contains("5555")),
             "{:?}",
             findings[0].details
+        );
+    }
+
+    // ── participant_sent_matches_input_locks ──────────────────────────────
+
+    /// A secp lock as the API states an input's lock script, and its lock hash.
+    fn sent_check_lock(arg: u8) -> (serde_json::Value, String) {
+        let code = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+        let args = [arg; 20];
+        let hash = ckbadger_common::script_hash(&hex::decode(code).unwrap(), 1, &args);
+        (
+            json!({
+                "codeHash": format!("0x{code}"),
+                "hashType": "type",
+                "args": format!("0x{}", hex::encode(args)),
+            }),
+            format!("0x{}", hex::encode(hash)),
+        )
+    }
+
+    /// Serves `/activities` as `activities` and each `/transactions/{hash}` as
+    /// its inputs' locks.
+    fn run_sent_check(
+        activities: serde_json::Value,
+        transactions: &[(String, Vec<serde_json::Value>)],
+    ) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/activities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": activities, "nextCursor": null, "hasMore": false, "limit": 10
+                })))
+                .mount(&server)
+                .await;
+            for (hash, locks) in transactions {
+                let inputs: Vec<_> = locks.iter().map(|lock| json!({ "lock": lock })).collect();
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/transactions/{hash}")))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(json!({ "inputs": inputs })),
+                    )
+                    .mount(&server)
+                    .await;
+            }
+        });
+        execute_check(
+            registered_check("participant_sent_matches_input_locks").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    /// One transfer: `payer` spends its cell and pays `payee`, each party
+    /// stating `sent` as given.
+    fn sent_check_transfer(
+        tx: &str,
+        payer: &str,
+        payer_sent: bool,
+        payee: &str,
+        payee_sent: bool,
+    ) -> serde_json::Value {
+        json!({
+            "txHash": tx,
+            "blockNumber": 100,
+            "participants": [
+                { "lockHash": payer, "lockHashPrefix": null, "sent": payer_sent },
+                { "lockHash": payee, "lockHashPrefix": null, "sent": payee_sent },
+            ]
+        })
+    }
+
+    #[test]
+    fn sent_check_passes_when_exactly_the_input_locks_sent() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let tx = format!("0x{}", "ab".repeat(32));
+        let named = json!({ "lockHash": null, "lockHashPrefix": "0x1234", "sent": false });
+        let mut activity = sent_check_transfer(&tx, &payer, true, &payee, false);
+        activity["participants"].as_array_mut().unwrap().push(named);
+        let completed = run_sent_check(json!([activity]), &[(tx, vec![payer_lock])]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    /// A store synced before the senders bit reads as "nobody sent": the
+    /// payer holds the input and states it did not send.
+    #[test]
+    fn sent_check_fails_on_a_store_from_before_the_senders_bit() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let tx = format!("0x{}", "ab".repeat(32));
+        let completed = run_sent_check(
+            json!([sent_check_transfer(&tx, &payer, false, &payee, false)]),
+            &[(tx.clone(), vec![payer_lock])],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].entity, format!("tx={tx} (block 100)"));
+        assert_eq!(
+            result.findings[0].details,
+            vec![format!(
+                "lock {payer} holds an input of the transaction but states it did not send"
+            )]
+        );
+    }
+
+    /// A payee that states it sent, and an input whose lock is no party.
+    #[test]
+    fn sent_check_fails_on_a_sender_without_an_input_and_an_input_without_a_party() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let (stray_lock, stray) = sent_check_lock(0x03);
+        let tx = format!("0x{}", "cd".repeat(32));
+        let completed = run_sent_check(
+            json!([sent_check_transfer(&tx, &payer, true, &payee, true)]),
+            &[(tx, vec![payer_lock, stray_lock])],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(
+            result.findings[0].details,
+            vec![
+                format!("lock {payee} states sent, but no input of the transaction has its lock"),
+                format!("input lock {stray} is no party of the activity"),
+            ]
         );
     }
 
