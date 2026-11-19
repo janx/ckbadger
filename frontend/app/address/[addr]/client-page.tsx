@@ -131,9 +131,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const activityPage = useCursorPagination(),
-    txPage = useCursorPagination(),
-    cellPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const activityPage = useCursorPagination(pageSize),
+    txPage = useCursorPagination(pageSize),
+    cellPage = useCursorPagination(pageSize);
   const historyId = useId();
   const address = useQuery({
     queryKey: ['address', addr],

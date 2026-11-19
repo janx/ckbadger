@@ -121,10 +121,12 @@ function ScopedCollectionHolders({
   assetClass,
 }: CollectionHoldersProps) {
   const [all, setAll] = useState(false);
-  const pagination = useCursorPagination();
   // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
   const allPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const limit = all ? allPageSize : 10;
+  // a change of page size (at md, or the top ten opened to all) starts the walk again (lane
+  // c2-finish, 1d)
+  const pagination = useCursorPagination(limit);
   const holders = useQuery({
     queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
     queryFn: () => load({ limit, cursor: pagination.cursor }),

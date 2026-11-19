@@ -352,8 +352,9 @@ function ShapeKey() {
 }
 
 export default function ForksPage() {
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination(limit);
   const pin = useForkDaysPin();
   const [expanded, setExpanded] = useState(false);
   const overview = useQuery({

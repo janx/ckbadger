@@ -462,9 +462,10 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const addr = holdings.lockScriptHash;
   const [active, setActive] = useState<AddressCellClass | null>(null);
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const tokensPage = useCursorPagination(),
-    daoPage = useCursorPagination(),
-    identitiesPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const tokensPage = useCursorPagination(pageSize),
+    daoPage = useCursorPagination(pageSize),
+    identitiesPage = useCursorPagination(pageSize);
   const tokens = useQuery({
     queryKey: ['address-tokens', addr, tokensPage.cursor, pageSize],
     queryFn: () => api.getAddressTokens(addr, { limit: pageSize, cursor: tokensPage.cursor }),

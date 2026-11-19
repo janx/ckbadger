@@ -67,8 +67,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryFn: () => api.getTokenHistory(typeHash),
   });
   // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
-  const supplyPages = useCursorPagination();
   const supplyPageSize = usePageSize(ENTITY_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const supplyPages = useCursorPagination(supplyPageSize);
   const supplyEvents = useQuery({
     queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
     queryFn: () =>

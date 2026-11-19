@@ -296,8 +296,9 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
 
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
-  const pagination = useCursorPagination();
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const pin = useFiberGraphPin();
   const channels = useQuery({

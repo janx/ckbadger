@@ -420,7 +420,11 @@ export default function ScriptDetailPage({
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedVersion, setSelectedVersion] = useState<SelectedVersion | null>(null);
   const [selectedDeploymentOutpoint, setSelectedDeploymentOutpoint] = useState<string | null>(null);
-  const cellsPagination = useCursorPagination();
+  // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
+  const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
+  const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const cellsPagination = useCursorPagination(cellsPageSize);
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
@@ -867,9 +871,6 @@ export default function ScriptDetailPage({
   });
   const selectedCapacityChart = selectedCapacityChartRead.data;
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
-  // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
-  const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
   const selectedVersionCellsQueries = useQueries({
     queries: cellReferences.map((reference) => ({
       queryKey: [

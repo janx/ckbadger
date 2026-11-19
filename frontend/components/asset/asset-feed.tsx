@@ -691,9 +691,10 @@ function FullAssetFeed({
   initialTab = 'activities',
 }: AssetFeedProps & { initialTab?: FeedLayer }) {
   const [tab, setTab] = useState<FeedLayer>(initialTab);
-  const actsPages = useCursorPagination(),
-    txPages = useCursorPagination();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const actsPages = useCursorPagination(pageSize),
+    txPages = useCursorPagination(pageSize);
   const activityCursor = actsPages.cursor ?? initialActivityCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
