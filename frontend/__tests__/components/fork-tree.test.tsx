@@ -242,18 +242,17 @@ const deep: ForkTreeModel = {
  * Every other case holds the property whole. The list can only shrink: a fix fails its entry's
  * pin, and the entry goes with the fix.
  */
-const KNOWN_FAULTS = [
-  {
-    width: 358,
-    shape: 'four heights, the last two today’s',
-    // the time of today's +2 (from its tile's left edge) and of +3 (ending at its tile's right
-    // edge, the last column): 86.4 px each under columns that span 72 + 20 + 72 = 164 px, so they
-    // share 2 × 86.4 − 164 = 8.8 px of the gap between the two tiles
-    meets: { a: '15:47:24.564', b: '15:47:24.564', by: 8.8 },
-    owner: 'P4 rd/p-topics (forks, fork)',
-    why: 'the tree’s phone form needs a design (PAGE-LANE-NOTES, P4: two of mainnet’s 58 forks, #21,022,666 and #21,006,834); this lane does not redesign it',
-  },
-] as const;
+// Lane P4 (rd/p-topics) took its one entry: at 358 px the times of today's +2 (from its tile's
+// left edge) and of +3 (ending at its tile's right edge, the last column), 86.4 px each under
+// columns that span 72 + 20 + 72 = 164 px, met by 2 × 86.4 − 164 = 8.8 px (#21,022,666 and
+// #21,006,834); the phone form is a column now, each tile's labels beside it on its own row.
+const KNOWN_FAULTS: readonly {
+  width: number;
+  shape: string;
+  meets: { a: string; b: string; by: number };
+  owner: string;
+  why: string;
+}[] = [];
 
 describe('ForkTree: every word inside its tile (readability F3)', () => {
   const shapes = [
@@ -278,9 +277,8 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
   const UNDER = 4 + 2 * (12 + 3) + 4;
 
   it('pins the known faults it holds, which only shrink', () => {
-    // 1: the miners of +2 and +3 met by 8.8 px too, the address cut a second time to 12
-    // characters (86.4 px); in the tight form (79.2 px) they stand 5.6 px apart
-    expect(KNOWN_FAULTS).toHaveLength(1);
+    // Lane P4: the one fault went with the column form (above); the list is empty
+    expect(KNOWN_FAULTS).toHaveLength(0);
     for (const fault of KNOWN_FAULTS)
       expect(cases.some(([w, name]) => w === fault.width && name === fault.shape)).toBe(true);
   });
@@ -486,4 +484,80 @@ describe('ForkTree: the miners of the last two columns never meet (review fb-log
     }
     expect(met).toEqual([]);
   });
+});
+
+// Lane P4 (rd/p-topics), THE FORK TREE ON A PHONE (PAGE-LANE-NOTES, P4, F3-d): at 358 px two of
+// mainnet's 58 forks drew labels that met by 8.8 px (#21,022,666, #21,006,834), the five-height fork
+// (#21,043,989) folded its dropped blocks into "+3 earlier", and at 326 px (a 360 phone) every
+// usual fork folded its fork point and its branch. A fold must never take the branch: on a phone
+// the tree turns to a column, one block a row, each tile with its time and miner beside it.
+describe('ForkTree on a phone: a column, every block a row of its own, nothing folded (P4)', () => {
+  const shapes = [
+    ['four heights, the last an uncle inclusion', usual],
+    ['three heights', three],
+    ['four heights, the last two today’s', full],
+    ['five heights, two dropped', five],
+    ['a 7-deep fork', deep],
+  ] as const;
+  const cases = [358, 326].flatMap((width) =>
+    shapes.map(([name, model]) => [width, name, model] as const)
+  );
+
+  it.each(cases)(
+    'at %i px, %s: every block is its own tile, the branch whole',
+    (width, _, model) => {
+      stubChartWidth(width);
+      const { container } = render(<ForkTree model={model} />);
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      expect(svg.querySelector('[data-collapsed]'), 'a fold').toBeNull();
+      const drawn = (n: number, dropped: boolean) =>
+        svg.querySelector(
+          `[data-tile="${n}"]${dropped ? '[data-dropped]' : ':not([data-dropped])'}`
+        );
+      for (const tile of model.main)
+        expect(drawn(tile.number, false), `${tile.number}`).not.toBeNull();
+      for (const row of model.rows)
+        for (const tile of row.tiles)
+          expect(drawn(tile.number, true), `${tile.number}′ (${row.label})`).not.toBeNull();
+      expect(svg.querySelectorAll('[data-tile]')).toHaveLength(
+        model.main.length + model.rows.reduce((n, row) => n + row.tiles.length, 0)
+      );
+    }
+  );
+
+  it.each(cases)(
+    'at %i px, %s: a tile’s time and miner stand beside it, on its row',
+    (width, _, model) => {
+      stubChartWidth(width);
+      const { container } = render(<ForkTree model={model} />);
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      const tiles = [...svg.querySelectorAll('[data-tile]')];
+      const boxes = tiles.map((g) => rectBox(g.querySelector('rect')!));
+      let labelled = 0;
+      tiles.forEach((g, i) => {
+        const box = boxes[i];
+        const time = g.querySelector('[data-time]');
+        if (!time) return;
+        labelled++;
+        const words = [...g.querySelectorAll('text')].filter(
+          (t) => t === time || t.textContent!.startsWith('ckb1')
+        );
+        expect(words, `${g.getAttribute('data-tile')}`).toHaveLength(2);
+        for (const line of words.flatMap((t) => textLines(t))) {
+          // beside the tile: right of every tile's lane, inside the tile's own band of height
+          expect(line.left, line.text).toBeGreaterThan(Math.max(...boxes.map((b) => b.right)));
+          expect(line.top, line.text).toBeGreaterThanOrEqual(box.top);
+          expect(line.bottom, line.text).toBeLessThanOrEqual(box.bottom);
+        }
+      });
+      expect(labelled).toBeGreaterThan(0);
+      // one block a row: no two tiles share a band of height
+      const sorted = [...boxes].sort((a, b) => a.top - b.top);
+      for (let k = 1; k < sorted.length; k++)
+        expect(sorted[k].top).toBeGreaterThanOrEqual(sorted[k - 1].bottom);
+      const all = allTextLines(svg);
+      for (const line of all) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
+      expect(meetings(all), 'the tree').toEqual([]);
+    }
+  );
 });
