@@ -221,11 +221,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason: 'the no-description sentence',
   },
-  'components/asset/collection-gallery.tsx': {
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'the empty gallery sentence',
-  },
+  // components/asset/collection-gallery.tsx left the list (lane p-assets): its items are a list
+  // table, whose empty state is the table's own
   'components/asset/collection-holders.tsx': {
     family: 'assets',
     sites: { prose: 2 },
