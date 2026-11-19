@@ -555,6 +555,14 @@ export function capNote(
   noun: string
 ): string {
   const valueAt = (point: ChartPoint) => {
+    // a stack is above the scale by its whole, the day's stack total, exactly
+    if (model.kind === 'stacked') {
+      const whole = exactSum(
+        model.series.map((entry) => point.values[entry.key]),
+        `${model.title} at ${point.label}`
+      );
+      return { ratio: ratio(whole, 'cap whole'), text: stated(whole, model.unit, true) };
+    }
     const key = model.series.reduce((best, entry) =>
       compare(at(point, entry.key), at(point, best.key)) > 0 ? entry : best
     );
