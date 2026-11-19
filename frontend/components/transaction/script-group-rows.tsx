@@ -16,6 +16,7 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { shortCkb } from '@/lib/tx-detail-model';
+import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 
 /**
  * A transaction's script groups as rows (Main.dc.html Script groups; lane D3: one wording on the
@@ -235,7 +236,12 @@ export function scriptGroupRows(
         ) : !deps ? (
           <span className="text-text-dim">Resolving code…</span>
         ) : codeDeps.length === 0 ? (
-          <span className="text-text-dim">No matching dep</span>
+          // the built-in Type ID runs with no cell dep; any other code with none is unmatched
+          <span className="text-text-dim">
+            {g.script.hashType === 'type' && g.script.codeHash.toLowerCase() === TYPE_ID_CODE_HASH
+              ? 'Built-in Type ID, no cell dep'
+              : 'No matching dep'}
+          </span>
         ) : (
           // The kind jumps to the dep row's evidence; the out point opens the code cell.
           codeDeps.map(({ d, i }) => (
