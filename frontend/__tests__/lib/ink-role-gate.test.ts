@@ -868,9 +868,11 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
     // reward's finality line with its block link, and the compact table's size and cycles are
     // values, and the error line a statement, all in the reading ink
-    sites: { td: 1, prose: 1 },
+    // td 1 → 0 (BRIEF-ink-size-roles item 1): the cycles' state, "Not yet run" or "Replay failed", is
+    // a cell's content, the reading ink; decided was "an empty value", which is no role of the brief's
+    sites: { prose: 1 },
     reason:
-      'decided (the P3 follow-up): the wide table’s cycles state for a block not run yet or a failed replay, an empty value; the loading line',
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading blocks…”',
   },
   'components/home/ckbytes-section.tsx': {
     family: 'chain',
@@ -929,8 +931,8 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
       'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading the newest cells…”',
   },
 };
-/** The pinned sites and files of DECIDED: 20 sites in 9 files (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided). */
-const DECIDED_SITES = 20;
+/** The pinned sites and files of DECIDED: 19 sites in 9 files (BRIEF-ink-size-roles item 1, the blocks list: the cycles' state is a cell's content, the reading ink). */
+const DECIDED_SITES = 19;
 const DECIDED_FILES = 9;
 
 /**
@@ -1255,7 +1257,7 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 20 in 9 files, none of them also on the work list', () => {
+  it('holds the decided sites apart, 19 in 9 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

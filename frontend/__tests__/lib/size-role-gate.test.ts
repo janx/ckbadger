@@ -343,14 +343,16 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   assets: 13,
   // lists 6 → 5 (the inventory's totals line at 13 px)
   // lists 5 → 4 (the pipeline's pinned readout at 13 px)
-  lists: 4,
+  // lists 4 → 0 (the blocks list's links and cells at 13 px)
+  lists: 0,
   topics: 2,
   charts: 1,
   shared: 3,
 };
 // 18 → 17 (the inventory's totals line at 13 px)
 // 17 → 16 (the pipeline's pinned readout at 13 px)
-const TOLERATED_FILES = 16;
+// 16 → 15 (the blocks list's links and cells at 13 px)
+const TOLERATED_FILES = 15;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -408,11 +410,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: `a code cell's link in a 12 px line; ${WORK}`,
   },
   // ---- lists ----
-  'app/blocks/page.tsx': {
-    family: 'lists',
-    sites: { link: 3, td: 1 },
-    reason: `the blocks list's miner and reward links at 12 px and a 12 px cell; ${WORK}`,
-  },
+  // 'app/blocks/page.tsx' left the list (BRIEF-ink-size-roles item 2: link 3, td 1 → 0): the\n  // reward's finality line and its block link, and both hardfork links, read at the cell's 13 px; the\n  // hash beside and under the number is an id at 13 px too (the Block column 220 → 226, Age · txs\n  // 122 → 126 with its proposals at 13 px)
   // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles item 2, 588cd09a:\n  // link 1 → 0): the totals line is a sentence at 13 px, its block link with it
   // 'components/pipeline/pipeline-panel.tsx' left the list (BRIEF-ink-size-roles item 2: link 1 →\n  // 0): the pinned readout's link and values read at 13 px; its eyebrow and tag stay 12 px, labels
   // ---- topics ----
