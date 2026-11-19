@@ -89,7 +89,11 @@ describe('RewardBreakdown', () => {
       'primary',
       'secondary',
     ]);
-    expect(screen.getByText('Proposal fees, 40%')).toBeInTheDocument();
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a block-quiet): a fee share of 0 is not
+    // listed either (it was: "Proposal fees, 40%" stood with nothing in it); the block says once
+    // that it earned no fees
+    expect(screen.queryByText('Proposal fees, 40%')).toBeNull();
+    expect(screen.getByText('This block earned no fees.')).toBeInTheDocument();
   });
   // Readability R4 (lane B7, the fix round): a share's note is a sentence; at 1280 the secondary
   // one ran 108 characters a line across the dl's last column. Each stands on the measure.
@@ -106,6 +110,36 @@ describe('RewardBreakdown', () => {
       expect(note.tagName).toBe('DD');
       expect(note).toHaveClass('max-w-measure');
     }
+  });
+  // Lane P1 follow-up (review chain-a block-quiet: "Committed fees, 60% 0 of 0 in fees of the 0
+  // transactions committed here"): a fee row with nothing to say is not drawn, and a block whose
+  // reward holds no fee says so once.
+  it('draws no fee row with nothing to say, and says once that the block earned no fees', () => {
+    const quiet = {
+      ...rewardBlock,
+      miningReward: '68429072137',
+      rewardBreakdown: { ...rewardBlock.rewardBreakdown, committed: '0', proposal: '0' },
+      totalFees: '0',
+      transactionsCount: 1,
+    };
+    wrap(<RewardBreakdown block={quiet} />);
+    expect(screen.queryByText('Committed fees, 60%')).toBeNull();
+    expect(screen.queryByText('Proposal fees, 40%')).toBeNull();
+    expect(screen.getAllByText('This block earned no fees.')).toHaveLength(1);
+    expect(document.body).not.toHaveTextContent('0 of 0');
+  });
+  it('draws a fee row only where it holds a fee', () => {
+    const proposedOnly = {
+      ...rewardBlock,
+      miningReward: '68429084795',
+      rewardBreakdown: { ...rewardBlock.rewardBreakdown, committed: '0' },
+      totalFees: '0',
+      transactionsCount: 1,
+    };
+    wrap(<RewardBreakdown block={proposedOnly} />);
+    expect(screen.queryByText('Committed fees, 60%')).toBeNull();
+    expect(screen.getByText('Proposal fees, 40%')).toBeInTheDocument();
+    expect(screen.queryByText('This block earned no fees.')).toBeNull();
   });
   it('says where an unfinalized reward will be paid', () => {
     wrap(<RewardBreakdown block={{ ...rewardBlock, miningReward: null, rewardBreakdown: null }} />);
