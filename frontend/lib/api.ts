@@ -2230,12 +2230,7 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
-  /**
-   * The live DAO cells under a legacy name: `liveCellsCount`, which the route checks it equals (a
-   * withdrawal request is no active deposit). Its last reader is the home page's card; it goes when
-   * that reads `liveCellsCount` (lane exactness, part A2, S2; part B).
-   */
-  activeDeposits: number;
+  /** The deposit cells, the home page's "Active deposits" (a withdrawal request is none). */
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
   /** The live DAO cells, deposits and withdrawal requests, the route's (lane exactness, part A). */
@@ -2876,7 +2871,9 @@ interface UncleRateChartResponse extends ChartResponse {
  * one block (`blockNumber`); every amount is a shannon string. `circulating` = knowledge + daoFree
  * + free exactly. `knowledge` is the occupied capacity of every live cell (DAO cells included),
  * `daoFree` the free capacity of the live NervosDAO cells (deposits and withdraw requests), `free`
- * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part.
+ * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part: the
+ * home page's "in all DAO cells", the Supply chart's deposited + withdrawing at this block
+ * (`/charts/total-supply`, `daoDeposited + daoWithdrawing`: one amount, lane exactness, part B5).
  */
 interface CkbytesAllocation {
   blockNumber: number;

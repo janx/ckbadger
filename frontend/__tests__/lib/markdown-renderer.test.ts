@@ -627,7 +627,6 @@ describe('renderMarkdownPage', () => {
       totalDeposited: '1300000000000',
       totalDepositedCkb: '13000',
       totalDepositors: 3,
-      activeDeposits: 13,
       depositCellsCount: 9,
       withdrawalRequestCellsCount: 4,
       liveCellsCount: 13,

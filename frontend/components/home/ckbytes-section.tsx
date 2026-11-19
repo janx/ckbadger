@@ -581,7 +581,8 @@ interface DaoView {
   apc: string;
   depositors: number;
   depositorsChange: number | null;
-  activeDeposits: number;
+  /** The deposit cells, "Active deposits" (a withdrawal request is no active deposit). */
+  depositCells: number;
   change: bigint | null;
 }
 
@@ -592,7 +593,9 @@ export function daoView(stats: DaoStatistics): DaoView {
     apc: stats.estimatedApc,
     depositors: stats.totalDepositors,
     depositorsChange: stats.depositorsChange24h ?? null,
-    activeDeposits: stats.activeDeposits,
+    // the figure the term names (lane exactness, part B5): it read the legacy activeDeposits, the
+    // live DAO cells with the withdrawal requests, which the route no longer sends
+    depositCells: stats.depositCellsCount,
     change: stats.depositChange24h === null ? null : parseCkbDecimal(stats.depositChange24h),
   };
 }
@@ -671,7 +674,7 @@ function DaoFigures({ view }: { view: DaoView }) {
             </span>
           )}
         </DaoStat>
-        <DaoStat term="Active deposits">{view.activeDeposits.toLocaleString('en-US')}</DaoStat>
+        <DaoStat term="Active deposits">{view.depositCells.toLocaleString('en-US')}</DaoStat>
         <DaoStat term="Change in 24 h">
           {change === null ? (
             <span className="text-text-dim">—</span>

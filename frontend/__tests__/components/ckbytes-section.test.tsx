@@ -413,7 +413,12 @@ describe('CkbytesSection', () => {
     expect(terms).toEqual(['Estimated APC', 'Depositors', 'Active deposits', 'Change in 24 h']);
     expect(dao).toHaveTextContent('1.99%');
     expect(dao).toHaveTextContent(`16,673 ${MINUS}3 in 24 h`);
-    expect(dao).toHaveTextContent('22,379');
+    // re-pinned on purpose (lane exactness, part B5): "Active deposits" counts the deposit cells
+    // (`depositCellsCount`, 20,689), as the figure above it does; it read the legacy
+    // activeDeposits, the live DAO cells (22,379: 20,689 deposits + 1,690 withdrawal requests),
+    // which the route no longer sends
+    expect(dao).toHaveTextContent('Active deposits20,689');
+    expect(dao).not.toHaveTextContent('22,379');
     const change = within(dao).getByTestId('home-dao-change-24h');
     expect(change).toHaveTextContent(`${MINUS}2,578,825 CKB`);
     expect(change).toHaveClass('text-negative');

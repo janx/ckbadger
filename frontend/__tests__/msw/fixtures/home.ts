@@ -172,7 +172,6 @@ export const daoStatistics: DaoStatistics = {
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
-  activeDeposits: 22379,
   depositCellsCount: 20689,
   withdrawalRequestCellsCount: 1690,
   // the route's: the live DAO cells, 20,689 + 1,690 (lane exactness, part A, A5 ii)

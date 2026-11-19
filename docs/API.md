@@ -683,6 +683,12 @@ bands it draws and the wholes it divides by, read-only on the store:
   amount the site calls circulating everywhere; it is not a band. (Part A2's
   four bands keyed the first `circulatingNotDeposited`, the withdrawal requests
   in it; lane D1's keyed it `outsideDao` with the same meaning.)
+  `daoDeposited + daoWithdrawing` is `protocol_deposited`, the capacity of
+  every live DAO cell (deposits and withdrawal requests) at the day's end: the
+  amount `/statistics/ckbytes-allocation`'s `daoCapacity` states at its block
+  (the home page's "in all DAO cells"; the indexer sums the same live DAO
+  entries' capacity for both), the two figures one amount at two moments
+  (part B5).
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
   `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
@@ -780,7 +786,7 @@ network store too), no re-sync:
   it. The legacy `activeDeposits`, the same live-cell total under an untrue
   name (a withdrawal request is no active deposit), is no longer sent (part B5);
   the route still refuses a stored row whose legacy count is not the deposits and
-  the requests.
+  the requests. The home page's "Active deposits" reads `depositCellsCount`.
 - `GET /charts/block-time-distribution` — `bucketCounts`: each bucket's
   intervals, one per point of `data`, so a tie or the most common interval is
   read from counts, not from the cut shares.
