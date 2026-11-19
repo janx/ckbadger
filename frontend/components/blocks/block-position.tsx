@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { BLOCK_GLYPH_HEIGHT, BlockContents } from '@/components/blocks/block-visual';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
-import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
+import { BLOCK_POSITION_COLORS, CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
@@ -97,6 +97,65 @@ interface BlockPositionProps {
   hasMore: boolean;
   transactionsError?: string;
   proposalsError?: string;
+}
+
+/**
+ * The diagram's key (lane P1, the plan: "Position in the chain" gets the legend it lacks; review
+ * chain-a block-busy): each mark the tiles and the arcs draw, a swatch of the same mark (the
+ * contents glyph's diamond, square and dot, the proposal arc's gold, the uncle box's dashed
+ * rule) beside its words, labels in the quiet ink. It stands over both forms of the position:
+ * the phone's list draws the same glyph and the same gold.
+ */
+function PositionLegend() {
+  const swatch = (mark: ReactNode) => (
+    <svg aria-hidden="true" width="18" height="12" viewBox="0 0 18 12" className="shrink-0">
+      {mark}
+    </svg>
+  );
+  const items: [string, ReactNode][] = [
+    ['the cellbase', <path key="d" d="M9 1.5 13.5 6 9 10.5 4.5 6z" fill={DATA_COLOR} />],
+    [
+      'a transaction, by its size',
+      <rect key="s" x="4" y="1" width="10" height="10" fill={DATA_COLOR} opacity="0.8" />,
+    ],
+    ['a proposal', <circle key="p" cx="9" cy="6" r="2.4" fill={CLASS_COLORS.dao} />],
+    [
+      'proposed, then committed',
+      <path
+        key="a"
+        d="M1 11C1 2 17 2 17 11"
+        fill="none"
+        stroke="var(--c-gold)"
+        strokeWidth="1.5"
+      />,
+    ],
+    [
+      'an included uncle',
+      <rect
+        key="u"
+        x="1.5"
+        y="1.5"
+        width="15"
+        height="9"
+        fill="none"
+        stroke="var(--c-ink-quiet)"
+        strokeDasharray="3 3"
+      />,
+    ],
+  ];
+  return (
+    <ul
+      aria-label="Chain position legend"
+      className="text-text-dim text-meta flex flex-wrap gap-x-5 gap-y-1.5"
+    >
+      {items.map(([words, mark]) => (
+        <li key={words} className="flex items-center gap-1.5">
+          {swatch(mark)}
+          {words}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** Canonical proposal endpoints and uncle references from the existing read responses. */
@@ -284,6 +343,7 @@ export function BlockPosition({
           </div>
         ))}
       </div>
+      <PositionLegend />
       <div
         ref={viewport}
         className="hidden max-w-full overflow-x-auto md:block"

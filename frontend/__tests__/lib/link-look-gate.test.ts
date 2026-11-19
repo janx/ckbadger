@@ -64,10 +64,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/blocks/[id]/client-page.tsx': {
     lane: 'p-chain',
-    // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look
-    sites: { look: 20, ink: 7, raw: 1 },
+    // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look.
+    // Look 20 → 18 (lane P1): the lede's miner (the strip's) went, the cellbase row's paid block
+    // states its look
+    sites: { look: 18, ink: 7, raw: 1 },
     reason:
-      '20 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
+      '18 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     lane: 'p-chain',
@@ -518,8 +520,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the structure's
 // group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 527 (lane P1, 10
 // more: the transaction page's lede, its item names, the cellbase's paid block, and the cellbase's
-// own block, which the status strip states, 5 looks and 5 inks)
-const TOLERATED_TOTAL = 527;
+// own block, which the status strip states, 5 looks and 5 inks) → 525 (lane P1: the block page's
+// lede no longer names the miner, and the cellbase row's paid block states its look, 2)
+const TOLERATED_TOTAL = 525;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

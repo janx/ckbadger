@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
@@ -26,7 +26,15 @@ import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { rankedPageAt } from '@/lib/pagination';
-import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
+import {
+  api,
+  isNotFoundApiError,
+  type Block,
+  type BlockUncle,
+  type GlobalActivity,
+  type Transaction,
+} from '@/lib/api';
+import { ParticipantRefView } from '@/components/participant-ref';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
@@ -37,7 +45,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
-import { Utc8Age, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 import { RowSeal } from '@/components/ui/row-seal';
 import { percentOf } from '@/lib/format-unit';
@@ -238,7 +246,6 @@ export default function BlockDetailPage() {
   if (parentElapsedMs !== null && !Number.isSafeInteger(parentElapsedMs))
     throw new Error(`Block ${block.number}: invalid parent timestamp interval`);
   const cycles = block.cycles === null ? null : Number(block.cycles);
-  const paidIn = block.rewardFinalizesAt === null ? null : block.rewardFinalizesAt - block.number;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
@@ -346,33 +353,45 @@ export default function BlockDetailPage() {
           }}
           // The summary is the head's last line (phase 5, Gate 3 note), under the stone and the
           // plate from the page's left edge, where the tab row and the sections start (C10).
+          // Lane P1 (the plan's P1 paragraph; said once): the strip states the time, the miner and
+          // the reward, so the lede says what only it says — what the block holds, the uncles it
+          // includes and which block's reward its cellbase pays (that cellbase's row names its
+          // amount and payee); genesis, what it issued: its header's total issuance, C.
           lede={
             <p data-testid="block-summary" className="text-body leading-relaxed">
               {unitNode(formatCount(block.transactionsCount, 'transaction'))}
-              {block.minerAddress && (
+              {block.number === 0 ? (
                 <>
-                  , mined by{' '}
-                  <MinerLink
-                    address={block.minerAddress}
-                    pool={block.minerPool}
-                    size="row"
-                    unnamed={<Address address={block.minerAddress} size="row" />}
-                  />
-                </>
-              )}{' '}
-              on <Utc8Date timestamp={block.timestamp} /> at{' '}
-              {unitNode(formatUtc8Time(block.timestamp))}.
-              {block.miningReward !== null ? (
-                <>
-                  {' '}
-                  The miner earns {amount(block.miningReward, 'reward')} for this block
-                  {paidIn !== null && <>, paid {unitNode(formatCount(paidIn, 'block'))} later</>}.
+                  , which issued the chain’s first{' '}
+                  <CkbAmount form="summary" shannons={dao.C} signed={false} tone="plain" />
                 </>
               ) : (
-                paidIn !== null && (
-                  <> Its reward is paid {unitNode(formatCount(paidIn, 'block'))} later.</>
-                )
+                <>
+                  {block.uncles.length > 0 && (
+                    <>
+                      {' and '}
+                      {unitNode(formatCount(block.uncles.length, 'uncle'))},{' '}
+                      {block.uncles.map((uncle, index) => (
+                        <Fragment key={uncle.hash}>
+                          {index > 0 && (index === block.uncles.length - 1 ? ' and ' : ', ')}
+                          <Link look="inline" href={getUncleDetailHref(block.number, index)}>
+                            {formatBlockNumber(uncle.number)}
+                          </Link>
+                        </Fragment>
+                      ))}
+                    </>
+                  )}
+                  {block.cellbasePays && (
+                    <>
+                      ; its cellbase pays the reward for{' '}
+                      <Link look="inline" href={`/blocks/${block.cellbasePays.hash}`}>
+                        {formatBlockNumber(block.cellbasePays.number)}
+                      </Link>
+                    </>
+                  )}
+                </>
               )}
+              .
             </p>
           }
           // on the kind line, after "Block"
@@ -740,7 +759,9 @@ export default function BlockDetailPage() {
                             key={activity.txHash}
                             activity={activity}
                             headline={
-                              activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
+                              activity.isCellbase ? (
+                                <CellbaseHeadline block={block} activity={activity} />
+                              ) : undefined
                             }
                             evidence={
                               <>
@@ -1005,18 +1026,40 @@ function UncleRow({
   );
 }
 
-/** "Cellbase  pays the reward of #N" (R2b-a 1, BA-12): the block whose reward this cellbase pays. */
-function CellbaseHeadline({ block }: { block: Pick<Block, 'cellbasePays'> }) {
+/**
+ * "Cellbase  reward for #N, to ckb1…xxxxxxxx" (R2b-a 1, BA-12; lane P1, the plan's P1 paragraph):
+ * the block whose reward this cellbase pays, and to whom — its parties, the cells it creates, in
+ * the row form — so its amount is not read as this block's own reward, which the status strip
+ * states. The words are the row's statement, the reading ink; its links are inside the line.
+ */
+function CellbaseHeadline({
+  block,
+  activity,
+}: {
+  block: Pick<Block, 'cellbasePays'>;
+  activity: Pick<GlobalActivity, 'participants'>;
+}) {
   return (
     <>
       Cellbase
       {block.cellbasePays && (
-        <span className="text-text-dim font-normal">
+        <span className="text-text font-normal">
           {' '}
-          pays the reward of{' '}
-          <Link href={`/blocks/${block.cellbasePays.hash}`}>
+          reward for{' '}
+          <Link look="inline" href={`/blocks/${block.cellbasePays.hash}`}>
             {formatBlockNumber(block.cellbasePays.number)}
           </Link>
+          {activity.participants.length > 0 && (
+            <>
+              , to{' '}
+              {activity.participants.map((party, i) => (
+                <Fragment key={party.lockHash ?? party.lockHashPrefix ?? i}>
+                  {i > 0 && (i === activity.participants.length - 1 ? ' and ' : ', ')}
+                  <ParticipantRefView participant={party} size="row" compact quiet />
+                </Fragment>
+              ))}
+            </>
+          )}
         </span>
       )}
     </>

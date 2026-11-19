@@ -70,8 +70,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/blocks/[id]/client-page.tsx': {
     family: 'chain',
-    // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it
-    sites: { link: 11, prose: 7 },
+    // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it;
+    // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
+    // reading ink
+    sites: { link: 10, prose: 7 },
     reason:
       'block heights, hashes and the hardfork link in quiet facts and proposal rows; empty and loading lines; the proposal notes',
   },
