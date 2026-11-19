@@ -30,6 +30,7 @@ import {
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
+import { sentField } from '@/lib/api-fields';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -422,16 +423,22 @@ function ScriptsSummary({ summary }: { summary: ScriptsListApi }) {
   // As before: without the class summary or the role counts the page states no summary.
   if (!summary.classSummary || !summary.roleCounts) return null;
   const counts = summary.roleCounts;
+  // the overlap and the rest this plan added to the route, refused by name where an older API sends
+  // none (the third read's La N6: it threw a TypeError on counts.both)
+  const both = sentField(counts.both, 'Scripts', 'roleCounts.both');
+  const neither = sentField(counts.neither, 'Scripts', 'roleCounts.neither');
   const n = (count: number) => count.toLocaleString('en-US');
   return (
     <>
       {/* what each count is, the overlap the route's: "41 locks and 34 types" of 70 read as a
-          partition, and a family used as both is in both (the page-phase review's SHOULD 3) */}
+          partition, and a family that is both is in both (the page-phase review's SHOULD 3). A
+          family's role is its use, or, with no cell yet, the registry's declaration, so the
+          sentence says what a family is, not what it was used as (the third read's La N5) */}
       <p data-role="summary" className="text-text text-body max-w-measure mt-6">
-        {unitNode(formatCount(counts.all, 'script'))}; {n(counts.locks)} used as locks,{' '}
-        {n(counts.types)} as types, {n(counts.both)} as both
-        {counts.neither > 0 && <>, {n(counts.neither)} as neither</>}. Who can change the locks’
-        code, by the CKB under them:
+        {unitNode(formatCount(counts.all, 'script'))}; {n(counts.locks)} are locks,{' '}
+        {n(counts.types)} are types, {n(both)} are both
+        {neither > 0 && <>, {n(neither)} are neither</>}. Who can change the locks’ code, by the CKB
+        under them:
       </p>
       <div className="mt-2">
         <ScriptCodeClassBar classes={summary.classSummary} size="line" />

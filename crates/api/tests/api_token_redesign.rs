@@ -88,14 +88,20 @@ fn fixture() -> Arc<CkbadgerStore> {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
-            recognized_type_codes: vec![],
+            // the token's type script ran (its row's code, 0x72… by type), as the indexer records
+            // the recognised codes of a transfer (C7)
+            recognized_type_codes: vec![ckbadger_store::types::TypeCode {
+                code_hash: [0x72; 32],
+                hash_type: 1,
+            }],
             participants: vec![
                 ParticipantDelta {
                     id: ParticipantId::Lock([0x31; 32]),
                     ckb_delta: -100,
                     used_delta: 0,
                     item_deltas: vec![],
-                    tags: 0,
+                    // its lock is the transaction's one input's: it sent (the senders bit)
+                    tags: ckbadger_store::types::TAG_INPUT,
                     roles: 0,
                 },
                 ParticipantDelta {

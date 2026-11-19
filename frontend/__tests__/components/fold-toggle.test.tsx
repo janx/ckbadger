@@ -168,4 +168,32 @@ describe('FoldToggle', () => {
     expect(document.activeElement).toBe(toggle);
     expect(screen.getByText('the whole feed')).toBeInTheDocument();
   });
+
+  // The lead's finding (the exactness lane's B9, in Chrome): a count of what is read while older
+  // rows are unread is not final, and says so in its own words, never "all"
+  it('says a count read so far as so far, never all, and the way back as ever', () => {
+    function SoFar() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <ul id="read">
+            <li>the rows read</li>
+          </ul>
+          <FoldToggle
+            open={open}
+            count={59}
+            singular="transaction"
+            soFar
+            controls="read"
+            onToggle={setOpen}
+          />
+        </div>
+      );
+    }
+    render(<SoFar />);
+    const toggle = screen.getByRole('button', { name: /^59\stransactions so far ↓$/ });
+    expect(toggle).not.toHaveTextContent(/all/);
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'fewer ↑' })).toBe(toggle);
+  });
 });

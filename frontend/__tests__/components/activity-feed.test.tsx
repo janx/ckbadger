@@ -18,6 +18,7 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const API = '/api/:network/v1';
 
@@ -257,7 +258,7 @@ describe('ActivityFeed', () => {
   });
 
   it('shows an unreadable DAO step as an error in its row, naming the tx', async () => {
-    const broken = {
+    const broken = activityRead({
       ...feedSamples.daoWithdrawRequest,
       protocolActions: [
         {
@@ -267,7 +268,7 @@ describe('ActivityFeed', () => {
           metadata: { capacity: '1' },
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([broken])));
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
@@ -343,7 +344,10 @@ describe('ActivityFeed', () => {
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
     // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
     // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
-    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
+    // re-pinned on purpose (C7, at the merge into resync/type-codes): a row names the recognised
+    // code that ran first, where it names its scripts (the row's `recognizedTypes`, now stated
+    // in the fixture as the route sends it), then its calls
+    expect(details).toEqual([' · Spore', ' · CKBFS', ' · Nervape Shadow Lock']);
     expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
@@ -365,7 +369,11 @@ describe('ActivityFeed', () => {
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
     // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
     // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
-    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede00…00e09f');
+    // re-pinned on purpose (C7, at the merge into resync/type-codes): a row names the recognised
+    // code that ran first, where it names its scripts (the row's `recognizedTypes`, now stated
+    // in the fixture as the route sends it), then its calls ("· xUDT · lock 0xab0e…")
+    const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
+    expect(details).toEqual([' · xUDT', ' · lock 0xab0ede00…00e09f']);
     expect(within(row).getByRole('link', { name: 'lock 0xab0ede00…00e09f' })).toHaveAttribute(
       'title',
       `lock 0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
@@ -404,8 +412,9 @@ describe('ActivityFeed', () => {
   });
 
   it('shows token item deltas on the party line', async () => {
-    const token: GlobalActivity = {
+    const token: GlobalActivity = activityRead({
       ...latestActivities[2],
+      recognizedTypes: [ITEM_TYPE.xudt],
       participants: [
         {
           ...latestActivities[2].participants[0],
@@ -420,7 +429,7 @@ describe('ActivityFeed', () => {
           ],
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([token])));
     render(<ActivityFeed />);
     const link = await screen.findByRole('link', { name: /SEAL/ });

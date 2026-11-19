@@ -29,6 +29,7 @@ import {
   nervape3xOtherTraits,
 } from '@/__tests__/fixtures/objects/nervape3x';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
 const template = collectionGalleryFilteredProducer.data[0];
@@ -90,15 +91,15 @@ beforeEach(() => {
     },
     title: 'Collection capacity',
     data: [
-      { date: '2026-10-21', values: { used: '0', unused: '0', capacity: '0' } },
+      { date: '2026-10-21', values: { occupiedCapacity: '0', freeCapacity: '0', capacity: '0' } },
       {
         date: '2026-10-22',
-        values: { used: '2892000000000', unused: '0', capacity: '2892000000000' },
+        values: { occupiedCapacity: '2892000000000', freeCapacity: '0', capacity: '2892000000000' },
       },
     ],
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   });
   vi.spyOn(api, 'getCollectionGallery').mockResolvedValue(
@@ -259,8 +260,10 @@ it('opens Recent activity with five rows and two links that open the full feed i
   // so they are one run, folded, its count the five rows it holds (was five articles)
   await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(1));
   expect(within(recent).getByRole('article')).toHaveAttribute('data-run-count', '5');
+  // re-pinned on purpose (the lead's finding, the exactness lane's B9): the five newest of a feed
+  // with more, so the run's count is so far (it said "all 5 transactions ↓")
   expect(
-    within(recent).getByRole('button', { name: /^all 5\stransactions ↓$/ })
+    within(recent).getByRole('button', { name: /^5\stransactions so far ↓$/ })
   ).toBeInTheDocument();
   expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('spore', NERVAPE3X_CLUSTER, {
     limit: 5,
@@ -441,12 +444,12 @@ it('marks every collection activity row as an object row, as the board does', as
   vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue({
     ...collectionActivityFeedProducer,
     data: [
-      {
+      activityRead({
         ...row,
         protocolActions: [
           { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
         ],
-      },
+      }),
     ],
   });
   await page();

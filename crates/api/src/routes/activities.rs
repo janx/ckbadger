@@ -218,8 +218,8 @@ pub struct ActivityResponse {
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
-    // This participant's Layer 2
-    pub item_deltas: Vec<ItemDeltaResponse>,
+    // This participant's Layer 2, each item with its movement in the whole transaction
+    pub item_deltas: Vec<RowItemDelta>,
     // TX-level Layer 3
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -299,6 +299,65 @@ pub struct TypeCallResponse {
     pub script_name_by: Option<String>,
 }
 
+/// One item delta of an address's row, with the item's movement in the whole transaction (the
+/// third read's Lb SHOULD 2, ruled): the row carries only its address's deltas, so its page cannot
+/// tell a burn from a send, nor a mint from a transfer in. `movement` is `mint` where the item's
+/// net over every party of the transaction rose, `burn` where it fell, `transfer` where it only
+/// changed hands ([`item_movement`], the rule every other feed's head reads off its whole row).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowItemDelta {
+    #[serde(flatten)]
+    pub delta: ItemDeltaResponse,
+    pub movement: &'static str,
+}
+
+/// An exact sum of u128 amounts: its low 128 bits and how many times they carried past a u128. A
+/// token amount is a u128 on chain (anyone can mint 2^127 units or more), so a transaction's amounts
+/// of one item can sum past a u128: the carries keep the sum exact for any number of deltas (a
+/// carry count bounded by the number of deltas a transaction holds, never near a usize), with no
+/// allocation, and two sums compare exactly, carries first (the derived order).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ExactSum {
+    carries: usize,
+    low: u128,
+}
+
+impl ExactSum {
+    fn add(&mut self, amount: u128) {
+        let (low, carried) = self.low.overflowing_add(amount);
+        self.low = low;
+        if carried {
+            self.carries += 1;
+        }
+    }
+}
+
+/// An item's movement in a transaction: the amounts every party received and the amounts every
+/// party sent, each summed apart and exactly ([`ExactSum`]), then compared: `mint` where more was
+/// received than sent, `burn` where more was sent, `transfer` where they are equal (a token by its
+/// type script hash, an object by its id, an identity by its id and standard: the item delta's
+/// kind and id). It cannot fail: an amount is never converted to a signed type (the lead's
+/// finding on a3c52252: a u128 past an i128 failed the whole page).
+fn item_movement(actions: &TxActions, item: &ItemDelta) -> &'static str {
+    let (mut received, mut sent) = (ExactSum::default(), ExactSum::default());
+    for delta in actions.participants.iter().flat_map(|p| &p.item_deltas) {
+        if delta.kind != item.kind || delta.item_id != item.item_id {
+            continue;
+        }
+        if delta.negative {
+            sent.add(delta.magnitude);
+        } else {
+            received.add(delta.magnitude);
+        }
+    }
+    match received.cmp(&sent) {
+        std::cmp::Ordering::Greater => "mint",
+        std::cmp::Ordering::Less => "burn",
+        std::cmp::Ordering::Equal => "transfer",
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LockCallResponse {
@@ -306,10 +365,14 @@ pub struct LockCallResponse {
     pub lock_hash_type: String,
     pub lock_args: String,
     pub script_hash: String,
-    pub script_name: Option<String>,
-    /// The script's hash type where its named pair is not the registry's
-    /// reference for its code, written beside the name; `None` otherwise.
-    pub script_name_by: Option<String>,
+    /// The name of the code the lock's pair runs (`utils::ScriptNamer`, lane rd/api-lock-names),
+    /// `lockScriptName` on the wire as on a party (the third read's T SHOULD-5: the bare
+    /// `scriptName` it was is a name the lock-words gate could only find by its variable's name).
+    /// The page decides the lock's words from it with the code hash and the hash type.
+    pub lock_script_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's reference for its code,
+    /// written beside the name (`lockScriptNameBy`); `None` otherwise.
+    pub lock_script_name_by: Option<String>,
     /// Decoded lock args; every integer in it is an exact decimal string
     /// (`utils::exact_json`). `null` when the lock's registry entry declares
     /// no args layout, or the args do not fit it (then `decodeError` says why).
@@ -940,8 +1003,8 @@ fn convert_lock_call(
         lock_hash_type: hash_type.to_string(),
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
-        script_name_by: script_name.as_ref().and_then(|name| name.by()),
-        script_name: script_name.map(|name| name.name),
+        lock_script_name_by: script_name.as_ref().and_then(|name| name.by()),
+        lock_script_name: script_name.map(|name| name.name),
         decoded,
         decode_error,
     })
@@ -1017,7 +1080,12 @@ pub(crate) fn build_activity_response(
     let item_deltas = participant
         .item_deltas
         .iter()
-        .map(|item| convert_item_delta(item, item_cache, store, pool.is_none()))
+        .map(|item| {
+            Ok(RowItemDelta {
+                delta: convert_item_delta(item, item_cache, store, pool.is_none())?,
+                movement: item_movement(actions, item),
+            })
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions

@@ -272,6 +272,9 @@ describe('protocol byte evidence', () => {
     expect(within(detail).getByText('… 68 more bytes')).toBeInTheDocument();
     const all = within(detail).getByText(fullText('All 100 bytes of Long')).closest('details')!;
     expect(all).not.toHaveAttribute('open');
+    // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words at
+    // the control step, 13 px (they were 12), in the tier's ink
+    expect(all.querySelector('summary')).toHaveClass('text-small');
     expect(all.querySelector('pre')).toHaveTextContent('0x' + '00'.repeat(100));
     // a field of 64 bytes or fewer is shown whole
     fireEvent.mouseEnter(screen.getByRole('button', { name: /^Boundary · \[255\.\.258\)/ }));

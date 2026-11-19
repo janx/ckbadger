@@ -169,7 +169,8 @@ impl PendingProposal {
 
         let fee_rate = match (cached.fee, cached.size) {
             (Some(fee), Some(size)) if size > 0 => {
-                let scaled = (u128::from(fee) * 100 + u128::from(size) / 2) / u128::from(size);
+                // cut at two places, never rounded (lane exactness, part B4: it was half up)
+                let scaled = u128::from(fee) * 100 / u128::from(size);
                 Some(format!("{}.{:02}", scaled / 100, scaled % 100))
             }
             (None, None) => None,
@@ -248,6 +249,24 @@ mod tests {
         let json = serde_json::to_value(pending).unwrap();
         assert_eq!(json["feeRate"], "9007199254740993.00");
         assert_eq!(json["fee"], "9007199254740993");
+    }
+
+    /// lane exactness, part B4: a proposal's fee rate is cut at two places, as every fee rate the
+    /// API serves: 2 shannons over 3 bytes is 0.666…, "0.66" (half up it read "0.67").
+    #[test]
+    fn a_proposal_fee_rate_is_cut_at_two_places() {
+        let cached = CachedProposal::new_with_details(
+            "abcd1234567890abcdef".to_string(),
+            "0x01".to_string(),
+            1,
+            0,
+            2,
+            3,
+            0,
+        )
+        .unwrap();
+        let pending = PendingProposal::from_cached(&cached, 1).unwrap();
+        assert_eq!(pending.fee_rate.as_deref(), Some("0.66"));
     }
 
     #[test]

@@ -31,13 +31,13 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', '..');
-const API_NAMES = new Set(['lockKind', 'lockName', 'lockScriptName']);
 /**
- * A called lock's registry name keeps the word `scriptName` on an activity's lock call (lane P2's
- * third round, item 12): read where the receiver is a lock call (`lc`, `lockCall`,
- * `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock.
+ * The API's names for a lock's words: a party's and a called lock's registry name is
+ * `lockScriptName` on the wire (lane P2's third round, item 12; the third read's T SHOULD-5 for a
+ * lock call, which was `scriptName`), read by its field on any receiver; a `scriptName` names no
+ * lock (a type call's, a code cell's).
  */
-const LOCK_CALL = /^(lc|lockCall|primaryLockCall)$/;
+const API_NAMES = new Set(['lockKind', 'lockName', 'lockScriptName']);
 /** The directories the gate reads: those every source gate reads (lane cd-fixes-controls: hooks/). */
 const READ_DIRS = ['app', 'components', 'hooks', 'lib'];
 
@@ -152,8 +152,6 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
     if (ts.isPropertyAccessExpression(node)) {
       const name = node.name.text;
       if (API_NAMES.has(name)) count('api name');
-      else if (name === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
-        count('api name');
       else if (name === 'lockScriptInfo') {
         if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
       } else if (name === 'name') {
@@ -164,8 +162,6 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
       const key = node.argumentExpression;
       if (ts.isStringLiteralLike(key)) {
         if (API_NAMES.has(key.text)) count('api name');
-        else if (key.text === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
-          count('api name');
         else if (key.text === 'lockScriptInfo') {
           if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
         } else if (key.text === 'name') {
@@ -270,13 +266,9 @@ const FEEDS: Reads = {
   // an address record that is the owner's or manager's own: the party's name handed with the
   // record's address to `partyLockSentence` (lane P2's third round, item 12)
   'components/identity/identity-records.tsx': { 'api name': 1 },
-  // a called lock: its `scriptName` handed with its code hash and hash type to the decision, whose
-  // words and name its link takes (the lead's final round, item 7; it was known, 2 reads, the
-  // link's name the API's as read)
-  'components/activity/activity-row.tsx': { 'api name': 1 },
-  // the AI view's primary lock call: its `scriptName` handed with its code hash and hash type to
-  // the decision, the words the page's row writes (the lead's final round, item 7; it was known)
-  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
+  // the activity row's and the AI view's called locks left (the third read's T SHOULD-5): a
+  // lock call's name, `lockScriptName` on the wire now, is read by the decision itself
+  // (`lockCallFacts`, lib/lock-words.ts), which both hand the call whole
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -391,17 +383,20 @@ describe('the gate reads the syntax, every form (lane B4 third round)', () => {
   });
 
   // Lane P2's third round (item 12, the test review's MUST-1): a .cell / .bit party's lock name is
-  // `lockScriptName` on the wire now (it was `scriptName`, which the gate did not read); a called
-  // lock's registry name is still `scriptName` on an activity's lock call, read off the call (`lc`,
-  // `lockCall`, `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock
-  it('counts a lock call’s scriptName, never a type call’s or a code cell’s', () => {
+  // `lockScriptName` on the wire now (it was `scriptName`, which the gate did not read).
+  // Re-pinned on purpose (the third read's T SHOULD-5): a called lock's is `lockScriptName` too,
+  // so the gate reads the field on any receiver, never a variable's name (it read `scriptName`
+  // on `lc`, `lockCall` and `primaryLockCall` alone, and `c.scriptName` in a `.map` passed); a
+  // `scriptName` names no lock anywhere (a type call's, a code cell's)
+  it('counts a lock call’s lockScriptName on any receiver, and no scriptName', () => {
     expect(
       lockNameReads(
-        `lc.scriptName; c.primaryLockCall.scriptName; lockCall['scriptName'];
-         sc.scriptName; c.primaryTypeCall.scriptName; out.codeCell.scriptName;`,
+        `lc.lockScriptName; activity.lockCalls.map((c) => c.lockScriptName);
+         const { lockScriptName: n } = activity.primaryLockCall!; call['lockScriptName'];
+         lc.scriptName; sc.scriptName; c.primaryTypeCall.scriptName; out.codeCell.scriptName;`,
         'x.ts'
       )
-    ).toEqual({ 'api name': 3 });
+    ).toEqual({ 'api name': 4 });
   });
 
   it('counts an aliased registeredName and a Map lookup by a code hash', () => {
@@ -507,10 +502,13 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "22 reads in 16 files,
   // the known writers 1 file and 2 reads"): the Fiber graph's party row writes the decision's
   // words, its two reads gone: KNOWN is empty, 20 reads in 15 files in all
-  it('pins the totals: 20 reads in 15 files, and no known writer', () => {
+  // Re-pinned on purpose (the third read's T SHOULD-5; renamed, it was "20 reads in 15 files"):
+  // the decision reads a called lock's name itself, so the activity row and the AI view, which
+  // fed it one read each, read none: 18 reads in 13 files
+  it('pins the totals: 18 reads in 13 files, and no known writer', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(15);
-    expect(total(all)).toBe(20);
+    expect(Object.keys(all)).toHaveLength(13);
+    expect(total(all)).toBe(18);
     expect(Object.keys(KNOWN)).toHaveLength(0);
     expect(total(KNOWN)).toBe(0);
   });

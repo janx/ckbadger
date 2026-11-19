@@ -135,6 +135,13 @@ describe('CodeCellBoard', () => {
       `/mainnet/cell/${txB}-1`
     );
     expect(screen.getByText(/binary changed/)).toBeInTheDocument();
+    // the lineage folds in the library's inner disclosure (lane cd-fixes-controls, the disclosure
+    // sweep): shut, its words 13 px in tier 1's reading ink (they were quiet), where the cell page
+    // draws the board, its versions 13 px under them as before
+    const lineage = screen.getByText('Type ID lineage of these bytes');
+    expect(lineage).toHaveClass('text-small', 'text-text');
+    expect(lineage.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText(/Version 2 · these bytes/).closest('div')).toHaveClass('text-small');
   });
   it('reads wide ELF addresses exactly and names kinds instead of raw decimals', () => {
     // 64 header + 56 program header + 8 unassigned + 16 loaded: the bytes the layout covers.

@@ -11,11 +11,11 @@ import {
 } from '@/components/ui/lock-kind';
 import { SaidOnce, onEveryRow } from '@/components/asset/said-once';
 import { useQuery } from '@tanstack/react-query';
-import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
+import type { CollectionHolder, RankedCursorPage } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
-import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, rankOf, rankedPageAt, rankedRead } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
@@ -53,7 +53,7 @@ export interface CollectionHoldersProps {
   load: (params: {
     limit?: number;
     cursor?: string;
-  }) => Promise<CursorPaginatedResponse<CollectionHolder>>;
+  }) => Promise<RankedCursorPage<CollectionHolder>>;
   queryKey: string;
   distribution?: readonly { range: string; holders: number; items: number }[];
   /** F2 objects (OB-C7), PB-12: the counts are bars in the collection's class colour. */
@@ -164,14 +164,16 @@ function ScopedCollectionHolders({
   // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
   // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
   // item 10: the loading list unmounted it and the focus fell to the page)
+  // each page ranked by its route (lane exactness, part B5: `firstRank`, refused where missing)
+  const ranked = `the holders of collection ${queryKey}`;
   const top = useQuery({
     queryKey: ['collection-holders', queryKey, 'top'],
-    queryFn: () => load({ limit: 10, cursor: undefined }),
+    queryFn: () => load({ limit: 10, cursor: undefined }).then((r) => rankedRead(r, ranked)),
   });
   // all holders, in pages of the walk
   const allHolders = useQuery({
     queryKey: ['collection-holders', queryKey, 'all', pagination.cursor, limit],
-    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
+    queryFn: pagination.ask((cursor) => load({ limit, cursor }).then((r) => rankedRead(r, ranked))),
     enabled: all,
   });
   const holders = all ? allHolders : top;
@@ -197,8 +199,9 @@ function ScopedCollectionHolders({
   };
   // the holders' table: where it is drawn, by its view and page (its part starts again on another)
   const holdersWhere = `collection ${queryKey}, ${all ? `all holders, page ${pagination.page}` : 'top 10'}`;
-  const rank = (holder: CollectionHolder) =>
-    (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
+  // the route's rank of the page's first row and the row's place (lane exactness, part B5: it was
+  // (page − 1) × size + the place, which holds only if the list stood still between the reads)
+  const rank = (holder: CollectionHolder) => rankOf(holders.data!, holder, ranked);
   // the holder at the form's size (U-09): row in the table and in a phone row from sm, tight in
   // a phone row below it (R9)
   const phoneSize = useTightBelowSm();
@@ -227,7 +230,9 @@ function ScopedCollectionHolders({
   const listed = holders.data?.data ?? [];
   // "All holders" pages through the list; the top ten are one page
   const holdersAt =
-    all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
+    all && allHolders.data
+      ? rankedPageAt('holders', allHolders.data, pagination, allHolders.data.firstRank)
+      : null;
   // the holders' columns, built while their table is drawn (inside its part)
   // what a holder's Lock cell says, from the one decision (B4)
   const lockText = (holder: CollectionHolder) => lockWordsText(rowLock(holder, 'column')!, 'row');

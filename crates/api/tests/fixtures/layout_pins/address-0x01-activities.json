@@ -14,6 +14,7 @@
           "composition": "pure_ckb",
           "delta": -1,
           "kind": "object",
+          "movement": "transfer",
           "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
           "role": "spore"
         }
@@ -62,6 +63,7 @@
           "composition": "pure_ckb",
           "delta": 1,
           "kind": "object",
+          "movement": "mint",
           "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
           "role": "spore"
         }
@@ -110,6 +112,7 @@
           "composition": null,
           "delta": 1,
           "kind": "object",
+          "movement": "mint",
           "objectId": "0x1111111111111111111111111111111111111111111111111111111111111111",
           "role": "cluster"
         }

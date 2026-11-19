@@ -365,7 +365,9 @@ describe('BlocksPage · Blocks v3 board', () => {
   it('states the fullest block and the most work against the consensus limits (BA-02)', async () => {
     render(<BlocksPage />);
     expect(await screen.findByText(/^Size and cycles · Fullest of these 2/)).toHaveTextContent(
-      /^Size and cycles · Fullest of these 2: 3,917 bytes, 0\.66% of the 597,000-byte limit · most work: 6,831,940 cycles, 0\.20% of the 3,500,000,000-cycle limit$/
+      // lane exactness, part B2: 3,917 of 597,000 bytes is 0.6561…%, 0.65% (half up 0.66%); 6,831,940 of
+      // 3,500,000,000 cycles 0.1951…%, 0.19% (half up 0.20%)
+      /^Size and cycles · Fullest of these 2: 3,917 bytes, 0\.65% of the 597,000-byte limit · most work: 6,831,940 cycles, 0\.19% of the 3,500,000,000-cycle limit$/
     );
   });
 

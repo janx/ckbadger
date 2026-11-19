@@ -26,16 +26,16 @@ export function withUnit(value: string, unit: string): string {
 }
 
 /**
- * The figure of a part in a whole as a percentage (CH-14), exact and rounded half up at two
- * decimals, with the two printed results that would state something false bounded instead (the
- * review's item I): a part above nothing that rounds to 0.00 is `<0.01`, a part below the whole
- * that rounds to 100.00 is `>99.99`. Exact zero and the exact whole are `0.00` and `100.00`. A
- * bar's width or any number behind a figure is computed from the parts, never from this text.
+ * The figure of a part in a whole as a percentage (CH-14), exact and cut at two decimals, never
+ * rounded (lane exactness, part B2), with the one printed result that would state something false bounded instead
+ * (the review's item I): a part above nothing that cuts to 0.00 is `<0.01`. A part below the whole
+ * cuts to at most 99.99, which is true of it (half up it could read 100.00, which was `>99.99`).
+ * Exact zero and the exact whole are `0.00` and `100.00`. A bar's width or any number behind a
+ * figure is computed from the parts, never from this text.
  */
 export function percentFigure(part: bigint, total: bigint): string {
   const figure = formatPercent(part, total, 2);
   if (part > BigInt(0) && figure === '0.00') return '<0.01';
-  if (part < total && figure === '100.00') return '>99.99';
   return figure;
 }
 

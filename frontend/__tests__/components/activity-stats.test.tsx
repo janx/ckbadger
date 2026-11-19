@@ -108,7 +108,8 @@ describe('ActivityStats', () => {
     );
     expect(labels).toEqual(['script', 'transfer', 'identity', 'dao', 'protocol']);
     // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
-    expect(types).toHaveTextContent('Script call81.45%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,795 script calls of 7,115 kind occurrences is 81.447…%, 81.44% (half up 81.45%)
+    expect(types).toHaveTextContent('Script call81.44%');
     expect(types).not.toHaveTextContent('Token');
     expect(within(types).getByRole('link', { name: /Script call/ })).toHaveAttribute(
       'href',
@@ -122,8 +123,10 @@ describe('ActivityStats', () => {
     expect(scripts).toHaveTextContent('By script, share of 11,300 calls');
     const rows = [...scripts.querySelectorAll('[data-rank-row]')];
     expect(rows).toHaveLength(6);
-    expect(rows[0]).toHaveTextContent('.bit Time Index State48.50%');
-    expect(rows[5]).toHaveTextContent('3 others0.10%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,480 of 11,300 calls is 48.495…%, 48.49% (half up 48.50%)
+    expect(rows[0]).toHaveTextContent('.bit Time Index State48.49%');
+    // and the rest's 11 calls of 11,300 0.0973…%, 0.09% (half up 0.10%)
+    expect(rows[5]).toHaveTextContent('3 others0.09%');
     expect(rows[5].querySelector('a')).toBeNull();
     expect(within(scripts).getByRole('link', { name: /Bitcoin SPV Type Lock/ })).toHaveAttribute(
       'href',
@@ -193,7 +196,7 @@ describe('ActivityStats', () => {
 
 // Re-pinned on purpose (the P3 follow-up's 2b, then F-6): a day's bar is the route's count of its
 // activities (activityCount, every transaction but the cellbases, each in one kind); it was the
-// route's userTransactionCount while the kinds overlapped, and before that the transaction-count
+// route's activityCount while the kinds overlapped, and before that the transaction-count
 // chart's day less the day's cellbases, joined and subtracted here.
 describe('dailyActivityView', () => {
   it('draws each day the route’s activities, the activityCount its kinds partition', () => {
@@ -213,5 +216,18 @@ describe('dailyActivityView', () => {
       /out of order/
     );
     expect(dailyActivityView([])).toBeNull();
+  });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('dailyActivityView on an older API', () => {
+  // it drew a TypeError on the day's count
+  it('refuses a day without activityCount by name', () => {
+    const { activityCount: _gone, ...older } = dailyActivities[0];
+    expect(() => dailyActivityView([older as (typeof dailyActivities)[0]])).toThrow(
+      `daily activities on ${dailyActivities[0].date}: the API sends no activityCount: it is older than this page`
+    );
   });
 });

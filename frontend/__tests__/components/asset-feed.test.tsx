@@ -7,11 +7,12 @@ import {
 } from '@/components/asset/asset-feed';
 import type { Transaction, GlobalActivity, ItemActivity } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 const token = '0x' + 'ab'.repeat(32);
-const activity: GlobalActivity = {
+const activity: GlobalActivity = activityRead({
   txHash: '0x' + 'cd'.repeat(32),
   blockNumber: 12,
   txIndex: 3,
@@ -46,9 +47,9 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
-  recognizedTypes: [],
+  recognizedTypes: [ITEM_TYPE.xudt],
   protocolActions: [],
-};
+});
 const transaction: Transaction = {
   hash: activity.txHash,
   blockNumber: 12,
@@ -70,9 +71,11 @@ describe('Shared asset feeds', () => {
   const aptId = '0x' + 'a7'.repeat(20);
   /** One item-feed row; the API states what the tx meant for this item in its itemContext. */
   const row = (context: Partial<ItemActivity['itemContext']>, extra: Partial<ItemActivity> = {}) =>
-    ({
+    activityRead({
       ...activity,
       participants: [{ ...activity.participants[0], itemDeltas: [] }],
+      // no item moved, so no item's code (the third read's T SHOULD-1)
+      recognizedTypes: [],
       ...extra,
       itemContext: {
         itemId: aptId,

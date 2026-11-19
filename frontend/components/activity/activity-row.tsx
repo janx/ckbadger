@@ -1,5 +1,5 @@
 'use client';
-import { nameByOf, withNameBy } from '@/lib/lock-words';
+import { withNameBy } from '@/lib/lock-words';
 import {
   useId,
   useLayoutEffect,
@@ -24,7 +24,7 @@ import {
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { LockWordsView, lockNoun, namedLockWords, partyLock } from '@/components/ui/lock-kind';
-import { normalizeScriptRefHashType } from '@/lib/script-ref';
+import { lockCallFacts } from '@/lib/lock-words';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -377,13 +377,9 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
   // type and the API's name together, as a list names locks: the name is the code the lock's pair
   // runs (lane rd/api-lock-names; a lock on a registered code hash by another hash type runs none,
   // and the API sends no name: the lead's final round, item 7), its hash type beside a name by
-  // another reference than the registry's
-  const facts = {
-    name: lc.scriptName ?? null,
-    codeHash: lc.lockCodeHash,
-    hashType: normalizeScriptRefHashType(lc.lockHashType),
-    nameBy: nameByOf(lc.scriptNameBy, `lock call ${lc.scriptHash}`),
-  };
+  // another reference than the registry's; read through the decision's one reader of a called lock
+  // (`lockCallFacts`, the third read's T SHOULD-5)
+  const facts = lockCallFacts(lc);
   const words = namedLockWords(facts, 'column');
   const name = lockNoun(words, 'row');
   const by = words.form === 'lock' && words.name !== null ? facts.nameBy : null;
@@ -733,14 +729,18 @@ export function rowReadFails(activity: ActivityBody): boolean {
  * (`actions`, drawn inline or as a list by `ActivityRow`), then the recognised type codes that ran
  * (`recognizedTypes`, C7: "Script call · Simple UDT" for a wallet merging its own sUDT cells), the
  * type calls and the lock calls by name ("lock …"), their args in each name's hover, a long call run
- * folded behind "+N more" (`calls`): one rule for a row's head and a folded run's. A protocol action
- * that cannot be read is an error line under the headline (`errors`).
+ * folded behind "+N more" (`calls`): one rule for a row's head and a folded run's. A row names its
+ * recognised codes where it names its scripts (`showScriptDetails`: a plain asset feed names none,
+ * OB-12); a folded run's head names them always (`nameCodes`), the codes its rows were folded by,
+ * as it named their item types. A protocol action that cannot be read is an error line under the
+ * headline (`errors`).
  */
 function activityDetails(
   activity: ActivityBody & { txHash: string; recognizedTypes: readonly RecognizedType[] },
   showScriptDetails: boolean,
   fold: HeadFold,
-  args = true
+  args = true,
+  nameCodes = showScriptDetails
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -774,7 +774,10 @@ function activityDetails(
     });
   });
   const runs: ScriptRun[] = [
-    { kind: 'type', parts: callNames(activity.recognizedTypes.map(recognizedTypeRef), args) },
+    {
+      kind: 'type',
+      parts: nameCodes ? callNames(activity.recognizedTypes.map(recognizedTypeRef), args) : [],
+    },
     ...(showScriptDetails
       ? [
           { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
@@ -1460,6 +1463,7 @@ export function FoldedActivityRow({
   className,
   fresh = false,
   open,
+  final,
   controls,
   onToggle,
 }: {
@@ -1482,6 +1486,11 @@ export function FoldedActivityRow({
   className?: string;
   fresh?: boolean;
   open: boolean;
+  /**
+   * Whether its counts are the run's whole: false for a feed's last run of the rows read while
+   * older rows are unread (the next row may continue it), whose counts say "so far".
+   */
+  final: boolean;
   /**
    * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
    * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
@@ -1516,14 +1525,18 @@ export function FoldedActivityRow({
     first,
     showScriptDetails,
     { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
-    false
+    false,
+    true
   );
-  const transactions = formatCount(rows.length, 'transaction');
+  // a count of what is read, older rows unread, is not final, and says so (the lead's finding)
+  const soFar = final ? '' : ' so far';
+  const transactions = `${formatCount(rows.length, 'transaction')}${soFar}`;
   const toggle = (
     <FoldToggle
       open={open}
       count={rows.length}
       singular="transaction"
+      soFar={!final}
       controls={controls}
       onToggle={onToggle}
     />
@@ -1553,9 +1566,14 @@ export function FoldedActivityRow({
         {/* "senders": the owner's word, the parties one of whose cells the transaction consumed
             (the indexer's per-participant input flag, the route's `sent`; `runSenders` counts
             them, each once). A run of cellbases has none and says no count. This is the one
-            place that writes it. */}
+            place that writes it. Like the transactions', its count says "so far" while older rows
+            are unread (the lead's finding). */}
         <Dotted
-          parts={[toggle, open && transactions, senders !== null && formatCount(senders, 'sender')]}
+          parts={[
+            toggle,
+            open && transactions,
+            senders !== null && `${formatCount(senders, 'sender')}${soFar}`,
+          ]}
         />
       </div>
     </article>

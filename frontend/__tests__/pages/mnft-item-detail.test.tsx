@@ -197,6 +197,13 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
     // F2 objects (OB-M5): the hero sentence tells who issued it and its life since.
     expect(screen.getByText(/^Issued by Issuer A/)).toBeInTheDocument();
+    // the issuer's raw metadata, the library's inner disclosure in tier 2 (lane cd-fixes-controls,
+    // the disclosure sweep): its words at the control step, 13 px, and the quiet ink (they were
+    // 12 px in the page's bright ink); shut; its bytes at 12 px as before
+    const metadata = screen.getByText('Raw issuer metadata');
+    expect(metadata).toHaveClass('text-small', 'text-text-dim');
+    expect(metadata.closest('details')).not.toHaveAttribute('open');
+    expect(metadata.closest('details')!.querySelector('pre')).toHaveClass('text-meta');
     expect(screen.getByRole('link', { name: 'Open the class' })).toHaveAttribute(
       'href',
       `/mainnet/classes/${detail.class.classId}`
@@ -388,5 +395,12 @@ describe('MnftItemDetailPage', () => {
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();
+    // lane P2's fifth round (item 2, MUST): the History sentence says what the burned token's
+    // cell held when it was consumed, in the past tense (it said the cell "holds" it)
+    const sentence = screen
+      .getByRole('region', { name: 'History' })
+      .querySelector('[data-role="history-sentence"]')!;
+    expect(sentence.textContent).toMatch(/^The token’s cell held .+ CKB.* when it was consumed\.$/);
+    expect(sentence.textContent).not.toMatch(/holds/);
   });
 });

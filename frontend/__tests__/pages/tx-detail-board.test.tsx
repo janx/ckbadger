@@ -26,6 +26,7 @@ import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
 import { scriptLookupKey } from '@/lib/script-pair';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -216,7 +217,7 @@ function objectActivity(): GlobalActivity {
     composition: 'btc_ckb' as const,
   });
   const [from, to, third] = feedSamples.objectTransfer.participants;
-  return {
+  return activityRead({
     ...feedSamples.objectTransfer,
     txHash: TX_HASH,
     participants: [
@@ -224,7 +225,7 @@ function objectActivity(): GlobalActivity {
       { ...to, itemDeltas: [withContext(1)] },
       third,
     ],
-  };
+  });
 }
 
 // the registry's names, each by its script's pair (lane rd/api-lock-names)
@@ -947,24 +948,35 @@ describe('Transaction variants (D4)', () => {
       { blockHash: `0x${'66'.repeat(32)}`, blockNumber: 9 },
     ];
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.daoWithdrawRequest,
-      txHash: TX_HASH,
-      protocolActions: [
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'withdraw_complete',
-          metadata: { capacity: '2605000000000', compensation: '17530634165' },
-        },
-      ],
-      participants: [
-        // the owner of the withdrawn deposit: the API tags it DAO (TAG_DAO, bit 3), as the indexer
-        // does the party whose cells hold the step (lane P1 follow-up: the fixture carried no tag)
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000', tags: 8 },
-        { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            // each DAO action names its cell's owner (lane exactness, part B6): the withdrawn deposit's
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          // the owner of the withdrawn deposit: the API tags it DAO (TAG_DAO, bit 3), as the indexer
+          // does the party whose cells hold the step (lane P1 follow-up: the fixture carried no tag)
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '-2605000000000',
+            tags: 8,
+          },
+          { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     // Lane P1 follow-up (the review's standing cause, What moved and the lede on a DAO step): the
     // lede says what happened from the activity's own kind, a withdrawal with its compensation
@@ -1000,25 +1012,35 @@ describe('Transaction variants (D4)', () => {
   it('says a deposit went into the Nervos DAO and who holds it, the figure too', async () => {
     const tx = committed();
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.daoWithdrawRequest,
-      txHash: TX_HASH,
-      protocolActions: [
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'deposit',
-          metadata: { capacity: '12200000000000' },
-        },
-      ],
-      participants: [
-        {
-          ...feedSamples.daoWithdrawRequest.participants[2],
-          ckbDelta: `-${BigInt('12200000000000') + BigInt(tx.fee)}`,
-        },
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '12200000000000', tags: 8 },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            // the deposit's owner (lane exactness, part B6)
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[2],
+            ckbDelta: `-${BigInt('12200000000000') + BigInt(tx.fee)}`,
+          },
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '12200000000000',
+            tags: 8,
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
       `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`
@@ -1045,18 +1067,31 @@ describe('Transaction variants (D4)', () => {
     ) => {
       const tx = committed();
       vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.daoWithdrawRequest,
-        txHash: TX_HASH,
-        protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata }],
-        participants: [
-          {
-            ...feedSamples.daoWithdrawRequest.participants[1],
-            ckbDelta: ckbDelta(BigInt(tx.fee)),
-            tags: 8,
-          },
-        ],
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.daoWithdrawRequest,
+          txHash: TX_HASH,
+          // the step's owner, the one party (lane exactness, part B6)
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action,
+              metadata: {
+                ...metadata,
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
+            },
+          ],
+          participants: [
+            {
+              ...feedSamples.daoWithdrawRequest.participants[1],
+              ckbDelta: ckbDelta(BigInt(tx.fee)),
+              tags: 8,
+            },
+          ],
+        })
+      );
       return tx;
     };
     const expectStep = async (lede: string, step: string) => {
@@ -1101,21 +1136,27 @@ describe('Transaction variants (D4)', () => {
       tx.outputs![0].capacity = '2622530633229';
       tx.fee = '936';
       vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.daoWithdrawRequest,
-        txHash: TX_HASH,
-        protocolActions: [
-          {
-            protocol: 'dao',
-            protocolName: 'Nervos DAO',
-            action: 'withdraw_complete',
-            metadata: { capacity: '2605000000000', compensation: '17530634165' },
-          },
-        ],
-        participants: [
-          { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '17530633229', tags: 8 },
-        ],
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.daoWithdrawRequest,
+          txHash: TX_HASH,
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'withdraw_complete',
+              metadata: {
+                capacity: '2605000000000',
+                compensation: '17530634165',
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
+            },
+          ],
+          participants: [
+            { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '17530633229', tags: 8 },
+          ],
+        })
+      );
       await expectStep(
         `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`,
         'Nervos DAO withdrawal 26,050 CKB'
@@ -1124,10 +1165,10 @@ describe('Transaction variants (D4)', () => {
   });
 
   // Lane P1, third round (review p-logic-chain SHOULD 2): a batch in which one party deposits and
-  // another withdraws. The activity tags both DAO and its actions name no party, so the lede says
-  // each step without its party and names the parties whose cells took the steps once; the figure
-  // says "a Nervos DAO step" on each, never both kinds on both.
-  it('says the DAO steps of a batch without giving a party a step it did not take', async () => {
+  // another withdraws. Re-pinned for lane exactness, part B6: each DAO action names its cell's owner (it was read as
+  // naming none, so the lede said each step without its party and the figure "a Nervos DAO step" on
+  // each); the lede says whose each step is, and the figure draws each party's own step
+  it('says whose each DAO step of a batch is, the deposit and the withdrawal apart', async () => {
     const tx = committed();
     tx.inputsCapacity = '2605000000000';
     tx.inputs![0].capacity = '2605000000000';
@@ -1135,36 +1176,57 @@ describe('Transaction variants (D4)', () => {
     tx.outputs![0].capacity = '2622530633229';
     tx.fee = '936';
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.daoWithdrawRequest,
-      txHash: TX_HASH,
-      protocolActions: [
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'deposit',
-          metadata: { capacity: '12200000000000' },
-        },
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'withdraw_complete',
-          metadata: { capacity: '2605000000000', compensation: '17530634165' },
-        },
-      ],
-      participants: [
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-12182469366771', tags: 8 },
-        { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '12200000000000', tags: 8 },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead<GlobalActivity>({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[2].lockHash!.slice(2),
+            },
+          },
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '-12182469366771',
+            tags: 8,
+          },
+          {
+            ...feedSamples.daoWithdrawRequest.participants[2],
+            ckbDelta: '12200000000000',
+            tags: 8,
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      `122,000 CKB went into a Nervos DAO deposit. 26,050 CKB came out of the Nervos DAO, with 175.3 CKB of compensation. The parties whose cells took these steps: ${row('r4p74p')} and ${row('hxw6h7')}.`
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('hxw6h7')}. ${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
     );
     const moved = await screen.findByTestId('tx-what-moved');
-    expect(moved).toHaveTextContent('a Nervos DAO step');
-    expect(moved).not.toHaveTextContent('Nervos DAO deposit');
+    expect(moved).not.toHaveTextContent('a Nervos DAO step');
+    const steps = [...moved.querySelectorAll('[data-dao-step]')].map((s) => s.textContent);
+    expect(steps.sort()).toEqual([
+      'Nervos DAO deposit 122,000 CKB',
+      'Nervos DAO withdrawal 26,050 CKB',
+    ]);
   });
 
   // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
@@ -1677,35 +1739,38 @@ describe('Transaction board, R2b-a fields', () => {
   });
 
   it('names the type scripts a plain script call ran (TX-11)', async () => {
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.objectTransfer,
-      txHash: TX_HASH,
-      typeCalls: [
-        {
-          typeCodeHash: '0xtime',
-          typeHashType: 'type',
-          typeArgs: '0x02',
-          scriptHash: '0xs1',
-          scriptName: '.bit Time Index State',
-        },
-        {
-          typeCodeHash: '0xinfo',
-          typeHashType: 'type',
-          typeArgs: '0x02',
-          scriptHash: '0xs2',
-          scriptName: '.bit Time Info',
-        },
-      ],
-      lockCalls: [],
-      participants: [
-        {
-          ...feedSamples.objectTransfer.participants[0],
-          ckbDelta: '-64119',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        recognizedTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [
+          {
+            typeCodeHash: '0xtime',
+            typeHashType: 'type',
+            typeArgs: '0x02',
+            scriptHash: '0xs1',
+            scriptName: '.bit Time Index State',
+          },
+          {
+            typeCodeHash: '0xinfo',
+            typeHashType: 'type',
+            typeArgs: '0x02',
+            scriptHash: '0xs2',
+            scriptName: '.bit Time Info',
+          },
+        ],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-64119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee sentence ("ckb1…xxxxxxxx
     // paid a 0.00064119 CKB fee.") is gone; the payer and the fee stand in the status strip
@@ -1728,26 +1793,29 @@ describe('Transaction board, R2b-a fields', () => {
   // the amount"): the summary states how much moved, from the flows the figure draws, in the
   // summary form, its exact value in its title and in the balance table.
   it('states how much CKB moved, cut to the summary form, its exact value in its title (P1)', async () => {
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.objectTransfer,
-      txHash: TX_HASH,
-      typeCalls: [],
-      lockCalls: [],
-      participants: [
-        {
-          ...feedSamples.objectTransfer.participants[0],
-          ckbDelta: '-66959187575',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-        {
-          ...feedSamples.objectTransfer.participants[1],
-          ckbDelta: '66959123456',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        recognizedTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-66959187575',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+          {
+            ...feedSamples.objectTransfer.participants[1],
+            ckbDelta: '66959123456',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     // what reached the receiver, 669.59123456 CKB, cut to two places; the fee is the strip's
@@ -1801,14 +1869,14 @@ describe('Transaction board, R2b-a fields', () => {
     });
     const tokenTx = (giver: string, receiver: string | null): GlobalActivity => {
       const [to, from] = feedSamples.tokenTransfer.participants;
-      return {
+      return activityRead({
         ...feedSamples.tokenTransfer,
         txHash: TX_HASH,
         participants: [
           { ...from, ckbDelta: '-8888', itemDeltas: [seal(giver)] },
           ...(receiver === null ? [] : [{ ...to, ckbDelta: '0', itemDeltas: [seal(receiver)] }]),
         ],
-      };
+      });
     };
     const lede = async (activity: GlobalActivity) => {
       vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
@@ -1846,19 +1914,22 @@ describe('Transaction board, R2b-a fields', () => {
   it('says a Nervos DAO step beside an item that moved', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
     const [to, from] = feedSamples.tokenTransfer.participants;
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.tokenTransfer,
-      txHash: TX_HASH,
-      protocolActions: [
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'deposit',
-          metadata: { capacity: '12200000000000' },
-        },
-      ],
-      participants: [{ ...to, tags: 1 | 8 }, { ...from }],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.tokenTransfer,
+        txHash: TX_HASH,
+        recognizedTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '12200000000000', lockHash: to.lockHash!.slice(2) },
+          },
+        ],
+        participants: [{ ...to, tags: 1 | 8 }, { ...from }],
+      })
+    );
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
@@ -1874,20 +1945,23 @@ describe('Transaction board, R2b-a fields', () => {
   // it): the lede says it once, and the figure and the one-party table, which said nothing else,
   // are not drawn.
   it('says in one line that only the fee moved, and draws no figure or table that restates it (P1)', async () => {
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.objectTransfer,
-      txHash: TX_HASH,
-      typeCalls: [],
-      lockCalls: [],
-      participants: [
-        {
-          ...feedSamples.objectTransfer.participants[0],
-          ckbDelta: '-64119',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        recognizedTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-64119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
@@ -1900,26 +1974,29 @@ describe('Transaction board, R2b-a fields', () => {
   });
 
   it('keeps the balance table when several locks shared the fee, and says "their" (P1)', async () => {
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.objectTransfer,
-      txHash: TX_HASH,
-      typeCalls: [],
-      lockCalls: [],
-      participants: [
-        {
-          ...feedSamples.objectTransfer.participants[0],
-          ckbDelta: '-60000',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-        {
-          ...feedSamples.objectTransfer.participants[1],
-          ckbDelta: '-4119',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        recognizedTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-60000',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+          {
+            ...feedSamples.objectTransfer.participants[1],
+            ckbDelta: '-4119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(

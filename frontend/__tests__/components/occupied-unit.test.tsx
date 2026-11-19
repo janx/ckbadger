@@ -13,6 +13,7 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { formatOccupiedDelta } from '@/lib/occupied';
 import type { ParticipantInfo } from '@/lib/api';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 
@@ -22,10 +23,10 @@ const MINUS = '−';
 describe('an occupied change that is not whole bytes names its transaction', () => {
   it('in an activity row', () => {
     const a = feedSamples.objectTransfer;
-    const bad = {
+    const bad = activityRead({
       ...a,
       participants: [{ ...a.participants[0], usedDelta: '150000001' }, ...a.participants.slice(1)],
-    };
+    });
     expect(() => render(<ActivityRow activity={bad} />)).toThrow(
       new RegExp(`${bad.txHash}.*occupied change 150000001 shannons is not a whole number of bytes`)
     );
@@ -63,7 +64,7 @@ describe('the participant line says "occupied ±N B"', () => {
     };
     const { container } = render(
       <ActivityRow
-        activity={{
+        activity={activityRead({
           txHash: `0x${'cd'.repeat(32)}`,
           blockNumber: 21000000,
           timestamp: String(Date.now() - 60_000),
@@ -73,7 +74,7 @@ describe('the participant line says "occupied ±N B"', () => {
           lockCalls: [],
           recognizedTypes: [],
           participants: [party, { ...party, lockHash: `0x${'02'.repeat(32)}`, ckbDelta: '1' }],
-        }}
+        })}
       />
     );
     const occupied = container.querySelector('[data-role="occupied"]') as HTMLElement;

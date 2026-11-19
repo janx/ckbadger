@@ -30,8 +30,11 @@ import type {
   Address,
   AddressTransaction,
   AddressCell,
+  ItemMovement,
   ParticipantInfo,
+  RowItemDelta,
 } from '@/lib/api';
+import { sentField } from '@/lib/api-fields';
 
 import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -70,20 +73,28 @@ const plural = (n: number, noun: string) => formatCount(n, noun);
  * every object shares one named collection.
  */
 function objectHeadline(
-  participant: ParticipantInfo,
+  itemDeltas: readonly RowItemDelta[],
   txHash: string
 ): { node: ReactNode; text: string } {
-  const objects = participant.itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
+  const objects = itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
   if (objects.length === 0)
     throw new Error(`transaction ${txHash}: an object activity of this address moved no object`);
   const arrived = objects.filter((o) => o.delta > 0).length;
   const departed = objects.length - arrived;
+  // minted to it or burnt from it in the whole transaction, as the route states (the third read's
+  // Lb SHOULD 2): said so, never "Received" of objects no party gave
+  const moved = new Set(objects.map((o) => rowItemMovement(o)));
+  const only = moved.size === 1 ? [...moved][0] : null;
   const movement =
-    departed === 0
-      ? `Received ${plural(arrived, 'object')}`
-      : arrived === 0
-        ? `Sent ${plural(departed, 'object')}`
-        : `Received ${arrived}, sent ${plural(departed, 'object')}`;
+    only === 'mint'
+      ? `Minted ${plural(objects.length, 'object')}`
+      : only === 'burn'
+        ? `Burnt ${plural(objects.length, 'object')}`
+        : departed === 0
+          ? `Received ${plural(arrived, 'object')}`
+          : arrived === 0
+            ? `Sent ${plural(departed, 'object')}`
+            : `Received ${arrived}, sent ${plural(departed, 'object')}`;
   const names = new Set(objects.map((o) => o.collection?.name?.trim() || null));
   const [collection] = names;
   return names.size === 1 && collection
@@ -97,6 +108,11 @@ function objectHeadline(
         text: `${movement} · ${collection}`,
       }
     : { node: movement, text: movement };
+}
+
+/** An item's movement in its whole transaction, as the address route states it beside the item. */
+function rowItemMovement(item: RowItemDelta): ItemMovement {
+  return sentField(item.movement, "an address activity's item", 'movement');
 }
 
 /**
@@ -122,20 +138,28 @@ function addressRow(activity: Activity, address: Address) {
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
-  // on an address's own page what was done is received or sent: a token's, an identity's and a CKB
-  // row's headline says its direction for this address, so a feed folds received with received
-  // (the page-phase review's SHOULD 1); a CKB row that left this address's balance as it was keeps
-  // the headline every feed gives it
+  // on an address's own page a token's and an identity's headline says what every feed says of a
+  // mint or a burn ("Token mint", "Token burn": the route states the item's movement in the whole
+  // transaction, the third read's Lb SHOULD 2), and of a transfer its direction for this address
+  // (the page-phase review's SHOULD 1), so a feed folds received with received, never a burn with
+  // a send; a CKB row says its direction, and one that left this address's balance as it was
+  // keeps the headline every feed gives it
   const ckb = BigInt(activity.ckbDelta);
+  const itemWords = (item: RowItemDelta) => {
+    const moved = rowItemMovement(item);
+    if (moved !== 'transfer') return moved;
+    const delta = BigInt(item.delta);
+    return delta > BigInt(0) ? 'received' : delta < BigInt(0) ? 'sent' : 'changed';
+  };
   const words =
     (itemClass === 'token' || itemClass === 'identity') && primary
-      ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
+      ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${itemWords(primary as RowItemDelta)}`
       : itemClass === 'ckbTransfer' && !activity.isCellbase && ckb !== BigInt(0)
         ? `CKB ${ckb > BigInt(0) ? 'received' : 'sent'}`
         : activityHeadline(row);
   const headline =
     itemClass === 'object'
-      ? objectHeadline(participant, activity.txHash)
+      ? objectHeadline(activity.itemDeltas, activity.txHash)
       : { node: words, text: words };
   return { row, participant, headline };
 }
@@ -165,9 +189,19 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
  * and the transaction's other parties, which the row does not draw but the activity names. A run
  * folds within the page shown.
  */
-export function AddressActivities({ rows, address }: { rows: Activity[]; address: Address }) {
+export function AddressActivities({
+  rows,
+  address,
+  more,
+}: {
+  rows: Activity[];
+  address: Address;
+  /** Whether a next page holds older rows: the page's last run is then not final. */
+  more: boolean;
+}) {
   return (
     <ActivityRuns
+      more={more}
       rows={rows.map((activity) => {
         const { row, participant, headline } = addressRow(activity, address);
         return {

@@ -15,6 +15,7 @@ import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { numberStrings } from '@/__tests__/utils/lede-rule';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -132,18 +133,19 @@ const neighbours = pagedRead({
   hasMore: true,
   nextCursor: String(N - 2),
 });
-const activity = (txIndex: number): GlobalActivity => ({
-  txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
-  blockNumber: N,
-  txIndex,
-  timestamp: block.timestamp,
-  isCellbase: txIndex === 0,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  recognizedTypes: [],
-  participants: [],
-});
+const activity = (txIndex: number): GlobalActivity =>
+  activityRead({
+    txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
+    blockNumber: N,
+    txIndex,
+    timestamp: block.timestamp,
+    isCellbase: txIndex === 0,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    recognizedTypes: [],
+    participants: [],
+  });
 const tx = (index: number): Transaction =>
   ({
     hash: h(`${index}a`),
@@ -665,7 +667,8 @@ describe('Block board · second tier', () => {
     expect((bar.querySelector('[data-segment="overhead"]') as HTMLElement).style.width).toBe(
       `${Math.round((883 / scale) * 120 * 100) / 100}px`
     );
-    expect(facts).toHaveTextContent('0.54% of 597,000 · overhead 883 · transactions 2,322');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 3,205 of 597,000 bytes is 0.5368…%, 0.53% (half up 0.54%)
+    expect(facts).toHaveTextContent('0.53% of 597,000 · overhead 883 · transactions 2,322');
     expect(facts).toHaveTextContent('Miner client');
     expect(facts).toHaveTextContent('decoded from the cellbase message');
   });
@@ -807,7 +810,7 @@ describe('Block board · R2b-a fields', () => {
       pagedRead({
         data: [0, 1, 2, 3].map((i) =>
           i === 0
-            ? {
+            ? activityRead({
                 ...activity(0),
                 participants: [
                   {
@@ -822,7 +825,7 @@ describe('Block board · R2b-a fields', () => {
                     tags: 0,
                   },
                 ],
-              }
+              })
             : activity(i)
         ),
         limit: 100,

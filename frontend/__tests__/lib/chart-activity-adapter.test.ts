@@ -81,7 +81,8 @@ describe('daily activity chart adapter', () => {
       } as never,
     ]);
     await expect(api.getActivityTypeBreakdownChart()).rejects.toThrow(
-      'daily activities on 20261027 send no kindCounts: the API is older than this page'
+      // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+      'daily activities on 20261027: the API sends no kindCounts: it is older than this page'
     );
   });
 });

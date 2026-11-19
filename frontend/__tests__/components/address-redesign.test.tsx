@@ -21,7 +21,7 @@ import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { addressCellSealId } from '@/lib/address-cell-seal';
-import type { Activity, ItemDelta } from '@/lib/api';
+import type { Activity, RowItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
 import { factsOf } from '@/__tests__/utils/facts';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
@@ -116,15 +116,16 @@ describe('Address v3 components', () => {
       // whole capacity), "occupied" (the bytes of its other cells) and "free" (the rest of those);
       // none is "spendable", and a DAO part is drawn where it holds DAO cells
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%)'
+        // lane exactness, part B2: free 28,256.66879443 of 319,742.66879443 CKB is 8.8373…%, 8.83% (half up 8.83%)
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.83%)'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
-      // re-pinned (lane P1, third round): "free 8.84%" (10 glyphs, 72 px and 16 of padding) fits
-      // its 8.84 % of the 1,246 px bar (110 px), where "spendable 8.84%" (124 px) did not
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
-      expect(parts[1]).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
+      // re-pinned (lane P1, third round): "free 8.83%" (10 glyphs, 72 px and 16 of padding) fits
+      // its 8.84 % of the 1,246 px bar (110 px), where "spendable 8.83%" (124 px) did not
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.83%']);
+      expect(parts[1]).toHaveAttribute('title', 'free 8.83% · 28,256.66879443 CKB');
       // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
       // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
       // (was one line joined by "·")
@@ -140,8 +141,10 @@ describe('Address v3 components', () => {
         ['occupied', '291,486 CKB pays for the bytes of its cells'],
         ['free', '28,256.66879443 CKB'],
       ]);
+      // re-pinned on purpose (the third read's Lb NOTE 2): a lock is not all that holds free CKB;
+      // a since and a cellbase reward's maturity hold it too (it read "their locks decide")
       expect(screen.getByTestId('free-note')).toHaveTextContent(
-        'Free is the CKB its cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+        'Free is the CKB its cells hold beyond what their bytes occupy; their locks, any since on them and a cellbase reward’s maturity decide whether it can be spent.'
       );
       expect(screen.getByTestId('free-note')).toHaveClass('text-text-dim');
     });
@@ -154,7 +157,7 @@ describe('Address v3 components', () => {
         .querySelector('[data-part="free"]')!;
       expect(free).toHaveTextContent(/^$/);
       // re-pinned on purpose (lane P1, third round): the part is "free" (it was "spendable")
-      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
+      expect(free).toHaveAttribute('title', 'free 8.83% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {
@@ -175,8 +178,10 @@ describe('Address v3 components', () => {
         ['occupied', '6,607 CKB pays for the bytes of its other cells'],
         ['free', '54,571.35338057 CKB'],
       ]);
+      // re-pinned on purpose (the third read's Lb NOTE 2): a lock is not all that holds free CKB;
+      // a since and a cellbase reward's maturity hold it too (it read "their locks decide")
       expect(screen.getByTestId('free-note')).toHaveTextContent(
-        'Free is the CKB its other cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+        'Free is the CKB its other cells hold beyond what their bytes occupy; their locks, any since on them and a cellbase reward’s maturity decide whether it can be spent.'
       );
       // lane P1: its unclaimed compensation stands beside the balance, exact (re-pinned, third
       // round: alone, no "spendable" beside it)
@@ -607,8 +612,15 @@ describe('Address v3 components', () => {
         activity={{
           ...addressActivitiesFixture[0],
           tags: 1,
+          // a transfer out, as the route states it (the third read's Lb SHOULD 2): its direction
           itemDeltas: [
-            { kind: 'token', typeScriptHash: '0x' + 'ab'.repeat(32), delta: '-1', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: '0x' + 'ab'.repeat(32),
+              delta: '-1',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
         }}
       />
@@ -628,6 +640,7 @@ describe('Address v3 components', () => {
           delta,
           symbol: 'iCKB',
           decimals: 8,
+          movement: 'transfer' as const,
         },
       ],
     });
@@ -647,7 +660,8 @@ describe('Address v3 components', () => {
 // Consistency C3: the address feed is the site's one activity row (ActivityRow), with this
 // address's line first, as text and tagged "this address" (Address.dc.html → History).
 describe('Address activity is the shared activity row (C3)', () => {
-  const nervape = (n: number): ItemDelta => ({
+  // objects that changed hands, as the route states it (the third read's Lb SHOULD 2)
+  const nervape = (n: number): RowItemDelta => ({
     kind: 'object',
     objectId: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
     delta: 1,
@@ -655,6 +669,7 @@ describe('Address activity is the shared activity row (C3)', () => {
     class: 'object',
     composition: 'btc_ckb',
     role: 'spore',
+    movement: 'transfer',
   });
   const received = (count: number): Activity => ({
     ...addressActivitiesFixture[0],
@@ -776,4 +791,24 @@ describe('Address activity is the shared activity row (C3)', () => {
     expect(party).toHaveTextContent('owner');
     expect(container).not.toHaveTextContent('Roles:');
   });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('the address balance on an older API', () => {
+  // it said "Address Nervos DAO cells: expected a non-negative decimal integer, received undefined":
+  // true, and silent that the API is older
+  it.each(['daoCellsCapacity', 'otherCellsOccupiedCapacity', 'otherCellsFreeCapacity'] as const)(
+    'refuses holdings without %s by name',
+    (field) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const older = { ...holdingsFixture } as Record<string, unknown>;
+      delete older[field];
+      expect(() =>
+        render(<AddressBalance holdings={older as unknown as typeof holdingsFixture} />)
+      ).toThrow(`Address holdings: the API sends no ${field}: it is older than this page`);
+      log.mockRestore();
+    }
+  );
 });

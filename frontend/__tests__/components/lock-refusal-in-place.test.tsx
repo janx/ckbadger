@@ -16,6 +16,7 @@ import { api, type GlobalActivity } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,35 +29,37 @@ const refusal = new RegExp(`address ${SPELLS_ANOTHER} spells the lock code hash`
 
 describe('a refused lock fails its part, in its place', () => {
   it('an activity row: the row says it cannot be read, the others are drawn', () => {
-    const row = (n: number, address: string): GlobalActivity => ({
-      txHash: `0x${String(n).repeat(64)}`,
-      blockNumber: 100 + n,
-      txIndex: 0,
-      timestamp: String(Date.now() - 60_000 * n),
-      isCellbase: false,
-      protocolActions: [],
-      typeCalls: [],
-      lockCalls: [],
-      recognizedTypes: [],
-      participants: [
-        {
-          address,
-          lockHash: `0x${String(n + 1).repeat(64)}`,
-          lockHashPrefix: null,
-          lockKind: null,
-          roles: [],
-          tags: 0,
-          ckbDelta: String(-n),
-          usedDelta: '0',
-          itemDeltas: [],
-          sent: false,
-        },
-      ],
-    });
+    const row = (n: number, address: string): GlobalActivity =>
+      activityRead({
+        txHash: `0x${String(n).repeat(64)}`,
+        blockNumber: 100 + n,
+        txIndex: 0,
+        timestamp: String(Date.now() - 60_000 * n),
+        isCellbase: false,
+        protocolActions: [],
+        typeCalls: [],
+        lockCalls: [],
+        recognizedTypes: [],
+        participants: [
+          {
+            address,
+            lockHash: `0x${String(n + 1).repeat(64)}`,
+            lockHashPrefix: null,
+            lockKind: null,
+            roles: [],
+            tags: 0,
+            ckbDelta: String(-n),
+            usedDelta: '0',
+            itemDeltas: [],
+            sent: false,
+          },
+        ],
+      });
     // the second party's address does not decode: the decision refuses it, naming it
     const rows = [row(1, seededAddress('good01')), row(2, 'ckb1qzda0b')];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -76,33 +79,37 @@ describe('a refused lock fails its part, in its place', () => {
   // (a transaction in the pool that commits), rather than standing in its error for good
   it('an activity row: its part starts again when its transaction changes', () => {
     const tx = `0x${'31'.repeat(32)}`;
-    const at = (blockNumber: number | null, address: string): GlobalActivity => ({
-      txHash: tx,
-      blockNumber: blockNumber as number,
-      txIndex: 0,
-      timestamp: (blockNumber === null ? null : String(Date.now() - 60_000)) as string,
-      isCellbase: false,
-      protocolActions: [],
-      typeCalls: [],
-      lockCalls: [],
-      recognizedTypes: [],
-      participants: [
-        {
-          address,
-          lockHash: `0x${'32'.repeat(32)}`,
-          lockHashPrefix: null,
-          lockKind: null,
-          roles: [],
-          tags: 0,
-          ckbDelta: '-1',
-          usedDelta: '0',
-          itemDeltas: [],
-          sent: true,
-        },
-      ],
-    });
+    const at = (blockNumber: number | null, address: string): GlobalActivity =>
+      activityRead({
+        txHash: tx,
+        blockNumber: blockNumber as number,
+        txIndex: 0,
+        timestamp: (blockNumber === null ? null : String(Date.now() - 60_000)) as string,
+        isCellbase: false,
+        protocolActions: [],
+        typeCalls: [],
+        lockCalls: [],
+        // a pool row states its recognised codes as a committed row does (C7: the mirror builds
+        // its rows with the indexer's builder)
+        recognizedTypes: [],
+        participants: [
+          {
+            address,
+            lockHash: `0x${'32'.repeat(32)}`,
+            lockHashPrefix: null,
+            lockKind: null,
+            roles: [],
+            tags: 0,
+            ckbDelta: '-1',
+            usedDelta: '0',
+            itemDeltas: [],
+            sent: true,
+          },
+        ],
+      });
     const runsOf = (a: GlobalActivity) => (
       <ActivityRuns
+        more={false}
         rows={[
           {
             key: a.txHash,
@@ -155,6 +162,7 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: 'more',
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     // the distribution is read as the API gives it (lane cd-fixes-controls, SHOULD-3): it was
@@ -196,8 +204,22 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: null,
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
+    // and the distribution as the route reads it at that tip (lane cd-fixes-controls,
+    // review-fix-tests NOTE-4: it stood at the first tip's 11 holders, largest 20, beside these
+    // ten): ten holders, the largest 28, the next nine 72, none after them
+    vi.mocked(api.getTokenDistribution).mockResolvedValue({
+      holdersCount: 10,
+      totalSupply: '100',
+      largestHolderBalance: '28',
+      nextNineBalance: '72',
+      remainingBalance: '0',
+      unit: 'token',
+      decimals: 0,
+      buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 10, balance: '100' }],
+    });
     // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
     fireEvent.click(screen.getByRole('button', { name: /^all .*holders ↓$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
@@ -228,6 +250,7 @@ describe('a refused lock fails its part, in its place', () => {
         total: 1,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(

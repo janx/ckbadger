@@ -304,9 +304,10 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
       'title',
       'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5\u00a0versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977\u00a0cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
     );
+    // lane exactness, part B2: 65,309,701 of 46,743,236,111.96022084 CKB occupied is 0.1397…%, 0.13% (half up 0.14%)
     expect(rowOf(t, 'Default Lock')).toHaveAttribute(
       'title',
-      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235\u00a0cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.14%)'
+      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235\u00a0cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.13%)'
     );
     expect(rowOf(t, 'PW Lock').getAttribute('title')).toContain('PW Lock · lock · deprecated · ');
     expect(rowOf(t, 'AlwaysSuccess')).toHaveAttribute(

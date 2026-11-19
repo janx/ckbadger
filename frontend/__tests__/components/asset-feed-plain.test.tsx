@@ -13,6 +13,7 @@ import {
   sporeCellVersionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const obj = (n: number, delta: 1 | -1) => ({
   kind: 'object' as const,
@@ -35,7 +36,7 @@ const party = (lock: string, kind: string, delta: string, items: ReturnType<type
   usedDelta: '0',
   itemDeltas: items,
 });
-const batch: GlobalActivity = {
+const batch: GlobalActivity = activityRead({
   txHash: '0x' + 'cd'.repeat(32),
   blockNumber: 12,
   txIndex: 3,
@@ -54,18 +55,18 @@ const batch: GlobalActivity = {
       scriptName: 'M-NFT',
     },
   ],
-  recognizedTypes: [],
+  recognizedTypes: [ITEM_TYPE.spore],
   lockCalls: [
     {
       lockCodeHash: '0x' + '0c'.repeat(32),
       lockHashType: 'type',
       lockArgs: '0x5678',
       scriptHash: '0x' + '0d'.repeat(32),
-      scriptName: 'PW Lock',
+      lockScriptName: 'PW Lock',
     },
   ],
   protocolActions: [],
-};
+});
 const page = pagedRead({ data: [batch], total: 1, limit: 50, hasMore: false, nextCursor: null });
 
 function feed(plain: boolean) {
@@ -140,10 +141,11 @@ describe('phone form of a collection activity entry (L6)', () => {
   });
 
   it("keeps occupied on the participant's line in the plain rows only", async () => {
-    const withOccupied = {
+    const withOccupied = activityRead({
       ...batch,
+      recognizedTypes: [ITEM_TYPE.spore],
       participants: batch.participants.map((p) => ({ ...p, usedDelta: '32400000000' })),
-    };
+    });
     const { container } = render(
       <AssetFeed
         queryKey="plain-occupied"

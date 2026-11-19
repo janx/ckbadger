@@ -589,13 +589,15 @@ export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityS
             </div>
             {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
                 folds within its day and across the older pages appended to it. */}
-            {groups.map(({ key, label, items }) => (
+            {groups.map(({ key, label, items }, at) => (
               // under the filter too: another filter shows another set of rows, and its runs'
               // state starts anew (a run the reader never opened under it is never drawn open)
               <div key={`${selectedFilter}:${key}`}>
                 <ActivityDayDivider label={label} />
                 <ActivityRuns
                   age
+                  // the last day's last run, older pages unread, is not final
+                  more={hasNextPage === true && at === groups.length - 1}
                   rows={items.map((activity) => {
                     const key = itemKey(activity);
                     return {

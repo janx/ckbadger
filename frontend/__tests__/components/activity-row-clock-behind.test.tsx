@@ -12,6 +12,7 @@ import {
 } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /**
  * Lane B4, the coordinator's third item: an activity row's right part (its evidence: the block
@@ -45,7 +46,7 @@ import { CLOCK_BEHIND } from '@/lib/format-age';
 const ahead = () => String(Date.now() + 2 * 60_000);
 
 function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
-  return {
+  return activityRead({
     txHash: `0x${'c1'.repeat(32)}`,
     blockNumber: 21047791,
     timestamp: ahead(),
@@ -69,13 +70,15 @@ function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
       },
     ],
     ...over,
-  };
+  });
 }
 
 const pool = (): ActivityRowData =>
   row({
     blockNumber: null,
     timestamp: null,
+    // a pool row states no item types, null and null, as the route sends it (the third read's T SHOULD-1)
+    recognizedTypes: [],
     poolStatus: 'committed_awaiting_index',
     timeAddedToPool: new Date(Date.now() + 2 * 60_000).toISOString(),
   });
@@ -136,6 +139,7 @@ describe.each([390, 360, 320])(
       const rows = [row(), row({ txHash: `0x${'c2'.repeat(32)}`, blockNumber: 21047790 })];
       const { container } = render(
         <ActivityRuns
+          more={false}
           age
           rows={rows.map((a) => ({
             key: a.txHash,

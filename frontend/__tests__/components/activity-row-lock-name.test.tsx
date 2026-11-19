@@ -8,6 +8,7 @@ import { ActivityRow, type ActivityRowData } from '@/components/activity/activit
 import { LockKind } from '@/components/ui/lock-kind';
 import type { ParticipantInfo } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // Real addresses (RFC 0021 full format): the default lock, and JoyID, over the same args.
 const DEFAULT_ADDRESS =
@@ -31,17 +32,18 @@ function party(address: string, lockKind: string | null, lockHash: string): Part
   };
 }
 
-const row = (participants: ParticipantInfo[]): ActivityRowData => ({
-  txHash: `0x${'ab'.repeat(32)}`,
-  blockNumber: 21000000,
-  timestamp: String(Date.now() - 60_000),
-  isCellbase: false,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  recognizedTypes: [],
-  participants,
-});
+const row = (participants: ParticipantInfo[]): ActivityRowData =>
+  activityRead({
+    txHash: `0x${'ab'.repeat(32)}`,
+    blockNumber: 21000000,
+    timestamp: String(Date.now() - 60_000),
+    isCellbase: false,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    recognizedTypes: [],
+    participants,
+  });
 
 const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-role="participant"]')];
 

@@ -21,13 +21,13 @@ import { exactSites, type ExactKind, type ExactSite } from '@/__tests__/utils/ex
  *   never a figure a reader is told;
  * - `exact`: what is written is exact all the same (an integer read from its digits, a multiple of
  *   an axis step written at the decimals the step needs);
- * - `cut`: a floor that cuts a figure for display, the site's rule (a span's two largest units);
- * - `part B`: a site in a page lane's files (P1 chain, P2 assets, P3 lists and home), named here by
- *   its lane and read in part B, when those files are free: a stated figure there is a fault.
+ * - `cut`: a floor that cuts a figure for display, the site's rule (a span's two largest units).
  *
  * Every site is on TOLERATED, by file, lane, kind and count, with its reason; a count is exact, so
- * a site that goes leaves the list, and a new one fails. The chart pages and the topic pages hold
- * no `part B` site: each of theirs is named.
+ * a site that goes leaves the list, and a new one fails. No site is unread (lane exactness, part
+ * B7): the page lanes' sites part A left as `part B` were each read in part B3, the stated figures
+ * among them cut (the home network charts' unused float path, the clipped bar's label, the pool
+ * tooltip's sizes, cycles and wait, the sync banner's rates and progress) and the rest named.
  *
  * What the reader cannot see (its limits): a name's `toLocaleString` (or a `format` of an
  * `Intl.NumberFormat`) with no digit option, which rounds a float at three places where it is exact
@@ -37,8 +37,13 @@ import { exactSites, type ExactKind, type ExactSite } from '@/__tests__/utils/ex
  * (`label={Math.round(x)}`; `formatValue={(n) => …}` counts only a call it can read in that
  * function); names
  * are the file's, not a scope's (a name bound to a rounded value anywhere is read as bound
- * everywhere in the file); rounding done in BigInt arithmetic (`formatPercent`'s and `percentOf`'s
- * half up, part B's) or by a function of the site's own that is not one of these calls; a
+ * everywhere in the file); rounding done in BigInt arithmetic (a `+ divisor / 2` before a
+ * quotient: part B took the shown ones out, `formatPercent`'s and `percentOf`'s in B2 and
+ * `formatDecimalBytes`' in B3, and the two left are a tick's grid in lib/chart-ticks.ts, exact
+ * multiples of its step, and a version bar's width in components/asset/cell-versions.tsx) or by a
+ * function of the site's own that is not one of these calls; a float cut in its own text (a
+ * `cutFloat` of a float's shortest decimal is exact to that decimal, which the float may not
+ * be); a
  * `Number(…)` of a decimal string that is drawn and not written (not a site); and whether a
  * written float was exact before it was written (a template that writes `${x}` of a float made by
  * division is not a call it counts).
@@ -47,7 +52,7 @@ import { exactSites, type ExactKind, type ExactSite } from '@/__tests__/utils/ex
 const ROOT = join(__dirname, '..', '..');
 
 type Lane = 'charts' | 'topics' | 'p1-chain' | 'p2-assets' | 'p3-lists' | 'shared';
-type What = 'drawing' | 'exact' | 'cut' | 'part B';
+type What = 'drawing' | 'exact' | 'cut';
 
 interface Tolerated {
   path: string;
@@ -207,48 +212,54 @@ const TOLERATED: readonly Tolerated[] = [
     sites: { 'number-to-text': 1 },
     reason: 'a timestamp in ms read from its digits, an integer',
   },
-  // ---- part B: the page lanes' files ----
+  // ---- the page lanes' files, read in part B (lane exactness, B3): named, none a stated figure ----
   {
     path: 'app/blocks/[id]/uncles/[index]/client-page.tsx',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'exact',
     sites: { 'number-to-text': 1 },
-    reason: "an uncle's index read from the route's path",
+    reason:
+      "an uncle's index read from the route's path, an integer the page checks (its pattern and Number.isSafeInteger) before it reads it",
   },
   {
     path: 'components/address/address-history.tsx',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 2 },
-    reason: "a capacity history's occupied and full capacity read into floats",
+    reason:
+      "a capacity history row's occupied bar, its width occupied ÷ capacity in %; the figures beside it are written exact (the lists lane's file, read, not edited)",
   },
   {
     path: 'components/address/address-holdings.tsx',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 2 },
-    reason: "a holding class's occupied capacity read into a float",
+    reason:
+      "a holding class's part of the occupied bar, its width in %; the class's figures are written exact in its legend",
   },
   {
     path: 'components/ui/cell-bar.tsx',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 5 },
-    reason: "a cell bar's parts read into floats for their widths and words",
+    reason:
+      "a cell bar's parts and its occupied share as widths in %; each part's figure is in its title and the bar's aria label, exact",
   },
   {
     path: 'components/ui/cell-tile.tsx',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 2 },
-    reason: "a cell tile's occupied share of its capacity",
+    reason:
+      "a cell tile's occupied bar, its width occupied ÷ capacity in %; the occupied bytes are written whole beside it",
   },
   {
     path: 'lib/cell-parts.ts',
     lane: 'p1-chain',
-    what: 'part B',
+    what: 'exact',
     sites: { 'number-to-text': 1 },
-    reason: "an ELF section's size read from the API's digits",
+    reason:
+      "an ELF section's size read from the API's digits, an integer of bytes far under 2^53 (a cell's data), placed and written exactly",
   },
   {
     path: 'lib/tx-detail-model.ts',
@@ -277,116 +288,101 @@ const TOLERATED: readonly Tolerated[] = [
   {
     path: 'components/asset/cell-versions.tsx',
     lane: 'p2-assets',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 1 },
-    reason: "a version's capacity on the largest one's scale, half up at a ten-thousandth",
+    reason:
+      "a version's capacity bar, its width on the largest version's scale in thousandths of a %; the capacity is written exact beside it",
   },
   {
     path: 'components/asset/protocol-evidence.tsx',
     lane: 'p2-assets',
-    what: 'part B',
+    what: 'exact',
     sites: { 'number-to-text': 1 },
-    reason: "a field's index read from its key",
+    reason: "a field's index read from its key ('field-N'), an integer index into the fields",
   },
   {
     path: 'components/ui/capacity-partition.tsx',
     lane: 'p2-assets',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 2 },
-    reason: "a capacity partition's parts read into floats for their widths and words",
+    reason:
+      "a capacity partition's parts as widths in % of their sum; each part's figure is written exact in its legend",
   },
   {
     path: 'components/ui/allele-gel.tsx',
     lane: 'p2-assets',
-    what: 'part B',
+    what: 'drawing',
     sites: { round: 2 },
-    reason: "an allele gel's band positions and its measured width",
+    reason: "an allele gel's band colour step between two inks, and its measured width in whole px",
   },
   {
     path: 'components/ui/sequencing-gel.tsx',
     lane: 'p2-assets',
-    what: 'part B',
+    what: 'drawing',
     sites: { round: 1 },
-    reason: "a sequencing gel's measured width",
+    reason: "a sequencing gel's measured width in whole px",
   },
   {
     path: 'components/home/ckbytes-section.tsx',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { 'number-to-text': 2 },
     reason:
-      'a CKBytes part and the circulating whole read into floats (formatDecimalBytes, part B)',
+      "a CKBytes part's width in the allocation bar, its share of the circulating whole in %; each part's figure is written exact, and its bytes cut (formatDecimalBytes, part B3)",
   },
   {
     path: 'components/home/mini-chart.tsx',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { round: 1, toFixed: 1 },
-    reason: "a home chart's tick line height and a value at one place",
-  },
-  {
-    path: 'components/home/network-section.tsx',
-    lane: 'p3-lists',
-    what: 'part B',
-    sites: { toFixed: 3 },
-    reason: "the home network charts' values at two places (block time, hash rate, uncle rate)",
+    reason:
+      "a home chart's height under its tick labels' descent in whole px, and its svg coordinates at a tenth of a px; every figure it writes is a point's exact display or compact label (part B3)",
   },
   {
     path: 'components/pipeline/pipeline-panel.tsx',
     lane: 'p3-lists',
-    what: 'part B',
-    sites: { toFixed: 6, 'number-to-text': 1 },
-    reason: "the pipeline's strap path and a card's block number read from its attribute",
+    what: 'drawing',
+    sites: { toFixed: 6 },
+    reason: "the reward strap's path coordinates at a tenth of a px",
   },
   {
-    path: 'components/pipeline/pipeline-tooltip.tsx',
+    path: 'components/pipeline/pipeline-panel.tsx',
     lane: 'p3-lists',
-    what: 'part B',
-    sites: { toFixed: 5 },
-    reason: "a pool transaction's size, cycles and wait, rounded (MB, M, s)",
+    what: 'exact',
+    sites: { 'number-to-text': 1 },
+    reason:
+      "a card's block number read back from its data attribute, an integer, to find its card (and to name it in the error where none is)",
   },
   {
     path: 'components/pipeline/window-label.tsx',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { toFixed: 1 },
-    reason: "the proposal window label's x",
-  },
-  {
-    path: 'components/stats-cards.tsx',
-    lane: 'p3-lists',
-    what: 'part B',
-    sites: { toFixed: 3 },
-    reason: 'a stats card value in thousands and the sync progress, rounded',
-  },
-  {
-    path: 'lib/chart-ticks.ts',
-    lane: 'p3-lists',
-    what: 'part B',
-    sites: { toFixed: 4 },
-    reason:
-      "formatCompactSigned, a clipped bar's label on the home page's CKBytes charts, rounded (part B: formatCompactSigned where it labels a value)",
+    reason: "the proposal window label's x at a tenth of a px",
   },
   {
     path: 'lib/pipeline/encoding.ts',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { round: 1, toFixed: 1 },
-    reason: "the pipeline's encoded timings and a coordinate",
+    reason:
+      "a colour mix's share in tenths of a %, and a cellbase diamond's path coordinates at a tenth of a px",
   },
   {
     path: 'lib/pipeline/layout.ts',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { round: 2, toFixed: 4 },
-    reason: "the pipeline's layout: slot counts and path coordinates",
+    reason:
+      'path coordinates at a tenth of a px, how many arrowheads a gap holds, and how many field rows a plate keeps under its uncles',
   },
   {
     path: 'lib/pipeline/motion.ts',
     lane: 'p3-lists',
-    what: 'part B',
+    what: 'drawing',
     sites: { toFixed: 16, 'number-to-text': 2 },
-    reason: "the pipeline's motion: transforms, opacities and a mark's centre read back",
+    reason:
+      "the pipeline's motion: transforms and opacities in svg attributes, and a mark's centre read back from its cx and cy",
   },
 ];
 
@@ -438,9 +434,10 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
     expect(failures).toEqual([]);
   });
 
-  it('holds the chart and topic pages to named sites, none a stated figure', () => {
+  // lane exactness, part B7: every site is named (drawing, exact or cut); no lane's is left unread
+  it('holds every page to named sites, none a stated figure', () => {
     expect(
-      TOLERATED.filter((t) => (t.lane === 'charts' || t.lane === 'topics') && t.what === 'part B')
+      TOLERATED.filter((t) => !['drawing', 'exact', 'cut'].includes(t.what)).map((t) => t.path)
     ).toEqual([]);
     for (const t of TOLERATED) expect(t.reason.length, t.path).toBeGreaterThan(20);
   });
@@ -467,7 +464,9 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
       shared: 18,
       'p1-chain': 15,
       'p2-assets': 8,
-      'p3-lists': 53,
+      // lane exactness, part B3: 53 → 38, the stated figures cut (the network charts' float path
+      // 3, the clipped bar's label 4, the pool tooltip 5, the sync banner 3); the rest named
+      'p3-lists': 38,
     });
   });
 

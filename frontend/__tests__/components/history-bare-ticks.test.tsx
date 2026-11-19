@@ -130,6 +130,7 @@ describe('holder counts', () => {
         total: 2,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(<CollectionHolders load={load} queryKey="seven" assetClass="objects" />);

@@ -19,6 +19,7 @@ import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-ev
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection } from '@/components/ui/detail-layout';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
@@ -36,6 +37,7 @@ import {
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { versionFree } from '@/lib/held-point';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -383,8 +385,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               note: current ? (
                 <>
                   <span className="text-text">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
-                  occupied · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))}{' '}
-                  free
+                  occupied ·{' '}
+                  {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))} free
                 </>
               ) : undefined,
             },
@@ -433,10 +435,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               <AssetCount value={item.issuer.setCount} /> sets
             </p>
             {item.issuer.infoHex !== null && (
-              <details className="text-meta mt-3">
-                <summary className="cursor-pointer">Raw issuer metadata</summary>
-                <pre className="mt-3 whitespace-pre-wrap break-all">{item.issuer.infoHex}</pre>
-              </details>
+              // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its
+              // bytes keep the 12 px they took from the disclosure
+              <SectionDisclosure form="inner" summary="Raw issuer metadata" className="mt-3">
+                <pre className="text-meta whitespace-pre-wrap break-all">{item.issuer.infoHex}</pre>
+              </SectionDisclosure>
             )}
           </DetailSection>
           <AssetReadState

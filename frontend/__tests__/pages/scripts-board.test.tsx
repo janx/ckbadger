@@ -14,6 +14,7 @@ import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type KnownScript } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
 import { pagedRead } from '@/__tests__/utils/paged-read';
@@ -178,7 +179,9 @@ describe('Scripts list against the Scripts board', () => {
     expect(joyRow.textContent).not.toContain('456,002,179.57');
     expect(joyRow.getAttribute('title')).toContain('456,002,179.57000000 CKB');
     expect(joyRow.textContent).not.toContain('456.00M');
-    expect(joyRow.textContent).toContain('4.19%');
+    // lane exactness, part B2: 19,096,283 of 456,002,179.57 CKB occupied is 4.1877…%, 4.18% (half up 4.19%); of the
+    // lock scripts' 49,794,300,000 CKB, 96.4568…% is 96.45% (half up 96.45%), 3.4682…% 3.46%
+    expect(joyRow.textContent).toContain('4.18%');
     const godRow = within(table)
       .getByRole('link', { name: 'Godwoken Custodian Lock' })
       .closest('tr') as HTMLElement;
@@ -327,6 +330,28 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     vi.restoreAllMocks();
   });
 
+  // The third read's La N6, with S5's rule: on an API one version older the page refuses by name
+  // or draws truthfully; this plan's fields go through the one reader (lib/api-fields.ts sentField)
+  // it threw a TypeError on counts.both
+  it('refuses role counts without both and neither by name', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...withSummary,
+      roleCounts: { all: 70, locks: 41, types: 34 } as never,
+    });
+    render(
+      <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+        <ScriptsPage />
+      </ErrorBoundary>
+    );
+    expect(
+      await screen.findByText(
+        'Scripts: the API sends no roleCounts.both: it is older than this page'
+      )
+    ).toHaveAttribute('role', 'alert');
+    log.mockRestore();
+  });
+
   const hero = () => screen.getByRole('region', { name: 'Scripts' });
   const tier1 = () => document.querySelector('[data-tier="1"]') as HTMLElement;
   const tier2 = () => document.querySelector('[data-tier="2"]') as HTMLElement;
@@ -370,6 +395,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
   // of 12 px", so rows stand in the first screen): no display figure; the counts the API states,
   // in one sentence in the reading ink, and no CKB total, which summed the classes in the page
   // (renamed: "leads with the CKB under these scripts as the one figure …")
+  // re-pinned on purpose (the third read's La N5): a family's role is its use, or, with no cell
+  // yet, the registry's declaration, so the sentence says what each family is ("41 are locks"); it
+  // said "41 used as locks" of families the registry only declares
   it('says the scripts with neither role where the route counts some', async () => {
     vi.mocked(api.getScripts).mockResolvedValue({
       ...withSummary,
@@ -380,7 +408,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
       (_, el) => el?.getAttribute('data-role') === 'summary'
     );
     expect(sentence).toHaveTextContent(
-      /^72\sscripts; 41 used as locks, 34 as types, 5 as both, 2 as neither\./
+      /^72\sscripts; 41 are locks, 34 are types, 5 are both, 2 are neither\./
     );
   });
 
@@ -393,7 +421,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // read as a partition (75 parts of 70); the sentence says what each count is, the overlap the
     // route's
     expect(sentence).toHaveTextContent(
-      /^70\sscripts; 41 used as locks, 34 as types, 5 as both\. Who can change the locks’ code, by the CKB under them:$/
+      /^70\sscripts; 41 are locks, 34 are types, 5 are both\. Who can change the locks’ code, by the CKB under them:$/
     );
     expect(sentence).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(figure()).toBeNull();
@@ -436,8 +464,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent)
     ).toEqual([
-      'Immutable · pinned by data hash 96.46%',
-      'A multisig can replace 3.47%',
+      'Immutable · pinned by data hash 96.45%',
+      'A multisig can replace 3.46%',
       'One key can replace 0.07%',
     ]);
     for (const share of within(legend).getAllByText(/%$/)) expect(share).toHaveClass('text-text');
@@ -503,7 +531,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The hero's request never carries the role: the tab is the table's.
     for (const [params] of vi.mocked(api.getScripts).mock.calls)
       if (params?.limit === 1) expect(params.role).toBeUndefined();
-    expect(sentence).toHaveTextContent(/^70\sscripts; 41 used as locks, 34 as types, 5 as both\./);
+    expect(sentence).toHaveTextContent(/^70\sscripts; 41 are locks, 34 are types, 5 are both\./);
   });
 
   it('writes no coloured text in tier 1: the figure is bright and the bar keeps its colours (R11)', async () => {
@@ -565,7 +593,7 @@ describe('Scripts list phone row (board L6)', () => {
     const items = Array.from(right.querySelectorAll('[data-role="figure-label"]')).map(
       (label) => label.parentElement!
     );
-    expect(items.map((l) => l.textContent)).toEqual(['161,049 live', '4.19% occupied']);
+    expect(items.map((l) => l.textContent)).toEqual(['161,049 live', '4.18% occupied']);
     for (const item of items) expect(item).toHaveClass('whitespace-nowrap');
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
     expect(48 + 12 + at('99,999,999 live · 100.00% occupied', 12)).toBeLessThanOrEqual(328);
@@ -590,7 +618,7 @@ describe('Scripts list phone row (board L6)', () => {
         left: 'lock · upgradable · 5 versions · by a multisig',
         right: null,
       },
-      { key: 'share', tone: 'quiet', left: '', right: '161,049 live · 4.19% occupied' },
+      { key: 'share', tone: 'quiet', left: '', right: '161,049 live · 4.18% occupied' },
     ]);
     // Never clamped (C#12): no line clamp anywhere in the row.
     expect(rows[0].querySelector('[class*="line-clamp"]')).toBeNull();
@@ -640,7 +668,7 @@ describe('Scripts list phone row (board L6)', () => {
       // a phone row's summary form (readability R5)
       ['identity', 'JoyID', '456,002,179 CKB'],
       ['code', 'lock · upgradable · 5 versions · by a multisig', null],
-      ['share', '', '161,049 live · 4.19% occupied'],
+      ['share', '', '161,049 live · 4.18% occupied'],
     ]);
   });
 });
@@ -668,7 +696,7 @@ describe('the scripts phone row on the phone-rows board (lane D4)', () => {
     expect(phoneLines(joy).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['identity', 'head', 'JoyID', '456,002,179 CKB'],
       ['code', 'body', 'lock · upgradable · 5 versions · by a multisig', null],
-      ['share', 'quiet', '', '161,049 live · 4.19% occupied'],
+      ['share', 'quiet', '', '161,049 live · 4.18% occupied'],
     ]);
     expect(phoneLines(base)[1].left).toBe(
       'lock · immutable · code cell unspendable · pinned by data hash'
@@ -682,7 +710,7 @@ describe('the scripts phone row on the phone-rows board (lane D4)', () => {
     // the bar and the two figures that name it, each after its value's name, quiet
     const share = joy.querySelector('[data-line="share"]')!;
     expect(share.querySelector('[data-share-track]')).not.toBeNull();
-    expect(dottedItems(share)).toEqual(['161,049 live', '4.19% occupied']);
+    expect(dottedItems(share)).toEqual(['161,049 live', '4.18% occupied']);
     const labels = Array.from(share.querySelectorAll('[data-role="figure-label"]'));
     expect(labels.map((l) => l.textContent)).toEqual(['live', 'occupied']);
     for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');

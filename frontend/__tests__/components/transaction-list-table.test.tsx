@@ -39,6 +39,7 @@ import {
   insetsPx,
   textRunPx,
 } from '@/__tests__/utils/tailwind-box';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -58,7 +59,7 @@ const scriptCall: Transaction = {
   ...base,
   hash: `0x00de304b${'00'.repeat(25)}25cbbc`,
   isCellbase: false,
-  activity: {
+  activity: activityRead({
     txHash: `0x00de304b${'00'.repeat(25)}25cbbc`,
     blockNumber: 20829775,
     txIndex: 1,
@@ -84,14 +85,14 @@ const scriptCall: Transaction = {
       },
     ],
     participants: [feedSamples.objectTransfer.participants[2]],
-  },
+  }),
 };
 const transfer: Transaction = {
   ...base,
   hash: `0xcfaebc55${'00'.repeat(25)}e6dd61`,
   isCellbase: false,
   value: '76729874184',
-  activity: { ...feedSamples.eightParties, typeCalls: [], protocolActions: [] },
+  activity: activityRead({ ...feedSamples.eightParties, typeCalls: [], protocolActions: [] }),
 };
 const cellbase: Transaction = {
   ...base,
@@ -436,7 +437,7 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     const recycle: Transaction = {
       ...scriptCall,
       hash: `0x0bb1${'00'.repeat(29)}1e`,
-      activity: {
+      activity: activityRead({
         ...scriptCall.activity!,
         txHash: `0x0bb1${'00'.repeat(29)}1e`,
         protocolActions: [
@@ -447,7 +448,7 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
             metadata: { accountId: '0x' + 'da'.repeat(20) },
           },
         ],
-      },
+      }),
     };
     render(<TransactionListTable transactions={[recycle, transfer]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });

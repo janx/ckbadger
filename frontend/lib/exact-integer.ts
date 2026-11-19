@@ -46,6 +46,21 @@ export function formatCompactInteger(value: string, context: string): string {
   return integer.toString();
 }
 
+/**
+ * A non-negative number a route sends as a float (a rate, a progress), cut at `decimals` (over
+ * `divisor`) from the shortest decimal that reads back as it, never rounded (lane exactness, part
+ * B3). A float written in exponent form is refused, named by `context`.
+ */
+export function cutFloat(
+  value: number,
+  decimals: number,
+  context: string,
+  divisor: bigint = BigInt(1)
+): string {
+  const [numerator, denominator] = exactDecimalRatio(String(value), context);
+  return cutScaledInteger(numerator, denominator * divisor, decimals);
+}
+
 /** Exact decimal ratio/percentage text from an API string. Geometry may still use Number. */
 export function formatDecimal(value: string, decimals: number, multiplier = 1): string {
   if (!Number.isSafeInteger(multiplier) || multiplier < 0) {

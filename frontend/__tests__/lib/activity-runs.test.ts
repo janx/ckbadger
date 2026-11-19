@@ -62,14 +62,18 @@ describe('runKey: what makes two rows the same', () => {
     );
   });
 
-  it('compares what was done as the API names it: the protocol actions, counted, not their figures', () => {
+  // re-pinned on purpose (the third read's Lb NOTE 1, by the rule of the final round's item 1):
+  // the actions are a SET of (protocol, action): one deposit against three in one batch did one
+  // thing; it was a multiset, which made them two runs
+  it('compares what was done as the API names it: the set of protocol actions, not their count or figures', () => {
     const deposit = { protocol: 'dao', action: 'deposit' };
     const request = { protocol: 'dao', action: 'withdraw_request' };
     const dao = (actions: RunSubject['protocolActions']) =>
       runKey(oracle({ title: 'DAO Deposit', typeCalls: [], protocolActions: actions }));
     expect(dao([deposit, request])).not.toBe(dao([deposit]));
-    expect(dao([deposit, deposit])).not.toBe(dao([deposit]));
+    expect(dao([deposit, deposit, deposit])).toBe(dao([deposit]));
     expect(dao([request, deposit])).toBe(dao([deposit, request]));
+    expect(dao([deposit, request, deposit])).toBe(dao([request, deposit]));
   });
 
   // re-pinned on purpose (the lead's final round, item 1): the code is a SET. The owner's rule is
@@ -301,18 +305,22 @@ describe('foldRuns: consecutive rows with one key', () => {
   });
 });
 
-// The live feeds (re-captured for the P3 follow-up, its capture said in the fixture: the first page
-// of /activities and of its token, object, identity and DAO filters, read through this lane's API
-// build over the live mainnet stores on 2026-11-19 at 12:33 UTC, with the item types of then, read
-// as the recognised codes, `liveFeeds` says how; the token feed
-// from its 22nd row, its first 21 being Force Bridge transactions of up to 774 parties). By the
-// rule a run is what was done and the code its rows carry; a row that carries other code ends it.
-// What the rule makes of them, read row by row: the whole feed's 50 rows in 14; the token feed's
+// The live feeds (re-captured for the P3 follow-up, and again at the third read's head, 574cb27d,
+// after the item resolver of 0ab62b48 (T NOTE-7); the capture is said in the fixture: the first
+// page of /activities and of its token, object, identity and DAO filters, read through this lane's
+// API build over the live mainnet stores on 2026-11-19 at 18:21 UTC, with the item types of then,
+// read as the recognised codes, `liveFeeds` says how; the token feed from its 22nd row, its first
+// 21 being Force Bridge transactions of more than 100 parties each). By the rule a run is what was
+// done and the code its rows carry; a row that carries other code ends it. What the rule makes of
+// them, read row by row: the whole feed's 50 rows in 12 (re-pinned on purpose at the recapture: the
+// whole feed is the chain's newest page, #21,057,151 to #21,057,212, where it was #21,055,136 to
+// #21,055,201 in 14; folded by the rows' code sets alone, read apart in Python, the same 12: .bit
+// time cells' runs, CKB transfers and two pairs of Bitcoin SPV Type Lock calls); the token feed's
 // 29 sUDT transfers in one run, every row calling the same codes (re-pinned on purpose, the lead's
 // final round, item 1: the codes are a set; as a multiset they were 4 runs, [11, 11, 3, 4], cut
 // only where the number of Godwoken Withdrawal Lock outputs changed, 2 to 5); the run, #21,016,902
 // to #21,016,521, holds transactions that moved six sets of five tokens of the one standard.
-const LIVE_ALL_RUNS = [2, 1, 10, 1, 6, 1, 2, 1, 1, 5, 1, 3, 2, 14];
+const LIVE_ALL_RUNS = [2, 3, 1, 3, 2, 6, 2, 6, 5, 12, 2, 6];
 const LIVE_TOKEN_RUNS = [29];
 const LIVE_TOKEN_MIXED = new Set([
   'USDC',

@@ -3,7 +3,7 @@ import { render, screen, within, act, createTestQueryClient } from '@/__tests__/
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
-import { api } from '@/lib/api';
+import { api, type ItemCellVersion } from '@/lib/api';
 import { mockItemReads, dotcellItem } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
@@ -189,4 +189,27 @@ it("titles collection feed rows from the API's collectionContext, never the tx's
   // The Transactions tab says the same thing per row.
   // Table and compact layouts both carry it.
   expect((await within(feed).findAllByText('Minted 1')).length).toBeGreaterThan(0);
+});
+
+// Lane P2's fifth round (item 2, MUST): a melted Spore's History said "The object's cell holds 320
+// CKB" under "No live cell holds capacity for this burned object." It says what its last cell held
+// when it was consumed, in the past tense.
+it('says what a melted object’s last cell held, in the past tense, under its History', async () => {
+  const live = (await api.getItemCellVersions('spore', sporeDetailProducer.sporeId)).data;
+  const consumed: ItemCellVersion[] = live.map((v) => ({
+    ...v,
+    isLive: false,
+    consumedByTx: v.consumedByTx ?? `0x${'56'.repeat(32)}`,
+    consumedAtBlock: v.consumedAtBlock ?? v.blockNumber + 1,
+  }));
+  vi.mocked(api.getItemCellVersions).mockResolvedValue({ data: consumed, total: consumed.length });
+  render(<SporeDetailView object={{ ...sporeDetailProducer, isLive: false }} error={null} />);
+  const history = await screen.findByRole('region', { name: 'History' });
+  await screen.findByLabelText(/cell versions$/);
+  const sentence = history.querySelector('[data-role="history-sentence"]')!;
+  expect(history).toHaveTextContent('No live cell holds capacity for this burned object.');
+  expect(sentence.textContent).toMatch(
+    /^The object’s (last )?cell held .+ CKB.* when it was consumed\./
+  );
+  expect(sentence.textContent).not.toMatch(/holds/);
 });

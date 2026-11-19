@@ -1,4 +1,5 @@
 import live from '@/__tests__/fixtures/activities-live-mainnet.json';
+import { activityRead } from '@/__tests__/utils/activity-read';
 import type { GlobalActivity } from '@/lib/api';
 
 /**
@@ -25,7 +26,7 @@ export function liveFeeds(): Record<string, GlobalActivity[]> {
       rows.map(({ itemTypes, itemTypesUnread, ...row }) => {
         if (itemTypes === null)
           throw new Error(`${row.txHash}: the capture states no item types (${itemTypesUnread})`);
-        return { ...row, recognizedTypes: itemTypes };
+        return activityRead<GlobalActivity>({ ...row, recognizedTypes: itemTypes });
       }),
     ])
   );

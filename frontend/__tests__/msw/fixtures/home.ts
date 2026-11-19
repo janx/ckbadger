@@ -9,6 +9,7 @@ import type {
   TxStatsResponse,
   UncleRateChartResponse,
 } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 /**
  * The homepage's data, shaped like the live API (mainnet, 2026-10-24). Daily charts end on the
@@ -172,7 +173,6 @@ export const daoStatistics: DaoStatistics = {
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
-  activeDeposits: 22379,
   depositCellsCount: 20689,
   withdrawalRequestCellsCount: 1690,
   // the route's: the live DAO cells, 20,689 + 1,690 (lane exactness, part A, A5 ii)
@@ -325,7 +325,7 @@ const ADDRS = [seededAddress('q3q7ue'), seededAddress('qsv05e')];
 
 /** Nine latest activities: .bit type calls, a DAO deposit and a plain transfer. */
 export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, i) => {
-  const base: GlobalActivity = {
+  const base: GlobalActivity = activityRead({
     txHash: `0x${String(i + 1).padStart(2, '0')}${'ab'.repeat(30)}${String(i).padStart(2, '0')}`,
     blockNumber: 20_819_142 - i,
     txIndex: 1,
@@ -363,11 +363,14 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         sent: true,
       },
     ],
-  };
+  });
   if (i === 1) {
-    return {
+    return activityRead({
       ...base,
       typeCalls: [],
+      // the route names the DAO's code on a DAO step (the third read's T SHOULD-1: the deposit kept
+      // the .bit oracle's [], a key the API cannot send)
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',
@@ -380,7 +383,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         { ...base.participants[0], ckbDelta: '-10200001000' },
         { ...base.participants[0], address: ADDRS[1], ckbDelta: '0' },
       ],
-    };
+    });
   }
   if (i === 2) return { ...base, typeCalls: [] };
   return base;
@@ -395,7 +398,12 @@ function party(
 ): GlobalActivity['participants'][number] {
   return {
     address: seededAddress(tail),
-    lockHash: `0x${tail.padStart(64, '0')}`,
+    // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
+    // is read as one): the tail's characters as hex, padded
+    lockHash: `0x${[...tail]
+      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+      .padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
     ckbDelta,
@@ -412,7 +420,7 @@ function sample(
   n: number,
   overrides: Partial<GlobalActivity> & Pick<GlobalActivity, 'participants'>
 ): GlobalActivity {
-  return {
+  return activityRead({
     txHash: `0x${String(n).padStart(2, '0')}${'cd'.repeat(30)}${String(n).padStart(2, '0')}`,
     blockNumber: 20_818_733 - n,
     txIndex: 1,
@@ -423,12 +431,13 @@ function sample(
     lockCalls: [],
     recognizedTypes: [],
     ...overrides,
-  };
+  });
 }
 
 /** Real shapes from the FE-7 mockup: DAO, Fiber, object, token, and an 8-party transaction. */
 export const feedSamples = {
   daoWithdrawRequest: sample(1, {
+    recognizedTypes: [ITEM_TYPE.dao],
     protocolActions: [
       {
         protocol: 'dao',
@@ -462,6 +471,7 @@ export const feedSamples = {
     ],
   }),
   objectTransfer: sample(3, {
+    recognizedTypes: [ITEM_TYPE.spore],
     typeCalls: [
       {
         typeCodeHash: '0xckbfs',
@@ -478,7 +488,7 @@ export const feedSamples = {
         // Revised R-8: 33 bytes — a raw prefix byte and a raw 32-byte hash.
         lockArgs: `0x0131da${'00'.repeat(28)}5d74`,
         scriptHash: '0xl1',
-        scriptName: 'Nervape Shadow Lock',
+        lockScriptName: 'Nervape Shadow Lock',
         decoded: { lock: 'shadow-lock', prefix: '0x01', hash: `0x31da${'00'.repeat(28)}5d74` },
         decodeError: null,
       },
@@ -494,8 +504,10 @@ export const feedSamples = {
     ],
   }),
   tokenTransfer: sample(4, {
+    recognizedTypes: [ITEM_TYPE.xudt],
     lockCalls: [
       {
+        lockScriptName: null,
         lockCodeHash: `0xab0ede${'00'.repeat(25)}e09f`,
         lockHashType: 'type',
         lockArgs: `0x4b0000${'00'.repeat(14)}838e`,

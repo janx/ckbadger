@@ -2494,6 +2494,74 @@ mod tests {
         }
     }
 
+    /// lane exactness, part B6: in one transaction where three locks take three kinds of Nervos DAO step, each
+    /// action names the owner of the cell that took it (`lockHash`, the cell's lock hash): a
+    /// deposit the output deposit cell's lock, a withdrawal request the output request cell's, a
+    /// completed withdrawal the input request cell's. The route sends it in the action's metadata,
+    /// so a page can say whose step each is.
+    #[test]
+    fn each_dao_action_names_the_owner_of_its_cell() {
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let deposit = make_output(
+            0xA1,
+            300_00000000,
+            Some(dao_code_hash.clone()),
+            None,
+            Some(vec![]),
+            vec![0u8; 8],
+        );
+        let request = make_output(
+            0xB2,
+            250_00000000,
+            Some(dao_code_hash.clone()),
+            None,
+            Some(vec![]),
+            19_800_000u64.to_le_bytes().to_vec(),
+        );
+        let mut completed = make_input(0xC3, 100_00000000, 102_00000000);
+        completed.type_code_hash = Some(dao_code_hash.clone());
+        completed.type_args = Some(vec![]);
+        completed.is_dao_withdraw_request = true;
+        completed.dao_compensation = Some(1_50000000);
+        let mut previous = make_input(0xB2, 250_00000000, 102_00000000);
+        previous.type_code_hash = Some(dao_code_hash);
+        previous.type_args = Some(vec![]);
+        let tx = TxView {
+            tx_hash: &[0x6B; 32],
+            block_hash: &[0xD1; 32],
+            tx_index: 1,
+            block_number: 19_900_000,
+            timestamp: 1_700_300_000,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: vec![completed.view(), previous.view()],
+            outputs: vec![deposit.view(), request.view()],
+        };
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let owners: Vec<(String, String)> = actions_list[0]
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao")
+            .map(|a| {
+                let meta = a.metadata_value().unwrap();
+                (
+                    a.action.clone(),
+                    meta["lockHash"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let mut owners = owners;
+        owners.sort();
+        assert_eq!(
+            owners,
+            vec![
+                ("deposit".to_string(), hex::encode([0xA1u8; 32])),
+                ("withdraw_complete".to_string(), hex::encode([0xC3u8; 32])),
+                ("withdraw_request".to_string(), hex::encode([0xB2u8; 32])),
+            ]
+        );
+    }
+
     #[test]
     fn test_dao_withdraw_request_multiplicity_preserved_for_repeated_identical_outputs() {
         // Same legitimate-repeat shape as the deposit case above: a single tx

@@ -41,6 +41,9 @@ pub(crate) struct CellVersion {
     pub owner_address: String,
     pub capacity: String,
     pub occupied_capacity: String,
+    /// The free part, `capacity − occupied_capacity`, stated so a page subtracts nothing
+    /// (lane exactness, part B5, `utils::assets::free_part`).
+    pub free_capacity: String,
     pub lock: ScriptResponse,
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
@@ -244,11 +247,9 @@ fn canonical_version_from_marker(
     // Derived from the fields above, never stored: only the stored capacity
     // can disagree with it.
     let occupied = cell.occupied_capacity();
-    ensure!(
-        cell.capacity >= occupied,
-        "cell capacity below its occupied capacity: {context}, occupied={occupied} capacity={}",
-        cell.capacity
-    );
+    // the one free part: an occupied part above the whole is the cell's fault, named
+    let free = crate::utils::assets::free_part(i128::from(cell.capacity), i128::from(occupied))
+        .map_err(|error| anyhow!("cell version: {error}: {context}"))?;
     // `owner_address` is not nullable in this answer: a cell whose lock has no
     // address form is still refused here (api_cells
     // `test_get_cell_fails_fast_when_address_cannot_be_encoded`; A4b review:
@@ -292,6 +293,7 @@ fn canonical_version_from_marker(
             owner_address,
             capacity: cell.capacity.to_string(),
             occupied_capacity: occupied.to_string(),
+            free_capacity: free.to_string(),
             lock,
             type_script,
             anatomy: CellAnatomy {

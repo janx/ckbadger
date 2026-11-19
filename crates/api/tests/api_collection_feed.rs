@@ -48,6 +48,8 @@ struct FeedTx {
     outputs: i16,
     participants: Vec<ParticipantDelta>,
     protocol_actions: Vec<ProtocolAction>,
+    /// The recognised type codes that ran, as the indexer records them on the row (C7).
+    recognized_type_codes: Vec<ckbadger_store::types::TypeCode>,
 }
 
 /// A plain output payload owned by `lock` (no type script).
@@ -103,7 +105,7 @@ fn put_feed_tx(batch: &mut StoreBatch, tx: &FeedTx) {
         protocol_actions: tx.protocol_actions.clone(),
         type_calls: vec![],
         lock_calls: vec![],
-        recognized_type_codes: vec![],
+        recognized_type_codes: tx.recognized_type_codes.clone(),
         participants: tx.participants.clone(),
     });
 }
@@ -139,12 +141,14 @@ fn seed_dotbit_registrations(store: &Arc<CkbadgerStore>, n: u32) -> Vec<(i64, i3
                 vec![identity_delta(account, IdentityStandard::DotBit, 1)],
             )],
             protocol_actions: vec![],
+            // the account's cell's .bit AccountCell type script ran (0x96… by type), as the
+            // indexer records the recognised codes that ran (C7)
+            recognized_type_codes: vec![ckbadger_store::types::TypeCode {
+                code_hash: [0x96; 32],
+                hash_type: 1,
+            }],
         };
         put_feed_tx(&mut batch, &tx);
-        // the account's cell carries the .bit AccountCell type script, as the indexer records it
-        batch
-            .put_cell_payload_by_outpoint(&tx.hash, 0, &typed_cell([0x96; 32], &[]))
-            .unwrap();
         batch.put_dotbit_account_outpoint(&tx.hash, 0, account);
         batch.put_dotbit_outpoint_by_account_id(account, &tx.hash, 0, AssetAction::Mint);
         batch.put_identity_collection_activity(
@@ -196,6 +200,25 @@ async fn collection_feed_page_reads_do_not_grow_with_collection_history() {
             assert_eq!(page["total"], n, "{route} n={n}");
             reads.push((route, n, store.read_call_counts()));
         }
+    }
+    // the third read's T SHOULD-2, carried to C7: the .bit accounts' rows name their AccountCell
+    // code (0x96), the row's own (`recognizedTypes`, no cell read per item)
+    let store = test_store();
+    seed_dotbit_registrations(&store, 2);
+    let app = quiet_router(store);
+    let (status, feed) = get_json(&app, "/assets/identities/dotbit/activity-feed?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    for row in feed["data"].as_array().unwrap() {
+        assert_eq!(
+            row["recognizedTypes"],
+            serde_json::json!([{
+                "typeCodeHash": format!("0x{}", "96".repeat(32)),
+                "typeHashType": "type",
+                "scriptName": null,
+                "scriptNameBy": null,
+            }]),
+            "{row}"
+        );
     }
     for route in ["activity-feed", "transactions"] {
         let counts: Vec<_> = reads
@@ -372,6 +395,7 @@ fn seed_two_cluster_transaction(store: &Arc<CkbadgerStore>) {
             participant(0x33, vec![object_delta(&OTHER_SPORE, 1)]),
         ],
         protocol_actions: vec![],
+        recognized_type_codes: vec![],
     };
     put_feed_tx(&mut batch, &tx);
     batch.put_object_collection_activity(
@@ -502,6 +526,7 @@ async fn identity_collection_renewal_is_an_update() {
         outputs: 1,
         participants: vec![participant(0x11, vec![])],
         protocol_actions: vec![],
+        recognized_type_codes: vec![],
     };
     put_feed_tx(&mut batch, &tx);
     batch.put_dotbit_account_outpoint(&renew_tx, 0, &account);

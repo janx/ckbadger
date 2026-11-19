@@ -19,6 +19,7 @@ import {
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -94,7 +95,7 @@ const history: TokenHistory = {
   transfersCount: 1000,
 };
 const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
-const activity: GlobalActivity = {
+const activity: GlobalActivity = activityRead({
   txHash: other,
   blockNumber: 12345,
   txIndex: 0,
@@ -115,9 +116,9 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
-  recognizedTypes: [],
+  recognizedTypes: [ITEM_TYPE.xudt],
   protocolActions: [],
-};
+});
 
 const event = (i: number, kind: 'mint' | 'burn') => ({
   txHash: '0x' + String(i).padStart(2, '0').repeat(32),
@@ -145,6 +146,7 @@ describe('Token board (F2 objects)', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,
@@ -164,8 +166,9 @@ describe('Token board (F2 objects)', () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({
       ...empty,
       data: [
-        {
+        activityRead({
           ...activity,
+          recognizedTypes: [ITEM_TYPE.xudt],
           typeCalls: [
             {
               typeCodeHash: other,
@@ -179,7 +182,7 @@ describe('Token board (F2 objects)', () => {
             ...p,
             lockKind: 'UTXOSwap Intent Lock',
           })),
-        },
+        }),
       ],
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);

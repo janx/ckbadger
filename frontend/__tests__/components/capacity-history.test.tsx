@@ -13,8 +13,8 @@ const history: AssetCapacityHistory = {
   data: Array.from({ length: 14 }, (_, i) => ({
     date: `2023-11-${String(i + 1).padStart(2, '0')}`,
     values: {
-      used: '6100000000',
-      unused: String(BigInt(3900000000) + BigInt(i)),
+      occupiedCapacity: '6100000000',
+      freeCapacity: String(BigInt(3900000000) + BigInt(i)),
       // the whole the day's cells hold, as the route states it (lane p-assets)
       capacity: String(BigInt(10000000000) + BigInt(i)),
     },
@@ -53,6 +53,28 @@ it('preserves single shannons, complete-day cutoff and shared capacity/transfer 
   expect(screen.queryByText('No data in this range.')).toBeNull();
   expect(readout).toHaveTextContent('100.00000013');
 });
+// lane exactness, part B (the third read's S4): one name for a held point's parts on every route;
+// an API older than this page sent used and unused, and is refused by name, never read as a
+// missing figure
+it('refuses an older API\u2019s used and unused by name', () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Older"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', unused: '1', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow(
+    'Older 2023-11-01: the API sends used and unused, not occupiedCapacity and freeCapacity: it is older than this page'
+  );
+  log.mockRestore();
+});
 it('rejects an incomplete calendar day and missing exact occupied state', () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
   expect(() =>
@@ -74,7 +96,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
         // occupied part is the fault read (it read occupied first, before capacity was sent)
         history={{
           ...history,
-          data: [{ date: '2023-11-01', values: { unused: '1', capacity: '1' } }],
+          data: [{ date: '2023-11-01', values: { freeCapacity: '1', capacity: '1' } }],
         }}
         weekly={[]}
       />
@@ -82,17 +104,24 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   ).toThrow('occupied');
   // a day without the whole its cells hold, which the route states, fails too: the page sums
   // nothing in its place
-  expect(() =>
-    render(
-      <CapacityHistory
-        assetClass="objects"
-        subject="Broken"
-        history={{ ...history, data: [{ date: '2023-11-01', values: { used: '1', unused: '1' } }] }}
-        weekly={[]}
-      />
-    )
-  ).toThrow('Broken 2023-11-01: capacity');
-  // Lane P2's third round (item 13): the day's free part is the route's `unused`, read beside the
+  expect(
+    () =>
+      render(
+        <CapacityHistory
+          assetClass="objects"
+          subject="Broken"
+          history={{
+            ...history,
+            data: [{ date: '2023-11-01', values: { occupiedCapacity: '1', freeCapacity: '1' } }],
+          }}
+          weekly={[]}
+        />
+      )
+    // re-pinned on purpose (lane P2's fifth round, item 3): the route states each day's capacity from
+    // this plan on; a day without it is from an API older than this page, refused by name (it was
+    // "Broken 2023-11-01: capacity", the number reader's message)
+  ).toThrow('Broken 2023-11-01: the API sends no capacity: it is older than this page');
+  // Lane P2's third round (item 13): the day's free part is the route's `freeCapacity`, read beside the
   // other two (it was capacity − occupied, in the page): a day without it fails, and parts that do
   // not make the whole are refused
   expect(() =>
@@ -102,12 +131,12 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
         subject="Broken"
         history={{
           ...history,
-          data: [{ date: '2023-11-01', values: { used: '1', capacity: '2' } }],
+          data: [{ date: '2023-11-01', values: { occupiedCapacity: '1', capacity: '2' } }],
         }}
         weekly={[]}
       />
     )
-  ).toThrow('Broken 2023-11-01: free');
+  ).toThrow('Broken 2023-11-01: the API sends no freeCapacity: it is older than this page');
   expect(() =>
     render(
       <CapacityHistory
@@ -115,7 +144,12 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
         subject="Broken"
         history={{
           ...history,
-          data: [{ date: '2023-11-01', values: { used: '1', unused: '2', capacity: '2' } }],
+          data: [
+            {
+              date: '2023-11-01',
+              values: { occupiedCapacity: '1', freeCapacity: '2', capacity: '2' },
+            },
+          ],
         }}
         weekly={[]}
       />

@@ -179,6 +179,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     // the former definition list, per reference, in one fold
     const full = within(facts).getByText('Each reference in full').closest('details')!;
     expect(full).not.toHaveAttribute('open');
+    // the library's inner disclosure in tier 2 (lane cd-fixes-controls, the disclosure sweep): its
+    // words 13 px in the quiet ink, as they were (they took the 13 px from the section around them)
+    expect(full.querySelector('summary')).toHaveClass('text-small', 'text-text-dim');
     const list = full.querySelector('dl')!;
     expect(
       within(list)

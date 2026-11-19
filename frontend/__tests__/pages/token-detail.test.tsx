@@ -15,6 +15,7 @@ import {
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -93,7 +94,7 @@ const history: TokenHistory = {
   transfersCount: 1000,
 };
 const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
-const activity: GlobalActivity = {
+const activity: GlobalActivity = activityRead({
   txHash: other,
   blockNumber: 12345,
   txIndex: 0,
@@ -114,9 +115,9 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
-  recognizedTypes: [],
+  recognizedTypes: [ITEM_TYPE.xudt],
   protocolActions: [],
-};
+});
 describe('TokenDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,6 +129,7 @@ describe('TokenDetailPage', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,
@@ -150,15 +152,16 @@ describe('TokenDetailPage', () => {
   it('leads each line with the page’s token however the address spells its hash', async () => {
     const lettered = `0x${'ab'.repeat(32)}`;
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, typeScriptHash: lettered });
-    const moved = {
+    const moved = activityRead({
       ...activity,
+      recognizedTypes: [ITEM_TYPE.xudt],
       participants: [
         {
           ...activity.participants[0],
           itemDeltas: [{ kind: 'token' as const, typeScriptHash: lettered, delta: '100000000000' }],
         },
       ],
-    };
+    });
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [moved] });
     render(<TokenDetailPage typeHash={`0x${'AB'.repeat(32)}`} />);
     await screen.findAllByRole('article');
@@ -544,6 +547,8 @@ describe('TokenDetailPage', () => {
         total: 21,
         totalSupply: '21',
         anchor: null,
+        // page two's first row is the 21st (lane exactness, part B5: the route ranks the page)
+        firstRank: p?.cursor ? 21 : 1,
         hasMore: !p?.cursor,
         nextCursor: p?.cursor ? null : 'page2',
       })

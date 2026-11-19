@@ -37,3 +37,21 @@ export function pagedRead<
     );
   return page;
 }
+
+/**
+ * A page of the tx pool's list as a test serves it, checked by the one checker (lane
+ * cd-fixes-controls, review-fix-tests SHOULD-3). The pool's list states no `hasMore`: its "more" is
+ * its next cursor, as its page reads it (app/transactions/page.tsx), and its route pages by its
+ * limit (crates/api/src/routes/pool_transactions.rs: more only past a full page).
+ */
+export function poolPagedRead<
+  P extends {
+    data: readonly unknown[];
+    limit: number;
+    nextCursor: string | null;
+    total: number;
+  },
+>(page: P, shownBefore = 0): P {
+  pagedRead({ ...page, hasMore: page.nextCursor !== null }, shownBefore);
+  return page;
+}

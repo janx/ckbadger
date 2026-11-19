@@ -5,6 +5,7 @@ import Link from '@/components/ui/link';
 import { ExternalLink } from '@/components/ui/external-link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { RangeSelect } from '@/components/ui/range-select';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { Pager } from '@/components/ui/pager';
 import { rankedPageAt, type Asked, type CursorPageRead, type CursorWalk } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -462,9 +463,9 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
               pins this exact binary; an upgrade will not reach cells that pin it.
             </p>
           )}
-          <details className="min-w-0">
-            <summary className="text-text-dim cursor-pointer">Each reference in full</summary>
-            <div className="mt-3 space-y-3">
+          {/* the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep) */}
+          <SectionDisclosure form="inner" summary="Each reference in full">
+            <div className="space-y-3">
               {references.map((reference) => (
                 <ReferenceFacts
                   key={`${reference.hashType}:${reference.referenceHash}`}
@@ -473,7 +474,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
                 />
               ))}
             </div>
-          </details>
+          </SectionDisclosure>
         </>
       )}
     </div>

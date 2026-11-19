@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
-import { api } from '@/lib/api';
+import { api, dayActivityCount } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
@@ -507,9 +507,9 @@ export default function TransactionsPage() {
   const day = daily ? completedYesterdayActivities(daily) : undefined;
   // yesterday's user transactions: the route's activity count, every committed transaction of the
   // day but its cellbases, each in exactly one kind (the activities page states the same figure; no
-  // page sums or subtracts)
+  // page sums or subtracts); an API older than the page sends none, refused by name
   const counts: Partial<Record<TransactionKind, number>> = day ? activityFilterCounts(day) : {};
-  const users = day ? day.activityCount : 0;
+  const users = day ? dayActivityCount(day) : 0;
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;

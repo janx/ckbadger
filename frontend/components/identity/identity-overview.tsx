@@ -9,7 +9,7 @@ import {
   cellLockSentence,
   cellOwnerLockPart,
   partyLockSentence,
-  partyLockWordsText,
+  PartyLockWords,
 } from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
@@ -171,6 +171,22 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
   ];
 }
 
+/**
+ * A `.cell` party whose 20-byte prefix the API resolved to no one lock, in the one word its fact,
+ * its line and the summary say (lane P2's fifth round, NOTE 7: the summary said "a lock not
+ * indexed owns it" beside the fact's "no uniquely resolved lock").
+ */
+const UNRESOLVED_PARTY_NOTE = 'prefix · lock not uniquely resolved';
+const UNRESOLVED_PARTY_PHRASE = 'a lock not uniquely resolved';
+
+/**
+ * A `.cell` party's lock in the summary's sentence (`partyLockSentence`), or the words of a prefix
+ * resolved to no one lock; an API older than this page is refused by name (item 3).
+ */
+function partyClause(party: DotCellPartyRef): string {
+  return party.lockHash ? partyLockSentence(party, 'row') : UNRESOLVED_PARTY_PHRASE;
+}
+
 /** A `.cell` named party as a metric: the resolved address, else the 20-byte prefix (C7). */
 /**
  * A `.cell` party's fact. Its owner line is drawn as every identity page's owner line is (lane D2,
@@ -193,8 +209,14 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
       // scrolled): 42 characters at 13 px, 327.6 px, one line from 360, two halves at 320
       <HeadId value={party.hashPrefix} kind="hash" />
     ),
-    // the party's lock by the one decision (lane P2's third round, item 12)
-    note: party.lockHash ? partyLockWordsText(party, 'row') : 'prefix · no uniquely resolved lock',
+    // the party's lock by the one decision (lane P2's third round, item 12), its refusal in its
+    // place (item 3 of the fifth round); a prefix no lock answers uniquely, in the one word the
+    // summary says too (NOTE 7)
+    note: party.lockHash ? (
+      <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+    ) : (
+      UNRESOLVED_PARTY_NOTE
+    ),
   };
 }
 
@@ -213,13 +235,15 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
           className="text-body"
         />
       </AppLink>
-      <Sub>{partyLockWordsText(party, 'row')}</Sub>
+      <Sub>
+        <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+      </Sub>
     </>
   ) : (
     <>
       {/* the prefix whole, as a head's id (lane P2's follow-up, item 8) */}
       <HeadId value={party.hashPrefix} kind="hash" />
-      <Sub>prefix · no uniquely resolved lock</Sub>
+      <Sub>{UNRESOLVED_PARTY_NOTE}</Sub>
     </>
   );
 }
@@ -578,11 +602,29 @@ export function IdentitySummary({
               <NoBreak>{formatUtc8Date(owners.since.cell.timestamp)}</NoBreak>{' '}
               {/* the locks by the one decision's sentence form (lane P2's third round, item 12;
                   a second lockPhrase here wrote "the Default Lock" and "an unnamed lock") */}
-              <B>{partyLockSentence(d.owner, 'row')}</B> owns it
-              {d.manager.hashPrefix !== d.owner.hashPrefix
-                ? ` while ${partyLockSentence(d.manager, 'row')} manages its records`
-                : ''}
-              .{' '}
+              {(() => {
+                // the two parties' locks read once, a refusal in the clause's place (item 3)
+                const read = readPart(() => ({
+                  owner: partyClause(d.owner),
+                  manager:
+                    d.manager.hashPrefix !== d.owner.hashPrefix ? partyClause(d.manager) : null,
+                }));
+                if (read.error !== undefined)
+                  return (
+                    <PartReadError
+                      what="who owns it"
+                      where={`party ${d.owner.hashPrefix}`}
+                      error={read.error}
+                    />
+                  );
+                return (
+                  <>
+                    <B>{read.value.owner}</B> owns it
+                    {read.value.manager ? ` while ${read.value.manager} manages its records` : ''}
+                    .{' '}
+                  </>
+                );
+              })()}
             </>
           )}
           {coins.length === 0

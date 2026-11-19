@@ -396,6 +396,9 @@ describe('Per-version raw protocol and item context', () => {
     // Lane E (C6): each folded script is its occupied bytes, one row per part (was a code hash /
     // args definition list).
     const lock = screen.getByText(/^lock script ·/).closest('details')!;
+    // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words at
+    // the control step, 13 px (they were 12, in the page's bright ink), in the tier's ink
+    expect(lock.querySelector('summary')).toHaveClass('text-small');
     expect(within(lock).getByRole('group', { name: 'lock script byte map' })).toBeInTheDocument();
     expect(within(lock).getByLabelText('lock script parts')).toHaveTextContent(
       protocol.versions[1].cell.lock.codeHash

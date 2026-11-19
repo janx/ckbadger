@@ -19,6 +19,7 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { ActivityStats } from '@/components/home/activity-stats';
 import type { ParticipantInfo } from '@/lib/api';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const ADDRESS =
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq22xdj8q4jdql98qkdhnqzgrsk4nqyavdcratvu9';
@@ -175,7 +176,9 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     };
     for (const sample of Object.values(feedSamples)) {
       const { container, unmount } = render(
-        <ActivityRow activity={{ ...sample, participants: [...sample.participants, lockOnly] }} />
+        <ActivityRow
+          activity={activityRead({ ...sample, participants: [...sample.participants, lockOnly] })}
+        />
       );
       const row = container.querySelector('[data-feed-row]');
       expect(row).not.toBeNull();

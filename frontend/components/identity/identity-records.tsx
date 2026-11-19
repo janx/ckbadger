@@ -1,4 +1,5 @@
 import { AppLink } from '@/components/ui/app-link';
+import { PartReadError, readPart } from '@/components/read-failure';
 import { partyLockSentence } from '@/components/ui/lock-kind';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import {
@@ -135,11 +136,24 @@ export function IdentityRecords({
                     ) : (
                       <RecordValue value={a.value} />
                     )}
-                    {whose(a.ckbAddress, a.ckbLockHash, parties) && (
-                      <span className="text-text-dim text-small block">
-                        {whose(a.ckbAddress, a.ckbLockHash, parties)}
-                      </span>
-                    )}
+                    {(() => {
+                      // whose own address it is, read once; a party from an API older than this
+                      // page is refused in the note's place (lane P2's fifth round, item 3)
+                      const note = readPart(() => whose(a.ckbAddress, a.ckbLockHash, parties));
+                      if (note.error !== undefined)
+                        return (
+                          <PartReadError
+                            what="whose address it is"
+                            where={`record ${a.key}`}
+                            error={note.error}
+                          />
+                        );
+                      return (
+                        note.value && (
+                          <span className="text-text-dim text-small block">{note.value}</span>
+                        )
+                      );
+                    })()}
                   </dd>
                 </div>
               ))}

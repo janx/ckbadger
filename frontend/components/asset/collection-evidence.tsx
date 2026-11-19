@@ -7,6 +7,7 @@ import { CurrentPatternEvidence } from '@/components/asset/genetics';
 import { DecodeCoverage } from '@/components/asset/collection-objects';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AppLink } from '@/components/ui/app-link';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { TintedJson } from '@/components/ui/tinted-json';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
@@ -119,18 +120,19 @@ export function StoredDescription({ description }: { description: string | null 
     // not JSON: shown exactly as stored
   }
   return (
-    <details className="min-w-0">
-      <summary className="text-text-dim text-small cursor-pointer">
-        Description, as stored{pretty !== null ? ' · pretty JSON' : ''}
-      </summary>
+    // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep)
+    <SectionDisclosure
+      form="inner"
+      summary={<>Description, as stored{pretty !== null ? ' · pretty JSON' : ''}</>}
+    >
       {pretty !== null ? (
-        <TintedJson text={pretty} className="mt-2" />
+        <TintedJson text={pretty} />
       ) : (
-        <pre className="text-meta text-text-dim mt-2 max-w-full whitespace-pre-wrap break-all">
+        <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
           {description}
         </pre>
       )}
-    </details>
+    </SectionDisclosure>
   );
 }
 
@@ -264,18 +266,15 @@ export function MnftClassEvidence({
         )}
       </dl>
       {issuerDetail?.infoHex && info && (
-        <details className="min-w-0">
-          <summary className="text-text-dim text-small cursor-pointer">
-            Issuer info, as stored · {info.kind}
-          </summary>
+        <SectionDisclosure form="inner" summary={<>Issuer info, as stored · {info.kind}</>}>
           {info.kind === 'pretty JSON' ? (
-            <TintedJson text={info.text} className="mt-2" />
+            <TintedJson text={info.text} />
           ) : (
-            <pre className="text-meta text-text-dim mt-2 max-w-full whitespace-pre-wrap break-all">
+            <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
               {info.text}
             </pre>
           )}
-        </details>
+        </SectionDisclosure>
       )}
     </ProtocolEvidence>
   );

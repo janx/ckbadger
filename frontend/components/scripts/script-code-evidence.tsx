@@ -1,7 +1,9 @@
 import { Fragment, useState } from 'react';
+import { sentField } from '@/lib/api-fields';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { AppLink } from '@/components/ui/app-link';
 import { Chart } from '@/components/ui/chart';
 import type {
@@ -344,7 +346,13 @@ function CodeCellLink({ outpoint }: { outpoint: string }) {
  * route states the code cell with the transaction; one without the other is refused.
  */
 function signedSpendHref(custody: ScriptCustodyApi): string | null {
-  const { verifiedByTx: tx, verifiedCodeCell: cell } = custody;
+  const tx = custody.verifiedByTx;
+  // sent beside the transaction from this plan on; an older API sends no code cell (item 3)
+  const cell = sentField(
+    custody.verifiedCodeCell,
+    `custody ${custody.lockArgs}`,
+    'verifiedCodeCell'
+  );
   if (tx === null && cell === null) return null;
   if (tx === null || cell === null)
     throw new Error(
@@ -389,16 +397,19 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.keyHashes.length > 0 && (
-        <details className="text-text-dim mt-1">
-          <summary className="cursor-pointer">
-            {custody.keyHashes.length} committed key hashes
-          </summary>
-          <ul className="text-meta mt-1 space-y-1 break-all font-mono">
+        // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words
+        // in the ink of the tier it stands in; the hashes keep the quiet ink they took from it
+        <SectionDisclosure
+          form="inner"
+          className="mt-1"
+          summary={<>{custody.keyHashes.length} committed key hashes</>}
+        >
+          <ul className="text-meta text-text-dim space-y-1 break-all font-mono">
             {custody.keyHashes.map((hash) => (
               <li key={hash}>{hash}</li>
             ))}
           </ul>
-        </details>
+        </SectionDisclosure>
       )}
       {signer && signedSpend && (
         <div className="text-text mt-1 [overflow-wrap:anywhere]">
@@ -465,11 +476,17 @@ export function ScriptCapacityEvidenceChart({
   const dateIndex = new Map(chart.data.map((point, index) => [point.date, index]));
   const displaySeries = chart.series.map((series) => ({
     ...series,
-    label: series.key === 'used' ? 'Occupied' : series.key === 'unused' ? 'Free' : series.label,
+    // the held bands by the routes' names (lane exactness, part B, S4: they were used and unused)
+    label:
+      series.key === 'occupiedCapacity'
+        ? 'Occupied'
+        : series.key === 'freeCapacity'
+          ? 'Free'
+          : series.label,
     color:
-      series.key === 'used'
+      series.key === 'occupiedCapacity'
         ? 'var(--c-data-framing)'
-        : series.key === 'unused'
+        : series.key === 'freeCapacity'
           ? 'var(--c-jade-dim)'
           : series.color,
   }));

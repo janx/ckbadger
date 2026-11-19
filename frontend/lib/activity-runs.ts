@@ -13,8 +13,9 @@
  *    (the feed hands it over: a feed may head a row in its own words), so the folded row's head is
  *    every one of its rows' head;
  * 2. **what was done, as the API names it**: the protocol actions, each by its protocol and its
- *    action (`dao:deposit`), as a multiset (each with its count); an action's own figures, such as
- *    a deposit's capacity, are not compared;
+ *    action (`dao:deposit`), as a SET (the third read's Lb NOTE 1, by the rule of the codes: one
+ *    deposit and three in one batch did one thing); an action's own figures, such as a deposit's
+ *    capacity, are not compared;
  * 3. **the script code**: each by its code (its code hash and its hash type: a script is the
  *    pair), as a SET: the code that was called, not how many cells carried it (the lead's final
  *    round, item 1: as a multiset, two Godwoken transfers with two and three Withdrawal Lock
@@ -82,8 +83,7 @@ function partyId(p: RunParty, txHash: string): string {
   return id;
 }
 
-const multiset = (values: readonly string[]) => [...values].sort();
-/** Each code once, in one order: what was called, not how often. */
+/** Each once, in one order: what was done or called, not how often. */
 const codeSet = (values: readonly string[]) => [...new Set(values)].sort();
 
 /** The key two rows share exactly when they are the same (see the module's rule). */
@@ -93,7 +93,7 @@ export function runKey(s: RunSubject): string {
     'committed',
     s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
-    multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
+    codeSet(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
     codeSet(s.recognizedTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),

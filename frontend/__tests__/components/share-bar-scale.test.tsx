@@ -51,6 +51,7 @@ describe('token holders (PB-11)', () => {
         nextCursor: null,
         totalSupply: '10000',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -132,6 +133,7 @@ describe('collection holders (PB-11)', () => {
         total: 3,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(<CollectionHolders load={load} queryKey="bit" assetClass="identities" />);

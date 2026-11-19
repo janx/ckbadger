@@ -677,13 +677,13 @@
     "title": "JoyID capacity",
     "series": [
       {
-        "key": "used",
-        "label": "Used",
+        "key": "occupiedCapacity",
+        "label": "Occupied",
         "color": "#f59e0b"
       },
       {
-        "key": "unused",
-        "label": "Unused",
+        "key": "freeCapacity",
+        "label": "Free",
         "color": "#00c389"
       }
     ],
@@ -691,48 +691,48 @@
       {
         "date": "2023-10-07",
         "values": {
-          "used": "5500000000",
-          "unused": "10000000000",
+          "occupiedCapacity": "5500000000",
+          "freeCapacity": "10000000000",
           "capacity": "15500000000"
         }
       },
       {
         "date": "2024-06-01",
         "values": {
-          "used": "800000000000000",
-          "unused": "9000000000000000",
+          "occupiedCapacity": "800000000000000",
+          "freeCapacity": "9000000000000000",
           "capacity": "9800000000000000"
         }
       },
       {
         "date": "2025-07-10",
         "values": {
-          "used": "1888674900000000",
-          "unused": "28657710373441640",
+          "occupiedCapacity": "1888674900000000",
+          "freeCapacity": "28657710373441640",
           "capacity": "30546385273441640"
         }
       },
       {
         "date": "2025-08-28",
         "values": {
-          "used": "1890000000000000",
-          "unused": "30000000000000000",
+          "occupiedCapacity": "1890000000000000",
+          "freeCapacity": "30000000000000000",
           "capacity": "31890000000000000"
         }
       },
       {
         "date": "2025-11-21",
         "values": {
-          "used": "1900000000000000",
-          "unused": "40000000000000000",
+          "occupiedCapacity": "1900000000000000",
+          "freeCapacity": "40000000000000000",
           "capacity": "41900000000000000"
         }
       },
       {
         "date": "2026-10-29",
         "values": {
-          "used": "1909628300000000",
-          "unused": "43690589657000000",
+          "occupiedCapacity": "1909628300000000",
+          "freeCapacity": "43690589657000000",
           "capacity": "45600217957000000"
         }
       }
