@@ -204,24 +204,75 @@ pub struct ProtocolRegistry {
     pub(crate) by_pair: HashMap<([u8; 32], u8), RegisteredScript>,
 }
 
+/// The registry file stem of the Nervos DAO.
+const DAO_SLUG: &str = "nervos-dao";
+
+/// THE pair rule: every pair (code hash, hash type byte) the registry entry
+/// `meta` (file stem `slug`) runs at, on both networks — each deployment's
+/// registered reference (`canonical_ref_hash` by `canonical_hash_type`, or a
+/// pseudo deployment's pair), and each registered version's binary by every
+/// data hash type (data, data1, data2: the same code on each VM). The Nervos
+/// DAO is its consensus reference alone: the consensus computes compensation
+/// for the DAO type script by type, never for its binary by a data hash type.
+///
+/// The one enumeration of what a registry entry runs: the protocol registry
+/// ([`PROTOCOL_REGISTRY`]) and the script layouts ([`SCRIPT_LAYOUTS`], a lock
+/// call's args layout and a type's CoBuild schema) are both keyed by it, so a
+/// pair that runs no registered code is no protocol, decodes nothing and is
+/// named nothing (resync fix round S2).
+fn registered_pairs(meta: &crate::label_import::ScriptMetadata, slug: &str) -> Vec<([u8; 32], u8)> {
+    let key = |code_hash: Vec<u8>| -> [u8; 32] {
+        code_hash.as_slice().try_into().unwrap_or_else(|_| {
+            panic!(
+                "{slug}: registry code hash 0x{} is not 32 bytes — build.rs validates this",
+                hex::encode(&code_hash)
+            )
+        })
+    };
+    let mut pairs = Vec::new();
+    for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        for dep in net.import_deployments() {
+            match &dep {
+                ImportDeployment::Version(version) => {
+                    pairs.push((
+                        key(parse_hex_to_bytes(&version.canonical_ref_hash)),
+                        hash_type_byte(version.canonical_hash_type.as_str(), slug),
+                    ));
+                    let attachment = crate::label_import::version_attachment(version)
+                        .unwrap_or_else(|e| {
+                            panic!("{slug}: bundled version entry: {e} — build.rs validates this")
+                        });
+                    match attachment {
+                        crate::label_import::VersionAttachment::Attachable(_)
+                            if slug == DAO_SLUG => {}
+                        crate::label_import::VersionAttachment::Attachable(binary) => {
+                            let binary = key(binary);
+                            for data_type in [0u8, 2, 4] {
+                                pairs.push((binary, data_type));
+                            }
+                        }
+                        crate::label_import::VersionAttachment::NoVersion => {}
+                        crate::label_import::VersionAttachment::Invalid(reason) => {
+                            panic!("{slug}: bundled version entry: {reason}")
+                        }
+                    }
+                }
+                ImportDeployment::Pseudo(pseudo) => pairs.push((
+                    key(parse_hex_to_bytes(&pseudo.code_hash)),
+                    hash_type_byte(pseudo.hash_type.as_str(), slug),
+                )),
+            }
+        }
+    }
+    pairs
+}
+
 impl ProtocolRegistry {
     fn from_bundled() -> Self {
         let mut by_pair: HashMap<([u8; 32], u8), RegisteredScript> = HashMap::new();
-        let mut insert = |code_hash: Vec<u8>, hash_type: u8, script: RegisteredScript| {
-            let key: [u8; 32] = code_hash.as_slice().try_into().unwrap_or_else(|_| {
-                panic!(
-                    "protocol registry code hash 0x{} is not 32 bytes — build.rs validates this",
-                    hex::encode(&code_hash)
-                )
-            });
-            if let Some(prev) = by_pair.insert((key, hash_type), script) {
-                assert_eq!(
-                    prev, script,
-                    "protocol registry pair collision: 0x{} by {hash_type} maps to both {prev:?} and {script:?} — two scripts/*.toml register one pair",
-                    hex::encode(&code_hash)
-                );
-            }
-        };
         for meta in script_labels() {
             let Some(slug) = meta.metadata_slug.as_deref() else {
                 continue;
@@ -232,47 +283,18 @@ impl ProtocolRegistry {
                 (None, None) if slug == UNIQUE_CELL_SLUG => RegisteredScript::UniqueCell,
                 (None, None) => continue,
             };
-            for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
-                .into_iter()
-                .flatten()
-            {
-                for dep in net.import_deployments() {
-                    match &dep {
-                        ImportDeployment::Version(version) => {
-                            insert(
-                                parse_hex_to_bytes(&version.canonical_ref_hash),
-                                hash_type_byte(version.canonical_hash_type.as_str(), slug),
-                                script,
-                            );
-                            let attachment = crate::label_import::version_attachment(version)
-                                .unwrap_or_else(|e| {
-                                    panic!("{slug}: bundled version entry: {e} — build.rs validates this")
-                                });
-                            match attachment {
-                                // The Nervos DAO is its consensus script only: the
-                                // consensus computes compensation for the DAO type
-                                // script (its reference by type), never for its
-                                // binary by a data hash type.
-                                crate::label_import::VersionAttachment::Attachable(_)
-                                    if script
-                                        == RegisteredScript::Protocol(ProtocolScript::Dao) => {}
-                                crate::label_import::VersionAttachment::Attachable(binary) => {
-                                    for data_type in [0u8, 2, 4] {
-                                        insert(binary.clone(), data_type, script);
-                                    }
-                                }
-                                crate::label_import::VersionAttachment::NoVersion => {}
-                                crate::label_import::VersionAttachment::Invalid(reason) => {
-                                    panic!("{slug}: bundled version entry: {reason}")
-                                }
-                            }
-                        }
-                        ImportDeployment::Pseudo(pseudo) => insert(
-                            parse_hex_to_bytes(&pseudo.code_hash),
-                            hash_type_byte(pseudo.hash_type.as_str(), slug),
-                            script,
-                        ),
-                    }
+            assert_eq!(
+                slug == DAO_SLUG,
+                script == RegisteredScript::Protocol(ProtocolScript::Dao),
+                "{slug}: the DAO's slug and the DAO protocol must agree"
+            );
+            for (code_hash, hash_type) in registered_pairs(&meta, slug) {
+                if let Some(prev) = by_pair.insert((code_hash, hash_type), script) {
+                    assert_eq!(
+                        prev, script,
+                        "protocol registry pair collision: 0x{} by {hash_type} maps to both {prev:?} and {script:?} — two scripts/*.toml register one pair",
+                        hex::encode(code_hash)
+                    );
                 }
             }
         }
@@ -418,11 +440,13 @@ pub struct ScriptLayout {
     pub cobuild: Option<CobuildSchema>,
 }
 
-/// Every registry entry that declares a layout, keyed by each code hash its
-/// deployments reference (`canonical_ref_hash`, or a pseudo `code_hash`), on
-/// both networks.
+/// Every registry entry that declares a layout, keyed by each pair its
+/// deployments run at ([`registered_pairs`], THE pair rule, the protocol
+/// registry's too), on both networks: a pair that runs no registered code has
+/// no layout, so it decodes nothing and is named nothing (resync fix round
+/// S2).
 pub struct ScriptLayouts {
-    by_code_hash: HashMap<Vec<u8>, std::sync::Arc<ScriptLayout>>,
+    by_pair: HashMap<([u8; 32], u8), std::sync::Arc<ScriptLayout>>,
 }
 
 fn decode_layout_hex(value: &str, at: &str) -> Vec<u8> {
@@ -432,7 +456,7 @@ fn decode_layout_hex(value: &str, at: &str) -> Vec<u8> {
 
 impl ScriptLayouts {
     fn from_bundled() -> Self {
-        let mut by_code_hash: HashMap<Vec<u8>, std::sync::Arc<ScriptLayout>> = HashMap::new();
+        let mut by_pair: HashMap<([u8; 32], u8), std::sync::Arc<ScriptLayout>> = HashMap::new();
         for meta in script_labels() {
             if meta.lock_args.is_none() && meta.cobuild.is_none() {
                 continue;
@@ -476,47 +500,42 @@ impl ScriptLayouts {
                 lock_args,
                 cobuild,
             });
-            for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
-                .into_iter()
-                .flatten()
-            {
-                for dep in net.import_deployments() {
-                    let code_hash_hex = match &dep {
-                        ImportDeployment::Version(version) => &version.canonical_ref_hash,
-                        ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
-                    };
-                    let bytes = decode_layout_hex(code_hash_hex, &slug);
-                    if let Some(previous) = by_code_hash.insert(bytes.clone(), layout.clone()) {
-                        // Same file, another network or version: idempotent. A
-                        // different file on the same code hash is a data bug.
-                        assert_eq!(
-                            previous.slug,
-                            layout.slug,
-                            "script layout code_hash collision: 0x{} is declared by both {} and {}",
-                            hex::encode(&bytes),
-                            previous.slug,
-                            layout.slug
-                        );
-                    }
+            for pair in registered_pairs(&meta, &slug) {
+                if let Some(previous) = by_pair.insert(pair, layout.clone()) {
+                    // Same file, another network or version: idempotent. A
+                    // different file on the same pair is a data bug.
+                    assert_eq!(
+                        previous.slug,
+                        layout.slug,
+                        "script layout pair collision: 0x{} by {} is declared by both {} and {}",
+                        hex::encode(pair.0),
+                        pair.1,
+                        previous.slug,
+                        layout.slug
+                    );
                 }
             }
         }
-        Self { by_code_hash }
+        Self { by_pair }
     }
 
-    /// The layouts of the registry entry a script with `code_hash` belongs
-    /// to; `None` when no entry for that code hash declares one.
-    pub fn get(&self, code_hash: &[u8]) -> Option<&ScriptLayout> {
-        self.by_code_hash
-            .get(code_hash)
+    /// The layouts of the registry entry whose code the script
+    /// `(code_hash, hash_type)` runs; `None` when that pair runs no
+    /// registered code or its entry declares no layout. A hash type outside
+    /// the CKB bytes is no registered pair.
+    pub fn get(&self, code_hash: &[u8], hash_type: i16) -> Option<&ScriptLayout> {
+        let code_hash: [u8; 32] = code_hash.try_into().ok()?;
+        let hash_type = u8::try_from(hash_type).ok()?;
+        self.by_pair
+            .get(&(code_hash, hash_type))
             .map(|layout| layout.as_ref())
     }
 
-    /// Every `(code_hash, layout)` entry.
-    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &ScriptLayout)> + '_ {
-        self.by_code_hash
-            .iter()
-            .map(|(code_hash, layout)| (code_hash, layout.as_ref()))
+    /// Every `((code_hash, hash_type), layout)` entry.
+    pub fn iter(&self) -> impl Iterator<Item = ((&[u8], u8), &ScriptLayout)> + '_ {
+        self.by_pair.iter().map(|((code_hash, hash_type), layout)| {
+            ((code_hash.as_slice(), *hash_type), layout.as_ref())
+        })
     }
 }
 
@@ -781,9 +800,12 @@ mod tests {
     #[test]
     fn script_layouts_read_lock_args_fields_from_the_registry() {
         let joyid = SCRIPT_LAYOUTS
-            .get(&parse_hex_to_bytes(
-                "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
-            ))
+            .get(
+                &parse_hex_to_bytes(
+                    "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+                ),
+                1,
+            )
             .expect("JoyID layout");
         assert_eq!(joyid.slug, "joyid");
         assert_eq!(joyid.name, "JoyID");
@@ -803,9 +825,12 @@ mod tests {
             ]))
         );
         let shadow = SCRIPT_LAYOUTS
-            .get(&parse_hex_to_bytes(
-                "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
-            ))
+            .get(
+                &parse_hex_to_bytes(
+                    "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+                ),
+                2,
+            )
             .expect("Nervape Shadow Lock layout");
         assert_eq!(
             shadow.lock_args,
@@ -823,14 +848,57 @@ mod tests {
             ]))
         );
         // A codec-named family: every default-lock code hash.
+        let default_lock = parse_hex_to_bytes(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
         assert_eq!(
             SCRIPT_LAYOUTS
-                .get(&parse_hex_to_bytes(
-                    "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                ))
+                .get(&default_lock, 1)
                 .and_then(|layout| layout.lock_args.clone()),
             Some(LockArgsLayout::Codec("secp256k1_blake160".into()))
         );
+        // resync fix round S2: by the pair. The default lock's code hash by
+        // data runs no registered code: no layout, so nothing decodes or is
+        // named under it.
+        assert!(SCRIPT_LAYOUTS.get(&default_lock, 0).is_none());
+    }
+
+    /// resync fix round S2: the layouts are keyed by THE pair rule the protocol
+    /// registry is keyed by (`registered_pairs`): every pair the registry
+    /// registers for an entry with a layout has its layout, and no other pair
+    /// of that code hash does.
+    #[test]
+    fn script_layouts_are_keyed_by_the_registry_pairs() {
+        for meta in script_labels() {
+            let Some(slug) = meta.metadata_slug.clone() else {
+                continue;
+            };
+            if meta.lock_args.is_none() && meta.cobuild.is_none() {
+                continue;
+            }
+            let pairs = registered_pairs(&meta, &slug);
+            for (code_hash, hash_type) in &pairs {
+                assert_eq!(
+                    SCRIPT_LAYOUTS
+                        .get(code_hash, i16::from(*hash_type))
+                        .map(|layout| layout.slug.as_str()),
+                    Some(slug.as_str()),
+                    "{slug}: 0x{} by {hash_type}",
+                    hex::encode(code_hash)
+                );
+                for other in HASH_TYPES {
+                    if !pairs.contains(&(*code_hash, u8::try_from(other).unwrap())) {
+                        assert!(
+                            SCRIPT_LAYOUTS
+                                .get(code_hash, other)
+                                .is_none_or(|layout| layout.slug != slug),
+                            "{slug}: 0x{} by {other} runs no registered code",
+                            hex::encode(code_hash)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// R-7: Spore-family type scripts declare the `SporeAction` items they
@@ -848,7 +916,7 @@ mod tests {
              .0
             .to_vec();
         let spore = SCRIPT_LAYOUTS
-            .get(&spore_code)
+            .get(&spore_code, 2)
             .and_then(|layout| layout.cobuild.clone())
             .expect("Spore CoBuild schema");
         assert_eq!(spore.schema, "spore");
@@ -864,11 +932,11 @@ mod tests {
                 (2, "BurnSpore", 2)
             ]
         );
-        for ((code_hash, _), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
+        for ((code_hash, hash_type), protocol) in PROTOCOL_REGISTRY.protocol_pairs() {
             if protocol == ProtocolScript::Xudt {
                 assert!(
                     SCRIPT_LAYOUTS
-                        .get(code_hash)
+                        .get(code_hash, i16::from(hash_type))
                         .is_none_or(|layout| layout.cobuild.is_none()),
                     "xUDT has no specified CoBuild action schema"
                 );

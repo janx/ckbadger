@@ -321,8 +321,12 @@ pub fn name_cobuild_actions(
         .chain(outputs.iter().filter_map(|output| output.r#type.as_ref()))
     {
         let code_hash = hex::decode(script.code_hash.trim_start_matches("0x"))?;
+        let hash_type = ckbadger_common::hash_type_from_label(&script.hash_type)
+            .ok_or_else(|| anyhow::anyhow!("invalid script hash type {}", script.hash_type))?;
+        // By the pair the type runs (resync fix round S2): a code hash by a
+        // hash type that runs no registered code has no schema.
         if let Some(schema) = SCRIPT_LAYOUTS
-            .get(&code_hash)
+            .get(&code_hash, i16::from(hash_type))
             .and_then(|layout| layout.cobuild.as_ref())
         {
             schemas.insert(script_hash(script)?, schema);
@@ -1064,14 +1068,21 @@ mod tests {
     fn spore_actions_decode_only_for_their_own_script_family() {
         use ckbadger_indexer::parser::registry::{CobuildSchema, SCRIPT_LAYOUTS};
         let schema_of = |protocol: ProtocolScript| -> Option<&'static CobuildSchema> {
-            // a reference pair: the layouts are keyed by the canonical reference
-            let ((code_hash, _), _) =
+            // a registered pair of the protocol: the layouts are keyed by the
+            // pairs the registry's rule registers (resync fix round S2)
+            let ((code_hash, hash_type), _) =
                 PROTOCOL_REGISTRY
                     .protocol_pairs()
-                    .find(|((code_hash, _), p)| {
-                        *p == protocol && SCRIPT_LAYOUTS.get(code_hash).is_some()
+                    .find(|((code_hash, hash_type), p)| {
+                        *p == protocol
+                            && SCRIPT_LAYOUTS
+                                .get(code_hash, i16::from(*hash_type))
+                                .is_some()
                     })?;
-            SCRIPT_LAYOUTS.get(code_hash)?.cobuild.as_ref()
+            SCRIPT_LAYOUTS
+                .get(code_hash, i16::from(hash_type))?
+                .cobuild
+                .as_ref()
         };
         let spore = schema_of(ProtocolScript::SporeNft).expect("Spore schema");
         let cluster = schema_of(ProtocolScript::Cluster).expect("Cluster schema");

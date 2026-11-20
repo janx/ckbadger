@@ -948,8 +948,16 @@ fn decode_detail_lock_args(
         };
         let code_hash =
             decode_hex_bytes_with_context(&lock.code_hash, "lock code hash", at, Some(32))?;
+        let hash_type =
+            ckbadger_common::hash_type_from_label(&lock.hash_type).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "{at}: lock hash type {} is no CKB hash type",
+                    lock.hash_type
+                ))
+            })?;
         let args = decode_hex_bytes_with_context(&lock.args, "lock args", at, None)?;
-        super::activities::decode_lock_args(&code_hash, &args)
+        // By the pair the lock runs (resync fix round S2).
+        super::activities::decode_lock_args(&code_hash, i16::from(hash_type), &args)
             .map_err(|e| ApiError::internal(format!("{at}: {e}")))
     };
     for (index, input) in inputs.iter_mut().enumerate() {

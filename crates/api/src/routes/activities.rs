@@ -710,14 +710,22 @@ pub(crate) struct DecodedLockArgs {
 }
 
 /// The one lock-args decoder (activity lock calls and the transaction
-/// detail): the args of a lock with code hash `code_hash`, read by the layout
-/// its scripts-registry entry declares (`[lock_args]`, R-8); integers as exact
-/// strings. The shape of on-chain lock args is not an indexer invariant, so
-/// args that do not fit are a stated `error`, never a failed response; `Err`
-/// is only a registry or encoding defect.
-pub(crate) fn decode_lock_args(code_hash: &[u8], args: &[u8]) -> Result<DecodedLockArgs, String> {
+/// detail): the args of the lock `(code_hash, hash_type)`, read by the layout
+/// the scripts-registry entry whose code that pair runs declares
+/// (`[lock_args]`, R-8); integers as exact strings. The layout is found by
+/// the pair, by the registry's one pair rule (resync fix round S2): a lock
+/// under a registered lock's code hash by a hash type that runs no
+/// registered code (anyone can lock a cell under it) decodes nothing and is
+/// named nothing. The shape of on-chain lock args is not an indexer
+/// invariant, so args that do not fit are a stated `error`, never a failed
+/// response; `Err` is only a registry or encoding defect.
+pub(crate) fn decode_lock_args(
+    code_hash: &[u8],
+    hash_type: i16,
+    args: &[u8],
+) -> Result<DecodedLockArgs, String> {
     use ckbadger_indexer::parser::registry::{LockArgsLayout, SCRIPT_LAYOUTS};
-    let Some(script) = SCRIPT_LAYOUTS.get(code_hash) else {
+    let Some(script) = SCRIPT_LAYOUTS.get(code_hash, hash_type) else {
         return Ok(DecodedLockArgs::default());
     };
     let read = match &script.lock_args {
@@ -996,7 +1004,8 @@ fn convert_lock_call(
     let DecodedLockArgs {
         decoded,
         error: decode_error,
-    } = decode_lock_args(&call.lock_code_hash, &call.lock_args).map_err(anyhow::Error::msg)?;
+    } = decode_lock_args(&call.lock_code_hash, call.lock_hash_type, &call.lock_args)
+        .map_err(anyhow::Error::msg)?;
 
     Ok(LockCallResponse {
         lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
@@ -2187,7 +2196,7 @@ mod tests {
     #[test]
     fn lock_args_codecs_follow_the_script_registry() {
         use ckbadger_indexer::parser::registry::{LockArgsLayout, SCRIPT_LAYOUTS};
-        for (code_hash, script) in SCRIPT_LAYOUTS.iter() {
+        for ((code_hash, _), script) in SCRIPT_LAYOUTS.iter() {
             if let Some(LockArgsLayout::Codec(codec)) = &script.lock_args {
                 assert!(
                     lock_args_codec(codec).is_some(),
@@ -2197,11 +2206,22 @@ mod tests {
                 );
             }
         }
-        let registry = |toml: &str| -> Vec<Vec<u8>> {
-            toml.lines()
+        // Each registered reference, by its hash type (resync fix round S2:
+        // the layouts are keyed by the pair).
+        let registry = |toml: &str| -> Vec<(Vec<u8>, i16)> {
+            let hashes = toml
+                .lines()
                 .filter_map(|line| line.trim().strip_prefix("canonical_ref_hash = \""))
-                .map(|rest| parse_hex_code_hash(rest.trim_end_matches('"')))
-                .collect()
+                .map(|rest| parse_hex_code_hash(rest.trim_end_matches('"')));
+            let hash_types = toml
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("canonical_hash_type = \""))
+                .map(|rest| {
+                    i16::from(
+                        ckbadger_common::hash_type_from_label(rest.trim_end_matches('"')).unwrap(),
+                    )
+                });
+            hashes.zip(hash_types).collect()
         };
         for (toml, codec) in [
             (
@@ -2241,15 +2261,15 @@ mod tests {
                 "utxoswap_intent",
             ),
         ] {
-            let hashes = registry(toml);
-            assert!(!hashes.is_empty(), "{codec}");
-            for hash in &hashes {
+            let pairs = registry(toml);
+            assert!(!pairs.is_empty(), "{codec}");
+            for (hash, hash_type) in &pairs {
                 assert_eq!(
                     SCRIPT_LAYOUTS
-                        .get(hash)
+                        .get(hash, *hash_type)
                         .and_then(|script| script.lock_args.clone()),
                     Some(LockArgsLayout::Codec(codec.into())),
-                    "{codec}: 0x{}",
+                    "{codec}: 0x{} by {hash_type}",
                     hex::encode(hash)
                 );
             }
@@ -2266,7 +2286,7 @@ mod tests {
         );
         let args = [[0x00u8, 0x01].as_slice(), &[0xab; 20]].concat();
         assert_eq!(
-            decode_lock_args(&joyid, &args).unwrap(),
+            decode_lock_args(&joyid, 1, &args).unwrap(),
             DecodedLockArgs {
                 decoded: Some(serde_json::json!({
                     "lock": "joyid",
@@ -2277,7 +2297,7 @@ mod tests {
             }
         );
         assert_eq!(
-            decode_lock_args(&joyid, &[0; 23]).unwrap(),
+            decode_lock_args(&joyid, 1, &[0; 23]).unwrap(),
             DecodedLockArgs {
                 decoded: None,
                 error: Some(
@@ -2291,14 +2311,14 @@ mod tests {
         );
         for prefix in [0x00u8, 0x01, 0x07] {
             let read =
-                decode_lock_args(&shadow, &[[prefix].as_slice(), &[1; 32]].concat()).unwrap();
+                decode_lock_args(&shadow, 2, &[[prefix].as_slice(), &[1; 32]].concat()).unwrap();
             assert_eq!(read.decoded.unwrap()["prefix"], format!("0x{prefix:02x}"));
         }
         let default_lock = parse_hex_code_hash(
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
         );
         assert_eq!(
-            decode_lock_args(&default_lock, &[0; 21])
+            decode_lock_args(&default_lock, 1, &[0; 21])
                 .unwrap()
                 .error
                 .as_deref(),
@@ -2316,7 +2336,7 @@ mod tests {
         );
         // A lock no registry entry lays out has neither a value nor a reason.
         assert_eq!(
-            decode_lock_args(&[0x99; 32], &[1, 2, 3]).unwrap(),
+            decode_lock_args(&[0x99; 32], 1, &[1, 2, 3]).unwrap(),
             DecodedLockArgs::default()
         );
     }
@@ -2354,7 +2374,7 @@ mod tests {
             "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
         );
         assert_eq!(
-            decode_lock_args(&funding_mainnet, &[7; 20])
+            decode_lock_args(&funding_mainnet, 1, &[7; 20])
                 .unwrap()
                 .decoded
                 .unwrap()["action"],
@@ -2366,7 +2386,7 @@ mod tests {
             &3u64.to_be_bytes(),
         ]
         .concat();
-        assert!(decode_lock_args(&commitment_mainnet, &commitment)
+        assert!(decode_lock_args(&commitment_mainnet, 1, &commitment)
             .unwrap()
             .decoded
             .is_some());
@@ -2485,7 +2505,7 @@ mod tests {
         );
         let args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
         for code_hash in [mainnet, testnet] {
-            assert!(decode_lock_args(&code_hash, &args)
+            assert!(decode_lock_args(&code_hash, 1, &args)
                 .unwrap()
                 .decoded
                 .is_some());
