@@ -2413,16 +2413,29 @@ mod tests {
     /// its files and column families are as they were, so the earlier build
     /// still opens it. (The T3 test above meets stores built with this
     /// build's column families.)
+    /// And an earlier build's EMPTY store (its column families, no row, no
+    /// stamp), refused by its column families alone (resync fix round 3,
+    /// tests SHOULD-1).
     #[test]
     fn startup_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
         use ckbadger_store::earlier_layout_for_test::{
-            create_earlier_layout_domain_store, store_files_and_column_families,
+            create_domain_store_by_hand, create_earlier_layout_domain_store,
+            earlier_layout_column_families, store_files_and_column_families,
         };
-        for stamp in [None, Some(7)] {
+        for (row, stamp) in [(true, None), (true, Some(7)), (false, None)] {
             let dir = tempfile::tempdir().unwrap();
             let domain = dir.path().join("domain");
             let append_only = dir.path().join("append-only");
-            create_earlier_layout_domain_store(&domain, stamp);
+            if row {
+                create_earlier_layout_domain_store(&domain, stamp);
+            } else {
+                create_domain_store_by_hand(
+                    &domain,
+                    &earlier_layout_column_families(),
+                    false,
+                    stamp,
+                );
+            }
             let before = store_files_and_column_families(&domain);
 
             let err = match open_chain_stores_for_startup(
@@ -2642,6 +2655,15 @@ mod tests {
             view.check_store_layout().unwrap(),
             Ok(StoreLayoutState::Current),
             "and the stamp with them"
+        );
+        // resync fix round 3, tests NOTE-2: what `verify` and `label-import`
+        // meet during a bulk build: the inspection, with options of its own,
+        // reads the stamp from the WAL while the primary holds it unflushed.
+        assert_eq!(
+            ckbadger_store::inspect_domain_store(&domain, &dir.path().join("domain-inspect"))
+                .unwrap(),
+            Some(Ok(StoreLayoutState::Current)),
+            "the inspection passes the store its indexer is writing"
         );
         drop(opened);
     }

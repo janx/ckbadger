@@ -434,17 +434,24 @@ pub mod earlier_layout_for_test {
     /// this build but [`ADDED_SINCE_LAYOUT_7`], holding one row (the network
     /// identity) and the layout stamp `stamp`, if any.
     pub fn create_earlier_layout_domain_store(path: &Path, stamp: Option<u32>) {
-        let column_families: Vec<&str> = DOMAIN_CFS
+        create_domain_store_by_hand(path, &earlier_layout_column_families(), true, stamp);
+    }
+
+    /// The domain column families of an earlier build's store: this build's
+    /// but [`ADDED_SINCE_LAYOUT_7`].
+    pub fn earlier_layout_column_families() -> Vec<&'static str> {
+        DOMAIN_CFS
             .iter()
             .copied()
             .filter(|name| !ADDED_SINCE_LAYOUT_7.contains(name))
-            .collect();
-        create_domain_store_by_hand(path, &column_families, true, stamp);
+            .collect()
     }
 
     /// Create, at `path`, with plain RocksDB, a domain store holding
     /// `column_families` (and `default`), one row (the network identity in
-    /// `sync_meta`) when `row`, and the layout stamp `stamp`, if any.
+    /// `sync_meta`) when `row`, and the layout stamp `stamp`, if any, flushed
+    /// to a table file (resync fix round 3, tests NOTE-1: an inspection of it
+    /// reads a table file, as on a real store).
     pub fn create_domain_store_by_hand(
         path: &Path,
         column_families: &[&str],
@@ -467,6 +474,7 @@ pub mod earlier_layout_for_test {
                 db.put_cf(sync_meta, sync_meta_keys::STORE_LAYOUT, stamp.to_le_bytes())
                     .unwrap();
             }
+            db.flush_cf(sync_meta).unwrap();
         }
     }
 
@@ -479,15 +487,23 @@ pub mod earlier_layout_for_test {
     }
 
     /// What a refusal must leave as it found it: the store directory's files
-    /// (name, size) and the store's column families, each sorted.
-    pub fn store_files_and_column_families(path: &Path) -> (Vec<(String, u64)>, Vec<String>) {
-        let mut files: Vec<(String, u64)> = std::fs::read_dir(path)
+    /// (name, size, a hash of the content: resync fix round 3, tests NOTE-1,
+    /// a file rewritten at its size is a change too) and the store's column
+    /// families, each sorted.
+    pub fn store_files_and_column_families(path: &Path) -> (Vec<(String, u64, u64)>, Vec<String>) {
+        use std::hash::{Hash, Hasher};
+        let mut files: Vec<(String, u64, u64)> = std::fs::read_dir(path)
             .unwrap()
             .map(|entry| {
                 let entry = entry.unwrap();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                if entry.file_type().unwrap().is_file() {
+                    std::fs::read(entry.path()).unwrap().hash(&mut hasher);
+                }
                 (
                     entry.file_name().to_string_lossy().into_owned(),
                     entry.metadata().unwrap().len(),
+                    hasher.finish(),
                 )
             })
             .collect();
@@ -727,6 +743,112 @@ mod tests {
                 "stamp {stamp:?}: the refused store is as it was"
             );
         }
+    }
+
+    /// resync fix round 3, tests SHOULD-1: the column families alone refuse
+    /// a store no other fact tells apart (each read by the inspection and by
+    /// a secondary, nothing written in it): an earlier build's EMPTY store
+    /// (its column families, no row, no stamp: never what a creating open of
+    /// this build leaves, which makes the newest column families first); an
+    /// earlier build's column families stamped with this build's layout; and
+    /// this build's column families and one it does not know, stamped with
+    /// this build's layout (refused, not opened).
+    #[test]
+    fn the_column_families_alone_refuse_a_store() {
+        use earlier_layout_for_test::{
+            create_domain_store_by_hand, earlier_layout_column_families,
+            store_files_and_column_families, ADDED_SINCE_LAYOUT_7,
+        };
+        let earlier = earlier_layout_column_families();
+        let mut with_unknown: Vec<&str> = DOMAIN_CFS.to_vec();
+        with_unknown.push("a_column_family_of_a_later_build");
+        // (the case, its column families, its stamp, the ones missing, the unknown ones)
+        type Case<'a> = (
+            &'a str,
+            &'a [&'a str],
+            Option<u32>,
+            &'a [&'a str],
+            &'a [&'a str],
+        );
+        let cases: [Case; 3] = [
+            (
+                "an earlier build's empty store",
+                earlier.as_slice(),
+                None,
+                &ADDED_SINCE_LAYOUT_7,
+                &[],
+            ),
+            (
+                "an earlier build's column families stamped with this layout",
+                earlier.as_slice(),
+                Some(STORE_LAYOUT),
+                &ADDED_SINCE_LAYOUT_7,
+                &[],
+            ),
+            (
+                "a column family this build does not know",
+                with_unknown.as_slice(),
+                Some(STORE_LAYOUT),
+                &[],
+                &["a_column_family_of_a_later_build"],
+            ),
+        ];
+        for (case, column_families, stamp, missing, unknown) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_domain_store_by_hand(&domain, column_families, false, stamp);
+            let before = store_files_and_column_families(&domain);
+            let expected = StoreLayoutMismatch {
+                found: stamp,
+                column_families: StoreColumnFamilies {
+                    missing: missing.iter().map(|name| name.to_string()).collect(),
+                    unknown: unknown.iter().map(|name| name.to_string()).collect(),
+                },
+            };
+            assert_eq!(
+                inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap(),
+                Some(Err(expected.clone())),
+                "{case}: the inspection refuses it"
+            );
+            let secondary =
+                CkbadgerStore::open_domain_secondary(&domain, &dir.path().join("secondary"))
+                    .unwrap();
+            assert_eq!(
+                secondary.check_store_layout().unwrap(),
+                Err(expected),
+                "{case}: a secondary refuses it"
+            );
+            drop(secondary);
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "{case}: the refused store is as it was"
+            );
+        }
+    }
+
+    /// resync fix round 3, tests NOTE-2: the inspection's pass paths, on
+    /// stores this build's open made: one never stamped (fresh), and one
+    /// stamped with its stamp flushed to a table file the store's own options
+    /// wrote (the inspection opens with options of its own).
+    #[test]
+    fn the_inspection_passes_a_fresh_store_and_a_stamped_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        drop(CkbadgerStore::open_domain(&domain).unwrap());
+        assert_eq!(
+            inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap(),
+            Some(Ok(StoreLayoutState::Fresh))
+        );
+        {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            store.set_store_layout(STORE_LAYOUT).unwrap();
+            store.flush_column_families(&[CF_SYNC_META]).unwrap();
+        }
+        assert_eq!(
+            inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap(),
+            Some(Ok(StoreLayoutState::Current))
+        );
     }
 
     /// resync fix round 3, M (logic MUST-1): RocksDB writes `CURRENT` before
