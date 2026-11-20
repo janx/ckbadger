@@ -418,6 +418,12 @@ not state, a stated code no cell carries, or an input whose cell the store does 
 finding naming the transaction and the code. A store synced before the list reads as rows in
 which no recognised type ran and fails on every activity whose cells carry one. It needs no RPC.
 
+Its limit: it recognises codes through the builder's own `is_recognized_type`, so it shares the
+builder's recognition rule. It catches a row that does not hold what the builder recognises (a
+writer, a decode or a route fault), never a wrong recognition rule: a code the classifier wrongly
+recognises, or wrongly does not, is wrong on both sides alike and passes. The rule itself is pinned
+only by the builder's and the registry's own tests.
+
 ### DAO Lifecycle vs Live DAO Cells (S31)
 
 `dao_live_cells_match_node` proves the DAO lifecycle cell by cell against the

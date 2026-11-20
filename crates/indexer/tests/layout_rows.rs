@@ -41,6 +41,12 @@ fn picks() -> Vec<(&'static str, Pick)> {
     ]
 }
 
+/// The store layout the rows below are pinned at. A row-format change re-pins
+/// a row here and raises `ckbadger_store::STORE_LAYOUT` in the same commit
+/// (a store re-synced by the old format must be refused): change both
+/// together (resync fix round, tests report NOTE-7).
+const EXPECTED_STORE_LAYOUT: u32 = 8;
+
 /// `(cf, key hex, value hex)` of every pick, as the store holds them now.
 const EXPECTED: &[(&str, &str, &str)] = &[
     (
@@ -98,6 +104,12 @@ const EXPECTED: &[(&str, &str, &str)] = &[
 
 #[tokio::test]
 async fn one_row_of_every_pointer_layout_cf_has_its_pinned_bytes() {
+    assert_eq!(
+        ckbadger_store::STORE_LAYOUT,
+        EXPECTED_STORE_LAYOUT,
+        "the pinned rows are layout {EXPECTED_STORE_LAYOUT}'s: a new layout re-reads them (and a \
+         re-pinned row raises the layout)"
+    );
     let chain = protocol_chain(0);
     let stores = open_stores();
     let plan = single_block_plan(chain.len());

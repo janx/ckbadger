@@ -645,6 +645,12 @@ status.
 | GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | The same counts over the exact rolling 24h chain-time window                                                  |
 | GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`)    |
 
+`/statistics/network` also states `storeLayout: number | null`: the layout the domain store was built
+with (`sync_meta` `store_layout`, stamped by the indexer; `null` on a store not stamped yet). The
+API opens only a store of its own build's layout (`ckbadger_store::STORE_LAYOUT`, 8 at this
+writing), so a running API answers its own layout; the verify check `store_layout_matches_build`
+holds the field to the verifier's build, so a skipped re-sync or a mismatched API build is seen.
+
 **Params**
 
 - `DailyActivityStatsParams` — `days` (only used by `get_daily_activity_stats`)

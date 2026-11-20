@@ -27,8 +27,15 @@ import { describe, expect, it } from 'vitest';
  *
  * Its limits, what it cannot see: a row over a spread that writes only other fields, a row with no
  * literal of its own (built from a variable, or its keys computed), a row in a JSON fixture
- * (`*.json` is not read: the live feeds' fixture is the route's own answer, its capture said in
- * it), and a row a helper outside `__tests__/` builds.
+ * (`*.json` is not read: the live feeds' fixture is a capture of the route's answer of
+ * 2026-11-19, said in it, read through a translation, `__tests__/utils/live-activities.ts`), and a
+ * row a helper outside `__tests__/` builds.
+ *
+ * A stand-in, until the live capture is redone after the re-sync: the capture predates the senders
+ * bit, so its rows carry no `sent`. The folding tests mark as senders the parties whose CKB fell
+ * (`components/activity-runs.test.tsx`), and the sender counts they pin ("31 senders", the twelve
+ * runs) are counts of that stand-in, not of the route's `sent`. Re-capture the feeds over the
+ * re-synced store (which states `sent`), read `sent` from the rows, and re-pin those counts.
  *
  * EXEMPT: the checker's own tests, whose rows are its inputs on purpose, to see them refused; and
  * the flow rule's (lib/tx-flows.ts), whose inputs are its pick of a row (the parties and the
