@@ -4469,3 +4469,141 @@ async fn the_fee_payer_names_a_depositor_and_none_of_two_payers() {
     let (_, json) = get_json(&app, &own(&shared)).await;
     assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
 }
+
+// ── Lane feed, part 4 (the owner's "做", 2026-11-20): a row states its items once and draws no
+//    party for moving one ───────────────────────────────────────────────────────────────────
+
+/// How many parties the item-mover row holds, and how many of them moved token T.
+const MOVER_PARTIES: usize = 600;
+const T_MOVERS: usize = 550;
+
+/// A party of the item-mover row: its lock hash names it by `i` in its first two bytes.
+fn mover_lock(i: usize) -> [u8; 32] {
+    let mut hash = [0x3c; 32];
+    hash[0] = u8::try_from(i >> 8).unwrap();
+    hash[1] = u8::try_from(i & 0xff).unwrap();
+    hash
+}
+
+/// The item-mover row: 600 parties. 0..275 send 10 of token T and 275..550 receive 10 (a transfer
+/// among 550 parties); 560 receives 100 of M that no one gave (a mint); 561 sends 30 of B and 562
+/// receives 10 (a burn of 20, 30 moved out); 570 sends 5 of T2 from one cell and takes 3 back in
+/// another (−2 net) and 571 receives 2 (a transfer of 2, the 3 it paid itself changing no holder);
+/// the five largest CKB changes are 595 to 599; every other party changed a few shannons.
+fn mover_actions(tx_hash: &[u8]) -> TxActions {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_TOKEN};
+    let token = |id: u8, magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![id; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let participants = (0..MOVER_PARTIES)
+        .map(|i| {
+            let item_deltas = match i {
+                0..=274 => vec![token(0x71, 10, true)],
+                275..=549 => vec![token(0x71, 10, false)],
+                560 => vec![token(0x72, 100, false)],
+                561 => vec![token(0x73, 30, true)],
+                562 => vec![token(0x73, 10, false)],
+                570 => vec![token(0x74, 5, true), token(0x74, 3, false)],
+                571 => vec![token(0x74, 2, false)],
+                _ => vec![],
+            };
+            ParticipantDelta {
+                id: ParticipantId::Lock(mover_lock(i)),
+                ckb_delta: if i >= 595 {
+                    -1_000_000_000_000 - i128::try_from(i).unwrap()
+                } else {
+                    100 + i128::try_from(i).unwrap()
+                },
+                used_delta: 0,
+                tags: if item_deltas.is_empty() { 0 } else { TAG_TOKEN },
+                item_deltas,
+                roles: 0,
+            }
+        })
+        .collect();
+    TxActions {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: vec![0xb8; 32],
+        block_number: 11,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    }
+}
+
+/// Part 4 of lane feed: on Godwoken rows hundreds of parties' items move, and a row drew every
+/// one of them in full (the live token page: 2,054 parties drawn for 50 rows, about 1.4 MB). A row
+/// now draws the five largest CKB changes and the fee payer, nothing else, and states the
+/// transaction's items once, each computed from every party: what it is, its movement, the token
+/// amount moved (the larger of what holders received and what they gave, each party's change
+/// netted first) and how many parties' holdings of it changed. The transaction's own activity
+/// still draws every party; the address feed states the same items.
+#[tokio::test]
+async fn a_row_states_its_items_once_and_draws_no_party_for_moving_one() {
+    let store = test_store();
+    let tx_hash = vec![0xa9; 32];
+    let actions = mover_actions(&tx_hash);
+    seed_named_tx(&store, 11, &tx_hash, &actions);
+    let focus = mover_lock(300);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(&focus, 11, 0, &AddrTxValue::new(400, true, true, 0));
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &focus);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    let drawn: Vec<String> = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap().to_string())
+        .collect();
+    let largest: Vec<String> = (595..600)
+        .map(|i| format!("0x{}", hex::encode(mover_lock(i))))
+        .collect();
+    assert_eq!(drawn, largest, "the five largest CKB changes alone");
+
+    let token = |id: u8, movement: &str, amount: &str, parties: usize| {
+        serde_json::json!({
+            "kind": "token",
+            "typeScriptHash": format!("0x{}", hex::encode([id; 32])),
+            "symbol": null,
+            "decimals": null,
+            "movement": movement,
+            "amount": amount,
+            "parties": parties,
+        })
+    };
+    let items = serde_json::json!([
+        token(0x71, "transfer", "2750", T_MOVERS),
+        token(0x72, "mint", "100", 1),
+        token(0x73, "burn", "30", 2),
+        token(0x74, "transfer", "2", 2),
+    ]);
+    assert_eq!(row["items"], items, "the row's items, once each");
+
+    let row_bytes = serde_json::to_string(row).unwrap().len();
+    assert!(
+        row_bytes <= 52 * MOVER_PARTIES + 8 * 1024,
+        "the row takes {row_bytes} bytes for {MOVER_PARTIES} parties"
+    );
+
+    let own_uri = format!("/transactions/0x{}/activity", hex::encode(&tx_hash));
+    let (_, own) = get_json(&app, &own_uri).await;
+    assert_eq!(own["participants"].as_array().unwrap().len(), MOVER_PARTIES);
+    assert_eq!(own["items"], items);
+
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(focus));
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["items"], items);
+}
