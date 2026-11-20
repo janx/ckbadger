@@ -1654,6 +1654,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
     let app = create_router(config).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -1676,14 +1677,29 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     assert_eq!(rows[0]["itemDeltas"][0]["delta"], 1);
     assert_eq!(rows[0]["itemDeltas"][0]["standard"], "dotcell");
     assert_eq!(rows[0]["roles"][0], "owner_to");
-    let participants = rows[0]["participants"].as_array().unwrap();
-    assert_eq!(participants.len(), 1, "only the other party: {json:?}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row draws this party
+    // alone and names every party by its short id, the other one too, and sends no other party in
+    // full (it sent `participants`, the other party with its address); the other party's address
+    // is on the transaction's own activity, which draws every party
+    assert!(rows[0].get("participants").is_none(), "{json:?}");
+    assert_eq!(rows[0]["participantCount"], 2);
     assert_eq!(
-        participants[0]["lockHash"],
-        format!("0x{}", hex::encode(&other))
+        rows[0]["partyIds"],
+        serde_json::json!([
+            [format!("0x{}", hex::encode(&other[..20])), 0],
+            [format!("0x{}", hex::encode(prefix)), TAG_IDENTITY],
+        ])
     );
-    assert!(participants[0]["address"].is_string());
-    assert!(participants[0]["lockHashPrefix"].is_null());
+    let (status, own) = get_json(
+        &app,
+        &format!("/transactions/0x{}/activity", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    let party = &own["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(&other)));
+    assert!(party["address"].is_string(), "{own}");
+    assert!(party["lockHashPrefix"].is_null());
 }
 
 #[tokio::test]
@@ -1734,7 +1750,12 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
 
-    let uri = format!("/api/v1/addresses/0x{}/activities", hex::encode(&lock_hash));
+    // Re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the other
+    // parties by their short ids and sends none in full, so it reads no other party's lock; the
+    // named party is resolved where a row draws it, the global feed (two parties: both drawn).
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(&lock_hash));
+    let named_id = serde_json::json!([format!("0x{}", hex::encode(named_prefix)), 0]);
+    let named = |json: &serde_json::Value| json["data"][0]["participants"][1].clone();
 
     // Unresolved: no lock script starts with this prefix.
     let app = create_router(test_config_with_append_only(
@@ -1742,14 +1763,12 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let participant = &json["data"][0]["participants"][0];
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["partyIds"][1], named_id, "{feed}");
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let participant = named(&json);
     assert!(participant["address"].is_null(), "{json:?}");
     assert!(participant["lockHash"].is_null());
     assert_eq!(
@@ -1779,21 +1798,17 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let participant = &json["data"][0]["participants"][0];
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let participant = named(&json);
     assert_eq!(
         participant["lockHash"],
         format!("0x{}", hex::encode(resolved_hash))
     );
     assert!(participant["address"].as_str().unwrap().starts_with("ck"));
 
-    // Ambiguous: a second lock script with the same prefix is an error, never a guess.
+    // Ambiguous: a second lock script with the same prefix is an error, never a guess, where the
+    // party is drawn; the address row, which names it by its prefix alone, reads neither script.
     let mut second_hash = [0x99u8; 32];
     second_hash[31] = 0x02;
     let mut batch = StoreBatch::new(core_store.as_ref());
@@ -1814,17 +1829,15 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
-        String::from_utf8_lossy(&body).contains("ambiguous"),
-        "{}",
-        String::from_utf8_lossy(&body)
+        json["message"].as_str().unwrap().contains("ambiguous"),
+        "{json}"
     );
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["partyIds"][1], named_id, "{feed}");
 }
 
 #[tokio::test]
@@ -2180,6 +2193,9 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
 
 /// A party whose lock script the store does not know is reported by its lock
 /// hash with no address — never with the hex lock hash posing as an address.
+/// Re-pinned on purpose (lane feed, ruling 14 of gate P): read where the party
+/// is drawn, the transaction's own activity; the address row names the other
+/// party by its short id and sends it in full no more.
 #[tokio::test]
 async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
     let store = test_store();
@@ -2190,18 +2206,20 @@ async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
 
     let (status, json) = get_json(
         &app,
-        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+        &format!("/transactions/0x{}/activity", hex::encode([0xaa; 32])),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let party = &json["data"][0]["participants"][0];
+    let party = &json["participants"][1];
     assert_eq!(party["lockHash"], format!("0x{}", hex::encode(other)));
     assert!(party["address"].is_null(), "{json}");
 }
 
 /// A lock script the store holds but cannot encode (a hash_type no chain
 /// allows) is store corruption, reported with the lock — not rendered as a
-/// guess or dropped.
+/// guess or dropped. Re-pinned on purpose (lane feed, ruling 14 of gate P):
+/// read where the party is drawn, the transaction's own activity; the address
+/// row reads no other party's lock any more, and answers.
 #[tokio::test]
 async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
     let store = test_store();
@@ -2222,7 +2240,7 @@ async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
 
     let (status, json) = get_json(
         &app,
-        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+        &format!("/transactions/0x{}/activity", hex::encode([0xaa; 32])),
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
@@ -2232,6 +2250,16 @@ async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
             .unwrap()
             .contains(&hex::encode(other)),
         "{json}"
+    );
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"][0]["partyIds"][1],
+        serde_json::json!([format!("0x{}", hex::encode(&other[..20])), 0])
     );
 }
 
@@ -2297,9 +2325,24 @@ async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
-    let party = &row["participants"][0];
-    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(recipient)));
-    assert_eq!(party["address"], expected, "{json}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the recipient
+    // by its short id and sends no other party in full; the recipient's address, encoded from the
+    // record, is on the pool's own row, which draws both parties
+    assert_eq!(
+        row["partyIds"][1],
+        serde_json::json!([format!("0x{}", hex::encode(&recipient[..20])), 0]),
+        "{json}"
+    );
+    let (status, pool) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
+    let recipient_hex = format!("0x{}", hex::encode(recipient));
+    let party = pool["data"][0]["activity"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["lockHash"] == recipient_hex)
+        .unwrap_or_else(|| panic!("the recipient is a party of the pool row: {pool}"));
+    assert_eq!(party["address"], expected, "{pool}");
 }
 
 // ── 2.6b: identity item deltas name their standard ──────────────────────
@@ -2632,8 +2675,11 @@ async fn object_item_deltas_name_collection_class_and_composition() {
 
     let (status, global) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{global}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): every party's item states its
+    // movement in the whole transaction, as an address's row does
     assert_eq!(
-        global["data"][0]["participants"][0]["itemDeltas"], expected,
+        global["data"][0]["participants"][0]["itemDeltas"],
+        with_movements(&expected, &["mint", "burn"]),
         "global feed"
     );
 }
@@ -2716,18 +2762,21 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         "role": "cluster",
     }]);
 
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): every party's item states its
+    // movement in the whole transaction, on every response that draws the party
+    let minted = with_movements(&expected, &["mint"]);
     for uri in ["/activities?filter=object&limit=20", "/activities?limit=20"] {
         let (status, json) = get_json(&app, uri).await;
         assert_eq!(status, StatusCode::OK, "{uri}: {json}");
         assert_eq!(
-            json["data"][0]["participants"][0]["itemDeltas"], expected,
+            json["data"][0]["participants"][0]["itemDeltas"], minted,
             "{uri}"
         );
     }
     let (status, json) = get_json(&app, "/transactions?activity_type=object&limit=20").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
-        json["data"][0]["activity"]["participants"][0]["itemDeltas"], expected,
+        json["data"][0]["activity"]["participants"][0]["itemDeltas"], minted,
         "transactions?activity_type=object"
     );
     let (status, json) = get_json(
@@ -2749,7 +2798,7 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
-        json["participants"][0]["itemDeltas"], expected,
+        json["participants"][0]["itemDeltas"], minted,
         "transaction activity: {json}"
     );
 }
@@ -2870,9 +2919,9 @@ async fn pending_object_delta_names_what_the_store_knows() {
 
 /// A pending transaction may spend a cell whose lock exists so far only as the
 /// output of another pending transaction, so no store row knows it. The mirror
-/// keeps that lock script on the record (`input_locks`); the address page must
-/// encode the sender from it exactly as it does for the record's own outputs —
-/// never `null`, never a store-derived guess.
+/// keeps that lock script on the record (`input_locks`); a row that draws the
+/// sender (the pool's own row) must encode it from there exactly as it does for
+/// the record's own outputs — never `null`, never a store-derived guess.
 #[tokio::test]
 async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
     use ckbadger_store::types::{ParticipantDelta, ParticipantId};
@@ -2929,14 +2978,24 @@ async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the sender by
+    // its short id and sends no other party in full; the sender's address, encoded from the
+    // record's spent input, is on the pool's own row, which draws both parties
+    let sender_id = serde_json::json!([format!("0x{}", hex::encode(&sender[..20])), 0]);
+    assert!(
+        row["partyIds"].as_array().unwrap().contains(&sender_id),
+        "{json}"
+    );
+    let (status, pool) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
     let sender_hex = format!("0x{}", hex::encode(sender));
-    let party = row["participants"]
+    let party = pool["data"][0]["activity"]["participants"]
         .as_array()
         .unwrap()
         .iter()
         .find(|p| p["lockHash"] == sender_hex)
-        .unwrap_or_else(|| panic!("the sender is a party of the row: {json}"));
-    assert_eq!(party["address"], expected, "{json}");
+        .unwrap_or_else(|| panic!("the sender is a party of the pool row: {pool}"));
+    assert_eq!(party["address"], expected, "{pool}");
 }
 
 #[tokio::test]

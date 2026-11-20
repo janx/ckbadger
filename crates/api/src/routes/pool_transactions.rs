@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use super::activities::{
-    LockCallResponse, ParticipantResponse, ProtocolActionResponse, TypeCallResponse,
+    ActivityParties, Draw, LockCallResponse, ParticipantResponse, ProtocolActionResponse,
+    TypeCallResponse,
 };
 use crate::{
     pool::{InterpretationResponse, PoolSnapshot, PoolStatus},
@@ -20,10 +21,14 @@ pub struct PoolListParams {
     activity_type: Option<String>,
 }
 
+/// A pool transaction's activity as a row draws it: the parts of the one activity builder's
+/// response a pool row has (`activities::build_global_activity_response_with_pool`, [`Draw::Row`]).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolActivity {
     pub participants: Vec<ParticipantResponse>,
+    #[serde(flatten)]
+    pub parties: ActivityParties,
     pub protocol_actions: Vec<ProtocolActionResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -266,12 +271,14 @@ fn pool_transactions_page(
                     &state.append_only_store,
                     &state.ckb_network,
                     actions,
+                    Draw::Row,
                     &mut script_cache,
                     &mut addresses,
                     Some(record),
                 )
                 .map(|activity| PoolActivity {
                     participants: activity.participants,
+                    parties: activity.parties,
                     protocol_actions: activity.protocol_actions,
                     type_calls: activity.type_calls,
                     lock_calls: activity.lock_calls,

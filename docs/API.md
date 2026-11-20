@@ -69,12 +69,43 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 
 **Responses**
 
-- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas, participants);
+- `CursorPaginatedResponse<ActivityResponse>` — per-address activity (tx + Layer1/2/3 deltas of
+  this address, and every party by its short id: see **The parties a row draws**);
   each of its `itemDeltas` carries `movement`, the item's movement in the whole transaction
   (`mint` where its net over every party rose, `burn` where it fell, `transfer` where it only
   changed hands), which the row's own delta cannot tell
-- `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
-- `Vec<GlobalActivityResponse>` — plain vector for latest
+- `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity: a row
+- `Vec<GlobalActivityResponse>` — plain vector for latest: rows
+- `GET /transactions/{hash}/activity` (in `transactions.rs`'s family, built here) answers the same
+  `GlobalActivityResponse` with EVERY party drawn: the transaction's page lists each one's change
+
+**The parties a row draws** (lane feed, ruling 14 of gate P: `/activities?filter=token` answered
+8.25 MB for one page of 50, every field of each of a Godwoken row's 600 to 770 parties)
+
+Every response that carries an activity states its parties the same way, from one builder
+(`activity_parties`, `drawn_parties`): the global feed, the latest feed and its WebSocket push, a
+block's feed, the asset feeds, a transaction list's `activity`, the tx pool's rows, an address's
+feed and a transaction's own activity.
+
+- `participantCount` — how many parties the transaction has, exactly.
+- `partyIds: [["0x<40 hex>", tags]]` — EVERY party, in the transaction's order: its short id, the
+  first 20 bytes of its lock hash (the 20 bytes a protocol names a lock by, `lockHashPrefix`;
+  for a protocol-named party, that prefix), and its participant `tags`. 47 to 51 bytes a party
+  (a 770-party row's list is about 37 KB). Two parties of one transaction under one short id are
+  a `500`. A page counts distinct parties across rows from it (a feed's fold); the senders bit
+  rides in `tags` after the re-sync.
+- `feePayer: "0x<lock hash>" | null` — the party whose only movement is the fee, read from every
+  party: not a cellbase, no Nervos DAO withdrawal completed (its compensation enters), no item
+  moved, and exactly one party's CKB changed and went down. Nothing is summed to find it.
+- `participants` (a `GlobalActivityResponse`; an address's row has none) — the parties DRAWN, in
+  full, in the transaction's order, each once. A feed's or a list's row draws every party of a
+  row of at most six; beyond six, the five largest CKB changes (by size, the earlier party first
+  where two are equal), the fee payer and every party whose items moved: a rule, not a cap. So a
+  row holds every item delta of its transaction, and a page may read items from it; it holds the
+  CKB of the drawn parties only, so a page reads a count from `participantCount` and the fee from
+  `feePayer`, never from `participants`. The transaction's own activity draws every party.
+- An address's row draws the address alone (its own changes are the row's fields) and sends no
+  other party in full: it reads no other party's lock.
 
 **The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
 and these codes, never their args)
@@ -118,8 +149,10 @@ and these codes, never their args)
 
 **Participants**
 
-A participant is any party the transaction affects, not only a holder of one of its cells. Both
-response shapes describe a party the same way:
+A participant is any party the transaction affects, not only a holder of one of its cells. A
+drawn party (`GlobalActivityResponse.participants`) is described this way, beside its
+`ckbDelta`, `usedDelta`, `itemDeltas` (each with its `movement`, as on an address's row) and
+`tags`:
 
 ```json
 {
@@ -142,8 +175,8 @@ response shapes describe a party the same way:
   empty for a plain cell participant.
 - A named party that held no cell has `ckbDelta` and `usedDelta` of exactly `"0"` — that zero is
   what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
-- `ActivityResponse.participants` are the OTHER parties; `ActivityResponse.roles` are this
-  participant's own roles.
+- `ActivityResponse.roles` are this participant's own roles; the other parties are in its
+  `partyIds` alone (see **The parties a row draws**).
 
 **Item deltas**
 
@@ -943,7 +976,7 @@ network store too), no re-sync:
 - Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
 - History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
-- New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every participant remains present. Token amount moved can be read as the sum of positive deltas for that token in the complete activity; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
+- New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every party is counted and named (`participantCount`, `partyIds`); the parties a row draws are in full, every party whose items moved among them (activities, **The parties a row draws**). Token amount moved can be read as the sum of positive deltas for that token over the drawn parties, which hold every item delta of the transaction; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
 
 Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0025-simple-udt/0025-simple-udt.md) and [RFC 0052](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0052-extensible-udt/0052-extensible-udt.md), rather than arbitrary compatible-script argument guesses.

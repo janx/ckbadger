@@ -286,6 +286,7 @@ pub(crate) fn transaction_response(
                 &state.append_only_store,
                 &state.ckb_network,
                 actions,
+                super::activities::Draw::Row,
                 &mut std::collections::HashMap::new(),
                 &mut std::collections::HashMap::new(),
             )
