@@ -397,11 +397,22 @@ struct GlobalParticipantApiRecord {
     lock_hash_prefix: Option<String>,
 }
 
+/// A feed row of `/activities`: it sends in full only the parties it draws, and names every party
+/// of its transaction by its short id (`partyIds`, `[id, tags]`) beside their count.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalActivityApiRecord {
     tx_hash: String,
     block_number: i64,
+    participant_count: usize,
+    party_ids: Vec<(String, u16)>,
+}
+
+/// A transaction's own activity (`/transactions/{hash}/activity`): every party in full.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionActivityApiRecord {
+    participant_count: usize,
     participants: Vec<GlobalParticipantApiRecord>,
 }
 
@@ -5035,9 +5046,14 @@ impl Check for DaoStatusIndexMatchesDeposits {
 /// The whole point of the participant model is that `addr_txs` rows are derived
 /// from `TxActions.participants` rather than from cells: one derivation, no
 /// join to drift. This check reads it back from the other end — for each party
-/// a recent activity lists, the party's own transaction index must contain that
+/// of a recent activity, the party's own transaction index must contain that
 /// transaction. A `Lock` party is looked up by address, a protocol-named party
 /// by its 20-byte prefix.
+///
+/// A feed row sends in full only the parties it draws (lane feed, ruling 14 of
+/// gate P), so every party is read from the transaction's own activity, which
+/// draws them all; the feed row's `participantCount` and `partyIds` are held
+/// against those parties, one finding naming the transaction where they differ.
 pub struct ParticipantRowsConsistency;
 
 /// How many recent activities the check walks, and how deep it pages each
@@ -5079,7 +5095,46 @@ impl Check for ParticipantRowsConsistency {
         let mut findings = vec![];
         let mut checked = 0u64;
         for activity in &page.data {
-            for participant in &activity.participants {
+            let own: TransactionActivityApiRecord =
+                api_get(ctx, &format!("transactions/{}/activity", activity.tx_hash))?;
+            // the feed row names every party the transaction's own activity draws, in its order
+            let named: Vec<Option<String>> = own
+                .participants
+                .iter()
+                .map(|p| {
+                    p.lock_hash
+                        .as_deref()
+                        .map(|hash| hash.get(..42).unwrap_or(hash).to_string())
+                        .or_else(|| p.lock_hash_prefix.clone())
+                })
+                .collect();
+            let feed: Vec<Option<String>> = activity
+                .party_ids
+                .iter()
+                .map(|(id, _)| Some(id.clone()))
+                .collect();
+            if activity.participant_count != own.participants.len()
+                || own.participant_count != own.participants.len()
+                || feed != named
+            {
+                findings.push(Finding {
+                    entity: format!("tx={}", activity.tx_hash),
+                    details: vec![format!(
+                        "the feed row counts {} parties and its partyIds name {} ({}); the \
+                         transaction's own activity counts {} and draws {}",
+                        activity.participant_count,
+                        activity.party_ids.len(),
+                        if feed == named {
+                            "the transaction's parties, in its order"
+                        } else {
+                            "not the transaction's parties in its order"
+                        },
+                        own.participant_count,
+                        own.participants.len(),
+                    )],
+                });
+            }
+            for participant in &own.participants {
                 let (path, entity) = match (&participant.lock_hash, &participant.lock_hash_prefix) {
                     // Resolved or plain cell participant: its full lock hash is
                     // the address index key.
