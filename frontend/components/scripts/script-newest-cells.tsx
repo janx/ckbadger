@@ -112,10 +112,12 @@ function whatOf({ cell: row, detail, error }: Row, size: ShortSize): What {
   };
 }
 
+// What the cell is, a value of its row, in the reading ink (BRIEF-roles-rest part A): the item, its
+// type by name, "plain cell", and "…" while its detail is read (a loading line reads, B27).
 function WhatItIs({ what }: { what: What }) {
   switch (what.state) {
     case 'reading':
-      return <span className="text-text-dim">…</span>;
+      return <span className="text-text">…</span>;
     case 'failed':
       return (
         <span role="alert" title={what.message} className="text-rouge">
@@ -130,7 +132,7 @@ function WhatItIs({ what }: { what: What }) {
         </Link>
       );
     case 'plain':
-      return <span className="text-text-dim">plain cell</span>;
+      return <span className="text-text">plain cell</span>;
   }
 }
 
@@ -176,7 +178,9 @@ function createdDate(detail: Cell | undefined): ReactNode {
  * "tx 0x1234…abcd · #20,911,313 · 2026-11-02": where and when the cell was made. Its facts break
  * between them, never inside one: on a phone its widest, "tx 0x1234…abcd · #99,999,999 · date
  * unavailable" (47 characters at 12 px, 338.4 px), is past a 328 px row (the coordinator's sweep,
- * F3-e); the table's numeric cell keeps it on one line.
+ * F3-e); the table's numeric cell keeps it on one line. The tx id, the block and the day are
+ * values, in the reading ink of the row; "tx" is their label, quiet (BRIEF-roles-rest part A: the
+ * whole line stood in the quiet ink, its two links with it).
  */
 function Created({
   cell,
@@ -188,11 +192,11 @@ function Created({
   size: ShortSize;
 }) {
   return (
-    <span className="text-text-dim">
+    <span className="text-text">
       <Dotted
         parts={[
           <>
-            tx{' '}
+            <span className="text-text-dim">tx</span>{' '}
             <Link
               look="inline"
               // the creating transaction opened at this cell, so its fold never hides it

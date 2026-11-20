@@ -103,6 +103,11 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       '/mainnet/blocks/12'
     );
     expect(within(switches).queryByRole('link', { name: /#11/ })).toBeNull();
+    // BRIEF-roles-rest part G: the depth is a value in the line's reading ink, "· depth" its label
+    const depth = within(switches).getByText('· depth');
+    expect(depth).toHaveClass('text-text-dim');
+    expect(depth.parentElement).toHaveTextContent(/^· depth \d+$/);
+    expect(depth.parentElement).not.toHaveClass('text-text-dim');
     // the legend's times fit their column: the date is in the header (visual pass)
     expect(screen.getByText(fullText('before 06:13:20 UTC+8'))).toBeInTheDocument();
     // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)

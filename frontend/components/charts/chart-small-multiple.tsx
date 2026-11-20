@@ -158,15 +158,21 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             </span>
           )}
         </div>
-        <div className="text-meta mt-0.5 flex min-w-0 gap-x-2.5">
+        {/* line 2 stands on the 13 px step's line rounded to a whole pixel (`leading-row`, 20 px),
+            with its date or without one, so every plot of a row still starts on one line: the
+            caption alone was 18 px and the 13 px date 19.5 */}
+        <div className="text-meta leading-row mt-0.5 flex min-w-0 items-baseline gap-x-2.5">
           {/* the caption, what the figure counts: a label, the quiet ink */}
           <span data-role="card-caption" className="text-text-dim whitespace-nowrap">
             {definition.cardSubtitle}
           </span>
           {head?.at && (
-            // the date is the datum, the reading ink; line 2 keeps the chart-hero board's 12 px
-            // (rule 9: two lines that fit the narrowest card, 278 px; chart-card-head.test.tsx)
-            <span data-role="card-date" className="text-text ml-auto whitespace-nowrap">
+            // the date is the datum, the reading ink at 13 px by the owner's ruling (gate P, ruling
+            // 2: it was the chart-hero board's 12 px); the caption beside it stays a 12 px label.
+            // Rule 9's two lines still hold: each fits the narrowest card, 278 px, on one line
+            // (chart-card-head.test.tsx, every chart: the widest line 2, the daily deposit's,
+            // is 26 × 7.2 + 10 + 10 × 7.8 = 275.2 px; the Miners card's caption is "largest")
+            <span data-role="card-date" className="text-text text-small ml-auto whitespace-nowrap">
               {head.at}
             </span>
           )}

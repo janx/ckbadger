@@ -608,7 +608,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'miner-address-distribution',
     title: 'Miners',
     subtitle: 'Share of blocks mined over the last 7 days',
-    cardSubtitle: 'largest miner',
+    cardSubtitle: 'largest',
     plotUnit: 'blocks',
     section: section.work,
     visual: 'ranked',

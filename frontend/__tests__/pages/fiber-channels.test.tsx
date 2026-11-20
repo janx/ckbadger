@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import {
   atContainerWidth,
   phoneHeadPx,
@@ -125,6 +126,17 @@ describe('FiberChannelsPage', () => {
       '2 · in 1 pair',
       '1m 40s · 2 of 2 closed within an hour',
     ]);
+    // BRIEF-roles-rest part G: a figure's note is quiet (R13), its values read in the reading ink:
+    // the day, the counts; "since", "in USDI", "in … pair" and "closed within an hour" stay quiet
+    const [ever, parties, lifetime] = within(row).getAllByRole('definition');
+    expect(inkOf(within(ever).getByText('2023-11-15'))).toBe(READING);
+    expect(inkOf(within(ever).getByText('1'))).toBe(READING);
+    expect(inkOf(parties.querySelector('[data-note-count]')!.firstElementChild!)).toBe(READING);
+    expect(
+      within(lifetime)
+        .getAllByText('2')
+        .map((e) => inkOf(e))
+    ).toEqual([READING, READING]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
     // R11: the figure is tier 1's only jade text. Re-pinned on purpose (lane P4): but for the way
     // onward, whose celadon is its look's (components/ui/link.tsx), not the page's colour

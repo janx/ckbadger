@@ -21,6 +21,8 @@ import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail
 import { Prose } from '@/components/ui/prose';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText } from '@/components/ui/utc8-date';
+import { NoBreak } from '@/components/ui/no-break';
+import { NoteCount } from '@/components/ui/units';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import Link from '@/components/ui/link';
 
@@ -148,7 +150,16 @@ function MaxMindAttribution() {
 }
 
 /** One figure of the hero's quiet row (R13): a meta label over a section-size value, its note inline. */
-function Metric({ label, children, note }: { label: string; children: ReactNode; note?: string }) {
+function Metric({
+  label,
+  children,
+  note,
+}: {
+  label: string;
+  children: ReactNode;
+  /** Quiet (R13): its values read in the reading ink, set by the caller, its label words quiet. */
+  note?: ReactNode;
+}) {
   return (
     <div className="min-w-0">
       <dt className="text-text-dim text-meta">{label}</dt>
@@ -180,13 +191,33 @@ function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
       </Metric>
       <Metric
         label="Heard of"
-        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString('en-US')} never verified`}
+        // a metric's note is quiet (R13); its values read (BRIEF-roles-rest part G): the count,
+        // the round's end, its span and its dials; "never verified" and "dials" stay quiet
+        note={
+          <>
+            <span className="text-text">
+              {lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString('en-US')}
+            </span>{' '}
+            never verified
+          </>
+        }
       >
         {lastRound.candidatePeers.toLocaleString('en-US')}
       </Metric>
       <Metric
         label="Latest round"
-        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${formatSpan(seconds)} · ${lastRound.addressAttempts.toLocaleString('en-US')} dials`}
+        note={
+          <>
+            <span className="text-text">
+              <NoBreak>{`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8`}</NoBreak>
+            </span>{' '}
+            ·{' '}
+            <span className="text-text">
+              <NoBreak>{formatSpan(seconds)}</NoBreak>
+            </span>{' '}
+            · <NoteCount count={lastRound.addressAttempts} singular="dial" />
+          </>
+        }
       >
         #{lastRound.roundId}
       </Metric>

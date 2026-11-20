@@ -7,6 +7,7 @@
 // (OB-C6), holder bars (OB-C7), rail (OB-C8), coverage out of tier 1 (OB-C11) and the blueprint
 // as a table (OB-C12).
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { inkOf } from '@/__tests__/utils/ink-role';
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
@@ -342,6 +343,16 @@ it('gives the metrics row the board facts (OB-C8, C7) and the history its mintin
   expect(rail).toHaveTextContent(
     '184 · 90 mints · 94 transfers · 0 burns; a transaction may count in more than one'
   );
+  // BRIEF-roles-rest part G: a metric's note is quiet (R13), its counts read in the reading ink,
+  // their nouns quiet, as on the object pages; the holders' "hold one" a label after its count
+  const counts = [
+    ...within(rail).getByText('Transactions').parentElement!.querySelectorAll('[data-note-count]'),
+  ] as HTMLElement[];
+  expect(counts.map((c) => c.textContent)).toEqual(['90 mints', '94 transfers', '0 burns']);
+  for (const count of counts) expect(count.firstElementChild).toHaveClass('text-text');
+  const holders = within(rail).getByText('Holders').parentElement!;
+  expect(inkOf(within(holders).getByText('hold one', { exact: false }))).toBe('text-text-dim');
+  expect(within(holders).getAllByText('90').at(-1)).toHaveClass('text-text');
   expect(within(rail).getByText('Transactions').parentElement).toHaveAttribute(
     'title',
     'Mints, transfers and burns are counted by complete week through 2026-10-24. A transaction counts once in each of them it carries, and one that only updates, renews or recycles counts in none, so they need not add up to the transactions.'

@@ -22,12 +22,20 @@ import { ShortId } from '@/components/ui/short-id';
 import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
 function Sub({ children }: { children: ReactNode }) {
   return <span className="text-text-dim text-small mt-0.5 block font-normal">{children}</span>;
+}
+/**
+ * A value inside a metric's quiet note (R13): a date, a block, a state, read in the reading ink,
+ * the note's label words around it quiet (BRIEF-roles-rest parts A and E: the notes stood quiet
+ * whole, their block links, dates and states with them).
+ */
+function V({ children }: { children: ReactNode }) {
+  return <span className="text-text">{children}</span>;
 }
 function B({ children, title }: { children: ReactNode; title?: string }) {
   return (
@@ -69,7 +77,7 @@ function heldFact(protocol: IdentityProtocol, isLive: boolean): AssetMetric {
         <CkbAmount form="summary" shannons={held - occupied} signed={false} tone="plain" /> free
       </>
     ) : (
-      'no live cell'
+      <V>no live cell</V>
     ),
   };
 }
@@ -99,14 +107,20 @@ function expiryFact(term: IdentityTerm, now: number, grace?: number): AssetMetri
     note: [
       last ? (
         <>
-          renewed <NoBreak>{formatUtc8Date(last.at)}</NoBreak>
+          renewed{' '}
+          <V>
+            <NoBreak>{formatUtc8Date(last.at)}</NoBreak>
+          </V>
         </>
       ) : (
-        'never renewed'
+        <V>never renewed</V>
       ),
       grace !== undefined && (
         <>
-          grace to <NoBreak>{formatUtc8Date(grace)}</NoBreak>
+          grace to{' '}
+          <V>
+            <NoBreak>{formatUtc8Date(grace)}</NoBreak>
+          </V>
         </>
       ),
     ],
@@ -120,14 +134,16 @@ function blockFact(label: string, timestamp: string | number, block: number): As
     title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
     value: <NoBreak>{formatUtc8Date(timestamp)}</NoBreak>,
     note: (
-      <AppLink look="inline" href={`/blocks/${block}`}>
-        {formatBlockNumber(block)}
-      </AppLink>
+      <V>
+        <AppLink look="inline" href={`/blocks/${block}`}>
+          {formatBlockNumber(block)}
+        </AppLink>
+      </V>
     ),
   };
 }
 
-function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
+function ownerFact(protocol: IdentityProtocol, note: ReactNode): AssetMetric {
   const cell = currentCell(protocol);
   return {
     label: 'Owner',
@@ -139,12 +155,17 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
   };
 }
 
-function physicalSince(protocol: IdentityProtocol, first: string) {
+function physicalSince(protocol: IdentityProtocol, first: string): ReactNode {
   const run = ownerRun(
     protocol.versions.map((v) => v.cell),
     (c) => c.ownerLockHash
   );
-  return run.changes === 0 ? `since ${first}` : `since ${formatUtc8Date(run.since.timestamp)}`;
+  return (
+    <>
+      since{' '}
+      <V>{run.changes === 0 ? first : <NoBreak>{formatUtc8Date(run.since.timestamp)}</NoBreak>}</V>
+    </>
+  );
 }
 
 /** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
@@ -166,7 +187,14 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
       label: 'Sub-accounts',
       size: 'body',
       value: <span className="text-text">{on ? 'enabled' : 'not enabled'}</span>,
-      note: on ? `since ${formatUtc8Date(since.cell.timestamp)}` : undefined,
+      note: on ? (
+        <>
+          since{' '}
+          <V>
+            <NoBreak>{formatUtc8Date(since.cell.timestamp)}</NoBreak>
+          </V>
+        </>
+      ) : undefined,
     },
   ];
 }
@@ -308,7 +336,11 @@ export function identityFacts({
       return [
         ownerFact(
           protocol,
-          sameKey ? 'owner and manager are the same key' : 'owner and manager are different keys'
+          <V>
+            {sameKey
+              ? 'owner and manager are the same key'
+              : 'owner and manager are different keys'}
+          </V>
         ),
         ...expiryFacts(term, now),
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),
@@ -316,11 +348,18 @@ export function identityFacts({
           label: 'Records',
           value: d.records.length ? d.records.length.toLocaleString('en-US') : 'none set',
           note:
-            typeof d.lastEditRecordsAt === 'string'
-              ? d.lastEditRecordsAt === '0'
-                ? 'never edited'
-                : `last edited ${formatUtc8Date(Number(d.lastEditRecordsAt) * 1000)}`
-              : undefined,
+            typeof d.lastEditRecordsAt === 'string' ? (
+              d.lastEditRecordsAt === '0' ? (
+                <V>never edited</V>
+              ) : (
+                <>
+                  last edited{' '}
+                  <V>
+                    <NoBreak>{formatUtc8Date(Number(d.lastEditRecordsAt) * 1000)}</NoBreak>
+                  </V>
+                </>
+              )
+            ) : undefined,
         },
         ...subAccountsFact(protocol),
         // null: the indexer has not derived the .bit Cell index yet — say nothing (L3 ruling).
@@ -345,7 +384,7 @@ export function identityFacts({
           ) : (
             <span className="text-text">not indexed</span>
           ),
-          note: d.linkedAccount ? (d.linkedAccount.isLive ? 'live' : 'not live') : undefined,
+          note: d.linkedAccount ? <V>{d.linkedAccount.isLive ? 'live' : 'not live'}</V> : undefined,
         },
         heldFact(protocol, isLive),
       ];
@@ -379,7 +418,12 @@ export function identityFacts({
         {
           label: 'Records',
           value: stored.length.toLocaleString('en-US'),
-          note: `${plural(records.addresses.length, 'address', 'addresses')} · ${plural(records.profile.length, 'profile key', 'profile keys')}`,
+          note: (
+            <>
+              <NoteCount count={records.addresses.length} singular="address" plural="addresses" /> ·{' '}
+              <NoteCount count={records.profile.length} singular="profile key" />
+            </>
+          ),
         },
         // Lane P2's follow-up (a standing cause): two facts were one metric, "Sub-names · for
         // sale", "none · no"; each is its own, and a name not for sale draws no sale metric (the

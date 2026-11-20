@@ -307,7 +307,8 @@ describe('Token board (F2 objects)', () => {
     await screen.findByRole('heading', { name: 'TEST' });
     // C7: the rail is the metrics row; each "not established" keeps its sentence in a title.
     const facts = screen.getByRole('region', { name: 'Metrics' });
-    expect(within(facts).getByText('maximum supply not established')).toHaveAttribute(
+    // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): the state is its own span
+    expect(within(facts).getByText(fullText('maximum supply not established'))).toHaveAttribute(
       'title',
       'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
     );
@@ -316,6 +317,8 @@ describe('Token board (F2 objects)', () => {
       'Not established. This token’s type script does not name an owner lock CKBadger can prove mints it.'
     );
     expect(facts).toHaveTextContent('· none in 24 h');
+    // BRIEF-roles-rest part G: "none" is the count's value, the reading ink; "in 24 h" its label
+    expect(within(facts).getByText('none')).toHaveClass('text-text');
     expect(facts).not.toHaveTextContent('Live cells');
   });
 
@@ -342,6 +345,8 @@ describe('Token board (F2 objects)', () => {
         .map((t) => t.textContent)
     ).toEqual(['Supply', 'Holders', 'Transfers', 'Issuer', 'CKB held in its cells']);
     await waitFor(() => expect(metrics).toHaveTextContent('largest holds 94.49%'));
+    // BRIEF-roles-rest part G: the share is a value in the reading ink, "largest holds" its label
+    expect(within(metrics).getByText('94.49%')).toHaveClass('text-text');
     expect(screen.getByRole('banner')).not.toHaveTextContent(/exist, held by|Its cells hold/);
     expect(ledeRestatements(container)).toEqual([]);
     // The type hash, which the rail listed, names the token under its title.

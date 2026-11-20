@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { LINK_LOOKS, linkLookClass, type LinkLook } from '@/components/ui/link';
 import { TYPE_STEPS } from '@/lib/type-scale';
 
 /**
@@ -17,7 +18,10 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  *   a `TokenAmount`'s default);
  * - `td`: a table cell — a `<td>`, the `className` of a `ListTable` column (an object with
  *   `render` and `minWidth`), or the root element its `render` returns;
- * - `prose`: a paragraph, `<p>`.
+ * - `prose`: a paragraph, `<p>`;
+ * - `line`: a loading or an empty-state line drawn in another element (a `div`, a `span`, …), by
+ *   its own words (`LOADING_OR_EMPTY`: they end in the ellipsis, or open with "No"): a sentence
+ *   wherever it is drawn (BRIEF-roles-rest part C; the round's ruling B27).
  *
  * An element carries the quiet ink by its own class (`text-text-dim` at rest: with no variant, or a
  * responsive one; `hover:text-text-dim` is a pointer's state; an arbitrary value naming the quiet
@@ -25,11 +29,15 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  * or a string naming that variable; `alpha(…)` and `fade(…)` are other inks) or, when it sets no
  * ink of its own, by the nearest ink its JSX ancestors in the same file set around it (a link in a
  * dim note). A class or a colour is read through `?:`, `&&`, `cn(…)`, template literals and the
- * file's own constants, so one that is quiet in one branch counts. An element handed to a
- * component as a prop is the component's to ink, and is not followed into it; a `quiet` class on
- * the element or an ancestor exempts it (the set-back row draws every word quiet on purpose), and
- * every element that carries that class is pinned by file in QUIET_SITES, so an exemption is a
- * decision too.
+ * file's own constants, so one that is quiet in one branch counts. A link's `look` is read as its
+ * class (`linkLookClass`: the key and onward looks set an ink, inline and block keep the line's).
+ * An element handed to a component as a prop (in the attribute, in an array or an object literal
+ * there, or returned by a function there) takes the ink a component pinned in PROP_INKS gives that
+ * prop, else the ink around the component: its own class, then its ancestors' (BRIEF-roles-rest
+ * part D: the walk stopped at the attribute, and `Dotted parts={[<Link …/>]}` inside a quiet span
+ * passed). A `quiet` class on the element or an ancestor exempts it (the set-back row draws every
+ * word quiet on purpose), and every element that carries that class is pinned by file in
+ * QUIET_SITES, so an exemption is a decision too.
  *
  * The sites tolerated today are listed per file, with their count per kind and a reason: this is
  * the work list of the page lanes (P1 chain, P2 assets, P3 lists, P4 topics), B7 (prose) and the
@@ -40,15 +48,27 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  *
  * Limits, the routes a source gate cannot see: a class or a colour imported from another module
  * (only the file's own constants are read; `BOARD_INKS`, `inkStyle(…)` and a `--ink` set through
- * them are not followed); a component that inks its children (the ancestor walk sees only the
- * elements of the file that carry a `className` or a `style`); ink set in CSS (`.prose-tier2 p`,
- * `.comment` in app/globals.css; lane F3 step 2 takes them, and a CSS check should then hold
- * them); a `style` that is not an object literal; and, because the list counts sites per kind and
- * not by name, a new site that replaces a fixed one of the same kind in the same file.
+ * them are not followed); a component that inks its children or a prop and is not in PROP_INKS
+ * (the ancestor walk sees only the elements of the file that carry a `className` or a `style`; a
+ * component of another file, or one of this file that renders the link inside its own body, as
+ * the home pipeline's `PipelineTip` in PromptHeading's args, is the Chrome measurement's to check);
+ * ink set in CSS (`.prose-tier2 p`, `.comment` in app/globals.css; lane F3 step 2 takes them, and
+ * a CSS check should then hold them); a `style` that is not an object literal; and, because the
+ * list counts sites per kind and not by name, a new site that replaces a fixed one of the same
+ * kind in the same file.
  */
 
-type Kind = 'link' | 'amount' | 'td' | 'prose';
-const KINDS: readonly Kind[] = ['link', 'amount', 'td', 'prose'];
+type Kind = 'link' | 'amount' | 'td' | 'prose' | 'line';
+const KINDS: readonly Kind[] = ['link', 'amount', 'td', 'prose', 'line'];
+
+/**
+ * A loading line or an empty-state line, by its own words (BRIEF-roles-rest part C; the ink and
+ * size round's ruling B27: a loading line is a sentence, site-wide, and so is an empty-state line):
+ * words that end in the ellipsis ("Loading peer evidence…", "Resolving code…", ": reading…", a
+ * lone "…" where a value is being read), or that open with "No" or "no" and a word ("No results.",
+ * "No type script", "no CKB moved for").
+ */
+const LOADING_OR_EMPTY = /…$|^no \S/i;
 
 /** The lane whose pages a file belongs to (the hand-back groups the list by them). */
 type Family = 'chain' | 'assets' | 'lists' | 'topics' | 'shared';
@@ -237,6 +257,44 @@ function inkOfClass(token: string): 'dim' | 'ink' | null {
 const QUIET_VAR = /--(?:c|rgb)-text-dim\b/;
 
 const LINK = (tag: string) => tag === 'a' || tag === 'Address' || /^(?:[A-Z]\w*)?Link$/.test(tag);
+
+/** The classes a link's look draws (`linkLookClass`, the looks' one owner); none for an unknown look. */
+const lookTokens = (look: string): string[] =>
+  (LINK_LOOKS as readonly string[]).includes(look)
+    ? (linkLookClass(look as LinkLook) ?? '').split(/\s+/).filter(Boolean)
+    : [];
+
+/**
+ * The components known to ink a prop themselves (BRIEF-roles-rest part D): an element handed to one
+ * of them in that prop takes the ink the component gives it, not the ink around the component. A
+ * component is named by the module and the export a file imports it from, never by a pattern of
+ * names, each with what its source draws; the list is pinned (PROP_INKS_PINNED) and only a reading
+ * of the component's source adds to it.
+ */
+const PROP_INKS: Readonly<
+  Record<string, { props: Readonly<Record<string, 'dim' | 'other'>>; reason: string }>
+> = {
+  '@/components/ui/prompt-heading#PromptHeading': {
+    props: { args: 'dim', note: 'dim' },
+    reason:
+      'its args in text-text-dim (what the command runs on, quiet by rule: R3, B23) and its note, the right prompt, in text-text-dim text-meta',
+  },
+  '@/components/home/section#SectionHeading': {
+    props: { args: 'dim', note: 'dim' },
+    reason: "a home section's heading: hands its args and its note to PromptHeading as they are",
+  },
+  '@/components/ui/detail-layout#DetailSection': {
+    props: { args: 'dim' },
+    reason:
+      "a tier-2 section's heading: its args in text-text-dim beside the title, as PromptHeading's",
+  },
+  '@/components/scripts/script-hero#HeroMetric': {
+    props: { note: 'dim' },
+    reason: "a script hero metric: its inline note in text-text-dim after the value (R13's note)",
+  },
+};
+/** The components and props PROP_INKS names: its pinned count, which only a reading changes. */
+const PROP_INKS_PINNED = { components: 4, props: 6 };
 const AMOUNT_DEFAULT_TONE: Readonly<Record<string, string>> = {
   CkbAmount: 'sign',
   TokenAmount: 'inherit',
@@ -283,9 +341,23 @@ function scanInkRoles(
   const text = (n: ts.Node) => n.getText(source).replace(/\s+/g, ' ');
 
   const locals = new Map<string, ts.Expression[]>();
+  /** The file's imported names: a local name to `module#export` (`#default` for a default import). */
+  const imports = new Map<string, string>();
   const collect = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer)
       locals.set(node.name.text, [...(locals.get(node.name.text) ?? []), node.initializer]);
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.importClause
+    ) {
+      const from = node.moduleSpecifier.text;
+      const clause = node.importClause;
+      if (clause.name) imports.set(clause.name.text, `${from}#default`);
+      if (clause.namedBindings && ts.isNamedImports(clause.namedBindings))
+        for (const s of clause.namedBindings.elements)
+          imports.set(s.name.text, `${from}#${(s.propertyName ?? s.name).text}`);
+    }
     ts.forEachChild(node, collect);
   };
   collect(source);
@@ -393,7 +465,13 @@ function scanInkRoles(
    */
   const classes = (n: El) => {
     const value = attr(n, 'className');
-    const tokens = value ? tokensOf(value) : [];
+    const look = LINK(tagOf(n)) ? attr(n, 'look') : undefined;
+    const tokens = [
+      // a link's look draws its ink (components/ui/link.tsx: key and onward set one, inline and
+      // block keep the line's), read from the one owner of the looks
+      ...(look ? leaves(look).flatMap((l) => lookTokens(l)) : []),
+      ...(value ? tokensOf(value) : []),
+    ];
     const inks = tokens.map(inkOfClass);
     const colour = styleColour(n);
     return {
@@ -403,15 +481,34 @@ function scanInkRoles(
     };
   };
 
+  /** The element a JSX attribute is written on: the component its value is handed to. */
+  const ownerOf = (a: ts.JsxAttribute): El => {
+    const o = a.parent.parent;
+    return ts.isJsxOpeningElement(o) ? o.parent : o;
+  };
+  /**
+   * The ink a component pinned in PROP_INKS gives the prop an attribute hands it, if it is pinned:
+   * the component is named by what the file imports it as (`module#export`), never by a pattern.
+   */
+  const pinnedInk = (a: ts.JsxAttribute): 'dim' | 'other' | undefined => {
+    const component = imports.get(tagOf(ownerOf(a)));
+    return component === undefined ? undefined : PROP_INKS[component]?.props[text(a.name)];
+  };
   /**
    * The ink an element takes from around it, in its file: the nearest JSX ancestor that sets one.
-   * `quiet` for a set-back subtree, `dim`, `other`, or `none` (nothing in the file sets one, or the
-   * element is a prop handed to a component).
+   * `quiet` for a set-back subtree, `dim`, `other`, or `none` (nothing in the file sets one). An
+   * element handed to a component as a prop (in an attribute, an array or an object literal there,
+   * a function's return) takes the ink the component pins for that prop (PROP_INKS), else the ink
+   * around the component: its own class, then its ancestors'.
    */
   const around = (node: ts.Node): 'quiet' | 'dim' | 'other' | 'none' => {
     for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
-      if (ts.isJsxAttribute(p)) return 'none';
-      if (ts.isJsxElement(p)) {
+      if (ts.isJsxAttribute(p)) {
+        const pinned = pinnedInk(p);
+        if (pinned !== undefined) return pinned;
+        p = ownerOf(p);
+      }
+      if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) {
         const c = classes(p);
         if (c.quiet) return 'quiet';
         if (c.dim) return 'dim';
@@ -422,8 +519,8 @@ function scanInkRoles(
   };
   const inQuiet = (node: ts.Node): boolean => {
     for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
-      if (ts.isJsxAttribute(p)) return false;
-      if (ts.isJsxElement(p) && classes(p).quiet) return true;
+      if (ts.isJsxAttribute(p)) p = ownerOf(p);
+      if ((ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) && classes(p).quiet) return true;
     }
     return false;
   };
@@ -456,6 +553,26 @@ function scanInkRoles(
     return out;
   };
 
+  /**
+   * Whether an element's own words are a loading or an empty-state line (`LOADING_OR_EMPTY`): its
+   * text children read as one line, or one of the strings its child expressions can reach (a
+   * branch's words), never the words of an element inside it, which is read on its own.
+   */
+  const loadingOrEmpty = (el: ts.JsxElement): boolean => {
+    const own = el.children
+      .filter(ts.isJsxText)
+      .map((t) => t.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const reached = el.children.flatMap((c) =>
+      ts.isJsxExpression(c) && c.expression && !ts.isJsxElement(unwrap(c.expression))
+        ? leaves(c.expression).map((l) => l.trim())
+        : []
+    );
+    return [own, ...reached].some((words) => words !== '' && LOADING_OR_EMPTY.test(words));
+  };
+
   const sites: Site[] = [];
   const quiet: QuietSite[] = [];
   const visit = (node: ts.Node) => {
@@ -470,7 +587,9 @@ function scanInkRoles(
             ? 'td'
             : tag === 'p'
               ? 'prose'
-              : null;
+              : /^[a-z]/.test(tag) && ts.isJsxElement(node) && loadingOrEmpty(node)
+                ? 'line'
+                : null;
       if (kind !== null) {
         const own = classes(node);
         let dim = false;
@@ -822,19 +941,123 @@ describe('the ink-role scan finds what it must, and only that', () => {
     ).toEqual([]);
   });
 
-  it('passes a set-back row, a state variant, a prop handed to a component and a label', () => {
+  // Re-pinned on purpose (BRIEF-roles-rest part D; renamed, it was "passes a set-back row, a state
+  // variant, a prop handed to a component and a label"): its case
+  // '<div className="text-text-dim"><Tile end={<Link href="/q">q</Link>} /></div>' is the blind
+  // route the brief closes, a link handed to a component inside a quiet line; it is found now, in
+  // the test below, and this test keeps its other cases.
+  it('passes a set-back row, a state variant and a label', () => {
     expect(
       sitesOf([
         '<tr className="quiet"><td className="text-text-dim">1</td><td><Link href="/z">z</Link></td></tr>;',
         '<div className="quiet text-text-dim"><p>context</p></div>;',
         '<Link href="/x" className="text-text hover:text-text-dim">x</Link>;',
-        '<div className="text-text-dim"><Tile end={<Link href="/q">q</Link>} /></div>;',
         '<dt className="text-text-dim">Height</dt>;',
         '<span className="text-text-dim">occupied</span>;',
         '<div className="text-text-dim"><p className="text-text">explains</p></div>;',
         '<div className="text-text-dim"><Link href="/i" className="text-[color:var(--ink)]">i</Link></div>;',
       ])
     ).toEqual([]);
+  });
+
+  // BRIEF-roles-rest part D: `around()` stopped at a JSX attribute, so an element handed to a
+  // component as a prop took no ink, and the newest cells' "Created" line (a quiet span around
+  // `Dotted parts={[tx + link, BlockLink, date]}`) passed with its tx and block links quiet.
+  it('finds a link or an inheriting amount handed to a component that stands in a quiet line', () => {
+    expect(
+      sitesOf([
+        '<span className="text-text-dim">',
+        '  <Dotted parts={[<>tx <Link look="inline" href="/t">t</Link></>, <BlockLink look="inline" number={1} />]} />',
+        '</span>;',
+        '<div className="text-text-dim"><Tile end={<Link href="/q">q</Link>} /></div>;',
+        '<div className="text-text-dim"><Row right={<CkbAmount form="summary" shannons={x} tone="inherit" />} /></div>;',
+        '<Dotted className="text-text-dim" parts={[<TokenAmount form="summary" amount="1" decimals={8} />]} />;',
+        '<div className="text-text-dim"><Rows lines={[{ key: "a", left: <AppLink href="/a">a</AppLink> }]} /></div>;',
+        '<div className="text-text-dim"><List render={(r) => <BlockLink look="inline" number={r} />} /></div>;',
+        '<div className="text-text-dim"><Row right={<span className="text-text"><Link href="/r">r</Link></span>} /></div>;',
+        '<div className="quiet text-text-dim"><Row right={<Link href="/n">n</Link>} /></div>;',
+      ])
+    ).toEqual([
+      '2 link <Link>',
+      '2 link <BlockLink>',
+      '4 link <Link>',
+      '5 amount <CkbAmount>',
+      '6 amount <TokenAmount>',
+      '7 link <AppLink>',
+      '8 link <BlockLink>',
+    ]);
+  });
+
+  // BRIEF-roles-rest part D: a component known to ink a prop itself gives the element that ink,
+  // whatever stands around the component (PROP_INKS, by the module it is imported from).
+  it('gives an element the ink a pinned component gives its prop, by the import, not the name', () => {
+    expect(
+      sitesOf([
+        "import { PromptHeading } from '@/components/ui/prompt-heading';",
+        "import { PromptHeading as Heading } from '@/components/ui/prompt-heading';",
+        '<PromptHeading command="supply" note={<span>at <BlockLink look="inline" number={1} /></span>} />;',
+        '<Heading command="cells" args={<>--tip <BlockLink look="inline" number={2} /></>} />;',
+        '<PromptHeading command="x" note={<span className="text-text">at <BlockLink look="inline" number={3} /></span>} />;',
+        '<PromptHeading command="class" note={<AppLink look="onward" href="/c">Open the class</AppLink>} />;',
+        '<div className="text-text"><PromptHeading command="y" note={<Link look="inline" href="/y">y</Link>} /></div>;',
+        '<SectionHeading command="z" note={<Link look="inline" href="/z">z</Link>} />;',
+      ])
+    ).toEqual(['3 link <BlockLink>', '4 link <BlockLink>', '7 link <Link>']);
+  });
+
+  // BRIEF-roles-rest part D: a link's look draws its ink (components/ui/link.tsx): the key and
+  // onward looks set one, so they do not take the quiet line's; the inline look keeps the line's.
+  it('reads the ink a link’s look draws: key and onward their own, inline the line’s', () => {
+    expect(
+      sitesOf([
+        '<div className="text-text-dim">',
+        '  <Link look="key" href="/k">k</Link>',
+        '  <AppLink look="onward" href="/o">o</AppLink>',
+        '  <BlockLink look="inline" number={1} />',
+        '  <Link look="block" href="/b">b</Link>',
+        '</div>;',
+      ])
+    ).toEqual(['4 link <BlockLink>', '5 link <Link>']);
+  });
+
+  // BRIEF-roles-rest part C: a loading or an empty-state line drawn in a div or a span was no kind
+  // of the gate (only a <p> was prose), so "Resolving script page…" and twenty more stood quiet.
+  it('finds a loading or an empty-state line in the quiet ink outside a <p>, and only that', () => {
+    expect(
+      sitesOf([
+        '<div className="text-text-dim text-small">Loading the daily AR history…</div>;',
+        '<span className="text-text-dim">{unitText(title)}: reading…</span>;',
+        '<div className="text-text-dim">{searching ? "Searching…" : "No results."}</div>;',
+        '<div className="text-text-dim"><span>No peers match these evidence filters.</span></div>;',
+        '<span className="text-text-dim text-small">no CKB moved for </span>;',
+        '<span className="text-text-dim">…</span>;',
+        '<span className="text-text-dim">held by</span>;',
+        '<span className="text-text-dim">since <Utc8Date timestamp={t} /></span>;',
+        '<div className="text-text-dim"><span className="text-text">Loading…</span></div>;',
+        '<p className="text-text-dim">Loading the page…</p>;',
+        '<tr className="quiet"><td><span>No data yet</span></td></tr>;',
+        '<dt className="text-text-dim">Nonce</dt>;',
+      ])
+    ).toEqual([
+      '1 line <div>',
+      '2 line <span>',
+      '3 line <div>',
+      '4 line <span>',
+      '5 line <span>',
+      '6 line <span>',
+      '10 prose <p>',
+    ]);
+  });
+
+  it('pins the components known to ink a prop: four, six props, each with its reason', () => {
+    expect({
+      components: Object.keys(PROP_INKS).length,
+      props: Object.values(PROP_INKS).reduce((n, c) => n + Object.keys(c.props).length, 0),
+    }).toEqual(PROP_INKS_PINNED);
+    for (const [component, entry] of Object.entries(PROP_INKS)) {
+      expect(component).toMatch(/^@\/[\w/-]+#\w+$/);
+      expect(entry.reason.length).toBeGreaterThan(30);
+    }
   });
 
   // Re-pinned on purpose (review of the fixes, S3): '<p className="text-text-dim/60">' passed this

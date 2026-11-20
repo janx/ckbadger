@@ -45,7 +45,7 @@ export default function DaoPage() {
           </div>
         )}
         {!statistics.isError && !evidence.isError && (!statistics.data || !evidence.data) && (
-          <div className="text-text-dim text-body py-8">Loading indexed DAO evidence…</div>
+          <div className="text-text text-body py-8">Loading indexed DAO evidence…</div>
         )}
         {statistics.data && evidence.data && (
           <DaoBoard

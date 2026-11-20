@@ -73,18 +73,19 @@ const NUMBER_WORDS = [
   'nine',
 ];
 
-/** "51 one block later, 215 two blocks later" (Forks V67 hero). */
-export function uncleDistanceWords(
+/**
+ * "51 one block later, 215 two blocks later" (Forks V67 hero), each distance's count apart from its
+ * words, so a page reads the count as a value and the words as its label (BRIEF-roles-rest part G).
+ */
+export function uncleDistanceParts(
   distances: readonly { distance: number; count: number }[]
-): string {
-  return distances
-    .map(({ distance, count }) => {
-      if (!Number.isSafeInteger(distance) || distance < 1)
-        throw new Error(`Fork: invalid uncle distance ${distance}`);
-      const d = NUMBER_WORDS[distance] ?? distance.toLocaleString('en-US');
-      return `${count.toLocaleString('en-US')} ${d} block${distance === 1 ? '' : 's'} later`;
-    })
-    .join(', ');
+): { count: number; words: string }[] {
+  return distances.map(({ distance, count }) => {
+    if (!Number.isSafeInteger(distance) || distance < 1)
+      throw new Error(`Fork: invalid uncle distance ${distance}`);
+    const d = NUMBER_WORDS[distance] ?? distance.toLocaleString('en-US');
+    return { count, words: `${d} block${distance === 1 ? '' : 's'} later` };
+  });
 }
 
 export function parseForkRoute(

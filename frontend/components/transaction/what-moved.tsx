@@ -600,7 +600,7 @@ export function WhatMoved({
           <div data-dao-steps-unmoved="" className="py-4">
             {unmoved.map(({ party, steps }) => (
               <div key={party.lockHash!} className="leading-row min-w-0">
-                <span className="text-text-dim text-small">no CKB moved for </span>
+                <span className="text-text text-small">no CKB moved for </span>
                 <ParticipantRefView participant={party} size={size} compact quiet look="inline" />
                 {steps.map((step, i) => (
                   <div key={i} data-dao-step="" className="text-gold text-small">

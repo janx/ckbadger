@@ -282,10 +282,14 @@ describe('TokenDetailPage', () => {
     const facts = screen.getByRole('region', { name: 'Metrics' });
     // F2 objects (D8): not established, with the one sentence that says why (C7: in its title).
     expect(facts).toHaveTextContent('maximum supply not established');
-    expect(within(facts).getByText('maximum supply not established')).toHaveAttribute(
+    // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): "not established" is the
+    // cap's state, a value in the reading ink, "maximum supply" its quiet label
+    const cap = within(facts).getByText(fullText('maximum supply not established'));
+    expect(cap).toHaveAttribute(
       'title',
       'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
     );
+    expect(within(cap).getByText('not established')).toHaveClass('text-text');
     // a stat tile's summary form, exact in its title (readability R5, re-pinned on purpose: was
     // "500,000.00000001")
     expect(facts).toHaveTextContent('500,000 CKB');
@@ -305,7 +309,9 @@ describe('TokenDetailPage', () => {
       maximumSupplyStatus: 'unlimited',
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText('maximum supply unlimited')).toBeInTheDocument();
+    // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): "unlimited" reads, a value
+    const cap = await screen.findByText(fullText('maximum supply unlimited'));
+    expect(within(cap).getByText('unlimited')).toHaveClass('text-text');
   });
   it('labels last full activity neutrally and states newest-first exactly once', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
@@ -19,7 +19,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
@@ -33,6 +33,8 @@ import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { NoBreak } from '@/components/ui/no-break';
+import { NoteCount, unitText } from '@/components/ui/units';
 
 type StateFilter = 'all' | FiberChannelState;
 
@@ -134,20 +136,38 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
     {
       label: 'Channels ever',
       value: summary.totalChannels.toLocaleString('en-US'),
-      sub: [
-        summary.firstOpenTimestamp
-          ? `since ${formatUtc8Date(summary.firstOpenTimestamp)}`
-          : 'none yet',
-        ...summary.channelsByToken.map(
-          (token) =>
-            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? shortenHash(token.udtTypeHash, 'row')}`
-        ),
-      ].join(' · '),
+      // a figure's note is quiet (R13); its values read (BRIEF-roles-rest part G): the day, the
+      // counts, "none yet"; "since", "in <token>" (what a count counts) and "of" stay quiet
+      sub: (
+        <>
+          {summary.firstOpenTimestamp ? (
+            <>
+              since{' '}
+              <span className="text-text">
+                <NoBreak>{formatUtc8Date(summary.firstOpenTimestamp)}</NoBreak>
+              </span>
+            </>
+          ) : (
+            <span className="text-text">none yet</span>
+          )}
+          {summary.channelsByToken.map((token, i) => (
+            <Fragment key={i}>
+              {' · '}
+              <span className="text-text">{token.channels.toLocaleString('en-US')}</span> in{' '}
+              {unitText(token.symbol ?? shortenHash(token.udtTypeHash, 'row'))}
+            </Fragment>
+          ))}
+        </>
+      ),
     },
     {
       label: 'Parties',
       value: summary.observedParties.toLocaleString('en-US'),
-      sub: `in ${formatCount(summary.observedPairs, 'pair')}`,
+      sub: (
+        <>
+          in <NoteCount count={summary.observedPairs} singular="pair" />
+        </>
+      ),
     },
     {
       label: 'Typical lifetime',
@@ -155,7 +175,12 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
         summary.typicalClosedLifetimeMs === null
           ? 'none closed yet'
           : fiberDuration(summary.typicalClosedLifetimeMs, 'typical closed lifetime'),
-      sub: `${summary.closedWithinHour.toLocaleString('en-US')} of ${closed.toLocaleString('en-US')} closed within an hour`,
+      sub: (
+        <>
+          <span className="text-text">{summary.closedWithinHour.toLocaleString('en-US')}</span> of{' '}
+          <span className="text-text">{closed.toLocaleString('en-US')}</span> closed within an hour
+        </>
+      ),
     },
   ];
 }
