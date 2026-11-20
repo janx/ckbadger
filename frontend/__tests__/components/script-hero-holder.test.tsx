@@ -6,6 +6,7 @@ import type { ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
 import { ScriptHeroMetrics } from '@/components/scripts/script-family-board';
 import { typeLineage } from '@/lib/script-lineage';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { inkOf } from '@/__tests__/utils/ink-role';
 
 const family = fixture.family as unknown as ScriptFamilyDetail;
 const lineage = typeLineage(family.history as ScriptHistoryMarkerApi[])!;
@@ -107,17 +108,6 @@ describe('the hero tiles break no word at a phone width (A4 round 2)', () => {
   });
 });
 
-/** The ink an element reads in: the nearest of the three text inks on it or around it. */
-function nearestInk(el: Element): string | null {
-  for (let at: Element | null = el; at; at = at.parentElement) {
-    const ink = [...at.classList].find((c) =>
-      ['text-text', 'text-text-dim', 'text-text-bright'].includes(c)
-    );
-    if (ink) return ink;
-  }
-  return null;
-}
-
 /**
  * BRIEF-roles-rest part A: a hero metric's note is quiet (R13), its values are not. The deploying
  * transaction under "In use since" (a link), the day the code was last replaced and a holder that
@@ -129,15 +119,15 @@ describe('the hero metrics read their notes’ values in the reading ink', () =>
     render(<ScriptHeroMetrics family={family} lineage={lineage} />);
     const since = screen.getByText('In use since').parentElement!;
     const tx = within(since).getByRole('link');
-    expect(nearestInk(tx)).toBe('text-text');
-    expect(nearestInk(within(since).getByText(/deployed in/))).toBe('text-text-dim');
+    expect(inkOf(tx)).toBe('text-text');
+    expect(inkOf(within(since).getByText(/deployed in/))).toBe('text-text-dim');
     const code = screen.getByText('Code').parentElement!;
     const replaced = within(code).getByText(/last replaced/);
-    expect(nearestInk(replaced)).toBe('text-text-dim');
+    expect(inkOf(replaced)).toBe('text-text-dim');
     const day = replaced.querySelector('time') ?? replaced.lastElementChild!;
     expect(day.textContent).toMatch(/^\d{4}-\d{2}-\d{2}/);
-    expect(nearestInk(day)).toBe('text-text');
+    expect(inkOf(day)).toBe('text-text');
     const held = screen.getByText('Code cell held by').parentElement!;
-    expect(nearestInk(within(held).getByText('has never signed'))).toBe('text-text');
+    expect(inkOf(within(held).getByText('has never signed'))).toBe('text-text');
   });
 });

@@ -308,11 +308,16 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               // the owner's lock by the one decision (B4): nothing for the default lock
               // the note's parts, which the metric's separated list draws (a list inside another
               // is refused): the lock left out where none is named
+              // a metric's note is quiet (R13); its values are not (BRIEF-roles-rest part A): the
+              // day it is held since, the blocks, read in the reading ink, their labels quiet
               note: current
                 ? [
                     cellOwnerLockPart(current),
                     <>
-                      since <Utc8Date timestamp={current.timestamp} />
+                      since{' '}
+                      <span className="text-text">
+                        <Utc8Date timestamp={current.timestamp} />
+                      </span>
                     </>,
                   ]
                 : undefined,
@@ -331,11 +336,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               title: first ? `issued ${formatUtc8DateTime(first.timestamp)}` : undefined,
               value: first ? formatUtc8Date(first.timestamp) : evidenceState,
               note: first ? (
-                <>
+                <span className="text-text">
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>
-                </>
+                </span>
               ) : undefined,
             },
             {
@@ -359,9 +364,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     'since issue'
                   ) : (
                     <>
-                      <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
-                        {formatBlockNumber(last.blockNumber)}
-                      </AppLink>{' '}
+                      <span className="text-text">
+                        <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
+                          {formatBlockNumber(last.blockNumber)}
+                        </AppLink>
+                      </span>{' '}
                       · {moves} {countNoun(moves, 'transfer')} since issue
                     </>
                   )
@@ -384,10 +391,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 evidenceState
               ),
               note: current ? (
+                // both figures are values, the reading ink; "occupied" and "free" their labels,
+                // quiet (the free figure stood quiet: BRIEF-roles-rest part A)
                 <>
                   <span className="text-text">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
                   occupied ·{' '}
-                  {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))} free
+                  <span className="text-text">
+                    {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))}
+                  </span>{' '}
+                  free
                 </>
               ) : undefined,
             },

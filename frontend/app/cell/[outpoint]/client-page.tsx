@@ -126,12 +126,23 @@ function useScriptNames(cell: Cell | undefined) {
   return { lock: name(cell?.lock?.codeHash), type: name(cell?.type?.codeHash), lookup };
 }
 
+/** A label word in a fact's second line: quiet, the values beside it in the reading ink. */
+function SubLabel({ children }: { children: ReactNode }) {
+  return <span className="text-text-dim">{children}</span>;
+}
+
+/**
+ * One fact of the cell: its label, its value, and a second line of its further values (the args
+ * and the owner, the ELF reading, the spending input and the time on chain, the block an age is
+ * read at) in the reading ink, their label words quiet (`SubLabel`; BRIEF-roles-rest part A: the
+ * line was quiet whole, its address and block links with it).
+ */
 function Fact({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
   return (
     <div className="min-w-0">
       <div className="text-text-dim">{label}</div>
       <div className="text-body mt-0.5">{children}</div>
-      {sub && <div className="text-text-dim mt-0.5">{sub}</div>}
+      {sub && <div className="text-text mt-0.5">{sub}</div>}
     </div>
   );
 }
@@ -171,7 +182,7 @@ function ScriptFact({
           <>
             {script.args !== '0x' && (
               <span title={script.args}>
-                args <ShortId value={script.args} kind="hash" size="row" />
+                <SubLabel>args</SubLabel> <ShortId value={script.args} kind="hash" size="row" />
               </span>
             )}
             {owner && (
@@ -278,8 +289,19 @@ function CellFacts({
               {cell.spentTimestamp && (
                 <Utc8DateTime timestamp={cell.spentTimestamp} dateTime={cell.spentTimestamp} />
               )}
-              {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
-              {cell.lifetimeMs != null && <> · {formatDurationMs(cell.lifetimeMs)} on chain</>}
+              {cell.consumingInputIndex != null && (
+                <>
+                  {' '}
+                  <SubLabel>· input</SubLabel> #{cell.consumingInputIndex}
+                </>
+              )}
+              {cell.lifetimeMs != null && (
+                <>
+                  {' '}
+                  <SubLabel>·</SubLabel> {formatDurationMs(cell.lifetimeMs)}{' '}
+                  <SubLabel>on chain</SubLabel>
+                </>
+              )}
             </>
           }
         >
@@ -298,7 +320,8 @@ function CellFacts({
             sub={
               cell.liveAgeAtBlock != null && (
                 <>
-                  as of <BlockLink look="inline" number={cell.liveAgeAtBlock} />
+                  <SubLabel>as of</SubLabel>{' '}
+                  <BlockLink look="inline" number={cell.liveAgeAtBlock} />
                 </>
               )
             }

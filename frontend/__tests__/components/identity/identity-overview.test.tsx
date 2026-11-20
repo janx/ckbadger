@@ -16,6 +16,7 @@ import {
   dotcellProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { dotcellItem } from '@/__tests__/utils/item-read-fixtures';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 const NOW = Date.parse('2026-10-25T13:54:13Z');
 const sec = (iso: string) => String(Date.parse(iso) / 1000);
@@ -108,6 +109,17 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Registered')).toHaveAttribute('title', 'registered 2024-02-20 08:56:57 UTC+8');
     expect(fact('Registered')).toHaveTextContent('#12,260,151');
     expect(fact('Records')).toHaveTextContent('none set');
+    // BRIEF-roles-rest parts A and E: a metric's note is quiet (R13), its values are not: the
+    // block a name was registered at (a link), the day of its last renewal and the owner's keys'
+    // state read in the reading ink; "renewed" stays a quiet label (the notes were quiet whole)
+    expect(
+      inkOf(within(fact('Registered') as HTMLElement).getByRole('link', { name: '#12,260,151' }))
+    ).toBe(READING);
+    expect(inkOf(within(fact('Expires') as HTMLElement).getByText('2025-02-18'))).toBe(READING);
+    expect(inkOf(within(fact('Expires') as HTMLElement).getByText(/^renewed/))).toBe(QUIET);
+    expect(
+      inkOf(within(fact('Owner') as HTMLElement).getByText('owner and manager are the same key'))
+    ).toBe(READING);
     // Raw protocol internals are tier 2, not the rail (ID-B1, ID-DC7).
     expect(document.body).not.toHaveTextContent(/status|witness version|Physical cell owner/);
   });
@@ -137,6 +149,10 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Expired')).toHaveTextContent('2026-04-24');
     // Lane P: the date is the value; how long ago is the metric's hover.
     expect(fact('Expired')).toHaveTextContent(/^Expired2026-04-24 · never renewed$/);
+    // BRIEF-roles-rest part E: "never renewed" is the term's state, a value in the reading ink
+    // (it stood quiet in the note); "not live" the .bit account's
+    expect(inkOf(within(fact('Expired') as HTMLElement).getByText('never renewed'))).toBe(READING);
+    expect(inkOf(within(fact('.bit account') as HTMLElement).getByText('not live'))).toBe(READING);
     expect(fact('Expired')).toHaveAttribute('title', 'expired 184\u00a0days ago');
     expect(fact('Minted')).toBeInTheDocument();
     expect(fact('.bit account')).toHaveTextContent('888899.bit · not live');

@@ -11,6 +11,7 @@ import { gapPx, widthRuleAt } from '@/__tests__/utils/tailwind-box';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { shortenHash } from '@/lib/shorten';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -329,6 +330,16 @@ describe('Cell page against the Cell board', () => {
     const owner = within(facts).getByRole('link', { name: 'ckb1…6qshp3hr' });
     expect(owner).toHaveAttribute('href', `/mainnet/address/${cell.address}`);
     expect(owner).toHaveAttribute('title', cell.address);
+    // BRIEF-roles-rest part A: a fact's second line is its label words and its values: the owner's
+    // address, the args and the block the age is read at are values, the reading ink; "args" and
+    // "as of" stay quiet (the whole line was quiet, its two links with it)
+    expect(inkOf(owner)).toBe(READING);
+    expect(inkOf(within(facts).getByRole('link', { name: '#20,834,844' }))).toBe(READING);
+    expect(inkOf(within(facts).getByText('as of'))).toBe(QUIET);
+    for (const args of within(facts).getAllByText('args')) {
+      expect(inkOf(args)).toBe(QUIET);
+      expect(inkOf(args.nextElementSibling!)).toBe(READING);
+    }
   });
 
   it('shows the lock and type by name, never a raw code hash (SC-C4)', async () => {

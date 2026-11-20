@@ -187,12 +187,24 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
+      // a metric's note is quiet (R13); its values are not (BRIEF-roles-rest part A): the block
+      // and the minter's address read in the reading ink at the note's 13 px, "by" a quiet label
       note: first ? (
         <>
-          <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
-            {formatBlockNumber(first.blockNumber)}
-          </AppLink>{' '}
-          · by <Address look="inline" address={first.ownerAddress} size="row" className="inline" />
+          <span className="text-text">
+            <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
+              {formatBlockNumber(first.blockNumber)}
+            </AppLink>
+          </span>{' '}
+          · by{' '}
+          <span className="text-text">
+            <Address
+              look="inline"
+              address={first.ownerAddress}
+              size="row"
+              className="text-small inline"
+            />
+          </span>
         </>
       ) : undefined,
     },
@@ -215,9 +227,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             'since minting'
           ) : (
             <>
-              <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
-                {formatBlockNumber(last.blockNumber)}
-              </AppLink>{' '}
+              <span className="text-text">
+                <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
+                  {formatBlockNumber(last.blockNumber)}
+                </AppLink>
+              </span>{' '}
               · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
             </>
           )
@@ -228,9 +242,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />,
       // R11: tier 1's words stay uncoloured; the bars keep the occupied colour.
       note: (
+        // both figures are values, the reading ink; "occupied" and "free" their labels, quiet (the
+        // free figure stood quiet: BRIEF-roles-rest part A)
         <>
           <span className="text-text">{ckbText(occupied)}</span> occupied ·{' '}
-          {ckbText(held - occupied)} free
+          <span className="text-text">{ckbText(held - occupied)}</span> free
         </>
       ),
     },
