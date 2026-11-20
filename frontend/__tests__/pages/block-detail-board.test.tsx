@@ -884,21 +884,24 @@ describe('Block board · R2b-a fields', () => {
         nextCursor: null,
       })
     );
+    // The refusal is thrown while the page draws. The page stands inside a boundary, as it does
+    // under the router, so the throw is the boundary's to show: with none around it React reports
+    // it as an uncaught exception, which the run counts as an error of its own although every
+    // test passes (the whole suite then exits 1; found on main at a8ca7bb8).
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    render(<BlockDetailPage />);
-    await waitFor(() =>
-      expect(
-        errors.mock.calls.some((call) =>
-          call.some((arg) =>
-            String(arg instanceof Error ? arg.message : arg).includes(
-              `cellbase ${cellbase.txHash} pays a block's reward: it draws 1 of its 2 parties, where it has one output at most`
-            )
-          )
-        )
-      ).toBe(true)
-    );
-    expect(screen.queryByText('Cellbase')).toBeNull();
-    errors.mockRestore();
+    try {
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+          <BlockDetailPage />
+        </ErrorBoundary>
+      );
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        `cellbase ${cellbase.txHash} pays a block's reward: it draws 1 of its 2 parties, where it has one output at most`
+      );
+      expect(screen.queryByText('Cellbase')).toBeNull();
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {
