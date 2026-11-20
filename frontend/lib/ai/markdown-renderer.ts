@@ -27,6 +27,7 @@ import {
   type TransactionLifecycle,
 } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { participantCount } from '@/lib/activity-parties';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
@@ -288,6 +289,28 @@ function renderActivityDetail(activity: GlobalActivity): string {
   return '-';
 }
 
+/** The activities table's columns, each named for what it holds (`renderGlobalActivityRows`). */
+const GLOBAL_ACTIVITY_COLUMNS = [
+  'timestamp',
+  'txHash',
+  'blockNumber',
+  'kind',
+  'participants',
+  'drawn',
+  'firstDrawnParty',
+  'firstDrawnCkbDelta',
+  'detail',
+];
+
+/** What the table's party columns hold, said under it (lane feed, ruling 14 of gate P). */
+const GLOBAL_ACTIVITY_PARTIES_NOTE =
+  'firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes, the fee payer and every party whose items moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.';
+
+/**
+ * One line an activity: every party counted (the route's `participantCount`), how many the row
+ * draws, and the first of those with its CKB change (lane feed: a row draws some of its parties, so
+ * the party listed is the first drawn, named so, never the transaction's).
+ */
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
@@ -305,10 +328,12 @@ function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
     const ckbDelta = party ? party.ckbDelta : '-';
     return [
       activity.timestamp,
-      addr === null ? '-' : hashShort(addr),
       hashShort(activity.txHash),
       activity.blockNumber,
       classified.displayType,
+      participantCount(activity),
+      activity.participants.length,
+      addr === null ? '-' : hashShort(addr),
       ckbDelta,
       renderActivityDetail(activity),
     ];
@@ -707,10 +732,9 @@ export async function renderMarkdownPage(
         '',
         activities.data.length === 0
           ? 'No activities found.'
-          : markdownTable(
-              ['timestamp', 'address', 'txHash', 'blockNumber', 'kind', 'ckbDelta', 'detail'],
-              renderGlobalActivityRows(activities.data)
-            ),
+          : markdownTable(GLOBAL_ACTIVITY_COLUMNS, renderGlobalActivityRows(activities.data)),
+        '',
+        GLOBAL_ACTIVITY_PARTIES_NOTE,
         '',
         markdownTable(
           ['field', 'value'],

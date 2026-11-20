@@ -267,6 +267,10 @@ describe('renderMarkdownPage', () => {
                 tags: 8,
               },
             ],
+            // every party counted and named, as the route states them (lane feed)
+            participantCount: 1,
+            partyIds: [[`0x${'0a'.repeat(20)}`, 8]],
+            feePayer: null,
           },
         ],
         total: 1,
@@ -424,6 +428,10 @@ describe('renderMarkdownPage', () => {
                 tags: 8,
               },
             ],
+            // every party counted and named, as the route states them (lane feed)
+            participantCount: 1,
+            partyIds: [[`0x${'0a'.repeat(20)}`, 8]],
+            feePayer: null,
           },
         ],
         total: 1,
@@ -485,6 +493,10 @@ describe('renderMarkdownPage', () => {
               { protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} },
             ],
             participants: [],
+            // no party, counted and named (lane feed)
+            participantCount: 0,
+            partyIds: [],
+            feePayer: null,
           },
         ],
         total: 1,
@@ -503,9 +515,13 @@ describe('renderMarkdownPage', () => {
     const row = result.body.split('\n').find((line) => line.includes('0xcccccccc'));
     expect(row).toBeDefined();
     const cells = (row as string).split('|').map((c) => c.trim());
-    // | timestamp | address | txHash | blockNumber | kind | ckbDelta | detail |
-    expect(cells[2]).toBe('-');
-    expect(cells[6]).toBe('-');
+    // re-pinned on purpose (lane feed, the lead's F2): the party columns are the first drawn
+    // party's, after the parties counted and drawn (they were `address`, second, and `ckbDelta`)
+    // | timestamp | txHash | blockNumber | kind | participants | drawn | firstDrawnParty | firstDrawnCkbDelta | detail |
+    expect(cells[5]).toBe('0');
+    expect(cells[6]).toBe('0');
+    expect(cells[7]).toBe('-');
+    expect(cells[8]).toBe('-');
   });
 
   // Lane feed (ruling 14 of gate P; the lead's F2): a feed row draws some of its parties, so the
@@ -647,6 +663,10 @@ describe('renderMarkdownPage', () => {
                 tags: 8,
               },
             ],
+            // every party counted and named, as the route states them (lane feed)
+            participantCount: 1,
+            partyIds: [[lockHash.slice(0, 42), 8]],
+            feePayer: lockHash,
           },
         ],
         limit: 1,
