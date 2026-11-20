@@ -1598,8 +1598,20 @@ impl CkbadgerStore {
             }
         }
 
-        let cf_descriptors =
-            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+        // A creating open makes the missing column families in its
+        // descriptors' order; a domain store's is the creation order, the
+        // newest layout's column families first (resync fix round 3, M), so a
+        // store still being created is never an earlier layout's set.
+        let creation_order = match store_class {
+            StoreClass::Domain => crate::layout_ops::domain_creation_order(),
+            _ => allowed.to_vec(),
+        };
+        let cf_descriptors = Self::cf_descriptors(
+            &creation_order,
+            &block_cache,
+            &memory_profile,
+            runtime_config,
+        );
 
         Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;

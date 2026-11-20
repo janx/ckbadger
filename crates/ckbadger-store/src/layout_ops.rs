@@ -10,7 +10,9 @@
 //! re-sync from genesis.
 
 use crate::keys::sync_meta_keys;
-use crate::store::{CkbadgerStore, CF_SYNC_META, DOMAIN_CFS};
+use crate::store::{
+    CkbadgerStore, CF_LIVE_CODE_CELLS_BY_TYPE, CF_SYNC_META, CF_TOKEN_LABELS, DOMAIN_CFS,
+};
 use rocksdb::DB;
 
 /// The layout of the domain store this build writes and reads.
@@ -120,12 +122,49 @@ pub enum StoreLayoutState {
     NotReady,
 }
 
+/// The domain column families the newest layouts added, newest first: a
+/// creating open makes them before every other ([`domain_creation_order`]).
+/// Layout 8 added both. A layout that adds a column family puts it at the
+/// front.
+pub const DOMAIN_CFS_CREATED_FIRST: [&str; 2] = [CF_TOKEN_LABELS, CF_LIVE_CODE_CELLS_BY_TYPE];
+
 /// The order in which a creating open makes the domain column families: the
 /// order of its descriptors (`CkbadgerStore::open_domain`; RocksDB's
 /// `DB::Open` makes each missing column family in that order, one MANIFEST
 /// append each, after `NewDB` has written `CURRENT` with `default` alone).
+/// [`DOMAIN_CFS_CREATED_FIRST`] first, then the rest in [`DOMAIN_CFS`] order
+/// (resync fix round 3, M): a store a creating open of this build has not
+/// finished holds `default` and the first column families of this order,
+/// which always include the newest ones; an earlier build's store, which
+/// lacks them, is never such a store.
 pub fn domain_creation_order() -> Vec<&'static str> {
-    DOMAIN_CFS.to_vec()
+    DOMAIN_CFS_CREATED_FIRST
+        .iter()
+        .copied()
+        .chain(
+            DOMAIN_CFS
+                .iter()
+                .copied()
+                .filter(|name| !DOMAIN_CFS_CREATED_FIRST.contains(name)),
+        )
+        .collect()
+}
+
+/// Whether a store's column families are what a creating open of this build
+/// leaves before it has made them all (resync fix round 3, M): none that
+/// this build does not know, and the ones it lacks exactly the last ones of
+/// [`domain_creation_order`].
+fn still_being_created(column_families: &StoreColumnFamilies) -> bool {
+    if !column_families.unknown.is_empty() || column_families.missing.is_empty() {
+        return false;
+    }
+    let order = domain_creation_order();
+    let Some(made) = order.len().checked_sub(column_families.missing.len()) else {
+        return false;
+    };
+    order[made..]
+        .iter()
+        .all(|name| column_families.missing.iter().any(|lacked| lacked == name))
 }
 
 /// How a store's column families differ from this build's (resync fix
@@ -302,10 +341,14 @@ fn holds_domain_rows_in(db: &DB) -> anyhow::Result<bool> {
 /// of this build's column families and layout is `Current`; one of this
 /// build's column families with no row and no stamp is `Fresh`: this build
 /// created it (its open creates every column family before any write) and
-/// has not stamped it yet. Any other is the inner error: another stamp, rows
-/// and no stamp (a build from before stamps), or column families that are not
-/// this build's (an earlier build's store, empty or not). The outer error is
-/// a read failure.
+/// has not stamped it yet. One holding the first column families of
+/// [`domain_creation_order`], no row and no stamp, is `NotReady`: a creating
+/// open of this build is still making them, or stopped before it made them
+/// all (resync fix round 3, M). Any other is the inner error, each with
+/// evidence of another layout: another stamp, rows and no stamp (a build from
+/// before stamps), a column family this build does not know, or a set of
+/// column families no creating open of this build leaves (an earlier build's
+/// store, empty or not). The outer error is a read failure.
 fn layout_of(
     db: &DB,
     column_families: &StoreColumnFamilies,
@@ -317,6 +360,9 @@ fn layout_of(
             None if !holds_domain_rows_in(db)? => return Ok(Ok(StoreLayoutState::Fresh)),
             _ => {}
         }
+    } else if found.is_none() && still_being_created(column_families) && !holds_domain_rows_in(db)?
+    {
+        return Ok(Ok(StoreLayoutState::NotReady));
     }
     Ok(Err(StoreLayoutMismatch {
         found,

@@ -27,9 +27,12 @@ use crate::lifecycle::RebuildRequiredError;
 /// refuse a store this build must not use (another stamp, rows and no stamp,
 /// column families that are not this build's), rebuild-required, so nothing
 /// is created in it and the build that wrote it can still open it. No store
-/// yet, a fresh store and a store of this build's layout pass; the open then
-/// stamps a fresh one ([`ensure_store_layout`]).
-pub fn refuse_before_open(domain_data_path: &std::path::Path) -> Result<()> {
+/// yet (`None`), a store still being created, a fresh store and a store of
+/// this build's layout pass, said: the indexer's open makes a store still
+/// being created whole and stamps a fresh one ([`ensure_store_layout`]); a
+/// hand-run label-import says to try again on one still being created
+/// (resync fix round 3, M).
+pub fn refuse_before_open(domain_data_path: &std::path::Path) -> Result<Option<StoreLayoutState>> {
     let inspected = ckbadger_store::inspect_domain_store(
         domain_data_path,
         &secondary_store_path(domain_data_path, SecondaryStoreOwner::Inspect),
@@ -38,7 +41,8 @@ pub fn refuse_before_open(domain_data_path: &std::path::Path) -> Result<()> {
         Some(Err(mismatch)) => Err(anyhow::Error::new(RebuildRequiredError::new(
             mismatch.diagnosis(),
         ))),
-        None | Some(Ok(_)) => Ok(()),
+        None => Ok(None),
+        Some(Ok(state)) => Ok(Some(state)),
     }
 }
 

@@ -661,10 +661,11 @@ impl BulkStatusReader {
         }
     }
 
-    /// Read the gating network's bulk status. A missing RocksDB `CURRENT` is the
-    /// sole not-ready state (an all-`None` sample); once the store exists, every
-    /// open/refresh/read/decode failure is an error. [`Self::poll`] is the
-    /// tolerant wrapper the sequencer actually uses.
+    /// Read the gating network's bulk status. A missing RocksDB `CURRENT`, or
+    /// a store still being created (resync fix round 3, M), is not ready (an
+    /// all-`None` sample); once the store exists, every open/refresh/read/
+    /// decode failure is an error. [`Self::poll`] is the tolerant wrapper the
+    /// sequencer actually uses.
     fn read(&mut self) -> Result<BulkStatusSample> {
         if self.store.is_none() {
             if !self.domain_data_path.join("CURRENT").is_file() {
@@ -695,9 +696,17 @@ impl BulkStatusReader {
             )
         })?;
         // The layout first: a store this build must not use is refused,
-        // never read for a bulk status (resync fix round 2, A).
-        if let Err(mismatch) = store.check_store_layout()? {
-            return Err(anyhow::Error::new(mismatch));
+        // never read for a bulk status (resync fix round 2, A). A store still
+        // being created is not ready: the handle is dropped, since a secondary
+        // never gains a column family made after it opened, and the store is
+        // opened again on the next poll (resync fix round 3, M).
+        match store.check_store_layout()? {
+            Err(mismatch) => return Err(anyhow::Error::new(mismatch)),
+            Ok(ckbadger_store::StoreLayoutState::NotReady) => {
+                self.store = None;
+                return Ok(BulkStatusSample::default());
+            }
+            Ok(_) => {}
         }
         let status = store.get_sync_status().with_context(|| {
             format!(

@@ -85,7 +85,7 @@ pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucke
 pub use layout_ops::earlier_layout_for_test;
 pub use layout_ops::{
     domain_creation_order, inspect_domain_store, StoreColumnFamilies, StoreLayoutMismatch,
-    StoreLayoutState, STORE_LAYOUT, STORE_LAYOUT_CHANGE,
+    StoreLayoutState, DOMAIN_CFS_CREATED_FIRST, STORE_LAYOUT, STORE_LAYOUT_CHANGE,
 };
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;

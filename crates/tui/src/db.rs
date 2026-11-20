@@ -5,7 +5,7 @@ use ckbadger_common::{
 };
 use ckbadger_store::{
     secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreLayoutMismatch,
-    StoreRuntimeConfig,
+    StoreLayoutState, StoreRuntimeConfig,
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -219,10 +219,14 @@ enum TuiStore {
 
 impl TuiStore {
     /// The one layout check (`check_store_layout`) on a store the TUI opened.
-    fn read_layout(store: Arc<CkbadgerStore>) -> Result<Self> {
+    /// `None` for a store still being created (resync fix round 3, M): not
+    /// held, since a secondary never gains a column family made after it
+    /// opened; the TUI opens it again on its next tick.
+    fn read_layout(store: Arc<CkbadgerStore>) -> Result<Option<Self>> {
         Ok(match store.check_store_layout()? {
-            Ok(_) => Self::Read(store),
-            Err(mismatch) => Self::Refused(store, mismatch),
+            Ok(StoreLayoutState::NotReady) => None,
+            Ok(_) => Some(Self::Read(store)),
+            Err(mismatch) => Some(Self::Refused(store, mismatch)),
         })
     }
 
@@ -243,6 +247,15 @@ impl TuiStore {
             )),
         }
     }
+}
+
+/// What the TUI says of a domain store still being created (resync fix round
+/// 3, M): no refusal; it is read once made.
+fn still_being_created(domain_data_path: &Path) -> String {
+    format!(
+        "domain store {} is still being created; it is read once the indexer has made it",
+        domain_data_path.display()
+    )
 }
 
 pub struct TuiDb {
@@ -363,7 +376,7 @@ impl TuiDb {
         )
         .and_then(|store| TuiStore::read_layout(Arc::new(store)))
         {
-            Ok(opened) => {
+            Ok(Some(opened)) => {
                 match opened.readable(Path::new(path_config.domain_data_path)) {
                     Ok(()) => eprintln!(
                         "TUI: opened domain store (secondary) at {}",
@@ -372,6 +385,13 @@ impl TuiDb {
                     Err(refusal) => eprintln!("TUI: {refusal}"),
                 }
                 Some(opened)
+            }
+            Ok(None) => {
+                eprintln!(
+                    "TUI: {}",
+                    still_being_created(Path::new(path_config.domain_data_path))
+                );
+                None
             }
             Err(e) => {
                 eprintln!("TUI: failed to open domain store: {e}");
@@ -456,9 +476,12 @@ impl TuiDb {
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current.store(), &store))
             {
-                *slot = Some(reread.clone());
+                *slot = reread.clone();
             }
-            return reread.readable(&self.domain_data_path);
+            return match reread {
+                Some(reread) => reread.readable(&self.domain_data_path),
+                None => Ok(()),
+            };
         }
 
         if !self.domain_data_path.join("CURRENT").is_file() {
@@ -481,7 +504,10 @@ impl TuiDb {
                 self.domain_data_path.display()
             )
         })?;
-        let opened = TuiStore::read_layout(Arc::new(store))?;
+        let Some(opened) = TuiStore::read_layout(Arc::new(store))? else {
+            self.set_store_notice(Some(still_being_created(&self.domain_data_path)));
+            return Ok(());
+        };
         let readable = opened.readable(&self.domain_data_path);
         // State, not stderr: this runs inside a refresh tick, long after
         // EnterAlternateScreen.

@@ -926,7 +926,8 @@ pub(crate) fn open_chain_stores_for_startup(
 
     // A store this build must not use is refused before the probe open,
     // which would create the column families it lacks (resync fix round 2,
-    // A): nothing is created in it.
+    // A): nothing is created in it. A store this build's creating open left
+    // half made is made whole by this open (resync fix round 3, M).
     crate::store_layout::refuse_before_open(std::path::Path::new(domain_data_path))?;
 
     info!(
@@ -1011,9 +1012,18 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         config.append_only_data_path.as_str(),
     );
     // Before the open, which would create the column families an earlier
-    // build's store lacks (resync fix round 2, A).
-    crate::store_layout::refuse_before_open(std::path::Path::new(&config.domain_data_path))
-        .map_err(|error| annotate_rebuild_required(error, &location))?;
+    // build's store lacks (resync fix round 2, A). A store still being
+    // created is the indexer's to make whole: said, and left to it (resync
+    // fix round 3, M).
+    let inspected =
+        crate::store_layout::refuse_before_open(std::path::Path::new(&config.domain_data_path))
+            .map_err(|error| annotate_rebuild_required(error, &location))?;
+    if inspected == Some(ckbadger_store::StoreLayoutState::NotReady) {
+        anyhow::bail!(
+            "the domain store {} is still being created: try again once the indexer has made it",
+            config.domain_data_path
+        );
+    }
     info!(
         "Opening ckbadger domain store at: {}",
         config.domain_data_path

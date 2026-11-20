@@ -1201,6 +1201,9 @@ fn sync_status_report(store: &CkbadgerStore, domain_data_path: &Path) -> Vec<Str
                 format!("  {mismatch}"),
             ]
         }
+        Ok(Ok(ckbadger_store::StoreLayoutState::NotReady)) => {
+            return vec![format!("Sync status: {}", being_created(domain_data_path))]
+        }
         Ok(Ok(_)) => {}
     }
     match store.get_sync_status() {
@@ -1359,8 +1362,20 @@ fn verify_store_refusal(domain_data_path: &Path) -> Result<Option<String>> {
             "domain store {} refused: {mismatch}",
             domain_data_path.display()
         )),
+        Some(Ok(ckbadger_store::StoreLayoutState::NotReady)) => {
+            Some(being_created(domain_data_path))
+        }
         None | Some(Ok(_)) => None,
     })
+}
+
+/// What a short-lived reader says of a domain store still being created
+/// (resync fix round 3, M): no refusal; try again.
+fn being_created(domain_data_path: &Path) -> String {
+    format!(
+        "the domain store {} is still being created: try again once the indexer has made it",
+        domain_data_path.display()
+    )
 }
 
 fn resolve_verify_targets(workdir: &Path) -> Result<Vec<VerifyTarget>> {
