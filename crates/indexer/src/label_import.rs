@@ -663,8 +663,23 @@ fn token_label(token: &TokenMetadata) -> ckbadger_store::types::TokenLabel {
         decimals: i32::from(token.decimals),
         icon_url: token.icon.clone(),
         description: token.description.clone(),
-        standard: token.standard.clone(),
     }
+}
+
+/// How a label's stated standard disagrees with what the chain's row says
+/// (resync fix round 3, item 4): the standard is a chain fact, what the pair
+/// of the token's type script runs, and a label never states it; label import
+/// reads the bundled files as they are and says each disagreement.
+fn label_standard_disagreement(
+    existing: &ckbadger_store::types::TokenInfo,
+    label: &TokenMetadata,
+) -> Option<String> {
+    (label.standard != existing.standard).then(|| {
+        format!(
+            "the label says standard {:?}, the chain's row {:?}",
+            label.standard, existing.standard
+        )
+    })
 }
 
 /// Write one decoded token label; every store error propagates.
@@ -694,6 +709,16 @@ fn write_token_label(
                 "token label differs from what the chain says of the token (the API shows \
                  the label's fields, the chain's beside them; if the chain is right, fix \
                  the upstream token-labels entry)"
+            );
+        }
+        if let Some(disagreement) = label_standard_disagreement(&info, token) {
+            warn!(
+                type_hash = %format!("0x{}", hex::encode(type_hash)),
+                label = %token.symbol,
+                %disagreement,
+                "token label states another standard than the chain's (the API answers the \
+                 chain's: what the pair of the token's type script runs; a label never states \
+                 it)"
             );
         }
     }
@@ -3043,7 +3068,6 @@ canonical_hash_type = "data1"
                 decimals: 8,
                 icon_url: Some("https://example.invalid/UNH.png".to_string()),
                 description: Some("UNH description".to_string()),
-                standard: "xudt_compatible".to_string(),
             }
         );
 
@@ -3318,6 +3342,52 @@ mod bundled_label_chain_consistency_tests {
         }
     }
 
+    /// resync fix round 3, item 4: label import says each label whose stated
+    /// standard is not the chain row's, never silently (the standard is the
+    /// pair's; the API answers the chain's).
+    #[test]
+    fn a_labels_standard_that_is_not_the_chains_is_said() {
+        let label = |standard: &str| TokenMetadata {
+            name: "N".to_string(),
+            symbol: "S".to_string(),
+            decimals: 8,
+            standard: standard.to_string(),
+            icon: None,
+            description: None,
+            disabled: false,
+            mainnet: None,
+            testnet: None,
+        };
+        let row = ckbadger_store::types::TokenInfo {
+            type_code_hash: vec![0x50; 32],
+            hash_type: 2,
+            type_args: vec![0x24; 32],
+            standard: "xudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
+        };
+        assert_eq!(
+            super::label_standard_disagreement(&row, &label("xudt")),
+            None
+        );
+        assert_eq!(
+            super::label_standard_disagreement(&row, &label("xudt_compatible")).as_deref(),
+            Some(r#"the label says standard "xudt_compatible", the chain's row "xudt""#)
+        );
+        assert_eq!(
+            super::label_standard_disagreement(&row, &label("sudt")).as_deref(),
+            Some(r#"the label says standard "sudt", the chain's row "xudt""#)
+        );
+    }
+
     /// The row the sync write path creates when the chain first holds the
     /// token of `deployment`: a fresh chain row with the label label import
     /// stored (`token_labels`) attached by the one rule. Label import itself
@@ -3467,7 +3537,10 @@ mod bundled_label_chain_consistency_tests {
         assert_eq!(stored.name.as_deref(), Some("USDI"));
         assert_eq!(stored.symbol.as_deref(), Some("USDI"));
         assert_eq!(stored.decimals, Some(6));
-        assert_eq!(stored.standard, "xudt_compatible");
+        // Re-pinned on purpose (resync fix round 3, item 4, the lead's
+        // ruling): the label says `xudt_compatible`, and the token's standard
+        // is the chain's, what its pair runs (it was the label's)
+        assert_eq!(stored.standard, "xudt");
     }
 
     /// A Unique Cell observation that says exactly what the stored row says.

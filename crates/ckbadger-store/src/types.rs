@@ -1018,8 +1018,8 @@ pub struct TokenLabel {
     pub decimals: i32,
     pub icon_url: Option<String>,
     pub description: Option<String>,
-    /// The label's standard (`sudt`, `xudt`, `xudt_compatible`).
-    pub standard: String,
+    // No standard: a label never states a token's standard, a chain fact (what
+    // the pair of the token's type script runs; resync fix round 3, item 4).
 }
 
 /// Which source wrote a token's stored `name` / `symbol` / `decimals`.

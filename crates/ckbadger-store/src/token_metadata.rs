@@ -15,15 +15,16 @@ use crate::types::{ChainTokenMetadata, OnchainInfoBinding, TokenInfo, TokenMetad
 impl TokenInfo {
     /// THE label rule: a curated label joined to the token's row gives its
     /// name, symbol and decimals ([`Self::apply_label`], the label wins where
-    /// it states a field), its icon, its description and its standard; the
-    /// chain's own values stay beside them (`chain_metadata`). The API applies
-    /// it when it reads a token (resync fix round 2, B); no stored row holds a
-    /// label.
+    /// it states a field), its icon and its description; the chain's own
+    /// values stay beside them (`chain_metadata`). The API applies it when it
+    /// reads a token (resync fix round 2, B); no stored row holds a label. The
+    /// standard stays the row's: a chain fact, what the pair of the token's
+    /// type script runs, which a label never states (resync fix round 3, item
+    /// 4, the lead's ruling).
     pub fn attach_label(&mut self, label: &crate::types::TokenLabel) {
         self.apply_label(label.name.clone(), label.symbol.clone(), label.decimals);
         self.icon_url = label.icon_url.clone();
         self.description = label.description.clone();
-        self.standard = label.standard.clone();
     }
 
     /// A curated label writes `name`, `symbol` and `decimals`; the stored

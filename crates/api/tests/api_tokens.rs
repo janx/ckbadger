@@ -363,7 +363,6 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
                 decimals: 8,
                 icon_url: Some("logo.png".to_string()),
                 description: Some("label metadata only".to_string()),
-                standard: "xudt".to_string(),
             },
         )
         .unwrap();
@@ -1601,7 +1600,6 @@ fn label_of(name: &str, symbol: &str, decimals: i32) -> ckbadger_store::types::T
         decimals,
         icon_url: None,
         description: None,
-        standard: "xudt".to_string(),
     }
 }
 
@@ -1712,6 +1710,59 @@ async fn a_label_never_states_a_tokens_standard() {
             .filter_map(|asset| asset["symbol"].as_str())
             .collect();
         assert_eq!(symbols.contains(&"LBL"), listed, "{standard}: {json}");
+    }
+}
+
+/// resync fix round 3, item 4: the answer's `conflict` is true exactly when
+/// the token's own binding (its Unique Cell) states another name, symbol or
+/// decimals than the answer, the label's where it states them: a label that
+/// agrees with the binding is no conflict; one that differs in its decimals
+/// alone, or its symbol, is; a token with no binding has none to conflict with.
+#[tokio::test]
+async fn the_conflict_says_exactly_when_a_label_and_the_chains_binding_disagree() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let cases = [
+        (
+            0xe2u8,
+            Some(rgbpp_chain_metadata()),
+            ("RGB++ Protocol", "RGB++", 18),
+            false,
+        ),
+        (
+            0xe3,
+            Some(rgbpp_chain_metadata()),
+            ("RGB++ Protocol", "RGB++", 8),
+            true,
+        ),
+        (
+            0xe4,
+            Some(rgbpp_chain_metadata()),
+            ("RGB++ Protocol", "RGBX", 18),
+            true,
+        ),
+        (0xe5, None, ("Anything", "ANY", 8), false),
+    ];
+    for (byte, chain, (name, symbol, decimals), _) in &cases {
+        let row = provenance_token(
+            *byte,
+            "RGB++ Protocol",
+            "RGB++",
+            TokenMetadataSource::Chain,
+            chain.clone(),
+        );
+        store.put_token_direct(&[*byte; 32], &row).unwrap();
+        store
+            .put_token_label_direct(&[*byte; 32], &label_of(name, symbol, *decimals))
+            .unwrap();
+    }
+    for (byte, _, _, conflict) in cases {
+        let (status, json) = token_detail(store.clone(), &[byte; 32]).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["metadata"]["conflict"], conflict,
+            "0x{byte:02x}: {json}"
+        );
     }
 }
 

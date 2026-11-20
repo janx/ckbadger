@@ -2471,7 +2471,6 @@ mod tests {
             decimals: 4,
             icon_url: Some("logo.png".to_string()),
             description: Some("curated".to_string()),
-            standard: "xudt".to_string(),
         }
     }
 
