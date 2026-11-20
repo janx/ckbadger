@@ -350,6 +350,8 @@ impl ProtocolRegistry {
     /// recognition of a Unique Cell, for the xUDT extension binding and claim
     /// and the issuance co-occurrence binding, on both sync paths.
     pub fn is_unique_cell(&self, code_hash: &[u8], hash_type: i16) -> bool {
+        #[cfg(test)]
+        UNIQUE_CELL_PAIR_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
         self.script(code_hash, hash_type) == Some(RegisteredScript::UniqueCell)
     }
 
@@ -383,6 +385,15 @@ impl ProtocolRegistry {
 fn hash_type_byte(label: &str, slug: &str) -> u8 {
     ckbadger_common::hash_type_from_label(label)
         .unwrap_or_else(|| panic!("{slug}: hash type `{label}` — build.rs validates this"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The pair lookups [`ProtocolRegistry::is_unique_cell`] made on this
+    /// thread: the cost on bulk's serial lane, where it is asked for every
+    /// typed output (resync fix round 2, C).
+    pub(crate) static UNIQUE_CELL_PAIR_LOOKUPS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
@@ -593,6 +604,45 @@ mod tests {
     /// binary by every data hash type (mainnet 0x2c8c…, testnet 0xcc25…).
     /// The mainnet binary by `type`, or the testnet reference by a data hash
     /// type, runs no Unique Cell; it is no protocol and no lock.
+    #[test]
+    fn asking_whether_a_cell_is_the_unique_cell_hashes_no_pair_for_another_code() {
+        // resync fix round 2, C (logic SHOULD-3): bulk's serial lane asks
+        // this for every typed output of every transaction
+        // (`owners/token.rs`, `token_helpers::is_unique_cell`). For a code
+        // hash that is not one of the Unique Cell's few, the answer is no
+        // without hashing a pair; only the Unique Cell's code hashes reach
+        // the pair (its hash type decides).
+        let xudt = parse_hex_to_bytes(
+            "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+        );
+        let unique_cell = parse_hex_to_bytes(
+            "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628",
+        );
+        let lookups = || UNIQUE_CELL_PAIR_LOOKUPS.with(std::cell::Cell::get);
+        let before = lookups();
+        for hash_type in [0, 1, 2, 4] {
+            assert!(!crate::sync::token_helpers::is_unique_cell(
+                &xudt, hash_type
+            ));
+            assert!(!crate::sync::token_helpers::is_unique_cell(
+                &[0x5a; 32],
+                hash_type
+            ));
+        }
+        assert_eq!(
+            lookups() - before,
+            0,
+            "no pair hashed for another code hash"
+        );
+        assert!(crate::sync::token_helpers::is_unique_cell(&unique_cell, 2));
+        assert!(!crate::sync::token_helpers::is_unique_cell(&unique_cell, 1));
+        assert_eq!(
+            lookups() - before,
+            2,
+            "the Unique Cell's code hash reaches its pair"
+        );
+    }
+
     #[test]
     fn the_unique_cell_runs_only_at_its_registered_pairs() {
         let mainnet = parse_hex_to_bytes(
