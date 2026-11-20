@@ -10631,6 +10631,105 @@ mod tests {
             ]
         }
 
+        /// resync fix round 2, B (logic SHOULD-2, tests SHOULD-1): a token row
+        /// holds what the chain says, whatever labels exist. With the label
+        /// imported before the first block or not at all, bulk and live write
+        /// the same `tokens` bytes, the chain's (the Unique Cell's name by
+        /// co-occurrence, `Chain`, no icon); label import run again (it runs
+        /// at every indexer start) changes nothing. The label is joined when
+        /// the row is read (the API).
+        #[tokio::test]
+        async fn a_label_changes_no_stored_token_row_on_either_path() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            fn no_label(_: &CkbadgerStore) -> Result<()> {
+                Ok(())
+            }
+            let bulk = |seed: fn(&CkbadgerStore) -> Result<()>| {
+                crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                    &blocks, seed,
+                )
+                .expect("bulk")
+                .token_rows
+                .tokens
+                .get(&type_hash)
+                .expect("bulk writes the token row")
+                .clone()
+            };
+            let bulk_with_label = bulk(import_label);
+            let bulk_without_label = bulk(no_label);
+
+            let mut live = Vec::new();
+            for labelled in [true, false] {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                let indexer = indexer_for_live_write_test(store.clone());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                if labelled {
+                    import_label(store.as_ref()).unwrap();
+                }
+                write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                    .await
+                    .unwrap();
+                let bytes = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap()
+                    .clone();
+                live.push((dir, store, bytes));
+            }
+            let (live_with_label, live_without_label) = (live[0].2.clone(), live[1].2.clone());
+
+            assert_eq!(
+                bulk_with_label, bulk_without_label,
+                "bulk: a label changes no row"
+            );
+            assert_eq!(
+                live_with_label, live_without_label,
+                "live: a label changes no row"
+            );
+            assert_eq!(live_with_label, bulk_with_label, "bulk and live");
+
+            let labelled_store = live[0].1.clone();
+            import_label(labelled_store.as_ref()).unwrap();
+            assert_eq!(
+                crate::sync::bulk_build::collect_token_raw_rows(labelled_store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap(),
+                &live_with_label,
+                "label import again changes no row"
+            );
+
+            let row: TokenInfo = bincode::deserialize(&live_with_label).unwrap();
+            assert_eq!(
+                (
+                    row.name.as_deref(),
+                    row.symbol.as_deref(),
+                    row.decimals,
+                    row.metadata_source,
+                    row.icon_url.as_deref(),
+                    row.standard.as_str()
+                ),
+                (
+                    Some("RGB++ Protocol"),
+                    Some("RGB++"),
+                    Some(18),
+                    Some(TokenMetadataSource::Chain),
+                    None,
+                    "xudt"
+                ),
+                "the chain's row"
+            );
+        }
+
         #[tokio::test]
         async fn label_and_chain_metadata_persist_identically_on_both_paths() {
             let _guard =
@@ -13841,6 +13940,111 @@ mod tests {
                 witnesses: vec!["0x".to_string()],
             };
             block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), tx])
+        }
+
+        /// The curated label of the extension token, as a metadata entry.
+        fn ext_label() -> crate::label_import::TokenMetadata {
+            let script = xudt_ext_type_script();
+            crate::label_import::TokenMetadata {
+                name: "Label X".to_string(),
+                symbol: "LBX".to_string(),
+                decimals: 6,
+                standard: "xudt".to_string(),
+                icon: Some("https://example.invalid/lbx.png".to_string()),
+                description: None,
+                disabled: false,
+                mainnet: Some(crate::label_import::TokenDeployment {
+                    code_hash: script.code_hash,
+                    hash_type: script.hash_type,
+                    args: script.args,
+                }),
+                testnet: None,
+            }
+        }
+
+        /// Write each inner vec as ONE live batch on a store where label
+        /// import ran first when `labelled` (the order every indexer start
+        /// takes).
+        async fn write_batches_live_after_label_import(
+            batches: &[Vec<BlockResponseWithCycles>],
+            labelled: bool,
+        ) -> Arc<CkbadgerStore> {
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            if labelled {
+                import_ext_label(store.as_ref());
+            }
+            let indexer = indexer_for_live_write_test(store.clone());
+            for batch in batches {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    batch.clone(),
+                )
+                .await
+                .unwrap();
+            }
+            store
+        }
+
+        fn import_ext_label(store: &CkbadgerStore) {
+            let result = crate::label_import::import_all(
+                store,
+                "mainnet",
+                std::slice::from_ref(&ext_label()),
+                &[],
+            )
+            .unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+
+        /// resync fix round 2, B (logic SHOULD-2, the tests reader's smallest
+        /// test): a labelled token bound by its xUDT extension. Its row is the
+        /// chain's whether the label exists or not; label import run again
+        /// (every indexer start) changes no byte of it; a rollback of the
+        /// naming block leaves the row a store synced to that block holds.
+        /// It used to flip at every restart (creation: label, then the chain
+        /// over it; import: the label over the merged row).
+        #[tokio::test]
+        async fn a_label_re_import_and_a_rollback_leave_an_extension_bound_row_as_the_chain_made_it(
+        ) {
+            let blocks = [
+                vec![funding_block()],
+                vec![ext_issuance_block()],
+                vec![ext_naming_block()],
+            ];
+            let tokens = |store: &CkbadgerStore| {
+                crate::sync::bulk_build::collect_token_raw_rows(store)
+                    .unwrap()
+                    .tokens
+                    .get(&ext_type_hash())
+                    .cloned()
+            };
+            let labelled = write_batches_live_after_label_import(&blocks, true).await;
+            let unlabelled = write_batches_live_after_label_import(&blocks, false).await;
+            let made = tokens(&labelled).expect("the row");
+            assert_eq!(
+                Some(&made),
+                tokens(&unlabelled).as_ref(),
+                "the label is no part of it"
+            );
+
+            import_ext_label(&labelled);
+            assert_eq!(
+                tokens(&labelled),
+                Some(made),
+                "label import again changes nothing"
+            );
+
+            labelled.rollback_to_block(101).unwrap();
+            let reference = write_batches_live_after_label_import(&blocks[..2], true).await;
+            assert_eq!(
+                tokens(&labelled),
+                tokens(&reference),
+                "the row of block 101"
+            );
         }
 
         /// What label import writes for the extension token before the

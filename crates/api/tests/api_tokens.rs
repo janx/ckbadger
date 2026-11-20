@@ -329,6 +329,10 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
     let type_hash = vec![0x7b; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
 
+    // Re-pinned in resync fix round 2, B (tests NOTE-8): the row is the
+    // chain's (no name: no Unique Cell bound) and the label lives in
+    // `token_labels`, joined when the token is read. It was a hand-made row
+    // label import wrote with the label's fields, which layout 8 never stores.
     store
         .put_token_direct(
             &type_hash,
@@ -337,16 +341,29 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
                 hash_type: 2,
                 type_args: vec![0x66; 32],
                 standard: "xudt".to_string(),
-                name: Some("Placeholder Label".to_string()),
-                symbol: Some("PLH".to_string()),
-                decimals: Some(8),
+                name: None,
+                symbol: None,
+                decimals: None,
                 max_supply: None,
-                first_seen_block: 0,
+                first_seen_block: 10,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: None,
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_label_direct(
+            &type_hash,
+            &ckbadger_store::types::TokenLabel {
+                name: "Placeholder Label".to_string(),
+                symbol: "PLH".to_string(),
+                decimals: 8,
                 icon_url: Some("logo.png".to_string()),
                 description: Some("label metadata only".to_string()),
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
+                standard: "xudt".to_string(),
             },
         )
         .unwrap();
@@ -1577,6 +1594,101 @@ fn provenance_token(
     }
 }
 
+fn label_of(name: &str, symbol: &str, decimals: i32) -> ckbadger_store::types::TokenLabel {
+    ckbadger_store::types::TokenLabel {
+        name: name.to_string(),
+        symbol: symbol.to_string(),
+        decimals,
+        icon_url: None,
+        description: None,
+        standard: "xudt".to_string(),
+    }
+}
+
+/// resync fix round 2, B: a token's label is joined when the token is read,
+/// never stored in its row. The chain names the token; a label added later
+/// names it on the token page and the token list (its source `label`, the
+/// chain's values beside it and the conflict), with the stored row untouched;
+/// the label removed, the answers are the chain's again.
+#[tokio::test]
+async fn a_label_names_a_token_when_it_is_read_and_its_removal_gives_the_chains_name_back() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let token = vec![0xee; 32];
+    let row = provenance_token(
+        0x30,
+        "RGB++ Protocol",
+        "RGB++",
+        TokenMetadataSource::Chain,
+        Some(rgbpp_chain_metadata()),
+    );
+    store.put_token_direct(&token, &row).unwrap();
+    let answers = |json: &serde_json::Value| {
+        (
+            json["name"].clone(),
+            json["symbol"].clone(),
+            json["metadata"]["source"].clone(),
+            json["metadata"]["conflict"].clone(),
+        )
+    };
+
+    let (status, json) = token_detail(store.clone(), &token).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        answers(&json),
+        (
+            "RGB++ Protocol".into(),
+            "RGB++".into(),
+            "chain".into(),
+            false.into()
+        )
+    );
+
+    store
+        .put_token_label_direct(&token, &label_of("Renamed", "RNM", 18))
+        .unwrap();
+    let (status, json) = token_detail(store.clone(), &token).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        answers(&json),
+        ("Renamed".into(), "RNM".into(), "label".into(), true.into()),
+        "{json}"
+    );
+    assert_eq!(json["metadata"]["chain"]["symbol"], "RGB++", "{json}");
+    assert_eq!(
+        store.get_token(&token).unwrap().unwrap(),
+        row,
+        "the stored row is untouched"
+    );
+
+    store.delete_token_label_direct(&token).unwrap();
+    let (status, json) = token_detail(store, &token).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        answers(&json),
+        (
+            "RGB++ Protocol".into(),
+            "RGB++".into(),
+            "chain".into(),
+            false.into()
+        )
+    );
+}
+
+/// resync fix round 2, B: a label for a token the chain does not hold names
+/// nothing: no token page (the API reads the chain's rows and joins their
+/// labels; it never lists a label alone).
+#[tokio::test]
+async fn a_label_for_a_token_the_chain_does_not_hold_names_nothing() {
+    let store = test_store();
+    let unheld = vec![0xef; 32];
+    store
+        .put_token_label_direct(&unheld, &label_of("Unheld", "UNH", 8))
+        .unwrap();
+    let (status, json) = token_detail(store, &unheld).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+}
+
 fn rgbpp_chain_metadata() -> ckbadger_store::types::ChainTokenMetadata {
     ckbadger_store::types::ChainTokenMetadata {
         name: Some("RGB++ Protocol".to_string()),
@@ -1606,6 +1718,11 @@ async fn token_detail(
 /// stored name/symbol/decimals came from, what the chain says, and that the
 /// two disagree; the same-symbol warning matches the chain symbol too, so the
 /// real RGB++ token and the renamed one warn about each other.
+///
+/// Re-pinned in resync fix round 2, B: each row is the chain's (the Unique
+/// Cell's own name, `Chain`) and each label is in `token_labels`, joined when
+/// the token is read; the answers are the ones label import's stored rows
+/// gave.
 #[tokio::test]
 async fn token_detail_reports_label_provenance_and_the_chain_conflict() {
     use ckbadger_store::types::TokenMetadataSource;
@@ -1617,12 +1734,15 @@ async fn token_detail_reports_label_provenance_and_the_chain_conflict() {
             &jump,
             &provenance_token(
                 0x24,
-                "RGB++_Jump",
-                "RGB++_Jump",
-                TokenMetadataSource::Label,
+                "RGB++ Protocol",
+                "RGB++",
+                TokenMetadataSource::Chain,
                 Some(rgbpp_chain_metadata()),
             ),
         )
+        .unwrap();
+    store
+        .put_token_label_direct(&jump, &label_of("RGB++_Jump", "RGB++_Jump", 18))
         .unwrap();
     store
         .put_token_direct(
@@ -1631,13 +1751,16 @@ async fn token_detail_reports_label_provenance_and_the_chain_conflict() {
                 0x08,
                 "RGB++ Protocol",
                 "RGB++",
-                TokenMetadataSource::Label,
+                TokenMetadataSource::Chain,
                 Some(ckbadger_store::types::ChainTokenMetadata {
                     decimals: 18,
                     ..rgbpp_chain_metadata()
                 }),
             ),
         )
+        .unwrap();
+    store
+        .put_token_label_direct(&rgbpp, &label_of("RGB++ Protocol", "RGB++", 18))
         .unwrap();
 
     let (status, json) = token_detail(store.clone(), &jump).await;
