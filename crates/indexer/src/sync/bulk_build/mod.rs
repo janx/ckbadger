@@ -4088,6 +4088,11 @@ pub struct BulkArtifactSnapshot {
     pub token_rows: TokenRawRows,
     /// Exact persisted bytes of every statistics and DAO domain CF.
     pub stats_dao_rows: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+    /// Exact persisted bytes of the activity CFs the re-sync set writes:
+    /// `CF_TX_ACTIONS` (participants' tags, the recognised type codes),
+    /// `CF_TX_ACTIONS_BY_BUCKET` (each transaction's one kind), `CF_ADDR_TXS`
+    /// and `CF_ADDR_TXS_BY_PREFIX` (the tags per address), whole.
+    pub activity_rows: RawCfRows,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -4595,6 +4600,28 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     Ok(snapshot)
 }
 
+/// Raw rows of named column families: `(cf, key, value)`.
+pub(crate) type RawCfRows = Vec<(&'static str, Vec<u8>, Vec<u8>)>;
+
+/// [`BulkArtifactSnapshot::activity_rows`] of `store`, raw, in CF then key
+/// order: the same reading of a live store compares with it.
+#[doc(hidden)]
+pub(crate) fn collect_activity_rows_for_test(store: &CkbadgerStore) -> Result<RawCfRows> {
+    let mut rows = Vec::new();
+    for name in [
+        ckbadger_store::CF_TX_ACTIONS,
+        ckbadger_store::CF_TX_ACTIONS_BY_BUCKET,
+        ckbadger_store::CF_ADDR_TXS,
+        ckbadger_store::CF_ADDR_TXS_BY_PREFIX,
+    ] {
+        for row in store.iterator_cf(store.cf(name), IteratorMode::Start) {
+            let (key, value) = row?;
+            rows.push((name, key.to_vec(), value.to_vec()));
+        }
+    }
+    Ok(rows)
+}
+
 fn collect_bulk_artifact_snapshot(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
@@ -4615,6 +4642,7 @@ fn collect_bulk_artifact_snapshot(
             }
         }
     }
+    let activity_rows = collect_activity_rows_for_test(domain_store)?;
     let core = collect_core_owner_state_snapshot(domain_store)?;
     let (block_headers, block_numbers_by_hash, txs_by_hash, tx_actions_map) =
         collect_history_snapshot(domain_store)?;
@@ -4691,6 +4719,7 @@ fn collect_bulk_artifact_snapshot(
         dotcell,
         token_rows,
         stats_dao_rows,
+        activity_rows,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,

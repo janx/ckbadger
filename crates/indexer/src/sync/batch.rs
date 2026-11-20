@@ -16009,6 +16009,190 @@ mod tests {
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 
+        /// The continuous chain with one more block: a wallet merging its own
+        /// two token cells (a recognised type code that moved no item: the
+        /// party's `TAG_TYPE_CALL`, a Script transaction), beside the chain's
+        /// DAO deposit, request and completion (a sender whose CKB rose), its
+        /// token mint and transfer and its `.cell` registrations.
+        fn continuous_chain_with_a_token_merge() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = continuous_chain_with_dao_token_and_name();
+            let tokens = super::token_daily_parity::blocks();
+            // The token transfer of block 2 left the token cells it made; a
+            // merge spends two of them under one lock and recreates one.
+            let transfer = blocks[2]
+                .block
+                .transactions
+                .iter()
+                .find(|tx| tx.hash == tokens[2].block.transactions[1].hash)
+                .expect("the chain's token transfer")
+                .clone();
+            let (merged_lock, token_cells): (crate::rpc::Script, Vec<usize>) = {
+                let mut by_lock: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+                for (index, output) in transfer.outputs.iter().enumerate() {
+                    if output.type_.is_some() {
+                        by_lock
+                            .entry(format!("{}{}", output.lock.code_hash, output.lock.args))
+                            .or_default()
+                            .push(index);
+                    }
+                }
+                let (_, indexes) = by_lock
+                    .into_iter()
+                    .find(|(_, indexes)| indexes.len() >= 2)
+                    .expect("the transfer leaves two token cells under one lock");
+                (transfer.outputs[indexes[0]].lock.clone(), indexes)
+            };
+            let token_type = transfer.outputs[token_cells[0]].type_.clone();
+            // The amounts the merged cells carry (an owner-mode cell carries
+            // none): the merge keeps their sum, so no item moves.
+            let total: u128 = token_cells
+                .iter()
+                .filter_map(|&index| {
+                    let data = crate::rpc::parse_hex_to_bytes(&transfer.outputs_data[index]);
+                    crate::parser::UdtParser::parse_amount(&data)
+                })
+                .sum();
+            let capacity: u64 = token_cells
+                .iter()
+                .map(|&index| {
+                    u64::from_str_radix(
+                        transfer.outputs[index].capacity.trim_start_matches("0x"),
+                        16,
+                    )
+                    .unwrap()
+                })
+                .sum();
+            let merge = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: token_cells
+                    .iter()
+                    .map(|&index| crate::rpc::CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: crate::rpc::OutPoint {
+                            tx_hash: transfer.hash.clone(),
+                            index: format!("0x{index:x}"),
+                        },
+                    })
+                    .collect(),
+                outputs: vec![crate::rpc::CellOutput {
+                    capacity: format!("0x{:x}", capacity - 1_000),
+                    lock: merged_lock,
+                    type_: token_type,
+                }],
+                outputs_data: vec![format!("0x{}", hex::encode(total.to_le_bytes()))],
+                witnesses: vec!["0x".to_string()],
+            };
+            let mut next = blocks[3].clone();
+            next.block.transactions =
+                vec![super::live_dao_fee::cellbase_tx(0xc4, 100_000_000), merge];
+            let number = 4u64;
+            let header = &mut next.block.header;
+            header.number = format!("0x{number:x}");
+            header.hash = format!("0x{}", hex::encode(super::live_dao_fee::block_hash(number)));
+            header.parent_hash = format!(
+                "0x{}",
+                hex::encode(super::live_dao_fee::block_hash(number - 1))
+            );
+            header.epoch = format!("0x{:x}", (1800_u64 << 40) | (number << 24));
+            header.timestamp = format!("0x{:x}", 1_700_064_002_000_u64);
+            blocks.push(next);
+            blocks
+        }
+
+        /// resync fix round, tests report NOTE-1: a STORE-level comparison of
+        /// bulk against live, whole column families, of the rows the re-sync
+        /// set's parts 1, 3 and 6 write: `tx_actions` (participants' tags with
+        /// the senders bit and `TAG_TYPE_CALL`, the recognised type codes),
+        /// `tx_actions_by_bucket` (each transaction's one kind), `addr_txs`
+        /// and `addr_txs_by_prefix` (the tags per address), and every
+        /// statistics row (the day and hour kind counts), byte for byte, from
+        /// bulk build, a block-at-a-time live sync and one live batch, on a
+        /// chain with a DAO completion (a sender whose CKB rose), a token
+        /// mint, transfer and merge (a recognised code that moved no item)
+        /// and `.cell` registrations.
+        #[tokio::test]
+        async fn bulk_and_live_write_the_same_activity_rows_whole() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_a_token_merge();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+            let merge = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xe7u8; 32])
+                .expect("the merge's activity row");
+            assert!(
+                !merge.recognized_type_codes.is_empty()
+                    && merge
+                        .participants
+                        .iter()
+                        .any(|party| party.tags & ckbadger_store::types::TAG_TYPE_CALL != 0),
+                "fixture: the merge is a recognised code that moved no item: {merge:?}"
+            );
+            assert!(
+                bulk.tx_actions_map.values().any(|actions| actions
+                    .participants
+                    .iter()
+                    .any(|party| party.sent() && party.ckb_delta > 0)),
+                "fixture: a sender whose CKB rose"
+            );
+
+            let open_live = || {
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+
+            let tip_chain_time_ms = blocks
+                .iter()
+                .map(|block| i64::from_str_radix(&block.block.header.timestamp[2..], 16).unwrap())
+                .max()
+                .unwrap();
+            for (live, shape) in [(&single, "a block per batch"), (&multi, "one batch")] {
+                let rows = crate::sync::bulk_build::collect_activity_rows_for_test(live).unwrap();
+                assert_eq!(rows.len(), bulk.activity_rows.len(), "{shape}: row count");
+                for (row, expected) in rows.iter().zip(&bulk.activity_rows) {
+                    assert_eq!(
+                        row,
+                        expected,
+                        "{shape}: first differing activity row ({}:0x{})",
+                        expected.0,
+                        hex::encode(&expected.1)
+                    );
+                }
+                assert_stats_dao_rows_eq(
+                    stats_dao_rows(live),
+                    &bulk.stats_dao_rows,
+                    tip_chain_time_ms,
+                    shape,
+                );
+            }
+        }
+
         fn bucket_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {
             store
                 .iterator_cf(
