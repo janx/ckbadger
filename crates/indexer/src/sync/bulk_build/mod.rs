@@ -183,7 +183,6 @@ impl BulkBuildEngine {
             std::time::Duration::from_millis(200),
             disk_device,
         );
-        let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let mem_profile = indexer.writer.store().memory_profile();
         let memory_guard = memory_guard::BulkMemoryGuard::new(
             indexer.config.bulk_memory_budget_gb,
@@ -349,11 +348,8 @@ impl BulkBuildEngine {
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
-            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
-                &raw_blocks,
-                indexer.config.is_mainnet(),
-                &token_info_cache,
-            )?;
+            let (batch_stats, build_timings, pending_flush) =
+                runtime.apply_blocks(&raw_blocks, indexer.config.is_mainnet())?;
             let build_elapsed = build_started.elapsed();
             if indexer.is_shutdown_requested() {
                 break 'bulk_loop Some("after_batch_build");
@@ -2931,7 +2927,6 @@ impl BulkBuildRuntimeState {
         &mut self,
         blocks: &[binary_facts::RawCkbBlock],
         is_mainnet: bool,
-        token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
@@ -3034,7 +3029,6 @@ impl BulkBuildRuntimeState {
                     &frozen,
                     interner,
                     is_mainnet,
-                    token_info_cache,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
@@ -3293,7 +3287,6 @@ impl BulkBuildRuntimeState {
         &mut self,
         blocks: &[BlockResponseWithCycles],
         is_mainnet: bool,
-        token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
@@ -3385,7 +3378,6 @@ impl BulkBuildRuntimeState {
                     &frozen,
                     interner,
                     is_mainnet,
-                    token_info_cache,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
@@ -4356,7 +4348,7 @@ fn run_bulk_stage_on_stores(
         }
 
         let (batch_stats, _timings, pending) =
-            runtime.apply_blocks_hex(std::slice::from_ref(block), true, &FxHashMap::default())?;
+            runtime.apply_blocks_hex(std::slice::from_ref(block), true)?;
         let history_count = pending.history_row_count();
         let sealed_count = pending.sealed_rows.len();
         let prepared = materialize::prepare_flush(
@@ -4557,8 +4549,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let (batch_stats, _timings, pending) =
-                runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
+            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(batch, true)?;
             let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
@@ -4892,7 +4883,6 @@ fn build_history_batches(
     interner: &interner::FrozenIdentityView,
     identity_interner: &interner::IdentityInterner,
     is_mainnet: bool,
-    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -4918,7 +4908,6 @@ fn build_history_batches(
                 &arena.cells,
                 interner,
                 &detectors,
-                token_info_cache,
             )
         })
         .collect();
@@ -5213,7 +5202,6 @@ fn build_history_rows_for_block(
     arena_cells: &[facts::CellFacts],
     interner: &interner::FrozenIdentityView,
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
-    _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<BlockHistoryRows> {
     let row_capacity = block_txs.len().checked_mul(6).ok_or_else(|| {
         anyhow!(
@@ -6021,47 +6009,6 @@ fn build_object_collection_activity_rows(
     }
 
     Ok(rows)
-}
-
-#[allow(clippy::type_complexity)]
-/// Pre-load token display info (symbol, decimals) from the store.
-/// On a fresh DB this contains only label-imported data which is
-/// immutable for the duration of bulk sync. Loading once eliminates
-/// the per-batch store read that forced flush ordering.
-fn preload_token_info_cache(
-    store: &CkbadgerStore,
-) -> Result<FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
-    let mut cache = FxHashMap::default();
-    let cf = store.cf_tokens();
-    let iter = store.iterator_cf(cf, IteratorMode::Start);
-    for item in iter {
-        let (key, value) =
-            item.map_err(|e| anyhow!("failed to iterate CF_TOKENS for token info preload: {}", e))?;
-        let info: ckbadger_store::types::TokenInfo = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize token info during preload: key=0x{} error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
-        let display_name = info.symbol.or(info.name);
-        let decimals = match info.decimals {
-            Some(value) => Some(u8::try_from(value).map_err(|_| {
-                anyhow!(
-                    "token decimals out of u8 range during preload: key=0x{} decimals={}",
-                    hex::encode(&key),
-                    value
-                )
-            })?),
-            None => None,
-        };
-        cache.insert(key.to_vec(), (display_name, decimals));
-    }
-    info!(
-        token_count = cache.len(),
-        "Pre-loaded token info cache for bulk sync"
-    );
-    Ok(cache)
 }
 
 /// Test fixtures hold bare `TxActions`; the activity stage takes them
@@ -7230,7 +7177,7 @@ mod tests {
     use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
-        AssetAction, FiberChannelState, TokenInfo, TokenTransferRecord, TxActions,
+        AssetAction, FiberChannelState, TokenTransferRecord, TxActions,
         BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
@@ -7891,15 +7838,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
 
         // Convert rows to WriteBatch and commit to stores, then scan for CF_ADDR_TXS keys.
         let prepared =
@@ -7966,15 +7906,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
                 .expect("prepare flush");
@@ -8042,15 +7975,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         // Convert rows to WriteBatch and write to stores (no-WAL) to populate memtables.
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
@@ -8740,43 +8666,6 @@ mod tests {
     }
 
     #[test]
-    fn preload_token_info_cache_loads_label_data() {
-        let (test_store, test_root) = open_empty_domain_store("bulk-build-preload-token-cache");
-        let type_script = fixture_sudt_type_script();
-        let type_hash = ScriptParser::compute_script_hash(&type_script);
-        let type_args = crate::rpc::parse_hex_to_bytes(&type_script.args);
-        test_store
-            .put_token_direct(
-                &type_hash,
-                &TokenInfo {
-                    type_code_hash: crate::rpc::parse_hex_to_bytes(&type_script.code_hash),
-                    hash_type: 1,
-                    type_args,
-                    standard: "sUDT".to_string(),
-                    name: Some("Seal".to_string()),
-                    symbol: Some("SEAL".to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 14_000_889,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .expect("put token");
-
-        let cache = preload_token_info_cache(&test_store).expect("preload token info cache");
-        assert_eq!(
-            cache.get(&type_hash),
-            Some(&(Some("SEAL".to_string()), Some(8)))
-        );
-
-        let _ = std::fs::remove_dir_all(&test_root);
-    }
-
-    #[test]
     fn build_history_rows_materializes_ckb_tx_actions_in_tx_order() {
         let block = bulk_build_addr_tx_fixture();
         let split_tx_hash =
@@ -8808,15 +8697,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let result = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let result = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
                 .expect("prepare flush");
@@ -8886,15 +8768,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let result = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let result = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
                 .expect("prepare flush");
@@ -8986,15 +8861,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let sealed_rows =
             build_sealed_aggregate_rows(&history.tx_actions_list).expect("sealed rows");
         let final_snapshot_rows =
@@ -9078,15 +8946,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
                 .expect("prepare flush");
@@ -10077,7 +9938,7 @@ mod tests {
             .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
-            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .apply_blocks_hex(std::slice::from_ref(&block), true)
             .unwrap();
 
         // Mainnet genesis virtual-occupied; both paths must use the same value.
@@ -11070,15 +10931,8 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
         // First call — should emit lock script rows.
-        let result1 = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("first build");
+        let result1 = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("first build");
 
         // Convert rows, commit, and count lock script entries in the store.
         let prepared1 =
@@ -11104,15 +10958,8 @@ mod tests {
         // Second call with the same arena/resolved/frozen and interner markers —
         // should emit zero NEW lock script rows since all lock_hash_ids are
         // already marked written.
-        let result2 = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("second build");
+        let result2 = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("second build");
 
         // Convert rows and commit second batch.
         let prepared2 =
@@ -11182,7 +11029,7 @@ mod tests {
         let mut block = bulk_build_addr_tx_fixture();
         block.block.header.dao = format!("0x{}", hex::encode(genesis_dao));
         runtime
-            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .apply_blocks_hex(std::slice::from_ref(&block), true)
             .unwrap();
 
         let root = super::unique_temp_test_dir("bulk-build-final-rows");
@@ -11959,7 +11806,6 @@ mod tests {
                 &arena.cells,
                 &frozen,
                 &detectors,
-                &FxHashMap::default(),
             )
             .expect("history rows");
             let folds = COLLECTION_DAY_FOLDS.with(|folds| folds.borrow().clone());

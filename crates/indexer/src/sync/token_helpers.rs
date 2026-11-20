@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, Result};
-
-use ckbadger_store::types::PositionedCellInfo;
-use ckbadger_store::CkbadgerStore;
+use anyhow::Result;
 
 use super::helpers::*;
 use super::types::{TxData, XudtExtensionScript};
@@ -941,65 +938,6 @@ pub(crate) fn collect_token_max_supply_observations(
     observations
 }
 
-#[allow(clippy::type_complexity, dead_code)]
-pub(crate) fn load_activity_token_info_cache(
-    store: &CkbadgerStore,
-    tx_data: &[TxData],
-    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
-    let mut type_hashes = HashSet::<Vec<u8>>::new();
-
-    for tx in tx_data {
-        for cell in &tx.cells {
-            if let Some(type_script_hash) = &cell.type_script_hash {
-                type_hashes.insert(type_script_hash.clone());
-            }
-        }
-
-        if tx.is_cellbase {
-            continue;
-        }
-
-        for input in &tx.inputs {
-            let key = (
-                input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
-            );
-            let cell_info = input_cell_info
-                .get(&key)
-                .or_else(|| batch_cell_infos.get(&key));
-            if let Some(info) = cell_info {
-                if let Some(type_script_hash) = info.type_script_hash() {
-                    type_hashes.insert(type_script_hash.to_vec());
-                }
-            }
-        }
-    }
-
-    let type_hash_vec: Vec<Vec<u8>> = type_hashes.into_iter().collect();
-    let mut token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> = HashMap::new();
-    for (type_hash, info) in store.get_tokens_batch(&type_hash_vec)? {
-        let Some(info) = info else {
-            continue;
-        };
-        let decimals = match info.decimals {
-            Some(value) => Some(u8::try_from(value).map_err(|_| {
-                anyhow!(
-                    "token decimals out of u8 range while building activity cache: type_hash=0x{}, decimals={}",
-                    hex::encode(&type_hash),
-                    value
-                )
-            })?),
-            None => None,
-        };
-        let symbol = info.symbol.clone().or(info.name.clone());
-        token_info_cache.insert(type_hash, (symbol, decimals));
-    }
-
-    Ok(token_info_cache)
-}
-
 /// A cell's UDT amount, when its type pair is a UDT (THE pair rule,
 /// `UdtParser::is_udt_code_hash_bytes`). Nothing else makes a cell a UDT: the
 /// standard a token row or a label states is no hint (resync fix round 2, B:
@@ -1052,7 +990,6 @@ pub(crate) fn parse_parsed_cell_udt_amount(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ckbadger_store::batch::StoreBatch;
 
     // -- molecule encoding helpers (test-only) --------------------------------
 
@@ -1303,28 +1240,6 @@ mod tests {
             cycles: None,
             timestamp: Utc::now(),
             semantic_tags: 0,
-        }
-    }
-
-    fn make_token_info(
-        decimals: Option<i32>,
-        symbol: Option<&str>,
-    ) -> ckbadger_store::types::TokenInfo {
-        ckbadger_store::types::TokenInfo {
-            type_code_hash: vec![0x77; 32],
-            hash_type: 1,
-            type_args: vec![0x88; 32],
-            standard: "xudt".to_string(),
-            name: Some("FallbackName".to_string()),
-            symbol: symbol.map(|s| s.to_string()),
-            decimals,
-            max_supply: None,
-            first_seen_block: 0,
-            icon_url: None,
-            description: None,
-            transfers_count: 0,
-            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-            chain_metadata: None,
         }
     }
 
@@ -1691,65 +1606,6 @@ mod tests {
 
         let missing_observations = collect_token_max_supply_observations(&[tx_without_witness]);
         assert!(!missing_observations.contains_key(token_type_hash.as_slice()));
-    }
-
-    // -- load_activity_token_info_cache tests ----------------------------------
-
-    #[test]
-    fn test_load_activity_token_info_cache_prefers_symbol_and_converts_decimals() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
-
-        let type_hash = vec![0xAA; 32];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_token(&type_hash, &make_token_info(Some(8), Some("OTTER")));
-        batch.commit().unwrap();
-
-        let tx = dummy_tx_data(
-            [0x11; 32],
-            false,
-            vec![],
-            vec![dummy_xudt_cell(
-                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
-                vec![0x99; 32],
-            )],
-            vec![],
-        );
-
-        let cache = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
-            .unwrap();
-
-        assert_eq!(
-            cache.get(&type_hash),
-            Some(&(Some("OTTER".to_string()), Some(8)))
-        );
-    }
-
-    #[test]
-    fn test_load_activity_token_info_cache_errors_on_invalid_decimals() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
-
-        let type_hash = vec![0xAB; 32];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_token(&type_hash, &make_token_info(Some(300), None));
-        batch.commit().unwrap();
-
-        let tx = dummy_tx_data(
-            [0x12; 32],
-            false,
-            vec![],
-            vec![dummy_xudt_cell(
-                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
-                vec![0x98; 32],
-            )],
-            vec![],
-        );
-
-        let err = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
-            .unwrap_err();
-
-        assert!(err.to_string().contains("out of u8 range"));
     }
 
     // -- parse_unique_cell_token_info tests ------------------------------------
