@@ -1344,29 +1344,32 @@ fn reject_multi_network_overrides(
     )
 }
 
-/// Resolve and validate every network before starting any potentially long-running
-/// verification. A plain workdir produces one target; an orchestrator root produces
-/// one target per `[[network]]`, in declaration order.
-/// The refusal of a network's domain store, when this build refuses it
-/// (resync fix round 2, A): the store read without writing anything in it
-/// (`ckbadger_store::inspect_domain_store`), the refusal in the words every
-/// opener says. No store, a fresh store and a store of this build's layout
-/// are no refusal: verify then reads the network through its API.
-fn verify_store_refusal(domain_data_path: &Path) -> Result<Option<String>> {
-    let inspected = ckbadger_store::inspect_domain_store(
+/// Why verify cannot run a network, read from its domain store before the
+/// run, writing nothing in it (`ckbadger_store::inspect_domain_store`): a
+/// store this build refuses (resync fix round 2, A), in the words every
+/// opener says; one still being created (resync fix round 3, M); one it
+/// cannot read, with the error (round 3, item 6). Each is that network's
+/// failed-start report, never the end of the run for the others. No store, a
+/// fresh store and a store of this build's layout are no reason: verify then
+/// reads the network through its API.
+fn verify_failed_start(domain_data_path: &Path) -> Option<String> {
+    match ckbadger_store::inspect_domain_store(
         domain_data_path,
         &secondary_store_path(domain_data_path, SecondaryStoreOwner::Cli),
-    )?;
-    Ok(match inspected {
-        Some(Err(mismatch)) => Some(format!(
+    ) {
+        Err(error) => Some(format!(
+            "the domain store {} could not be read: {error:#}",
+            domain_data_path.display()
+        )),
+        Ok(Some(Err(mismatch))) => Some(format!(
             "domain store {} refused: {mismatch}",
             domain_data_path.display()
         )),
-        Some(Ok(ckbadger_store::StoreLayoutState::NotReady)) => {
+        Ok(Some(Ok(ckbadger_store::StoreLayoutState::NotReady))) => {
             Some(being_created(domain_data_path))
         }
-        None | Some(Ok(_)) => None,
-    })
+        Ok(None | Some(Ok(_))) => None,
+    }
 }
 
 /// What a short-lived reader says of a domain store still being created
@@ -1378,6 +1381,9 @@ fn being_created(domain_data_path: &Path) -> String {
     )
 }
 
+/// Resolve and validate every network before starting any potentially long-running
+/// verification. A plain workdir produces one target; an orchestrator root produces
+/// one target per `[[network]]`, in declaration order.
 fn resolve_verify_targets(workdir: &Path) -> Result<Vec<VerifyTarget>> {
     if !is_orchestrator(workdir) {
         let config = load_config(workdir)?;
@@ -1721,11 +1727,12 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
 
     for target in targets {
         let network = target.network.clone();
-        // A network whose store this build refuses is reported with the
-        // refusal, not run against an API that refuses it too.
-        if let Some(refusal) = verify_store_refusal(&target.domain_data_path)? {
+        // A network whose store this build refuses, or that is still being
+        // created, or that cannot be read, is that network's report, not
+        // run against an API that refuses it too, nor the end of the run.
+        if let Some(reason) = verify_failed_start(&target.domain_data_path) {
             reports.push(indexer_verify::VerifyReport::for_failed_start(
-                &run_id, &network, refusal,
+                &run_id, &network, reason,
             ));
             continue;
         }
@@ -2357,9 +2364,7 @@ mod tests {
                 "{lines:?}"
             );
 
-            let refusal = super::verify_store_refusal(&domain)
-                .unwrap()
-                .expect("verify says the refusal");
+            let refusal = super::verify_failed_start(&domain).expect("verify says the refusal");
             assert!(
                 refusal.contains("live_code_cells_by_type")
                     && refusal.contains(&format!(
@@ -2401,10 +2406,7 @@ mod tests {
             ckbadger_store::StoreRuntimeConfig::default(),
         );
         assert_eq!(lines, vec![format!("Sync status: {being_created}")]);
-        assert_eq!(
-            super::verify_store_refusal(&domain).unwrap(),
-            Some(being_created)
-        );
+        assert_eq!(super::verify_failed_start(&domain), Some(being_created));
         assert_eq!(store_files_and_column_families(&domain), before);
     }
 
@@ -2418,8 +2420,8 @@ mod tests {
         let domain = dir.path().join("domain");
         std::fs::create_dir_all(&domain).unwrap();
         std::fs::write(domain.join("CURRENT"), "MANIFEST-000099\n").unwrap();
-        match super::verify_store_refusal(&domain) {
-            Ok(Some(reason)) => assert!(
+        match super::verify_failed_start(&domain) {
+            Some(reason) => assert!(
                 reason.starts_with(&format!(
                     "the domain store {} could not be read: ",
                     domain.display()
