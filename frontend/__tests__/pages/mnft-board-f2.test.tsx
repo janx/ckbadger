@@ -295,6 +295,8 @@ describe('Mnft board (F2 objects)', () => {
     expect(promptNote(heading)).toContainElement(
       within(cls).getByRole('link', { name: 'Open the class' })
     );
+    // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+    expect(within(cls).getByRole('link', { name: 'Open the class' })).toHaveClass('text-small');
     expect(cls).toHaveTextContent('150 holders');
     expect(cls).toHaveTextContent('0 of 198 fully on-chain');
     expect(cls).toHaveTextContent('issued by Issuer A');

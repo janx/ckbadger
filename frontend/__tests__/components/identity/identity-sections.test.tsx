@@ -332,6 +332,8 @@ describe('AmongDidCkb (ID-D3)', () => {
     expect(promptNote(heading)).toContainElement(
       within(section).getByRole('link', { name: 'All 114' })
     );
+    // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+    expect(within(section).getByRole('link', { name: 'All 114' })).toHaveClass('text-small');
     const mine = within(section).getByText('web5.bbs.fans').closest('li')!;
     expect(mine).toHaveTextContent('99');
     expect(mine).toHaveTextContent('this one');

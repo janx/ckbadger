@@ -453,8 +453,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <PromptHeading
             command="Collection"
             args={collectionName ?? 'this collection'}
+            // a link is never 12 px (BRIEF-roles-rest part B): 13 px in the note's 12 px, the note
+            // an item of the heading's wrapping row, "Open the collection →" 21 glyphs, 163.8 px
             note={
-              <AppLink look="onward" href={collectionHref!}>
+              <AppLink look="onward" href={collectionHref!} className="text-small">
                 Open the collection
               </AppLink>
             }

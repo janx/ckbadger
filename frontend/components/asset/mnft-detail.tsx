@@ -497,8 +497,10 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         <PromptHeading
           command="Class"
           args={className}
+          // a link is never 12 px (BRIEF-roles-rest part B): 13 px in the note's 12 px, the note an
+          // item of the heading's wrapping row, "Open the class →" 16 glyphs, 124.8 px
           note={
-            <AppLink look="onward" href={classHref}>
+            <AppLink look="onward" href={classHref} className="text-small">
               Open the class
             </AppLink>
           }

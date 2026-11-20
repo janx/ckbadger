@@ -332,6 +332,8 @@ it('places it in its collection with the composition count and cluster cell (OB-
   expect(promptNote(heading)).toContainElement(
     within(coll).getByRole('link', { name: 'Open the collection' })
   );
+  // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+  expect(within(coll).getByRole('link', { name: 'Open the collection' })).toHaveClass('text-small');
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');
   expect(coll).toHaveTextContent('90 of 90');

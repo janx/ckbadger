@@ -65,6 +65,8 @@ describe('CkbytesSection', () => {
     // BRIEF-roles-rest part A: the block is a value, a link in the reading ink inside the note's
     // quiet "at" (it took the right prompt's quiet ink)
     expect(block.parentElement).toHaveClass('text-text');
+    // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+    expect(block.parentElement).toHaveClass('text-small');
     expect(screen.getByRole('link', { name: 'supply' })).toHaveAttribute(
       'href',
       '/mainnet/charts/total-supply'
