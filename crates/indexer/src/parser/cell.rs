@@ -11,6 +11,13 @@ pub struct ParsedCell {
     pub lock_hash_type: i16,
     pub lock_args: Vec<u8>,
     pub lock_script_hash: Vec<u8>,
+    /// The type script's code hash, hash type, args and hash are set
+    /// together from one RPC script ([`Self::parse_output`], the only
+    /// constructor outside tests): a typed cell always carries its hash type.
+    /// So a site that reads a missing hash type as "not X" (a
+    /// `.zip(type_hash_type)`) never meets a typed cell; the hash type is
+    /// missing only where the cell has no type script (resync fix round,
+    /// logic NOTE N1).
     pub type_code_hash: Option<Vec<u8>>,
     pub type_hash_type: Option<i16>,
     pub type_args: Option<Vec<u8>>,

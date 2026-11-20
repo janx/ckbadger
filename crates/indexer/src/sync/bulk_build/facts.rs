@@ -310,6 +310,10 @@ pub(crate) struct CellFacts {
     pub(crate) lock_code_hash_id: InternId,
     pub(crate) lock_hash_type: i16,
     pub(crate) lock_args_id: InternId,
+    /// The type script's hash, code hash, hash type and args are set together
+    /// from one packed script (`binary_facts`), so a typed cell always carries
+    /// its hash type: a site reading a missing hash type as "not X" never
+    /// meets a typed cell (resync fix round, logic NOTE N1).
     pub(crate) type_script_hash_id: Option<InternId>,
     pub(crate) type_code_hash_id: Option<InternId>,
     pub(crate) type_hash_type: Option<i16>,

@@ -33,6 +33,12 @@ pub struct LiveCellInfo {
     pub lock_code_hash: [u8; 32],
     pub lock_hash_type: i16,
     pub lock_args: Vec<u8>,
+    /// The type script's code hash, hash type and args are all present or all
+    /// absent: the payload's encode and decode refuse a partial type script
+    /// ("type script is partial"), so a stored cell with a code hash always
+    /// carries its hash type, and a site that reads a missing hash type as
+    /// "not X" never meets a typed stored cell (resync fix round, logic NOTE
+    /// N1).
     pub type_code_hash: Option<[u8; 32]>,
     pub type_hash_type: Option<i16>,
     pub type_args: Option<Vec<u8>>,

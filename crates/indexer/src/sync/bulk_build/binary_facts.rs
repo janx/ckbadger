@@ -363,11 +363,14 @@ pub(crate) fn parse_block_to_facts(
 
             // -- Semantic tag (registry lookup from raw code_hash bytes) -------
 
-            let semantic_tag = match type_code_hash_bytes.as_ref() {
-                Some(code_hash) => {
-                    code_hash_to_semantic_tag(code_hash, type_hash_type.unwrap_or(-1))
+            // The code hash and the hash type come from the one packed type
+            // script above, both or neither (resync fix round, logic NOTE N1:
+            // no default hash type stands in for a missing one).
+            let semantic_tag = match (type_code_hash_bytes.as_ref(), type_hash_type) {
+                (Some(code_hash), Some(hash_type)) => {
+                    code_hash_to_semantic_tag(code_hash, hash_type)
                 }
-                None => CellSemanticTag::Plain,
+                _ => CellSemanticTag::Plain,
             };
 
             // -- Occupied capacity -------------------------------------------

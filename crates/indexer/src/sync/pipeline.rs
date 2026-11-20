@@ -330,8 +330,11 @@ pub fn classify_type_script_semantic_tag(
     type_code_hash: Option<&[u8]>,
     type_hash_type: Option<i16>,
 ) -> CellSemanticTag {
-    // A type script is a pair: a cell with no type script, or a code hash
-    // without its hash type, carries no type.
+    // A type script is a pair: a cell with no type script carries no type. A
+    // code hash without its hash type reaches here from no caller (resync fix
+    // round, logic NOTE N1): a parsed output (`ParsedCell::parse_output`), a
+    // stored cell (`LiveCellInfo`, whose codec refuses a partial type script)
+    // and the pool mirror's raw scripts all carry the two together.
     let (Some(type_code_hash), Some(type_hash_type)) = (type_code_hash, type_hash_type) else {
         return CellSemanticTag::Plain;
     };
