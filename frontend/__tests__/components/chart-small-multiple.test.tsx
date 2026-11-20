@@ -187,7 +187,11 @@ describe('ChartSmallMultiple', () => {
     // under its title (was its share under "top"); the window is the head's date.
     const readout = screen.getByRole('group', { name: 'Miners current readout' });
     expect(readout.textContent).toBe('60');
-    expect(screen.getByText('largest miner')).toBeInTheDocument();
+    // Re-pinned on purpose (BRIEF-roles-rest part F; it was "largest miner"): the card's date
+    // reads at 13 px by the owner's ruling, and "largest miner · 2026-11-12 → 2026-11-18" was
+    // 13 × 7.2 + 10 + 23 × 7.8 = 283 px of the 278 px card; "largest" under the title "Miners" says
+    // the same, 50.4 + 10 + 179.4 = 239.8 px
+    expect(screen.getByText('largest')).toBeInTheDocument();
     expect(screen.getByText('2026-10-21 → 2026-10-27')).toBeInTheDocument();
   });
 
