@@ -2328,6 +2328,79 @@ async fn every_participant_states_whether_it_sent() {
     }
 }
 
+/// resync fix round T2 (tests report SHOULD-2): `sent` is the senders bit, never
+/// the sign of the CKB change. A DAO withdrawal's sender gains its compensation:
+/// its lock is an input's (`TAG_INPUT`) and its CKB rose (+50). It sent, on the
+/// global row and on its own address row; the party whose CKB fell without an
+/// input (-50, no bit) did not.
+#[tokio::test]
+async fn a_sender_whose_ckb_rose_still_sent() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_DAO, TAG_INPUT};
+    let store = test_store();
+    let withdrawer = [0x43u8; 32];
+    let other = [0x12u8; 32];
+    let tx_hash = vec![0xab; 32];
+    let party = |id, ckb_delta, tags| ParticipantDelta {
+        id,
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags,
+        roles: 0,
+    };
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbc; 32],
+        block_number: 11,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        recognized_type_codes: vec![],
+        participants: vec![
+            party(ParticipantId::Lock(withdrawer), 50, TAG_INPUT | TAG_DAO),
+            party(ParticipantId::Lock(other), -50, 0),
+        ],
+    };
+    seed_named_tx(&store, 11, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &withdrawer,
+        11,
+        0,
+        &AddrTxValue::new(50, true, true, TAG_INPUT | TAG_DAO),
+    );
+    batch.put_addr_tx(&other, 11, 0, &AddrTxValue::new(-50, false, false, 0));
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &withdrawer);
+    sync_address_tx_counters(&store, &other);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let sent: Vec<_> = json["data"][0]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["sent"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![serde_json::json!(true), serde_json::json!(false)],
+        "the withdrawer sent though its CKB rose; the other did not though its fell: {json}"
+    );
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(withdrawer)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["sent"], serde_json::json!(true), "{json}");
+}
+
 /// A party whose lock script the store does not know is reported by its lock
 /// hash with no address — never with the hex lock hash posing as an address.
 #[tokio::test]
