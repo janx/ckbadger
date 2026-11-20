@@ -495,12 +495,20 @@ pub(crate) fn insert_max_supply_claim(claims: &mut MaxSupplyClaims, claim: MaxSu
 }
 
 /// THE max-supply rule, both sync paths: a token's max supply is the first
-/// of the token's claims made at or after the token's first block (the
-/// block of its first cell), in chain order. `type_args` and `first_block`
-/// are the token row's.
+/// claim in chain order at or after the token's first BLOCK (the block of its
+/// first cell). `type_args` and `first_block` are the token row's; a token
+/// row exists only once the chain holds the token, so its first block is
+/// always that block (label import writes no row for a token the chain does
+/// not hold: resync fix round M1).
 ///
-/// - A claim made before the token exists is not the token's: it names an id
-///   nothing carries yet.
+/// - The rule is by block, so that it cannot depend on batch cuts or on the
+///   order of transactions inside a block: a claim made in a block before the
+///   token's first block is not the token's (it names an id nothing carries
+///   yet), and a claim earlier in the token's own first block, in a
+///   transaction before the one that creates its first cell, counts (the
+///   lead's ruling: a counted Omnilock claim comes only from the token's
+///   owner lock, the one lock the token is minted under, so only the owner's
+///   own claim can be that early).
 /// - An Omnilock supply-info claim is the token's only when the token's owner
 ///   lock hash (the first 32 bytes of its type args, sUDT and xUDT alike) is
 ///   the hash of the claiming supply-mode Omnilock: one comparison. A claim

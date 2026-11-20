@@ -11,6 +11,19 @@
 use crate::types::{ChainTokenMetadata, OnchainInfoBinding, TokenInfo, TokenMetadataSource};
 
 impl TokenInfo {
+    /// THE label rule (resync fix round M1): a curated label attached to the
+    /// token's row writes its name, symbol and decimals ([`Self::apply_label`]),
+    /// its icon, its description and its standard. Label import calls it on a
+    /// row the chain already made; live sync and the bulk snapshot writer call
+    /// it on the row they create when the chain first holds the token, before
+    /// any chain claim or Unique Cell is merged in, so both paths store one row.
+    pub fn attach_label(&mut self, label: &crate::types::TokenLabel) {
+        self.apply_label(label.name.clone(), label.symbol.clone(), label.decimals);
+        self.icon_url = label.icon_url.clone();
+        self.description = label.description.clone();
+        self.standard = label.standard.clone();
+    }
+
     /// A curated label writes `name`, `symbol` and `decimals`; the stored
     /// fields are now the label's. The bound chain values are kept.
     pub fn apply_label(&mut self, name: String, symbol: String, decimals: i32) {

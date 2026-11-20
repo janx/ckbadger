@@ -439,6 +439,10 @@ pub const CF_DAO_BY_BLOCK: &str = "dao_by_block";
 pub const CF_DAO_BY_LOCK_BLOCK: &str = "dao_by_lock_block";
 pub const CF_DAO_BY_STATUS_BLOCK: &str = "dao_by_status_block";
 pub const CF_TOKENS: &str = "tokens";
+/// The curated token labels label import read (`TokenLabel`), by type script
+/// hash: attached to a token's row when the chain first holds the token
+/// (resync fix round M1). Label import is its only writer.
+pub const CF_TOKEN_LABELS: &str = "token_labels";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_TOKEN_HOLDERS_BY_BALANCE: &str = "token_holders_by_balance";
 pub const CF_ADDR_TOKENS_BY_BALANCE: &str = "addr_tokens_by_balance";
@@ -735,6 +739,7 @@ mod cf_table {
         cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
+        cf(CF_TOKEN_LABELS,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -856,6 +861,12 @@ const PSEUDO_LABELS_REASON: &str =
     "the registry's labels of the pseudo deployments (Zero Lock, Type ID), not chain state: \
     label import rewrites the whole column family at every start and nothing journals it, so a \
     rollback leaves it as the last import wrote it";
+/// `token_labels` (resync fix round M1): the curated token labels, which no
+/// batch journals.
+const TOKEN_LABELS_REASON: &str =
+    "the curated token labels, not chain state: label import rewrites the whole column family \
+    at every start and nothing journals it, so a rollback leaves it as the last import wrote it; \
+    a token row the chain creates takes its label from here";
 const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
 const DERIVE_REASON: &str =
     "a derived aggregate is rebuilt from canonical rows; a rollback resets \
@@ -1059,6 +1070,13 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         LABEL_IMPORT,
         LABELS_REASON,
         ALSO_JOURNALED,
+    ),
+    whole_cf(
+        CF_TOKEN_LABELS,
+        OutsideWriter::LabelImport,
+        LABEL_IMPORT,
+        TOKEN_LABELS_REASON,
+        NEVER,
     ),
 ];
 
@@ -2264,6 +2282,9 @@ impl CkbadgerStore {
     }
     pub fn cf_tokens(&self) -> &ColumnFamily {
         self.cf(CF_TOKENS)
+    }
+    pub fn cf_token_labels(&self) -> &ColumnFamily {
+        self.cf(CF_TOKEN_LABELS)
     }
     pub fn cf_token_holders(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_HOLDERS)
@@ -4277,7 +4298,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 74);
+        assert_eq!(DOMAIN_CFS.len(), 75);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5779,8 +5800,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 78);
-        assert_eq!(DOMAIN_CFS.len(), 74);
+        assert_eq!(CF_SPECS.len(), 79);
+        assert_eq!(DOMAIN_CFS.len(), 75);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5842,7 +5863,7 @@ mod tests {
         );
         assert_eq!(
             (FINALIZE_WRITTEN_CFS.len(), BATCH_LOOP_ONLY_CFS.len()),
-            (52, 22)
+            (53, 22)
         );
         for name in BATCH_LOOP_ONLY_CFS {
             assert!(
@@ -6688,6 +6709,7 @@ mod tests {
     "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "token_labels FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

@@ -1000,6 +1000,23 @@ pub struct TokenInfo {
     pub chain_metadata: Option<ChainTokenMetadata>,
 }
 
+/// A curated token label (`docs/metadata/tokens/`), as label import stores it
+/// in `CF_TOKEN_LABELS` by the token's type script hash. It is attached to the
+/// token's row ([`TokenInfo::attach_label`]) by label import when the chain
+/// already holds the token, and by the writer that creates the row (live sync
+/// or the bulk snapshot) when the chain first holds it: a label never makes a
+/// token row by itself (resync fix round M1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenLabel {
+    pub name: String,
+    pub symbol: String,
+    pub decimals: i32,
+    pub icon_url: Option<String>,
+    pub description: Option<String>,
+    /// The label's standard (`sudt`, `xudt`, `xudt_compatible`).
+    pub standard: String,
+}
+
 /// Which source wrote a token's stored `name` / `symbol` / `decimals`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TokenMetadataSource {

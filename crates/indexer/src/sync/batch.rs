@@ -10660,7 +10660,10 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             import_label(store.as_ref()).unwrap();
-            let labelled = store.get_token(&type_hash).unwrap().unwrap();
+            // resync fix round M1: label import stores the label and writes
+            // no token row for a token the chain does not hold yet.
+            assert_eq!(store.get_token(&type_hash).unwrap(), None);
+            let label = store.get_token_label(&type_hash).unwrap().unwrap();
             write_live_block(&indexer, blocks[0].clone()).await.unwrap();
             write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
                 .await
@@ -10702,10 +10705,18 @@ mod tests {
             );
             assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
             assert_eq!(live_bytes, bulk_bytes, "live and bulk CF_TOKENS rows, raw");
-            // Label import alone wrote the label and nothing about the chain.
+            // The label import stored is the one attached.
             assert_eq!(
-                (labelled.metadata_source, labelled.chain_metadata),
-                (Some(TokenMetadataSource::Label), None)
+                (
+                    live.name.as_deref(),
+                    live.icon_url.as_deref(),
+                    live.standard.as_str()
+                ),
+                (
+                    Some(label.name.as_str()),
+                    label.icon_url.as_deref(),
+                    label.standard.as_str()
+                )
             );
         }
     }

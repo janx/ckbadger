@@ -185,6 +185,31 @@ pub(crate) mod tests {
         assert_eq!(store.get_store_layout().unwrap(), Some(6));
     }
 
+    /// The fix round's M1 (layout 8): a store stamped 7 holds a token row with
+    /// first block 0 for every labelled token, held by the chain or not.
+    /// Refused before anything is written, both layouts named.
+    #[test]
+    fn a_store_stamped_with_label_placeholder_token_rows_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        store.set_store_layout(7).unwrap();
+        let before = domain_rows(&store);
+
+        let error = ensure_store_layout(&store).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let words = error.to_string();
+        assert!(
+            words.contains("store layout 7")
+                && words.contains(&format!("store layout {STORE_LAYOUT}"))
+                && words.contains("a token row only once the chain holds the token")
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+        assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+        assert_eq!(store.get_store_layout().unwrap(), Some(7));
+    }
+
     #[test]
     fn a_store_of_another_layout_is_refused_naming_both() {
         let dir = tempfile::tempdir().unwrap();

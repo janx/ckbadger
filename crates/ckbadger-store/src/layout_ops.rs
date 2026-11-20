@@ -65,19 +65,28 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   recognised type ran that moved none of its items and took no DAO step
 ///   carries `TAG_TYPE_CALL` (a wallet merging its own token cells counts
 ///   under Script, never as a CKB transfer). A store stamped 6 lacks them.
+/// - 8: a token row only for a token the chain holds (resync fix round M1):
+///   label import keeps the curated labels in `token_labels` and writes no
+///   `tokens` row for a token the chain does not hold; the writer that creates
+///   a token's row (live sync or the bulk snapshot) attaches its label
+///   (`TokenInfo::attach_label`), so a token's first block is the block of
+///   its first cell on both paths and a claim made before it is never kept on
+///   its row. A store stamped 7 holds label rows with first block 0, from
+///   which live admitted a claim made before the token existed.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
 /// type's usage, its activity rows are another layout, its participants
 /// carry no senders bit.
-pub const STORE_LAYOUT: u32 = 7;
+pub const STORE_LAYOUT: u32 = 8;
 
 /// What [`STORE_LAYOUT`] changed, for the refusal's words.
 pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by their pair (code \
      hash, hash type), generic type references counted by their live code, each transaction in \
      one activity kind, the senders bit on participants, a token's max supply its first claim \
      at or after its first block on both sync paths, made by the token's owner lock, protocols \
-     recognised by their pair, the recognised type codes that ran on each activity";
+     recognised by their pair, the recognised type codes that ran on each activity, a token \
+     row only once the chain holds the token, its label attached by the writer that creates it";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +324,20 @@ mod tests {
         assert_eq!(
             store.check_store_layout().unwrap(),
             Err(StoreLayoutMismatch { found: Some(6) })
+        );
+    }
+
+    /// Stamp 7 is the re-sync set before the fix round's M1: label import
+    /// wrote a token row with first block 0 for every labelled token, and
+    /// live admitted a claim made before the token existed, so this build
+    /// refuses it.
+    #[test]
+    fn a_store_stamped_with_label_placeholder_token_rows_is_refused() {
+        let (_dir, store) = store();
+        store.set_store_layout(7).unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: Some(7) })
         );
     }
 

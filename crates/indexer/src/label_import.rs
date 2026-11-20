@@ -449,6 +449,14 @@ pub(crate) fn import_all(
     let existing_labels = store
         .list_script_infos()
         .with_context(|| format!("label import preflight: network={network} script_info rows"))?;
+    // Every token label row is read before any write: a label no entry
+    // imports any more is deleted after the writes, so a token the chain first
+    // holds later is never given a label that was removed.
+    let existing_token_labels = store
+        .list_token_label_hashes()
+        .with_context(|| format!("label import preflight: network={network} token_labels rows"))?;
+    let mut imported_token_labels: std::collections::HashSet<Vec<u8>> =
+        std::collections::HashSet::new();
     let mut result = LabelImportResult::default();
     for token in tokens {
         if token.disabled {
@@ -472,6 +480,7 @@ pub(crate) fn import_all(
                             hex::encode(&prepared.type_hash)
                         )
                     })?;
+                    imported_token_labels.insert(prepared.type_hash);
                     result.udt_labels_imported += 1;
                 }
                 Err(e) => result.errors.push(format!("Token {}: {}", token.symbol, e)),
@@ -487,6 +496,18 @@ pub(crate) fn import_all(
         upsert_script_label_validated(store, script, network, &registrations)
             .with_context(|| format!("label import: network={network} script={}", script.name))?;
         result.script_labels_imported += 1;
+    }
+    for type_hash in existing_token_labels {
+        if !imported_token_labels.contains(&type_hash) {
+            store
+                .delete_token_label_direct(&type_hash)
+                .with_context(|| {
+                    format!(
+                        "label import: delete token label 0x{}",
+                        hex::encode(&type_hash)
+                    )
+                })?;
+        }
     }
     remove_script_labels_not_imported(store, existing_labels, &registrations.label_pairs)?;
     set_family_versions_counts(store)?;
@@ -589,12 +610,10 @@ fn script_family_id(script: &ScriptMetadata) -> Result<&str> {
     })
 }
 
-/// A token label's deployment, decoded from its metadata entry.
+/// A token label's deployment, decoded from its metadata entry: the type
+/// script hash its label is stored under.
 struct PreparedTokenLabel {
     type_hash: Vec<u8>,
-    hash_type: u8,
-    code_hash: Vec<u8>,
-    args: Vec<u8>,
 }
 
 /// Decode a token label's deployment: pure metadata validation, the only
@@ -603,31 +622,27 @@ fn prepare_token_label(
     token: &TokenMetadata,
     deployment: &TokenDeployment,
 ) -> Result<PreparedTokenLabel> {
-    let code_hash = decode_hex(&deployment.code_hash).map_err(|e| {
+    decode_hex(&deployment.code_hash).map_err(|e| {
         anyhow::anyhow!(
             "invalid type script code_hash for token {}: {}",
             token.symbol,
             e
         )
     })?;
-    let args = decode_hex(&deployment.args).map_err(|e| {
+    decode_hex(&deployment.args).map_err(|e| {
         anyhow::anyhow!("invalid type script args for token {}: {}", token.symbol, e)
     })?;
     // Metadata, not node data: an unknown label is a collected entry error,
     // checked before the script hash reads it.
-    let hash_type =
-        ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
-            anyhow::anyhow!(
-                "invalid type script hash_type `{}` for token {}",
-                deployment.hash_type,
-                token.symbol
-            )
-        })?;
+    ckbadger_common::hash_type_from_label(&deployment.hash_type).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid type script hash_type `{}` for token {}",
+            deployment.hash_type,
+            token.symbol
+        )
+    })?;
     Ok(PreparedTokenLabel {
         type_hash: compute_type_hash(deployment)?,
-        hash_type,
-        code_hash,
-        args,
     })
 }
 
@@ -640,32 +655,41 @@ fn upsert_token_label(
     write_token_label(store, token, &prepare_token_label(token, deployment)?)
 }
 
+/// The label a token metadata entry carries, as `token_labels` stores it.
+fn token_label(token: &TokenMetadata) -> ckbadger_store::types::TokenLabel {
+    ckbadger_store::types::TokenLabel {
+        name: token.name.clone(),
+        symbol: token.symbol.clone(),
+        decimals: i32::from(token.decimals),
+        icon_url: token.icon.clone(),
+        description: token.description.clone(),
+        standard: token.standard.clone(),
+    }
+}
+
 /// Write one decoded token label; every store error propagates.
+///
+/// The label is stored in `token_labels` (domain store, outside the journal:
+/// label import is its only writer). A token row is the chain's (resync fix
+/// round M1): when the chain already holds the token, the label is attached
+/// to its row here by the one rule ([`TokenInfo::attach_label`]); a token the
+/// chain does not hold gets no row, and the writer that creates its row when
+/// the chain first holds it (live sync or the bulk snapshot) attaches the
+/// label by the same rule. So a token row's first block is always the block
+/// of the token's first cell.
+///
+/// [`TokenInfo::attach_label`]: ckbadger_store::types::TokenInfo::attach_label
 fn write_token_label(
     store: &CkbadgerStore,
     token: &TokenMetadata,
     prepared: &PreparedTokenLabel,
 ) -> Result<()> {
     let type_hash = &prepared.type_hash;
-    let mut info =
-        store
-            .get_token(type_hash)?
-            .unwrap_or_else(|| ckbadger_store::types::TokenInfo {
-                type_code_hash: prepared.code_hash.clone(),
-                hash_type: prepared.hash_type,
-                type_args: prepared.args.clone(),
-                standard: token.standard.clone(),
-                name: None,
-                symbol: None,
-                decimals: None,
-                max_supply: None,
-                first_seen_block: 0,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: None,
-                chain_metadata: None,
-            });
+    let label = token_label(token);
+    store.put_token_label_direct(type_hash, &label)?;
+    let Some(mut info) = store.get_token(type_hash)? else {
+        return Ok(());
+    };
 
     if let Some(conflict) = label_override_conflicts(&info, token) {
         warn!(
@@ -678,16 +702,10 @@ fn write_token_label(
         );
     }
 
-    // The label writes name/symbol/decimals (and says so); the bound chain
-    // values on the row are kept beside it (IV-26).
-    info.apply_label(
-        token.name.clone(),
-        token.symbol.clone(),
-        i32::from(token.decimals),
-    );
-    info.icon_url = token.icon.clone();
-    info.description = token.description.clone();
-    info.standard = token.standard.clone();
+    // The label writes name/symbol/decimals (and says so), its icon,
+    // description and standard; the bound chain values on the row are kept
+    // beside it (IV-26).
+    info.attach_label(&label);
 
     store.put_token_direct(type_hash, &info)?;
     Ok(())
@@ -2968,6 +2986,98 @@ canonical_hash_type = "data1"
         assert_eq!(original.max_supply, Some(1_000_000));
     }
 
+    /// resync fix round M1: a token row is the chain's. Label import stores
+    /// the label (`token_labels`) and writes no token row for a token the
+    /// chain does not hold; on a row the chain made it attaches the label by
+    /// the one rule and keeps the row's chain facts (its first block, max
+    /// supply, transfers); a label no entry carries any more is deleted, so a
+    /// token the chain first holds later never takes a removed label.
+    #[test]
+    fn label_import_writes_no_token_row_and_attaches_a_label_to_a_chain_row() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        let token = |args: &str, symbol: &str| TokenMetadata {
+            name: format!("{symbol} Token"),
+            symbol: symbol.to_string(),
+            decimals: 8,
+            standard: "xudt_compatible".to_string(),
+            icon: Some(format!("https://example.invalid/{symbol}.png")),
+            description: Some(format!("{symbol} description")),
+            disabled: false,
+            mainnet: Some(TokenDeployment {
+                code_hash: "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+                    .to_string(),
+                hash_type: "data1".to_string(),
+                args: args.to_string(),
+            }),
+            testnet: None,
+        };
+        let unheld = token("0x01", "UNH");
+        let held = token("0x02", "HLD");
+        let unheld_hash = compute_type_hash(unheld.mainnet.as_ref().unwrap()).unwrap();
+        let held_hash = compute_type_hash(held.mainnet.as_ref().unwrap()).unwrap();
+        let chain_row = ckbadger_store::types::TokenInfo {
+            type_code_hash: hex::decode(
+                "50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+            )
+            .unwrap(),
+            hash_type: 2,
+            type_args: vec![0x02],
+            standard: "xudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            max_supply: Some(21_000_000),
+            first_seen_block: 4_242,
+            icon_url: None,
+            description: None,
+            transfers_count: 9,
+            metadata_source: None,
+            chain_metadata: None,
+        };
+        store.put_token_direct(&held_hash, &chain_row).unwrap();
+
+        let result = import_all(&store, "mainnet", &[unheld.clone(), held.clone()], &[]).unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+
+        assert_eq!(
+            store.get_token(&unheld_hash).unwrap(),
+            None,
+            "no token row for a token the chain does not hold"
+        );
+        let stored_label = store.get_token_label(&unheld_hash).unwrap().unwrap();
+        assert_eq!(
+            stored_label,
+            ckbadger_store::types::TokenLabel {
+                name: "UNH Token".to_string(),
+                symbol: "UNH".to_string(),
+                decimals: 8,
+                icon_url: Some("https://example.invalid/UNH.png".to_string()),
+                description: Some("UNH description".to_string()),
+                standard: "xudt_compatible".to_string(),
+            }
+        );
+
+        let labelled = store.get_token(&held_hash).unwrap().unwrap();
+        let mut expected = chain_row.clone();
+        expected.attach_label(&store.get_token_label(&held_hash).unwrap().unwrap());
+        assert_eq!(labelled, expected, "the label attached by the one rule");
+        assert_eq!(
+            (
+                labelled.first_seen_block,
+                labelled.max_supply,
+                labelled.transfers_count
+            ),
+            (4_242, Some(21_000_000), 9),
+            "the chain's facts are kept"
+        );
+
+        // The unheld token's entry removed: its label goes with it.
+        import_all(&store, "mainnet", std::slice::from_ref(&held), &[]).unwrap();
+        assert_eq!(store.get_token_label(&unheld_hash).unwrap(), None);
+        assert!(store.get_token_label(&held_hash).unwrap().is_some());
+    }
+
     #[test]
     fn test_imports_deprecated_active_network_script_deployments() {
         let dir = TempDir::new().unwrap();
@@ -3226,9 +3336,56 @@ mod bundled_label_chain_consistency_tests {
         }
     }
 
-    /// Every token row the bundled labels produce for `network`, read back out
-    /// of a real label import rather than reconstructed from the TOML — this
-    /// is the state the sync write path meets on a fresh database.
+    /// The row the sync write path creates when the chain first holds the
+    /// token of `deployment`: a fresh chain row with the label label import
+    /// stored (`token_labels`) attached by the one rule. Label import itself
+    /// writes no token row (resync fix round M1: a token row is the chain's),
+    /// so the label is read back out of a real label import, never rebuilt
+    /// from the TOML. The first block is any block: these checks read the
+    /// metadata only.
+    fn row_created_with_label(
+        store: &CkbadgerStore,
+        deployment: &TokenDeployment,
+        type_hash: &[u8],
+        symbol: &str,
+    ) -> TokenInfo {
+        assert!(
+            store.get_token(type_hash).unwrap().is_none(),
+            "label import writes no token row for {symbol} (0x{})",
+            hex::encode(type_hash)
+        );
+        let label = store
+            .get_token_label(type_hash)
+            .expect("token label read must succeed")
+            .unwrap_or_else(|| {
+                panic!(
+                    "label import must have stored the label of {symbol} (0x{})",
+                    hex::encode(type_hash)
+                )
+            });
+        let mut row = TokenInfo {
+            type_code_hash: hex::decode(deployment.code_hash.trim_start_matches("0x")).unwrap(),
+            hash_type: ckbadger_common::hash_type_from_label(&deployment.hash_type).unwrap(),
+            type_args: hex::decode(deployment.args.trim_start_matches("0x")).unwrap(),
+            standard: "xudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
+        };
+        row.attach_label(&label);
+        row
+    }
+
+    /// Every token row the bundled labels produce for `network` when the
+    /// chain first holds each token, from a real label import: the state the
+    /// sync write path creates on a fresh database.
     fn stored_label_rows(store: &CkbadgerStore, network: &str) -> Vec<(Vec<u8>, TokenInfo)> {
         let mut rows = Vec::new();
         let mut seen = HashSet::new();
@@ -3243,16 +3400,7 @@ mod bundled_label_chain_consistency_tests {
             if !seen.insert(type_hash.clone()) {
                 continue;
             }
-            let info = store
-                .get_token(&type_hash)
-                .expect("token read must succeed")
-                .unwrap_or_else(|| {
-                    panic!(
-                        "label import must have written token {} (0x{})",
-                        token.symbol,
-                        hex::encode(&type_hash)
-                    )
-                });
+            let info = row_created_with_label(store, deployment, &type_hash, &token.symbol);
             rows.push((type_hash, info));
         }
         rows
@@ -3333,10 +3481,7 @@ mod bundled_label_chain_consistency_tests {
             result.errors
         );
 
-        let stored = store
-            .get_token(&expected_type_hash)
-            .unwrap()
-            .expect("testnet USDI label must be imported");
+        let stored = row_created_with_label(&store, deployment, &expected_type_hash, "USDI");
         assert_eq!(stored.name.as_deref(), Some("USDI"));
         assert_eq!(stored.symbol.as_deref(), Some("USDI"));
         assert_eq!(stored.decimals, Some(6));
@@ -3495,10 +3640,7 @@ mod bundled_label_chain_consistency_tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
         super::run_label_import_bundled(&store, "mainnet").unwrap();
-        let mut row = store
-            .get_token(&type_hash)
-            .unwrap()
-            .expect("RGB++ label row must be imported");
+        let mut row = row_created_with_label(&store, deployment, &type_hash, &label.symbol);
 
         // RGB++ carries a plain owner-lock-hash in its xUDT args, so the chain
         // binds its Unique Cell by issuance co-occurrence.
