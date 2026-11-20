@@ -3660,6 +3660,80 @@ pub struct TokenActivityTransfer {
 mod tests {
     use super::*;
 
+    /// The secp256k1/blake160 code hash: every hex digit class, `0`-`9` and
+    /// `a`-`f`, is in it.
+    const SECP_CODE_HASH: &str = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+
+    /// resync fix round 4 (the lead's one-allocation key), pinned before the
+    /// change: a day's script count key is the pair, byte for byte as the
+    /// head (87c260cb) builds it, `<hex code hash>:<hash type label>` for each
+    /// hash type CKB defines; every other hash type is refused, named, with
+    /// the head's words.
+    #[test]
+    fn a_script_count_key_is_its_pair_byte_for_byte() {
+        let secp = hex::decode(SECP_CODE_HASH).unwrap();
+        for (hash_type, key) in [
+            (
+                0,
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:data",
+            ),
+            (
+                1,
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:type",
+            ),
+            (
+                2,
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:data1",
+            ),
+            (
+                4,
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:data2",
+            ),
+        ] {
+            assert_eq!(
+                script_count_key(&secp, hash_type).unwrap(),
+                key,
+                "hash type {hash_type}"
+            );
+        }
+        assert_eq!(
+            script_count_key(&secp, 3).unwrap_err().to_string(),
+            "script 0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 has hash \
+             type 3, not a CKB hash type"
+        );
+        assert_eq!(
+            script_count_key(&secp, -1).unwrap_err().to_string(),
+            "script 0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 has hash \
+             type -1, not a CKB hash type"
+        );
+        for hash_type in [5, 8, 255, 256, i16::MAX, i16::MIN] {
+            assert_eq!(
+                script_count_key(&secp, hash_type).unwrap_err().to_string(),
+                format!("script 0x{SECP_CODE_HASH} has hash type {hash_type}, not a CKB hash type"),
+            );
+        }
+    }
+
+    /// resync fix round 4 (the lead's one-allocation key): the key is built to
+    /// its exact size, the code hash's hex, `:` and the label, with no slack
+    /// (a `format!` grows its buffer by doubling: 128 bytes for a 69-byte key).
+    #[test]
+    fn a_script_count_key_is_built_to_its_exact_size() {
+        let secp = hex::decode(SECP_CODE_HASH).unwrap();
+        for hash_type in [0, 1, 2, 4] {
+            let label = ckbadger_common::hash_type_label(hash_type as u8).unwrap();
+            let key = script_count_key(&secp, hash_type).unwrap();
+            assert_eq!(key.len(), 64 + 1 + label.len(), "{key}");
+            assert_eq!(
+                key.capacity(),
+                key.len(),
+                "{key}: built to {} bytes for {}",
+                key.capacity(),
+                key.len()
+            );
+        }
+    }
+
     fn activity_tx(
         index: i32,
         is_cellbase: bool,
