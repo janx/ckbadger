@@ -176,7 +176,8 @@ describe('Asset history', () => {
         ['held', '200.00000001 CKB'],
         // re-pinned on purpose (lane P2's follow-up, item 5): the readout's exact form, no padding (it was
         // "61.00000000 CKB")
-        ['occupied', '61 CKB 30.50%'],
+        // re-pinned for lane exactness, part B2 (one percentage, cut): 61 of 200.00000001 CKB is 30.4999998…%, 30.49% (half up 30.50%)
+        ['occupied', '61 CKB 30.49%'],
         ['free', '139.00000001 CKB'],
         ['week', 'Latest complete week, from 2024-01-01: 3 transfers'],
         ['peak', '200.00000001 CKB on 2024-01-08'],
@@ -814,6 +815,21 @@ describe('Asset history', () => {
     ).toThrow(
       '2024-01-01: occupied 6100000000 and free 3900000000 do not make the capacity 10000000001'
     );
+    // Lane P2's fifth round (item 3): a day from an API older than this page sends no free part:
+    // refused by name
+    const { freeCapacity: _free, ...older } = daily[0];
+    void _free;
+    expect(() =>
+      render(
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={[older as (typeof daily)[number]]}
+          weekly={[]}
+          completeThrough="2024-01-08"
+        />
+      )
+    ).toThrow('2024-01-01: the API sends no freeCapacity: it is older than this page');
     error.mockRestore();
   });
 });

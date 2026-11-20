@@ -196,12 +196,12 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     assert_eq!(json["title"], "Test Cluster Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
-    assert_eq!(data[1]["values"]["used"], "60");
-    assert_eq!(data[1]["values"]["unused"], "40");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[1]["values"]["freeCapacity"], "40");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -217,8 +217,8 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
@@ -666,10 +666,10 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     assert_eq!(json["title"], "Spore Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[1]["values"]["used"], "61");
-    assert_eq!(data[1]["values"]["unused"], "39");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "61");
+    assert_eq!(data[1]["values"]["freeCapacity"], "39");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -685,8 +685,8 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "61");
-    assert_eq!(data[0]["values"]["unused"], "39");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "61");
+    assert_eq!(data[0]["values"]["freeCapacity"], "39");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/objects/{}", spore_id_hex))

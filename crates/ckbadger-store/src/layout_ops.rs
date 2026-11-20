@@ -35,7 +35,6 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   - the senders bit: a participant's tags carry `TAG_INPUT` when its lock
 ///     is the lock of at least one input (`tx_actions`, `addr_txs`,
 ///     `addr_txs_by_prefix` values).
-///
 /// - 3: live sync reads a batch's token max-supply claims in every batch,
 ///   as bulk build does (resync/all): a build stamped 2 read them only in a
 ///   batch that moved a UDT, so a store it live-synced can miss a claim
@@ -56,19 +55,29 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   `.cell` listing or max-supply claim, and is a called lock
 ///   (`lock_calls`); a standard lock's binary by a data hash type is a
 ///   standard lock. A store stamped 5 holds those rows by code hash alone.
+/// - 7: the recognised type codes that ran (resync/final, C7 of
+///   resync/type-codes): each `tx_actions` row ends with
+///   `recognized_type_codes`, every type script code the indexer recognises
+///   that ran in the transaction, each pair (code hash, hash type) once, as
+///   the one registry recognises it, beside the unrecognised `type_calls`
+///   (the row's strict decode, [`crate::types::decode_stored_tx_actions`],
+///   refuses a row without it: the row's own guard); a party for which a
+///   recognised type ran that moved none of its items and took no DAO step
+///   carries `TAG_TYPE_CALL` (a wallet merging its own token cells counts
+///   under Script, never as a CKB transfer). A store stamped 6 lacks them.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
 /// type's usage, its activity rows are another layout, its participants
 /// carry no senders bit.
-pub const STORE_LAYOUT: u32 = 6;
+pub const STORE_LAYOUT: u32 = 7;
 
 /// What [`STORE_LAYOUT`] changed, for the refusal's words.
 pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by their pair (code \
      hash, hash type), generic type references counted by their live code, each transaction in \
      one activity kind, the senders bit on participants, a token's max supply its first claim \
      at or after its first block on both sync paths, made by the token's owner lock, protocols \
-     recognised by their pair";
+     recognised by their pair, the recognised type codes that ran on each activity";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +302,19 @@ mod tests {
         assert_eq!(
             store.check_store_layout().unwrap(),
             Err(StoreLayoutMismatch { found: Some(5) })
+        );
+    }
+
+    /// Stamp 6 is the re-sync set before the recognised type codes (resync/protocol-pairs): its
+    /// activity rows end at the participants, without the type codes that ran, so this build
+    /// refuses it.
+    #[test]
+    fn a_store_stamped_before_the_recognised_type_codes_is_refused() {
+        let (_dir, store) = store();
+        store.set_store_layout(6).unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: Some(6) })
         );
     }
 

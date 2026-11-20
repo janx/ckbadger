@@ -16,6 +16,7 @@ import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -30,6 +31,8 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
   TAG_CELLBASE: 32,
+  // C7: the classifier reads a party's TAG_TYPE_CALL (a recognised script that moved nothing)
+  TAG_TYPE_CALL: 64,
 }));
 
 /**
@@ -61,7 +64,7 @@ function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantI
 function makeActivity(
   overrides: Partial<GlobalActivity> & { participants: ParticipantInfo[] }
 ): GlobalActivity {
-  return {
+  return activityRead({
     txHash: overrides.txHash ?? '0xtx',
     blockNumber: overrides.blockNumber ?? 10_000,
     txIndex: overrides.txIndex ?? 0,
@@ -69,11 +72,12 @@ function makeActivity(
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    // the row's recognised codes as its caller states them, as the route would (the third read's T
+    // SHOULD-1, carried to C7's list)
+    recognizedTypes: overrides.recognizedTypes ?? [],
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants,
-  };
+  });
 }
 
 // A participant's CKB change, by its text. Readability R5 (re-pinned on purpose): a feed line is
@@ -256,6 +260,7 @@ describe('ActivitiesStreamExplorer', () => {
         pagedRead({
           data: [
             makeActivity({
+              recognizedTypes: [ITEM_TYPE.xudt],
               txHash: '0xtoken-only',
               participants: [
                 makeParticipant({
@@ -284,6 +289,7 @@ describe('ActivitiesStreamExplorer', () => {
         pagedRead({
           data: [
             makeActivity({
+              recognizedTypes: [ITEM_TYPE.xudt],
               txHash: '0xtoken-only',
               participants: [
                 makeParticipant({
@@ -657,6 +663,7 @@ describe('ActivitiesStreamExplorer', () => {
       pagedRead({
         data: [
           makeActivity({
+            recognizedTypes: [ITEM_TYPE.dao],
             txHash: '0xbad0000000000000000000000000000000000000000000000000000000000001',
             protocolActions: [
               {
@@ -669,6 +676,7 @@ describe('ActivitiesStreamExplorer', () => {
             participants: [makeParticipant({ ckbDelta: '100000000' })],
           }),
           makeActivity({
+            recognizedTypes: [ITEM_TYPE.dao],
             txHash: '0x9000000000000000000000000000000000000000000000000000000000000002',
             protocolActions: [
               {

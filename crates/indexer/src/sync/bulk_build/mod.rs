@@ -10072,6 +10072,7 @@ mod tests {
     #[test]
     fn history_chunk_writes_stored_activity_values_as_encode_stored() {
         let tx_actions = TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0x11; 32],
             block_hash: vec![0x22; 32],
             block_number: 100,
@@ -10154,6 +10155,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -10196,6 +10198,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -10268,6 +10271,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 1,
@@ -10373,6 +10377,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x43; 32]),
                 ckb_delta: 123,
@@ -11422,6 +11427,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -11499,6 +11505,7 @@ mod tests {
             protocol_actions: vec![dotbit(0x01), dotbit(0x02)],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: (0..3).map(|i| participant(first_lock + i)).collect(),
         };
         let date = ckbadger_common::stats_bucket::stats_date_key(ts).unwrap();
@@ -11596,6 +11603,7 @@ mod tests {
                   prefix_only: bool,
                   actions: &[(&str, &str)],
                   tags: u16| TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![block as u8 * 16 + tx_index as u8; 32],
             block_hash: vec![block as u8; 32],
             block_number: blocks[block].number,
@@ -11965,6 +11973,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
         let error = |blocks: &[facts::BlockFacts], actions: &[TxActions]| {
@@ -12032,6 +12041,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
         let block = facts::BlockFacts {

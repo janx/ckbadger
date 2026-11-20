@@ -61,11 +61,14 @@ export function NetworkSection() {
   );
 }
 
+/** A point's place on the chart; its exact figure (`display`) is added by the view that reads it. */
+type PlacedPoint = Omit<SeriesPoint, 'display'>;
+
 interface LineView {
-  points: SeriesPoint[];
+  points: PlacedPoint[];
   min: number;
   max: number;
-  last: SeriesPoint;
+  last: PlacedPoint;
 }
 
 /** The last 14 days of a daily chart, scaled for display. */
@@ -91,7 +94,8 @@ function exactLineView(
   multiplier: number,
   displaySuffix = ''
 ):
-  | (LineView & {
+  | (Omit<LineView, 'points'> & {
+      points: SeriesPoint[];
       minExact: string;
       maxExact: string;
       lastExact: string;
@@ -152,7 +156,6 @@ function BlockTimeFigure() {
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
@@ -167,7 +170,6 @@ function BlockTimeFigure() {
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={s}
           ariaLabel={`Average block time per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} seconds, ${view.lastExact} s on ${view.last.label}`}
         />
       ))}
@@ -223,7 +225,6 @@ function HashRateFigure() {
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
@@ -236,7 +237,6 @@ function HashRateFigure() {
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={s}
           ariaLabel={`Hash rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} ${view.unit}, ${view.lastExact} ${view.unit} on ${view.last.label}`}
         />
       ))}
@@ -268,7 +268,6 @@ function UncleRateFigure() {
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
@@ -281,7 +280,6 @@ function UncleRateFigure() {
         <LineChart
           points={view.points}
           reference={view.target}
-          formatValue={(n) => `${s(n)}%`}
           ariaLabel={`Uncle rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} percent around the NC-Max target of ${view.targetExact} percent, ${view.lastExact} percent on ${view.last.label}`}
         />
       ))}

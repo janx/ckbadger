@@ -5,7 +5,7 @@ import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
-import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, rankOf, rankedPageAt, rankedRead } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { TokenAmount } from '@/components/ui/ckb-amount';
 import { AssetReadState } from '@/components/asset/detail-shell';
@@ -341,14 +341,21 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
   // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
   // item 10: the loading list unmounted it and the focus fell to the page)
+  // each page ranked by its route (lane exactness, part B5: `firstRank`, refused where missing)
+  const ranked = `the holders of token ${typeHash}`;
   const top = useQuery({
     queryKey: ['token-holders', typeHash, 'top'],
-    queryFn: () => api.getTokenHolders(typeHash, { limit: 10, cursor: undefined }),
+    queryFn: () =>
+      api
+        .getTokenHolders(typeHash, { limit: 10, cursor: undefined })
+        .then((r) => rankedRead(r, ranked)),
   });
   // all holders, in pages of the walk
   const allHolders = useQuery({
     queryKey: ['token-holders', typeHash, 'all', pagination.cursor, limit],
-    queryFn: pagination.ask((cursor) => api.getTokenHolders(typeHash, { limit, cursor })),
+    queryFn: pagination.ask((cursor) =>
+      api.getTokenHolders(typeHash, { limit, cursor }).then((r) => rankedRead(r, ranked))
+    ),
     enabled: all,
   });
   const holders = all ? allHolders : top;
@@ -497,11 +504,14 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       `${formatTokenBalanceWithRawMarker(h.balance, decimals)}${symbol ? ` ${symbol}` : ''}`,
       `${holderShare(h).text} of supply`,
     ].join(' · ');
-  const rank = (h: TokenHolder) =>
-    (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
+  // the route's rank of the page's first row and the row's place (lane exactness, part B5: it was
+  // (page − 1) × size + the place, which holds only if the list stood still between the reads)
+  const rank = (h: TokenHolder) => rankOf(holders.data!, h, ranked);
   // "All holders" pages through the list; the top ten are one page
   const holdersAt =
-    all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
+    all && allHolders.data
+      ? rankedPageAt('holders', allHolders.data, pagination, allHolders.data.firstRank)
+      : null;
   const holderTable = (
     <div className="min-w-0">
       <div id={listId} className="min-w-0">

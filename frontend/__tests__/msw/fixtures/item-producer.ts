@@ -17,6 +17,7 @@ import type {
   AssetCapacityHistory,
 } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 /**
  * The producer's owners, each the real address of the lock its rows carry (B4 second fix round,
  * review-rules-fixes-tests SHOULD-4; `__tests__/lib/producer-owners.test.ts` holds them to it).
@@ -342,6 +343,7 @@ export const didCellVersionsProducer = {
       },
       lockName: null,
       occupiedCapacity: '11400000000',
+      freeCapacity: '19300000000',
       outputIndex: 0,
       ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -375,6 +377,7 @@ export const didCellVersionsProducer = {
       },
       lockName: null,
       occupiedCapacity: '11400000000',
+      freeCapacity: '20600000000',
       outputIndex: 0,
       ownerAddress: PRODUCER_OWNER_3,
       ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
@@ -404,7 +407,7 @@ export const didPdsProducer = {
 } satisfies DidPdsDistribution;
 export const itemActivityFeedProducer = pagedRead({
   data: [
-    {
+    activityRead({
       blockNumber: 100,
       isCellbase: false,
       itemContext: {
@@ -433,6 +436,7 @@ export const itemActivityFeedProducer = pagedRead({
           },
           lockName: null,
           occupiedCapacity: '11400000000',
+          freeCapacity: '19300000000',
           outputIndex: 0,
           ownerAddress: PRODUCER_OWNER_1,
           ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -466,6 +470,7 @@ export const itemActivityFeedProducer = pagedRead({
           },
           lockName: null,
           occupiedCapacity: '11400000000',
+          freeCapacity: '20600000000',
           outputIndex: 0,
           ownerAddress: PRODUCER_OWNER_3,
           ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
@@ -482,8 +487,7 @@ export const itemActivityFeedProducer = pagedRead({
         itemId: '0x4444444444444444444444444444444444444444',
       },
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [
         {
           address: null,
@@ -505,7 +509,7 @@ export const itemActivityFeedProducer = pagedRead({
       txHash: '0x5252525252525252525252525252525252525252525252525252525252525252',
       txIndex: 2,
       typeCalls: [],
-    },
+    }),
   ],
   hasMore: true,
   limit: 1,
@@ -515,12 +519,11 @@ export const itemActivityFeedProducer = pagedRead({
 export const itemTransactionsProducer = pagedRead({
   data: [
     {
-      activity: {
+      activity: activityRead({
         blockNumber: 100,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [],
-        itemTypesUnread: null,
+        recognizedTypes: [],
         participants: [
           {
             address: null,
@@ -542,7 +545,7 @@ export const itemTransactionsProducer = pagedRead({
         txHash: '0x5151515151515151515151515151515151515151515151515151515151515151',
         txIndex: 1,
         typeCalls: [],
-      },
+      }),
       blockHash: '0x6464646464646464646464646464646464646464646464646464646464646464',
       blockNumber: 100,
       cycles: null,
@@ -579,6 +582,7 @@ export const itemTransactionsProducer = pagedRead({
           },
           lockName: null,
           occupiedCapacity: '11400000000',
+          freeCapacity: '19300000000',
           outputIndex: 0,
           ownerAddress: PRODUCER_OWNER_1,
           ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -650,6 +654,7 @@ export const sporeCellVersionsProducer = {
       },
       lockName: null,
       occupiedCapacity: '22900000000',
+      freeCapacity: '27100000000',
       outputIndex: 0,
       ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -733,6 +738,7 @@ export const clusterProtocolProducer = {
       },
       lockName: null,
       occupiedCapacity: '33600000000',
+      freeCapacity: '66400000000',
       outputIndex: 0,
       ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1038,29 +1044,29 @@ export const clusterCapacityHistoryProducer = {
       date: '2026-10-25',
       values: {
         capacity: '100',
-        unused: '50',
-        used: '50',
+        freeCapacity: '50',
+        occupiedCapacity: '50',
       },
     },
     {
       date: '2026-10-26',
       values: {
         capacity: '120',
-        unused: '60',
-        used: '60',
+        freeCapacity: '60',
+        occupiedCapacity: '60',
       },
     },
   ],
   series: [
     {
       color: '#f59e0b',
-      key: 'used',
-      label: 'Used',
+      key: 'occupiedCapacity',
+      label: 'Occupied',
     },
     {
       color: '#06b6d4',
-      key: 'unused',
-      label: 'Unused',
+      key: 'freeCapacity',
+      label: 'Free',
     },
   ],
   source: 'indexedChainTimeUtc8',
@@ -1078,29 +1084,29 @@ export const sporeCapacityHistoryProducer = {
       date: '2026-10-25',
       values: {
         capacity: '100',
-        unused: '50',
-        used: '50',
+        freeCapacity: '50',
+        occupiedCapacity: '50',
       },
     },
     {
       date: '2026-10-26',
       values: {
         capacity: '120',
-        unused: '60',
-        used: '60',
+        freeCapacity: '60',
+        occupiedCapacity: '60',
       },
     },
   ],
   series: [
     {
       color: '#f59e0b',
-      key: 'used',
-      label: 'Used',
+      key: 'occupiedCapacity',
+      label: 'Occupied',
     },
     {
       color: '#06b6d4',
-      key: 'unused',
-      label: 'Unused',
+      key: 'freeCapacity',
+      label: 'Free',
     },
   ],
   source: 'indexedChainTimeUtc8',
@@ -1118,29 +1124,29 @@ export const objectCollectionCapacityHistoryProducer = {
       date: '2026-10-25',
       values: {
         capacity: '100',
-        unused: '50',
-        used: '50',
+        freeCapacity: '50',
+        occupiedCapacity: '50',
       },
     },
     {
       date: '2026-10-26',
       values: {
         capacity: '120',
-        unused: '60',
-        used: '60',
+        freeCapacity: '60',
+        occupiedCapacity: '60',
       },
     },
   ],
   series: [
     {
       color: '#f59e0b',
-      key: 'used',
-      label: 'Used',
+      key: 'occupiedCapacity',
+      label: 'Occupied',
     },
     {
       color: '#00c389',
-      key: 'unused',
-      label: 'Unused',
+      key: 'freeCapacity',
+      label: 'Free',
     },
   ],
   source: 'indexedChainTimeUtc8',
@@ -1171,6 +1177,7 @@ export const bitCellLegacyProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '18700000000',
+        freeCapacity: '81300000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1242,6 +1249,7 @@ export const bitCellProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '20400000000',
+        freeCapacity: '79600000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1325,6 +1333,7 @@ export const didProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '36500000000',
+        freeCapacity: '63500000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1411,6 +1420,7 @@ export const dotbitV1ProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '22800000000',
+        freeCapacity: '77200000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
@@ -1510,6 +1520,7 @@ export const dotcellProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '21700000000',
+        freeCapacity: '78300000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1618,6 +1629,7 @@ export const dotbitV2ProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '22800000000',
+        freeCapacity: '77200000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
@@ -1715,6 +1727,7 @@ export const mnftProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '13300000000',
+        freeCapacity: '86700000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
@@ -1800,6 +1813,7 @@ export const dotbitV3ProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '22800000000',
+        freeCapacity: '77200000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
@@ -1897,6 +1911,7 @@ export const dotbitV4ProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '22800000000',
+        freeCapacity: '77200000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
@@ -1994,6 +2009,7 @@ export const sporeProtocolProducer = {
         },
         lockName: null,
         occupiedCapacity: '22900000000',
+        freeCapacity: '27100000000',
         outputIndex: 0,
         ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',

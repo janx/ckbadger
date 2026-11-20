@@ -1,7 +1,12 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import Page from '@/app/identities/[collectionId]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
-import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
+import {
+  mockItemReads,
+  emptyPage,
+  identityItem,
+  rankedPage,
+} from '@/__tests__/utils/item-read-fixtures';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
@@ -143,7 +148,7 @@ it('shows inactive identity state without manufacturing a live owner', async () 
   expect(within(region).getByText('No live owner')).toBeInTheDocument();
 });
 it('keeps holders visible independently of the records tabs and handles empty pages', async () => {
-  vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue(emptyPage());
+  vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue(rankedPage());
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
   // re-pinned (PB-28, lane c2-assets): the layers open from the last five, then the tabs switch

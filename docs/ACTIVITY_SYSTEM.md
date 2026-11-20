@@ -63,6 +63,7 @@ pub struct StoredTxActions {
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
     pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
+    pub recognized_type_codes: Vec<TypeCode>,   // Recognised type codes that ran (C7), each once
 }
 ```
 
@@ -87,8 +88,20 @@ pub struct TxActions {
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
     pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
+    pub recognized_type_codes: Vec<TypeCode>,   // Recognised type codes that ran (C7), each once
 }
 ```
+
+`recognized_type_codes` (resync/type-codes, C7) holds every type script code the classifier
+recognises by its pair (sUDT, xUDT, the Nervos DAO, Spore, Cluster, m-NFT, `.bit`, `.bit Cell`,
+did:ckb, `.cell`; the one registry a protocol's pair is read by, `ProtocolRegistry::protocol`, and
+the bundled xUDT-compatible pairs) that ran on an input or an output cell of the transaction, each
+`(code_hash, hash_type)` once, sorted. The activity builder fills it in the recognised arms of its classifier, the same pass
+that fills `type_calls` in the unrecognised arm, so together they are every type script code that
+ran. It is last in the stored row: a row of the layout before it does not decode. `TAG_TYPE_CALL`
+is set on a party when a type script ran for it that moved none of its items: an unrecognised one,
+or (C7) a recognised one with no item change and no DAO step (a wallet merging its own token cells,
+an identity cell rewritten in place), so such a transaction is a script call, never a CKB transfer.
 
 **Key design decisions:**
 
@@ -178,7 +191,7 @@ pub const TAG_IDENTITY: u16  = 1 << 2;  // 0x04 — has identity item_deltas
 pub const TAG_DAO: u16       = 1 << 3;  // 0x08 — involved in DAO operation
 pub const TAG_PROTOCOL: u16  = 1 << 4;  // 0x10 — TX has protocol_actions
 pub const TAG_CELLBASE: u16  = 1 << 5;  // 0x20 — cellbase transaction
-pub const TAG_TYPE_CALL: u16 = 1 << 6;  // 0x40 — TX has unrecognized type scripts
+pub const TAG_TYPE_CALL: u16 = 1 << 6;  // 0x40 — a type script ran for this party that moved none of its items
 pub const TAG_LOCK_CALL: u16 = 1 << 7;  // 0x80 — TX has non-standard lock scripts
 pub const TAG_INPUT: u16     = 1 << 8;  // 0x100 — this party's lock is an input's lock: it sent
 ```

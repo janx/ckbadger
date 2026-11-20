@@ -6,7 +6,7 @@ const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 import everDepositorsProducer from '@/__tests__/fixtures/dao-ever-depositors-api-producer.json';
-import { pagedRead } from '@/__tests__/utils/paged-read';
+import { pagedRead, poolPagedRead } from '@/__tests__/utils/paged-read';
 
 describe('api', () => {
   describe('query parameter building', () => {
@@ -133,14 +133,18 @@ describe('api', () => {
       server.use(
         http.get('/api/:network/v1/activities', ({ request }) => {
           expect(new URL(request.url).searchParams.get('blockNumber')).toBe('42');
-          return HttpResponse.json({ data: [], nextCursor: null });
+          return HttpResponse.json(
+            pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null })
+          );
         }),
         http.get('/api/:network/v1/transactions/pool', ({ request }) => {
           const query = new URL(request.url).searchParams;
           expect(query.get('status')).toBe('proposed');
           expect(query.get('cursor')).toBe('123:0xab');
           expect(query.get('limit')).toBe('5');
-          return HttpResponse.json({ data: [], nextCursor: null, total: 0 });
+          return HttpResponse.json(
+            poolPagedRead({ data: [], limit: 5, nextCursor: null, total: 0 })
+          );
         }),
         http.get('/api/:network/v1/transactions/0xabc/activity', () => HttpResponse.json(null))
       );
@@ -196,12 +200,16 @@ describe('api', () => {
         http.get('/api/:network/v1/transactions', ({ request }) => {
           const url = new URL(request.url);
           paths.push(url.searchParams.get('activity_type') ?? 'missing');
-          return HttpResponse.json({ data: [], limit: 20, nextCursor: null });
+          return HttpResponse.json(
+            pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null })
+          );
         }),
         http.get('/api/:network/v1/transactions/pool', ({ request }) => {
           const url = new URL(request.url);
           paths.push(url.searchParams.get('activity_type') ?? 'missing');
-          return HttpResponse.json({ data: [], total: 0, limit: 20, nextCursor: null });
+          return HttpResponse.json(
+            poolPagedRead({ data: [], total: 0, limit: 20, nextCursor: null })
+          );
         })
       );
       await api.getTransactions({ activityType: 'identity' });

@@ -5,6 +5,7 @@ import { BlockLink } from '@/components/ui/block-link';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 
 const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
 /** A cell or script link in the lock blue; the global `a:hover` jade still wins over it. */
@@ -122,11 +123,10 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           ))}
         </ul>
       )}
-      <details className="text-small">
-        <summary className="text-text-dim hover:text-text cursor-pointer">
-          Type ID lineage of these bytes
-        </summary>
-        <div className="mt-2 space-y-1.5">
+      {/* the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its versions
+          keep the 13 px they took from the disclosure */}
+      <SectionDisclosure form="inner" summary="Type ID lineage of these bytes">
+        <div className="text-small space-y-1.5">
           {codeCell.typeIdVersions.length ? (
             codeCell.typeIdVersions.map((item) => (
               <p
@@ -173,7 +173,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             </p>
           ))}
         </div>
-      </details>
+      </SectionDisclosure>
     </section>
   );
 }

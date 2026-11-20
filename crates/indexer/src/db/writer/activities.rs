@@ -9,8 +9,8 @@ use std::sync::OnceLock;
 
 use ckbadger_store::types::{
     IdentityStandard, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
-    ProtocolAction, TxActions, TypeCallEntry, TAG_CELLBASE, TAG_DAO, TAG_INPUT, TAG_LOCK_CALL,
-    TAG_PROTOCOL, TAG_TYPE_CALL,
+    ProtocolAction, TxActions, TypeCallEntry, TypeCode, TAG_CELLBASE, TAG_DAO, TAG_INPUT,
+    TAG_LOCK_CALL, TAG_PROTOCOL, TAG_TYPE_CALL,
 };
 
 use crate::parser::{
@@ -358,6 +358,15 @@ pub(crate) mod test_detectors {
     }
 }
 
+/// Whether the activity builder recognises the pair (`code_hash`, `hash_type`) as an asset's or a
+/// protocol's type script, through the one registry (`PROTOCOL_REGISTRY`, the same lookup a
+/// protocol's pair is read by, and `UdtParser`'s pairs): `TxActions::recognized_type_codes` holds
+/// exactly the pairs it recognises that ran (C7). The verify check of that list reads the one
+/// classification here.
+pub(crate) fn is_recognized_type(code_hash: &[u8], hash_type: i16) -> bool {
+    code_hashes().classify(code_hash, hash_type).is_some()
+}
+
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
 #[cfg(test)]
 pub fn build_tx_actions_for_block_no_detectors(txs: &[TxView<'_>]) -> Result<Vec<TxActions>> {
@@ -589,6 +598,9 @@ pub struct OwnerAccum<'a> {
     pub(crate) has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
     pub(crate) unrecognized_type_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
+    /// The type script codes the classifier recognises that ran on this owner's cells, by
+    /// (code_hash, hash_type): the transaction's `recognized_type_codes` are their union.
+    pub(crate) recognized_type_codes: BTreeSet<(&'a [u8], i16)>,
     /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
     pub(crate) unrecognized_lock_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
 }
@@ -836,6 +848,7 @@ fn build_tx_actions<'a>(
     let mut detector_protocol_actions: Vec<ProtocolAction> = Vec::new();
     let mut tx_type_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut tx_lock_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
+    let mut tx_recognized_types: BTreeSet<(&[u8], i16)> = BTreeSet::new();
     let mut participants = Vec::with_capacity(owner_hashes.len());
     let mut participant_io: Vec<ParticipantIo> = Vec::with_capacity(owner_hashes.len());
 
@@ -944,6 +957,7 @@ fn build_tx_actions<'a>(
         for entry in &accum.unrecognized_lock_calls {
             tx_lock_calls.insert(*entry);
         }
+        tx_recognized_types.extend(accum.recognized_type_codes.iter().copied());
 
         // Per-owner type/lock call refs for detector compatibility
         let owner_type_calls: Vec<TypeCallEntry> = accum
@@ -1027,6 +1041,13 @@ fn build_tx_actions<'a>(
             item_deltas.extend(n.item_deltas.iter().cloned());
             roles |= n.roles;
             tags |= item_kind_tags(&n.item_deltas);
+        }
+        // A recognised type script ran on this owner's cells and moved none of its items (a
+        // wallet merging its own token cells, an identity's cell rewritten in place): as for an
+        // unrecognised one, a type script ran for this party that moved nothing it holds, so the
+        // transaction is a script call, never a CKB transfer (resync/type-codes, C7).
+        if !accum.recognized_type_codes.is_empty() && item_deltas.is_empty() && !has_dao {
+            tags |= TAG_TYPE_CALL;
         }
 
         participants.push(ParticipantDelta {
@@ -1122,8 +1143,25 @@ fn build_tx_actions<'a>(
         })
         .collect();
 
+    let recognized_type_codes = tx_recognized_types
+        .into_iter()
+        .map(|(code_hash, hash_type)| {
+            Ok(TypeCode {
+                code_hash: code_hash.try_into().map_err(|_| {
+                    anyhow!(
+                        "recognised type code hash of {} bytes in tx 0x{}",
+                        code_hash.len(),
+                        hex::encode(tx.tx_hash)
+                    )
+                })?,
+                hash_type,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     Ok(BuiltTxActions {
         actions: TxActions {
+            recognized_type_codes,
             tx_hash: tx.tx_hash.to_vec(),
             block_hash: tx.block_hash.to_vec(),
             block_number: tx.block_number,
@@ -1179,7 +1217,11 @@ fn classify_input<'a>(
             hex::encode(type_code_hash)
         )
     })?;
-    match hashes.classify(type_code_hash, type_hash_type) {
+    let kind = hashes.classify(type_code_hash, type_hash_type);
+    if kind.is_some() {
+        record_recognized_type(accum, type_code_hash, type_hash_type);
+    }
+    match kind {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = udt_amount {
@@ -1288,7 +1330,11 @@ fn classify_output<'a>(
             hex::encode(type_code_hash)
         )
     })?;
-    match hashes.classify(type_code_hash, type_hash_type) {
+    let kind = hashes.classify(type_code_hash, type_hash_type);
+    if kind.is_some() {
+        record_recognized_type(accum, type_code_hash, type_hash_type);
+    }
+    match kind {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = UdtParser::parse_amount(cell_data) {
@@ -1384,6 +1430,19 @@ fn classify_output<'a>(
         }
     }
     Ok(())
+}
+
+/// A type script the classifier recognises by its pair ran on one of this owner's cells: its pair,
+/// once (`TxActions::recognized_type_codes`). The hash type is the one `classify_input` /
+/// `classify_output` required of every type script before classifying it (one rule, one error).
+fn record_recognized_type<'a>(
+    accum: &mut OwnerAccum<'a>,
+    type_code_hash: &'a [u8],
+    hash_type: i16,
+) {
+    accum
+        .recognized_type_codes
+        .insert((type_code_hash, hash_type));
 }
 
 fn record_script_call<'a>(
@@ -2480,6 +2539,74 @@ mod tests {
                 hex::encode(&owner_lock_hash)
             );
         }
+    }
+
+    /// lane exactness, part B6: in one transaction where three locks take three kinds of Nervos DAO step, each
+    /// action names the owner of the cell that took it (`lockHash`, the cell's lock hash): a
+    /// deposit the output deposit cell's lock, a withdrawal request the output request cell's, a
+    /// completed withdrawal the input request cell's. The route sends it in the action's metadata,
+    /// so a page can say whose step each is.
+    #[test]
+    fn each_dao_action_names_the_owner_of_its_cell() {
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let deposit = make_output(
+            0xA1,
+            300_00000000,
+            Some(dao_code_hash.clone()),
+            None,
+            Some(vec![]),
+            vec![0u8; 8],
+        );
+        let request = make_output(
+            0xB2,
+            250_00000000,
+            Some(dao_code_hash.clone()),
+            None,
+            Some(vec![]),
+            19_800_000u64.to_le_bytes().to_vec(),
+        );
+        let mut completed = make_input(0xC3, 100_00000000, 102_00000000);
+        completed.type_code_hash = Some(dao_code_hash.clone());
+        completed.type_args = Some(vec![]);
+        completed.is_dao_withdraw_request = true;
+        completed.dao_compensation = Some(1_50000000);
+        let mut previous = make_input(0xB2, 250_00000000, 102_00000000);
+        previous.type_code_hash = Some(dao_code_hash);
+        previous.type_args = Some(vec![]);
+        let tx = TxView {
+            tx_hash: &[0x6B; 32],
+            block_hash: &[0xD1; 32],
+            tx_index: 1,
+            block_number: 19_900_000,
+            timestamp: 1_700_300_000,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: vec![completed.view(), previous.view()],
+            outputs: vec![deposit.view(), request.view()],
+        };
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let owners: Vec<(String, String)> = actions_list[0]
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao")
+            .map(|a| {
+                let meta = a.metadata_value().unwrap();
+                (
+                    a.action.clone(),
+                    meta["lockHash"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let mut owners = owners;
+        owners.sort();
+        assert_eq!(
+            owners,
+            vec![
+                ("deposit".to_string(), hex::encode([0xA1u8; 32])),
+                ("withdraw_complete".to_string(), hex::encode([0xC3u8; 32])),
+                ("withdraw_request".to_string(), hex::encode([0xB2u8; 32])),
+            ]
+        );
     }
 
     #[test]
@@ -3861,6 +3988,165 @@ mod tests {
                 .any(|a| a.protocol == "rgbpp"),
             "production entry point must run the production detectors; got {:?}",
             actions_list[0].protocol_actions
+        );
+    }
+
+    // ---- C7: the recognised type codes that ran ----
+
+    /// Stable++ Asset (mainnet), an xUDT-compatible token code the classifier recognises.
+    fn c7_udt_code() -> Vec<u8> {
+        crate::rpc::parse_hex_to_bytes(
+            "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+        )
+    }
+
+    fn c7_udt_input(owner: u8, amount: u128) -> OwnedInput {
+        let mut input = make_input(owner, 200_00000000, 102_00000000);
+        input.type_code_hash = Some(c7_udt_code());
+        input.type_script_hash = Some(vec![0x71; 32]);
+        input.type_hash_type = Some(1);
+        input.type_args = Some(vec![0x36; 32]);
+        input.udt_amount = Some(amount);
+        input
+    }
+
+    fn c7_udt_output(owner: u8, amount: u128) -> OwnedOutput {
+        let mut output = make_output(
+            owner,
+            200_00000000,
+            Some(c7_udt_code()),
+            Some(vec![0x71; 32]),
+            Some(vec![0x36; 32]),
+            amount.to_le_bytes().to_vec(),
+        );
+        output.type_hash_type = Some(1);
+        output
+    }
+
+    fn c7_tx<'a>(inputs: &'a [OwnedInput], outputs: &'a [OwnedOutput]) -> TxView<'a> {
+        TxView {
+            tx_hash: &[0xC7; 32],
+            block_hash: &[0xBB; 32],
+            tx_index: 1,
+            block_number: 2000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        }
+    }
+
+    fn c7_code(code_hash: &[u8], hash_type: i16) -> ckbadger_store::types::TypeCode {
+        ckbadger_store::types::TypeCode {
+            code_hash: code_hash.try_into().unwrap(),
+            hash_type,
+        }
+    }
+
+    /// Every type script code the classifier recognises that ran, on an input or an output, is
+    /// recorded once (code hash, hash type), sorted; a code it does not recognise stays a type
+    /// call with its args and is not recorded here.
+    #[test]
+    fn the_recognized_type_codes_are_every_recognised_code_that_ran_once() {
+        let dao_code = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let inputs = [c7_udt_input(0xAA, 60), c7_udt_input(0xAA, 40)];
+        let mut dao_deposit = make_output(
+            0xDD,
+            1000_00000000,
+            Some(dao_code.clone()),
+            Some(vec![0x82; 32]),
+            Some(vec![]),
+            vec![0; 8],
+        );
+        dao_deposit.type_hash_type = Some(1);
+        let mut unknown = make_output(
+            0xCC,
+            200_00000000,
+            Some(vec![0x3a; 32]),
+            Some(vec![0x3b; 32]),
+            Some(vec![0x01]),
+            vec![],
+        );
+        unknown.type_hash_type = Some(1);
+        let outputs = [c7_udt_output(0xBB, 100), dao_deposit, unknown];
+        let actions = build_tx_actions_for_block_no_detectors(&[c7_tx(&inputs, &outputs)])
+            .unwrap()
+            .remove(0);
+        let mut expected = vec![c7_code(&c7_udt_code(), 1), c7_code(&dao_code, 1)];
+        expected.sort();
+        assert_eq!(actions.recognized_type_codes, expected);
+        assert_eq!(actions.type_calls.len(), 1, "{:?}", actions.type_calls);
+        assert_eq!(actions.type_calls[0].type_code_hash, vec![0x3a; 32]);
+        assert_eq!(actions.type_calls[0].type_args, vec![0x01]);
+    }
+
+    /// The case the list is for: a wallet merging its own token cells changes no amount, so no item
+    /// delta says the token's code ran. The row records the code, and the owner's tags say a type
+    /// script ran that moved none of its items (TAG_TYPE_CALL): the transaction counts under Script,
+    /// as an unrecognised call does, not as a CKB transfer.
+    #[test]
+    fn a_wallet_merging_its_own_token_cells_records_the_code_and_is_a_script_call() {
+        let inputs = [c7_udt_input(0xAA, 60), c7_udt_input(0xAA, 40)];
+        let outputs = [c7_udt_output(0xAA, 100)];
+        let actions = build_tx_actions_for_block_no_detectors(&[c7_tx(&inputs, &outputs)])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            actions.recognized_type_codes,
+            vec![c7_code(&c7_udt_code(), 1)]
+        );
+        assert!(actions.type_calls.is_empty());
+        let owner = find_participant(&actions, 0xAA);
+        assert!(owner.item_deltas.is_empty(), "{:?}", owner.item_deltas);
+        assert_ne!(owner.tags & TAG_TYPE_CALL, 0, "tags {:#b}", owner.tags);
+        assert_eq!(
+            ckbadger_store::classify_global_bucket(&actions),
+            Some(ckbadger_store::GlobalBucket::Script)
+        );
+    }
+
+    /// A token that changed hands keeps its kind: the code is recorded, the parties carry the
+    /// token's tag, and none carries the type-call tag.
+    #[test]
+    fn a_token_transfer_records_its_code_and_stays_a_token() {
+        let inputs = [c7_udt_input(0xAA, 100)];
+        let outputs = [c7_udt_output(0xBB, 30), c7_udt_output(0xAA, 70)];
+        let actions = build_tx_actions_for_block_no_detectors(&[c7_tx(&inputs, &outputs)])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            actions.recognized_type_codes,
+            vec![c7_code(&c7_udt_code(), 1)]
+        );
+        for party in &actions.participants {
+            assert_ne!(party.tags & TAG_TOKEN, 0, "tags {:#b}", party.tags);
+            assert_eq!(party.tags & TAG_TYPE_CALL, 0, "tags {:#b}", party.tags);
+        }
+        assert_eq!(
+            ckbadger_store::classify_global_bucket(&actions),
+            Some(ckbadger_store::GlobalBucket::Token)
+        );
+    }
+
+    /// A type script with no hash type is an invariant violation, named with its code hash, never
+    /// classified or recorded as some default: the one rule of `classify_input` /
+    /// `classify_output` (resync/protocol-pairs), which C7's list records under (re-pinned at the
+    /// merge into resync/final: C7 refused it with a second error of its own).
+    #[test]
+    fn a_type_script_without_its_hash_type_is_an_error() {
+        let inputs = [c7_udt_input(0xAA, 100)];
+        let outputs = [c7_udt_output(0xAA, 100)];
+        let mut tx = c7_tx(&inputs, &outputs);
+        // the view the builder reads, with no hash type beside the type's code
+        tx.inputs[0].type_hash_type = None;
+        let err = build_tx_actions_for_block_no_detectors(&[tx])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a type script without a hash type")
+                && err.contains(&hex::encode(c7_udt_code())),
+            "{err}"
         );
     }
 

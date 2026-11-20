@@ -132,14 +132,20 @@ export function Tabs<K extends string>({
         {/* the narrow form: the row's line under its rule, the Select after "showing" */}
         <div className="border-row-rule flex min-w-0 items-center gap-4 border-b pb-1.5">
           {command && <span aria-hidden="true" className={TAB_SQUARE} />}
+          {/* named by the row's label, as its tablist is, "showing" the word it stands after; its
+              panel the tab form's (lane cd-fixes-controls, review-fix-logic-pages NOTE 4: the
+              Select was named "showing", so two such rows on a page had one name, and the panel was
+              a div with no role) */}
           <Select
             label="showing"
+            name={label}
+            controls={panelId}
             value={value}
             options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
             onChange={onChange}
           />
         </div>
-        <div id={panelId} aria-label={tabs[index].label}>
+        <div role="tabpanel" id={panelId} aria-label={tabs[index].label} tabIndex={0}>
           {children}
         </div>
       </div>

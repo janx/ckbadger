@@ -673,6 +673,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 100,
@@ -1149,6 +1150,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::lock(&lock).unwrap(),
                 ckb_delta: 50,
@@ -1230,6 +1232,7 @@ mod prefix_participant_filter_tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::LockPrefix(prefix),
                 ckb_delta: 0,
@@ -1265,6 +1268,7 @@ mod global_bucket_tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 100,

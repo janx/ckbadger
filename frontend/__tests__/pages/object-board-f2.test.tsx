@@ -301,8 +301,11 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
   expect(cell).not.toHaveTextContent(/all occupied|none free/);
   // the lock note is tier 2
   const caption = cell.querySelector('p[data-role="history-sentence"]')!;
+  // re-pinned on purpose (lane P2's fifth round, item 2): the figures the route sent, both
+  // capacities and both lock sizes, over its one move; no difference the page computed (it said
+  // "the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved")
   expect(caption).toHaveTextContent(
-    'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
+    'The object’s cell holds 320 CKB. At minting it held 307 CKB, its lock 53 bytes; after 1 move its lock is 66 bytes.'
   );
   // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
   expect(caption).toHaveClass('text-body', 'max-w-measure');

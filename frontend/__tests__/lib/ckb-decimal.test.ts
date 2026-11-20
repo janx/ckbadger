@@ -70,13 +70,18 @@ describe('formatSignedCount', () => {
 });
 
 describe('formatPercent', () => {
-  it('rounds an exact share half-up', () => {
+  // re-pinned for lane exactness, part B2: one percentage, cut by the one cut function, never rounded (it was half
+  // up: 2 of 3 read 66.67, 5 of 8 at none 63)
+  it('cuts an exact share, never rounds it', () => {
     const total = BigInt('4986878303450933125');
+    // 0.30306…% and 16.30051…%: the same digits cut as rounded
     expect(formatPercent(BigInt('15113424500000000'), total)).toBe('0.30');
     expect(formatPercent(BigInt('812889561643799700'), total)).toBe('16.30');
     expect(formatPercent(BigInt(1), BigInt(8), 1)).toBe('12.5');
     expect(formatPercent(BigInt(1), BigInt(3), 0)).toBe('33');
-    expect(formatPercent(BigInt(2), BigInt(3), 2)).toBe('66.67');
+    // 66.666…% is 66.66 (half up 66.67); 62.5 % at none is 62 (half up 63)
+    expect(formatPercent(BigInt(2), BigInt(3), 2)).toBe('66.66');
+    expect(formatPercent(BigInt(5), BigInt(8), 0)).toBe('62');
   });
 
   it('rejects a non-positive total or a negative part', () => {
@@ -86,21 +91,25 @@ describe('formatPercent', () => {
 });
 
 describe('formatDecimalBytes', () => {
-  it('promotes a rounded 1000.0 to the next decimal unit', () => {
+  // Re-pinned on purpose (lane exactness, part B3): the unit is the one the exact value reaches and
+  // the figure is cut in it, as the hash rate's (part B, S3). It chose the unit at
+  // unit − unit / 20,000 and rounded half up, so 999,950 bytes read 1.0 MB where they are 999.9 kB.
+  it('chooses the unit the exact value reaches and cuts in it', () => {
     for (const [unit, previous, next] of [
       [BigInt(1e6), 'kB', 'MB'],
       [BigInt(1e9), 'MB', 'GB'],
       [BigInt(1e12), 'GB', 'TB'],
     ] as const) {
-      const threshold = unit - unit / BigInt(20000);
-      expect(formatDecimalBytes(threshold - BigInt(1))).toBe(`999.9 ${previous}`);
-      expect(formatDecimalBytes(threshold)).toBe(`1.0 ${next}`);
+      expect(formatDecimalBytes(unit - unit / BigInt(20000))).toBe(`999.9 ${previous}`);
+      expect(formatDecimalBytes(unit - BigInt(1))).toBe(`999.9 ${previous}`);
+      expect(formatDecimalBytes(unit)).toBe(`1.0 ${next}`);
     }
   });
 
-  it('prints decimal units with one decimal', () => {
+  it('prints decimal units with one decimal, cut', () => {
     expect(formatDecimalBytes(BigInt(151_134_245))).toBe('151.1 MB');
-    expect(formatDecimalBytes(BigInt(41_590_000_000))).toBe('41.6 GB');
+    // 41,590,000,000 bytes are 41.59 GB: 41.5 (half up read 41.6)
+    expect(formatDecimalBytes(BigInt(41_590_000_000))).toBe('41.5 GB');
     expect(formatDecimalBytes(BigInt(999))).toBe('999 B');
   });
 });

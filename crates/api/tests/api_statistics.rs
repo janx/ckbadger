@@ -1234,7 +1234,7 @@ async fn test_network_stats_reads_derived_statistics() {
     //  - avgBlockTime = windowed average with ms precision (two 8s gaps →
     //    "8.00s"), not a hardcoded 10.00s;
     //  - hashRate = the window's summed per-block work over its span in true
-    //    H/s ("165.01 PH/s"; equal to difficulty / avg seconds here because
+    //    H/s ("165.00 PH/s", cut; equal to difficulty / avg seconds here because
     //    the seeded window is uniform-difficulty), not the 1000×-understated
     //    per-millisecond figure;
     //  - transactionsPerDay = the rolling last-24h rate normalized to a day
@@ -1319,8 +1319,9 @@ async fn test_network_stats_reads_derived_statistics() {
     assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
-    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165.01 PH/s.
-    assert_eq!(json["hashRate"], "165.01 PH/s");
+    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165,007,367,725,940,091.125 H/s, cut
+    // 165.00 PH/s (re-pinned for lane exactness, part B (the third read's S3): half up it read 165.01 PH/s)
+    assert_eq!(json["hashRate"], "165.00 PH/s");
 }
 
 #[tokio::test]
@@ -2927,6 +2928,7 @@ async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
                 })
                 .collect(),
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x70 + n as u8; 32]),
                 ckb_delta: 10,
@@ -2954,6 +2956,7 @@ async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         },
     );
@@ -3064,6 +3067,7 @@ async fn test_activity_summary_24h_counts_each_transaction_in_one_kind_and_dao_a
             protocol_actions,
             type_calls,
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0x50 + tx_index as u8; 32]),
                 ckb_delta: 10,
@@ -3090,6 +3094,7 @@ async fn test_activity_summary_24h_counts_each_transaction_in_one_kind_and_dao_a
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         },
     );
@@ -3169,6 +3174,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: participants
                 .into_iter()
                 .map(|(hash, ckb_delta)| ParticipantDelta {
@@ -3209,6 +3215,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ParticipantDelta {
                 id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 1,
@@ -3329,6 +3336,7 @@ async fn activity_summary_24h_counts_and_names_each_script_by_its_pair() {
     let default_lock = default_lock_code_hash();
     let binary = hex::decode(DEFAULT_LOCK_BINARY).unwrap();
     let actions = TxActions {
+        recognized_type_codes: vec![],
         tx_hash: vec![0x10; 32],
         block_hash: vec![0; 32],
         block_number: 0,
@@ -3425,6 +3433,7 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
     let tx =
         |index: i32, tags: u16, protocols: &[(&str, &str)], type_call: bool, lock_call: bool| {
             TxActions {
+                recognized_type_codes: vec![],
                 tx_hash: vec![0x40 + index as u8; 32],
                 block_hash: vec![1; 32],
                 block_number: 1,

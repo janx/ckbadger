@@ -11,9 +11,10 @@ import {
 import { MINUS } from '@/lib/chart-ticks';
 import type { GlobalActivity } from '@/lib/api';
 import { Dotted } from '@/components/ui/phone-row';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
-  return {
+  return activityRead({
     txHash: '0x54522856aa00000000000000000000000000000000000000000000000000007b60c3',
     blockNumber: 20_819_142,
     txIndex: 1,
@@ -22,11 +23,10 @@ function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [],
     ...overrides,
-  };
+  });
 }
 
 const bitTypeCalls = [
@@ -59,7 +59,7 @@ describe('global tx events — one classification for the full rows and the feed
           lockHashType: 'type',
           lockArgs: '0x01',
           scriptHash: '0xi',
-          scriptName: 'UTXOSwap Intent',
+          lockScriptName: 'UTXOSwap Intent',
           decoded: { protocol: 'utxoswap' },
         },
         {
@@ -67,7 +67,7 @@ describe('global tx events — one classification for the full rows and the feed
           lockHashType: 'type',
           lockArgs: '0x02',
           scriptHash: '0xo',
-          scriptName: 'Omnilock',
+          lockScriptName: 'Omnilock',
         },
       ],
     });
@@ -80,6 +80,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(
       activityHeadline(
         makeGlobal({
+          recognizedTypes: [ITEM_TYPE.dao],
           protocolActions: [
             {
               protocol: 'dao',
@@ -114,7 +115,9 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
       tags: 2,
       sent: false,
     };
-    expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object mint');
+    expect(
+      activityHeadline(makeGlobal({ recognizedTypes: [ITEM_TYPE.spore], participants: [party] }))
+    ).toBe('Object mint');
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
     expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Cellbase');

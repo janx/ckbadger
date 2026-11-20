@@ -7,12 +7,17 @@ import {
   LockKind,
   lockWordsText,
   lockWords,
-  partyLockWordsText,
   LockWordsView,
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
-import { lockPhrase, withNameBy } from '@/lib/lock-words';
+import {
+  lockCallFacts,
+  lockPhrase,
+  partyLockSentence,
+  partyLockWordsText,
+  withNameBy,
+} from '@/lib/lock-words';
 import { addressLockName } from '@/components/address/address-holdings';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
@@ -579,5 +584,66 @@ describe('a name by another reference carries its hash type wherever it is writt
         'row'
       )
     ).toThrow(/not a CKB hash type/);
+  });
+});
+
+// The third read's T SHOULD-5: a called lock is decided from its code hash, its hash type and its
+// `lockScriptName` (the wire's name for a lock's registry name, as on a party). A lock call from
+// an API one version older carries `scriptName` instead: refused by name, never decided on
+// `undefined` (which wrote "undefined lock").
+describe('lockCallFacts: a called lock as the decision reads it', () => {
+  const call = {
+    lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+    lockHashType: 'data',
+    lockArgs: '0x',
+    scriptHash: '0x' + 'cd'.repeat(32),
+    lockScriptName: 'Default Lock',
+  };
+  it('hands the decision the code hash, the hash type and the name', () => {
+    expect(lockCallFacts(call)).toEqual({
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data',
+      nameBy: null,
+    });
+  });
+
+  // at the merge with resync/all (lane rd/api-lock-names): the API names the code a called lock's
+  // pair runs and writes its hash type beside a name by another reference (`lockScriptNameBy`), as
+  // on a party; the decision reads it here, and a word the chain does not have is refused
+  it('hands the decision the hash type the API writes beside the name', () => {
+    expect(lockCallFacts({ ...call, lockHashType: 'data1', lockScriptNameBy: 'data1' })).toEqual({
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data1',
+      nameBy: 'data1',
+    });
+    expect(() => lockCallFacts({ ...call, lockScriptNameBy: 'data3' })).toThrow(
+      /not a CKB hash type/
+    );
+  });
+
+  it('refuses a lock call of an older API by the field it does not send', () => {
+    const { lockScriptName: _gone, ...older } = call;
+    expect(() => lockCallFacts({ ...older, scriptName: 'Default Lock' } as never)).toThrow(
+      "an activity's lock call: the API sends no lockScriptName: it is older than this page"
+    );
+  });
+});
+
+// Lane P2's fifth round (item 3; review-fix-logic-routes S5): on an API one version older a .cell
+// party sends `scriptName`, not `lockScriptName`, and the party's lock read "an undefined lock". The
+// party's one reader refuses a party without the field by name; it never writes a word that is
+// not on chain.
+describe('a named party from an API older than this page', () => {
+  const older = {
+    address: ckbAddress({ codeHash: JOYID, hashType: 'type', args: `0x${'0a'.repeat(22)}` }),
+    scriptName: 'JoyID',
+  } as unknown as { lockScriptName: string | null; address: string | null };
+  it('is refused by name, never written "undefined"', () => {
+    expect(() => partyLockWordsText(older, 'row')).toThrow(
+      /a \.cell party: the API sends no lockScriptName: it is older than this page/
+    );
+    expect(() => partyLockSentence(older, 'row')).toThrow(/it is older than this page/);
   });
 });

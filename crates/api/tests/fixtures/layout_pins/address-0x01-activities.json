@@ -14,19 +14,11 @@
           "composition": "pure_ckb",
           "delta": -1,
           "kind": "object",
+          "movement": "transfer",
           "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
           "role": "spore"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore",
-          "scriptNameBy": null,
-          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -40,6 +32,14 @@
         }
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
       "sent": true,
       "tags": 258,
@@ -63,19 +63,11 @@
           "composition": "pure_ckb",
           "delta": 1,
           "kind": "object",
+          "movement": "mint",
           "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
           "role": "spore"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore",
-          "scriptNameBy": null,
-          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -89,6 +81,14 @@
         }
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
       "sent": false,
       "tags": 2,
@@ -112,19 +112,11 @@
           "composition": null,
           "delta": 1,
           "kind": "object",
+          "movement": "mint",
           "objectId": "0x1111111111111111111111111111111111111111111111111111111111111111",
           "role": "cluster"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore Cluster",
-          "scriptNameBy": null,
-          "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -138,6 +130,14 @@
         }
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore Cluster",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
       "sent": false,
       "tags": 2,

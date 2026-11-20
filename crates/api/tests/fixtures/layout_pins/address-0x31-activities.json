@@ -5,8 +5,6 @@
       "ckbDelta": "-50000000000",
       "isCellbase": false,
       "itemDeltas": [],
-      "itemTypes": [],
-      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -20,6 +18,7 @@
         }
       ],
       "protocolActions": [],
+      "recognizedTypes": [],
       "roles": [],
       "sent": true,
       "tags": 256,
@@ -34,8 +33,6 @@
       "ckbDelta": "50000000000",
       "isCellbase": false,
       "itemDeltas": [],
-      "itemTypes": [],
-      "itemTypesUnread": null,
       "lockCalls": [],
       "participants": [
         {
@@ -49,6 +46,7 @@
         }
       ],
       "protocolActions": [],
+      "recognizedTypes": [],
       "roles": [],
       "sent": false,
       "tags": 0,

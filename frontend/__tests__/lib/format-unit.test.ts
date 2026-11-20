@@ -49,6 +49,8 @@ describe('percent: one form (CH-14)', () => {
   it('writes a share with two decimals and no space before its sign', () => {
     expect(percentOf(BigInt(2479), BigInt(10000))).toBe('24.79%');
     expect(percentOf(BigInt(1), BigInt(3))).toBe('33.33%');
+    // lane exactness, part B2: 2 of 3 is 66.666…%, cut 66.66% (half up 66.67%)
+    expect(percentOf(BigInt(2), BigInt(3))).toBe('66.66%');
     expect(percentOf(BigInt(0), BigInt(5))).toBe('0.00%');
     expect(withUnit('24.79', '%')).toBe('24.79%');
   });
@@ -65,15 +67,19 @@ describe('percent: one form (CH-14)', () => {
     const M = BigInt(1_000_000);
     expect(percentOf(BigInt(1), M)).toBe('<0.01%');
     expect(percentOf(BigInt(49), M)).toBe('<0.01%'); // 0.0049 %
-    expect(percentOf(BigInt(50), M)).toBe('0.01%'); // 0.005 % rounds half up
-    expect(percentOf(M - BigInt(1), M)).toBe('>99.99%');
-    expect(percentOf(M - BigInt(50), M)).toBe('>99.99%'); // 99.995 % would round to 100.00
+    // re-pinned for lane exactness, part B2: cut, never rounded. 0.005 % cuts to 0.00, a share above nothing:
+    // <0.01% (half up it read 0.01%); a share below the whole cuts to at most 99.99, which is
+    // true of it (99.9999 % and 99.995 % read >99.99% half up)
+    expect(percentOf(BigInt(50), M)).toBe('<0.01%');
+    expect(percentOf(BigInt(100), M)).toBe('0.01%');
+    expect(percentOf(M - BigInt(1), M)).toBe('99.99%');
+    expect(percentOf(M - BigInt(50), M)).toBe('99.99%');
     expect(percentOf(M - BigInt(51), M)).toBe('99.99%');
     expect(percentOf(BigInt(0), M)).toBe('0.00%');
     expect(percentOf(M, M)).toBe('100.00%');
     // the figure alone, for a place that writes the sign apart (a headline's unit)
     expect(percentFigure(BigInt(1), M)).toBe('<0.01');
-    expect(percentFigure(M - BigInt(1), M)).toBe('>99.99');
+    expect(percentFigure(M - BigInt(1), M)).toBe('99.99');
     expect(percentFigure(BigInt(2479), BigInt(10000))).toBe('24.79');
   });
 });

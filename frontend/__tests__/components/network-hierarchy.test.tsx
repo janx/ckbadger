@@ -509,9 +509,10 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     // the bar's 1,196 px less its two 2 px gaps give Amazon.com 652.4 px and Hetzner 362.4, each
     // holding its words and 10 px each side; Unknown's 181.2 px cannot hold "Unknown 15.15% · 10
     // nodes", 25 characters at 13 px, 195 px and 20: it is named under the bar. It was
-    // ['Amazon.com 54.55%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%'].
+    // ['Amazon.com 54.54%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%'].
+    // lane exactness, part B2: 36 of 66 nodes is 54.5454…%, 54.54% (half up 54.55%)
     expect(words).toEqual([
-      'Amazon.com 54.55% · 36 nodes',
+      'Amazon.com 54.54% · 36 nodes',
       'Hetzner Online GmbH 30.30% · 20 nodes',
       '',
     ]);
@@ -524,7 +525,7 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
   });
 
   // Re-pinned on purpose (readability P4): it was "writes a share alone, or nothing, where a
-  // segment cannot hold its words" (['Amazon.com 54.55%', '30.30%', '']); a share alone left its
+  // segment cannot hold its words" (['Amazon.com 54.54%', '30.30%', '']); a share alone left its
   // part unnamed. At 358 px no segment holds its words (354 px: 193.1, 107.3 and 53.6), so all
   // three are named on their lines under the bar and every segment is a fill without words.
   it('names a part under the bar where its segment cannot hold its words, and writes nothing in it', async () => {
@@ -534,7 +535,7 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     expect(words).toEqual(['', '', '']);
     const lines = [...section.querySelectorAll('[data-provider-line]')];
     expect(lines.map((line) => line.textContent)).toEqual([
-      'Amazon.com 54.55% · 36 nodes',
+      'Amazon.com 54.54% · 36 nodes',
       'Hetzner Online GmbH 30.30% · 20 nodes',
       'Unknown 15.15% · 10 nodes',
     ]);

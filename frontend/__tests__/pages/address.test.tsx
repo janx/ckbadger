@@ -49,6 +49,7 @@ import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -93,17 +94,21 @@ const pool = {
   pendingCkbDelta: '-50000000000',
   truncated: false,
 };
-const poolActivity = (): Activity => ({
-  ...addressActivitiesFixture[0],
-  txHash: fixtureHash(900),
-  blockNumber: null,
-  txIndex: null,
-  timestamp: null,
-  poolStatus: 'proposed',
-  timeAddedToPool: new Date(Date.now() - 120000).toISOString(),
-  ckbDelta: '-50000000000',
-  interpretation: { status: 'complete' },
-});
+// a pool row states no item types, null and null, as the route sends it (the third read's T
+// SHOULD-1: it inherited the committed row's [])
+const poolActivity = (): Activity =>
+  activityRead({
+    ...addressActivitiesFixture[0],
+    txHash: fixtureHash(900),
+    blockNumber: null,
+    txIndex: null,
+    timestamp: null,
+    poolStatus: 'proposed',
+    timeAddedToPool: new Date(Date.now() - 120000).toISOString(),
+    ckbDelta: '-50000000000',
+    interpretation: { status: 'complete' },
+    recognizedTypes: [],
+  });
 const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
   balance: '0',
@@ -1157,7 +1162,16 @@ describe('Address v3', () => {
         pageFixture([
           {
             ...addressActivitiesFixture[0],
-            itemDeltas: [{ kind: 'identity', standard, identityId: fixtureHash(77), delta: 1 }],
+            // the route states each item's movement in the whole transaction (the third read's Lb SHOULD 2)
+            itemDeltas: [
+              {
+                kind: 'identity',
+                standard,
+                identityId: fixtureHash(77),
+                delta: 1,
+                movement: 'transfer',
+              },
+            ],
           },
         ])
       );
@@ -1188,8 +1202,15 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           tags: 1,
+          // a transfer in, as the route states it (the third read's Lb SHOULD 2): its direction
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '1', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '1',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
         },
       ])
@@ -1205,7 +1226,13 @@ describe('Address v3', () => {
         {
           ...addressActivitiesFixture[0],
           itemDeltas: [
-            { kind: 'token', typeScriptHash: fixtureHash(300), delta: '123456789', decimals: 8 },
+            {
+              kind: 'token',
+              typeScriptHash: fixtureHash(300),
+              delta: '123456789',
+              decimals: 8,
+              movement: 'transfer',
+            },
           ],
           typeCalls: [
             {
@@ -1688,7 +1715,7 @@ describe('Address board · F2 blocks', () => {
     // Re-pinned on purpose (Gate B's rule, lists lane P3: a run is what was done and the script
     // code, not the parties): the second transaction calls a type script, so the two rows do not
     // fold (another party alone no longer keeps them apart)
-    const second = {
+    const second = activityRead({
       ...addressActivitiesFixture[0],
       txHash: fixtureHash(801),
       ckbDelta: '-5',
@@ -1704,12 +1731,23 @@ describe('Address board · F2 blocks', () => {
       participants: [
         { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [], sent: false },
       ],
-    };
+    });
     const page = pageFixture([...addressActivitiesFixture, second]);
     // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the
-    // API would, so the feed's two rows do not reach the chip's one-row invariant.
+    // API would, so the feed's two rows do not reach the chip's one-row invariant. Lane
+    // cd-fixes-controls (review-fix-tests SHOULD-3): as the API would means a full page of one at
+    // the size asked, naming the cursor after it (it was one row at 20 a page that said more
+    // followed and named no cursor, which the checker refuses)
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
-      p?.limit === 1 ? { ...page, data: page.data.slice(0, 1), hasMore: true } : page
+      p?.limit === 1
+        ? pagedRead({
+            ...page,
+            data: page.data.slice(0, 1),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'chip-1',
+          })
+        : page
     );
     render(<AddressDetailPage />);
     const history = await screen.findByRole('region', { name: 'History' });
@@ -2016,13 +2054,18 @@ describe('Address · consistency round (C13, C14)', () => {
   // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0
   // or 1 — and no number otherwise; "All" keeps the address's total; an empty filter is dimmed.
   it('counts a filter chip from its one-row page only when the count is exact; an empty filter is dimmed 0', async () => {
+    // a chip's one-row page as the API sends it: at the size asked (1), naming the cursor after
+    // it where more follow (lane cd-fixes-controls, review-fix-tests SHOULD-3: they were pages of
+    // 20, and "ckb"'s said more followed and named no cursor)
+    const chipPage = (rows: typeof addressActivitiesFixture, more: boolean) =>
+      pagedRead({ data: rows, limit: 1, hasMore: more, nextCursor: more ? 'chip-1' : null });
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.limit === 1 && p.filter && p.filter !== 'all'
         ? p.filter === 'token'
-          ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: false, total: undefined }
+          ? chipPage([addressActivitiesFixture[0]], false)
           : p.filter === 'ckb'
-            ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: true, total: undefined }
-            : { ...pageFixture([]), hasMore: false, total: undefined }
+            ? chipPage([addressActivitiesFixture[0]], true)
+            : chipPage([], false)
         : // the unfiltered page states the address's activity count (contracts W5-1)
           pageFixture(addressActivitiesFixture, addressActivitiesFixture.length)
     );
@@ -2108,7 +2151,8 @@ describe('Address · space legend (lane A follow-up)', () => {
         .map((b) => b.textContent)
       // re-pinned on purpose (lane P1, the plan: the bar says its unit; review chain-b
       // address-miner: "102 / 122" with no unit read as CKB): bytes, "3,761 B"
-    ).toEqual(['Objects3,761\u00a0B96.76%', 'Plain CKB126\u00a0B3.24%']);
+      // lane exactness, part B2: 3,761 of 3,887 B is 96.758…%, 96.75% (half up 96.76%); 126 3.2415…%, 3.24%
+    ).toEqual(['Objects3,761\u00a0B96.75%', 'Plain CKB126\u00a0B3.24%']);
     const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
     expect(rest).toHaveClass('text-text-dim');
     expect(rest).toHaveAttribute(

@@ -241,6 +241,11 @@ function Gel({
   // band's sides, cut to that room at whole graphemes by the bound of lib/type-metrics.ts
   // (review F-B, logic finding 5).
   const labelRoom = lw - 2 * inset - 8;
+  // One form of the lanes' counts a gel (lane P2's fifth round, NOTE 6): with the noun where every
+  // lane holds its count's words between its insets, else every count bare, which the legend reads
+  const countsWithNoun = lanes.every(
+    (lane) => textPx(formatCount(lane.variants, 'variant').length, SVG_TEXT.tick) <= lw - 2 * inset
+  );
   return (
     <>
       <svg
@@ -389,10 +394,10 @@ function Gel({
                     fontSize={SVG_TEXT.tick}
                     fill={GEL_COLORS.label}
                   >
-                    {/* the count with its noun where the lane holds it (lane P2's third round,
-                        item 5: a bare "3", which only the legend explained) */}
-                    {textPx(formatCount(lane.variants, 'variant').length, SVG_TEXT.tick) <=
-                    lw - 2 * inset
+                    {/* the count with its noun where every lane holds it (lane P2's third round,
+                        item 5: a bare "3", which only the legend explained), one form a gel
+                        (the fifth round, NOTE 6: "3 variants · 12" in one row) */}
+                    {countsWithNoun
                       ? formatCount(lane.variants, 'variant')
                       : lane.variants.toLocaleString('en-US')}
                   </text>

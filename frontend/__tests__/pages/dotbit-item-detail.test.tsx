@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
-import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { api, ApiRequestError, type ItemCellVersion, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import {
@@ -369,4 +369,50 @@ it('lays the .bit Transactions out in the board columns (ID-C8)', async () => {
   ]);
   const row = table.querySelector('tbody tr')!;
   expect(row).toHaveTextContent(/cell after/);
+});
+
+// Lane P2's fifth round (item 1, MUST): a version whose type changed is never folded among versions
+// alike, though its capacity, byte counts and lock stay (a .bit account cell under a type of the
+// same length, its args changed), nor are a renewal and a record edit, which change only the data.
+it('never folds a type change, a renewal or a record edit of the same length', async () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  const type = base.type!;
+  const otherType = { ...type, args: `0x${'5e'.repeat((type.args.length - 2) / 2)}` };
+  const data = [
+    base.dataHash,
+    base.dataHash,
+    base.dataHash,
+    `0x${'e1'.repeat(32)}`,
+    `0x${'e2'.repeat(32)}`,
+  ];
+  const types = [type, type, otherType, otherType, otherType];
+  const cells: ItemCellVersions = {
+    data: data.map((dataHash, i): ItemCellVersion => {
+      const last = i === data.length - 1;
+      return {
+        ...base,
+        txHash: `0x${String(i + 1)
+          .padStart(2, '0')
+          .repeat(32)}`,
+        outputIndex: 0,
+        blockNumber: 100 + i,
+        txIndex: 0,
+        dataHash,
+        type: types[i],
+        isLive: last,
+        consumedByTx: last
+          ? null
+          : `0x${String(i + 2)
+              .padStart(2, '0')
+              .repeat(32)}`,
+        consumedAtBlock: last ? null : 101 + i,
+      };
+    }),
+    total: data.length,
+  };
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
+  render(<Page identityId={evidence.itemId} />);
+  const list = await screen.findByLabelText(/cell versions$/);
+  expect(within(list).getAllByRole('article')).toHaveLength(5);
+  expect(list.querySelector('[data-versions-fold]')).toBeNull();
 });

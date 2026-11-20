@@ -7,6 +7,7 @@ import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-rende
 import { api } from '@/lib/api';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // the module's own constants (its tags, which an activity's classification reads) beside the
 // mocked reads (the lead's final round, item 7: a called lock's activity reaches the tags)
@@ -223,8 +224,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 1,
       uniqueAddressCount: 9,
       totalCkbMoved: '123000000000',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 5 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 5 }],
+      scriptCalls: 5,
       scriptRest: null,
       protocolActionCounts: {
         'dao:deposit': 3,
@@ -306,8 +309,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 1 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 1 }],
+      scriptCalls: 1,
       scriptRest: null,
       protocolActionCounts: {},
       hoursCovered: 24,
@@ -319,15 +324,16 @@ describe('renderMarkdownPage', () => {
       scriptHash: '0x' + 'cd'.repeat(32),
       // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
       // lock on the default lock's code hash by data runs none, so it sends no name; the client's
-      // stopgap that dropped the name is gone
-      scriptName: null,
+      // stopgap that dropped the name is gone. A called lock's name is `lockScriptName` (the third
+      // read's T SHOULD-5)
+      lockScriptName: null,
       decoded: null,
       decodeError: null,
     };
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
         data: [
-          {
+          activityRead({
             txHash: `0x${'a'.repeat(64)}`,
             blockNumber: 123,
             txIndex: 1,
@@ -337,9 +343,8 @@ describe('renderMarkdownPage', () => {
             lockCalls: [byData],
             protocolActions: [],
             participants: [],
-            itemTypes: [],
-            itemTypesUnread: null,
-          },
+            recognizedTypes: [],
+          }),
         ],
         limit: 1,
         hasMore: false,
@@ -434,8 +439,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 0,
       uniqueAddressCount: 0,
       totalCkbMoved: '0',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 1 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 1 }],
+      scriptCalls: 1,
       scriptRest: null,
       protocolActionCounts: {},
       hoursCovered: 24,
@@ -645,7 +652,6 @@ describe('renderMarkdownPage', () => {
       totalDeposited: '1300000000000',
       totalDepositedCkb: '13000',
       totalDepositors: 3,
-      activeDeposits: 13,
       depositCellsCount: 9,
       withdrawalRequestCellsCount: 4,
       liveCellsCount: 13,
@@ -656,7 +662,9 @@ describe('renderMarkdownPage', () => {
       averageDepositDays: null,
       estimatedApc: '2.10',
     } as never);
-    vi.mocked(api.getDaoDeposits).mockResolvedValue({ data: [], nextCursor: null } as never);
+    vi.mocked(api.getDaoDeposits).mockResolvedValue(
+      pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null }) as never
+    );
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/dao'),
       searchParams: new URLSearchParams(),
@@ -1436,5 +1444,59 @@ describe('renderMarkdownPage', () => {
       origin: 'http://localhost:3000',
     });
     expect(bad.status).toBe(404);
+  });
+});
+
+// Lane P2's fifth round (item 3): the AI view's ownerLock / managerLock cells read the party
+// through the page's one reader, which refuses a party an older API sends (no lockScriptName).
+describe('the .cell AI view on an API older than this page', () => {
+  it('refuses a party with no lockScriptName by name', async () => {
+    const manager = {
+      hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+      lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+      address: ckbAddress({
+        codeHash: DEFAULT_LOCK_CODE_HASH,
+        args: '0x' + '57'.repeat(20),
+        network: 'ckt',
+      }),
+      scriptName: 'SECP256K1_BLAKE160',
+    };
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'1'.repeat(64)}`,
+      layoutVersion: 1,
+      namespaceArgs: '0x' + '34'.repeat(20),
+      expiredAt: 1900000000,
+      state: 'active',
+      graceEndsAt: 1902592000,
+      owner: manager,
+      manager,
+      ownerNameCount: 1,
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue(
+      pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null }) as any
+    );
+    await expect(
+      renderMarkdownPage({
+        page: parseMarkdownSourcePath(
+          '/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+        ),
+        searchParams: new URLSearchParams(),
+        origin: 'https://explorer.example',
+      })
+    ).rejects.toThrow(/the API sends no lockScriptName: it is older than this page/);
   });
 });

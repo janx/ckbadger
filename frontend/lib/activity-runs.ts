@@ -13,17 +13,19 @@
  *    (the feed hands it over: a feed may head a row in its own words), so the folded row's head is
  *    every one of its rows' head;
  * 2. **what was done, as the API names it**: the protocol actions, each by its protocol and its
- *    action (`dao:deposit`), as a multiset (each with its count); an action's own figures, such as
- *    a deposit's capacity, are not compared;
+ *    action (`dao:deposit`), as a SET (the third read's Lb NOTE 1, by the rule of the codes: one
+ *    deposit and three in one batch did one thing); an action's own figures, such as a deposit's
+ *    capacity, are not compared;
  * 3. **the script code**: each by its code (its code hash and its hash type: a script is the
  *    pair), as a SET: the code that was called, not how many cells carried it (the lead's final
  *    round, item 1: as a multiset, two Godwoken transfers with two and three Withdrawal Lock
  *    outputs were two runs, which no reader would call two things done). Not the args: the same
  *    code with other args is the same (the three oracles' 0x00, 0x01, 0x02; two tokens of one
  *    standard). Three lists, as the API states them:
- *    - `itemTypes`, the type script of every token, object and identity the row moved and the
- *      Nervos DAO's, as the indexer classified each item (the page-phase review's MUST-1: an
- *      item's type is never a call, so without them an sUDT and an xUDT transfer were one run);
+ *    - `recognizedTypes`, every type script code the indexer recognises that ran, read from the
+ *      row (C7): the codes of the items that changed hands and of a recognised script that moved
+ *      nothing, so a wallet merging its own sUDT cells never folds with a plain CKB transfer, and
+ *      an sUDT and an xUDT transfer are two runs (the page-phase review's MUST-1);
  *    - `typeCalls`, the type scripts the indexer does not recognise;
  *    - `lockCalls`, the non-standard locks ATTACHED to the row's outputs. An output's lock does
  *      not run: these are not the locks the transaction ran. The locks that ran, its inputs', are
@@ -68,8 +70,8 @@ export interface RunSubject {
   protocolActions: readonly { protocol: string; action: string }[];
   typeCalls: readonly { typeCodeHash: string; typeHashType: string }[];
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
-  /** Its items' and its DAO step's type scripts, each code once (the API's `itemTypes`). */
-  itemTypes: readonly { typeCodeHash: string; typeHashType: string }[];
+  /** The recognised type script codes that ran, each once (the API's `recognizedTypes`). */
+  recognizedTypes: readonly { typeCodeHash: string; typeHashType: string }[];
   /** The row's parties (the feed's: a feed may know more of them than the row draws), counted. */
   parties: readonly RunParty[];
 }
@@ -81,8 +83,7 @@ function partyId(p: RunParty, txHash: string): string {
   return id;
 }
 
-const multiset = (values: readonly string[]) => [...values].sort();
-/** Each code once, in one order: what was called, not how often. */
+/** Each once, in one order: what was done or called, not how often. */
 const codeSet = (values: readonly string[]) => [...new Set(values)].sort();
 
 /** The key two rows share exactly when they are the same (see the module's rule). */
@@ -92,8 +93,8 @@ export function runKey(s: RunSubject): string {
     'committed',
     s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
-    multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
-    codeSet(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
+    codeSet(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
+    codeSet(s.recognizedTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
   ]);

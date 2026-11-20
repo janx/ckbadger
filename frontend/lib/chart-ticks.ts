@@ -5,6 +5,7 @@
 
 import { SVG_TEXT } from '@/lib/chart-type';
 import { advancePx } from '@/lib/type-metrics';
+import { formatCompactRatio } from '@/lib/exact-integer';
 
 /** The typographic minus, used for every negative number the charts print. */
 export const MINUS = '−';
@@ -226,15 +227,20 @@ function trimZeros(s: string): string {
   return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
 
-/** A compact signed amount for a clipped bar's label: +28.12M, −8.94M, +950k, +12.5k, −12. */
-export function formatCompactSigned(value: number): string {
-  assertFinite('formatCompactSigned: value', value);
-  const sign = value > 0 ? '+' : value < 0 ? MINUS : '';
-  const abs = Math.abs(value);
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${trimZeros((abs / 1e3).toFixed(1))}k`;
-  return `${sign}${abs.toFixed(0)}`;
+/**
+ * A signed CKB change, compact, for a clipped bar's label and a chart's range: +28.12M, −8.94M,
+ * +950k, +12.5k, −12. Read from the exact shannons and cut in the unit the value reaches, its
+ * trailing zeros dropped; under 1,000 CKB the whole CKB, cut (lane exactness, part B3: it rounded
+ * the float the bar is drawn from, 28,129,999.99999999 CKB read +28.13M).
+ */
+export function formatCompactSigned(shannons: bigint): string {
+  const sign = shannons > BigInt(0) ? '+' : shannons < BigInt(0) ? MINUS : '';
+  const abs = shannons < BigInt(0) ? -shannons : shannons;
+  const perCkb = BigInt(100_000_000);
+  if (abs < perCkb * BigInt(1000)) return `${sign}${abs / perCkb}`;
+  const compact = formatCompactRatio(abs, perCkb);
+  const suffix = compact.replace(/^[\d.]+/, '');
+  return `${sign}${trimZeros(compact.slice(0, compact.length - suffix.length))}${suffix}`;
 }
 
 /**

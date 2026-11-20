@@ -146,7 +146,8 @@ describe('formatShare', () => {
     expect(formatShare(814, 1000)).toBe('81.40%');
     expect(formatShare(14, 10000)).toBe('0.14%');
     expect(formatShare(2, 100000)).toBe('<0.01%');
-    expect(formatShare(999_999, 1_000_000)).toBe('>99.99%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 999,999 of 1,000,000 is 99.9999%, 99.99% (half up 100.00, bounded >99.99%)
+    expect(formatShare(999_999, 1_000_000)).toBe('99.99%');
     expect(formatShare(0, 10)).toBe('0.00%');
     expect(formatShare(10, 10)).toBe('100.00%');
   });
@@ -179,5 +180,26 @@ describe('exact completed day counts', () => {
       script: 5795,
       ckb: 1302,
     });
+  });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('scriptShares on an older API', () => {
+  // it read BigInt(undefined)
+  it('refuses a summary without scriptCalls or scriptRest by name', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptRest: null } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow(
+      'the 24 h activity summary: the API sends no scriptCalls: it is older than this page'
+    );
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptCalls: 0 } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow('the 24 h activity summary: the API sends no scriptRest: it is older than this page');
   });
 });

@@ -13918,10 +13918,9 @@ mod tests {
         #[tokio::test]
         async fn live_and_bulk_agree_on_extension_bound_metadata_and_max_supply() {
             let blocks = vec![funding_block(), ext_issuance_block(), ext_naming_block()];
-            let batches: Vec<Vec<BlockResponseWithCycles>> =
-                blocks.iter().cloned().map(|b| vec![b]).collect();
-            let store = write_batches_live(&batches, None).await;
-            let live = store.get_token(&ext_type_hash()).unwrap().unwrap();
+            // the row on every path and batching, byte-equal (resync/final: it read live a block
+            // per batch alone, then compared bulk field by field below)
+            let live = token_row_on_every_path(&blocks, &ext_type_hash()).await;
             assert_eq!(live.name.as_deref(), Some("RGB++ Protocol"));
             assert_eq!(live.max_supply, Some(TOKEN_MAX_SUPPLY));
             assert_eq!(
@@ -14398,7 +14397,10 @@ mod tests {
         /// the info cell under Omnilock's code hash by `type` claims it, the
         /// same cell by `data` (a pair anyone can lock a cell with; no such
         /// binary runs) claims nothing. The token's owner is that very lock
-        /// in both, so the owner rule passes and the pair alone decides.
+        /// in both, so the owner rule passes and the pair alone decides. On
+        /// every path and batching (resync/final: bulk, live a block per
+        /// batch, and live in one batch after the funding block, byte-equal;
+        /// it compared bulk with live a block per batch).
         #[tokio::test]
         async fn omnilock_claims_a_max_supply_only_by_its_registered_pair() {
             for (lock_by, claimed) in [("type", Some(TOKEN_MAX_SUPPLY)), ("data", None)] {
@@ -14408,12 +14410,8 @@ mod tests {
                         supply_issuance_block(lock_by),
                         omnilock_claim_block(with_transfer, lock_by),
                     ];
-                    let row = assert_bulk_row_equals_live(
-                        &blocks,
-                        &per_block(&blocks),
-                        &supply_token_hash_by(1, lock_by),
-                    )
-                    .await;
+                    let row =
+                        token_row_on_every_path(&blocks, &supply_token_hash_by(1, lock_by)).await;
                     assert_eq!(
                         row.max_supply, claimed,
                         "Omnilock by {lock_by}, with_transfer={with_transfer}"

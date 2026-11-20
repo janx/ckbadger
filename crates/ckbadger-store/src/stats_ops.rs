@@ -2377,6 +2377,7 @@ mod daily_activity_stats_tests {
         let secp = hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
             .unwrap();
         let actions = TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0xa1; 32],
             block_hash: vec![0xba; 32],
             block_number: 5,
@@ -2493,6 +2494,7 @@ mod daily_activity_stats_tests {
     #[test]
     fn a_call_of_another_hash_type_is_an_error_naming_its_transaction() {
         let actions = TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0xa1; 32],
             block_hash: vec![0xba; 32],
             block_number: 5,

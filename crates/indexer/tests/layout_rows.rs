@@ -48,7 +48,9 @@ const EXPECTED: &[(&str, &str, &str)] = &[
         "7fffffffffffffef7ffffffe",
         // re-pinned on purpose (resync/int, step 2): the one participant spent an input, so its
         // tags carry TAG_INPUT (0x0100, little-endian 00 01); it was 00 00
-        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff0000000000000000000100",
+        // re-pinned on purpose (resync/type-codes, C7): the row ends with its recognised type
+        // codes, none in this plain transfer: an empty list's 8-byte length, 00 × 8
+        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff00000000000000000001000000000000000000",
     ),
     (
         "addr_balance",

@@ -6,6 +6,7 @@
  * components/ui/lock-kind.tsx, which re-exports this half; agent-renderer-imports.test keeps the
  * renderer's import graph free of React.
  */
+import { sentField } from '@/lib/api-fields';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
 import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
@@ -110,10 +111,34 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
 }
 
 /**
+ * A called lock (an activity's lock call) as the decision reads it (the third read's T SHOULD-5):
+ * its code hash, its hash type and the name of the code its pair runs, `lockScriptName` on the wire
+ * as on a party, with the hash type the API writes beside it (`lockScriptNameBy`, lane
+ * rd/api-lock-names), read here alone, so the row's head, its link and the AI view decide one lock
+ * alike. A call of an API one version older carries `scriptName` instead: refused by the field's
+ * name.
+ */
+export function lockCallFacts(call: {
+  lockCodeHash: string;
+  lockHashType: string;
+  lockScriptName: string | null;
+  lockScriptNameBy?: string | null;
+}): LockFacts {
+  return {
+    name: sentField(call.lockScriptName, "an activity's lock call", 'lockScriptName'),
+    codeHash: call.lockCodeHash,
+    hashType: normalizeScriptRefHashType(call.lockHashType),
+    nameBy: nameByOf(call.lockScriptNameBy, `lock call ${call.lockCodeHash}`),
+  };
+}
+
+/**
  * A named party's lock (a .cell name's owner, manager, a sale's seller; lane P2's third round,
  * item 12): the name the API sends for the code its lock's pair runs (`lockScriptName`), with the
  * hash type beside it (`lockScriptNameBy`), and, where the party has an address, the lock read off
- * it, which decides the default lock. A party with no address keeps the name alone.
+ * it, which decides the default lock. A party with no address keeps the name alone. A party from an
+ * API older than this page sends no `lockScriptName` (it sent `scriptName`) and is refused by name
+ * (lane P2's fifth round, item 3: it read "an undefined lock").
  */
 export function namedPartyLockFacts(party: {
   lockScriptName: string | null;
@@ -121,7 +146,7 @@ export function namedPartyLockFacts(party: {
   lockScriptNameBy?: string | null;
   address: string | null;
 }): LockFacts {
-  const name = party.lockScriptName;
+  const name = sentField(party.lockScriptName, 'a .cell party', 'lockScriptName');
   const nameBy = nameByOf(party.lockScriptNameBy, `party ${party.address ?? '(no address)'}`);
   if (party.address === null) return { name, codeHash: null, hashType: null, nameBy };
   const { codeHash, hashType } = addressScript(party.address);

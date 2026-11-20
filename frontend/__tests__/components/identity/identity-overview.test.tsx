@@ -414,7 +414,10 @@ describe('.cell rail parties (visual pass)', () => {
     expect(fact('Owner')).toHaveTextContent('Quantum-Resistant Lock');
     expect(fact('Owner')).not.toHaveTextContent("named in the name's data");
     expect(fact('Manager')).not.toHaveTextContent('edits its records');
-    expect(fact('Manager')).toHaveTextContent('prefix · no uniquely resolved lock');
+    // re-pinned on purpose (lane P2's fifth round, NOTE 7): one word for a prefix no lock answers
+    // uniquely, the fact's and the summary's (it was "prefix · no uniquely resolved lock" here and
+    // "a lock not indexed owns it" in the summary)
+    expect(fact('Manager')).toHaveTextContent('prefix · lock not uniquely resolved');
   });
 });
 
@@ -477,4 +480,51 @@ describe('.cell parties name their locks through the decision', () => {
     );
     expect(document.body).not.toHaveTextContent('Default Lock');
   });
+});
+
+// Lane P2's fifth round (NOTE 7): a .cell owner whose prefix no lock answers uniquely is said in
+// one word on the page: the summary said "a lock not indexed owns it", the decision's answer for a
+// lock with no code hash and no name, beside the fact's "no uniquely resolved lock".
+it('says an unresolved .cell owner in one word, in the summary and the fact', () => {
+  const protocol = structuredClone(dotcellProtocolProducer) as Extract<
+    IdentityProtocol,
+    { kind: 'dotcell' }
+  >;
+  const first = protocol.versions[0];
+  const second = structuredClone(first);
+  second.cell.timestamp = String(Number(first.cell.timestamp) + 86_400_000);
+  second.cell.txHash = '0x' + '78'.repeat(32);
+  second.decoded.owner = {
+    hashPrefix: '0x' + '6c'.repeat(20),
+    lockHash: null,
+    address: null,
+    lockScriptName: null,
+  };
+  protocol.versions = [first, second];
+  const item = dotcellItem();
+  const dotcell = { ...item, owner: second.decoded.owner };
+  render(
+    <>
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+        now={NOW}
+        isLive
+        createdAtBlock={100}
+        dotcell={dotcell}
+      />
+      <IdentitySummary
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+        now={NOW}
+        isLive
+        subject="alice.cell"
+      />
+    </>
+  );
+  expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+    /a lock not uniquely resolved owns it/
+  );
+  expect(fact('Owner')).toHaveTextContent('prefix · lock not uniquely resolved');
+  expect(document.body).not.toHaveTextContent('not indexed');
 });

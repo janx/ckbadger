@@ -1273,6 +1273,7 @@ mod tests {
             )],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
 

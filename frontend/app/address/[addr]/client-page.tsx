@@ -528,7 +528,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <>
                       {activities.data.data.length ? (
                         // B4: its runs folded, within the page shown
-                        <AddressActivities rows={activities.data.data} address={a} />
+                        <AddressActivities
+                          rows={activities.data.data}
+                          address={a}
+                          more={activities.data.hasMore}
+                        />
                       ) : (
                         <p className="text-text-dim text-small max-w-measure py-6">
                           {filter === 'all'

@@ -49,6 +49,8 @@ fn pin_broadcast_read_view() -> ReadViewGuard {
 
 pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
+    // the request namer's (`utils::ScriptNamer`): a generic type reference is named by its live
+    // code cells; no activity builder reads it
     append_only_store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
@@ -279,7 +281,6 @@ fn broadcast_latest_activities(
         .map(|actions| {
             build_global_activity_response(
                 store,
-                ao_store,
                 ckb_network,
                 actions,
                 &mut script_info_cache,

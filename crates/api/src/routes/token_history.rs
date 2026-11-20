@@ -406,15 +406,13 @@ impl Day {
         capacity: i128,
         occupied: i128,
     ) -> anyhow::Result<Self> {
-        let free = capacity
-            .checked_sub(occupied)
-            .filter(|free| *free >= 0 && occupied >= 0)
-            .with_context(|| {
-                format!(
-                    "token history: occupied {occupied} does not fit the capacity {capacity}: token=0x{} date={date}",
-                    hex::encode(hash)
-                )
-            })?;
+        // the one free part (lane exactness, part B5: `free_part`, the cell versions' and the histories' too)
+        let free = crate::utils::assets::free_part(capacity, occupied).map_err(|error| {
+            anyhow::anyhow!(
+                "token history: {error}: token=0x{} date={date}",
+                hex::encode(hash)
+            )
+        })?;
         Ok(Self {
             date: date.to_string(),
             supply,
@@ -1187,7 +1185,8 @@ mod day_tests {
             .unwrap()
             .to_string();
         assert!(
-            error.contains("occupied 600 does not fit the capacity 500"),
+            // re-pinned for lane exactness, part B5: the one helper's words (were "does not fit the capacity")
+            error.contains("occupied 600 is not within the capacity 500"),
             "{error}"
         );
         assert!(error.contains("date=2026-10-02"), "{error}");

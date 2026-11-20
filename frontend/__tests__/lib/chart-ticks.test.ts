@@ -200,12 +200,24 @@ describe('clipToCap', () => {
 });
 
 describe('formatCompactSigned', () => {
+  const ckb = (whole: number) => BigInt(whole) * BigInt(100_000_000);
   it('formats a clipped bar label with sign and unit', () => {
-    expect(formatCompactSigned(28.12e6)).toBe('+28.12M');
-    expect(formatCompactSigned(-8.94e6)).toBe(`${MINUS}8.94M`);
-    expect(formatCompactSigned(950_000)).toBe('+950k');
-    expect(formatCompactSigned(12_500)).toBe('+12.5k');
-    expect(formatCompactSigned(0)).toBe('0');
+    expect(formatCompactSigned(ckb(28_120_000))).toBe('+28.12M');
+    expect(formatCompactSigned(-ckb(8_940_000))).toBe(`${MINUS}8.94M`);
+    expect(formatCompactSigned(ckb(950_000))).toBe('+950k');
+    expect(formatCompactSigned(ckb(12_500))).toBe('+12.5k');
+    expect(formatCompactSigned(BigInt(0))).toBe('0');
+  });
+
+  // lane exactness, part B3: the label is the day's change, read from its exact shannons and cut
+  // (it rounded the float the bar is drawn from: 28,129,999.99999999 CKB read +28.13M)
+  it('cuts the exact change, never rounds it', () => {
+    expect(formatCompactSigned(BigInt('2812999999999999'))).toBe('+28.12M');
+    // 999,999.99999999 CKB: 999.99k (half up read 1.00M)
+    expect(formatCompactSigned(-BigInt('99999999999999'))).toBe(`${MINUS}999.99k`);
+    // 999.99999999 CKB: whole CKB under 1,000, cut
+    expect(formatCompactSigned(-BigInt('99999999999'))).toBe(`${MINUS}999`);
+    expect(formatCompactSigned(BigInt('1299999999'))).toBe('+12');
   });
 });
 

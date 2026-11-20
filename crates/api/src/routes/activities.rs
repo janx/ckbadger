@@ -4,10 +4,9 @@ use axum::{
     Router,
 };
 use ckbadger_store::{
-    keys,
     types::{
-        participant_roles, IdentityStandard, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta,
-        ParticipantId, TxActions, TypeCallEntry,
+        participant_roles, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
+        TxActions, TypeCallEntry,
     },
     CkbadgerStore, ResolvedTx,
 };
@@ -219,16 +218,17 @@ pub struct ActivityResponse {
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
-    // This participant's Layer 2
-    pub item_deltas: Vec<ItemDeltaResponse>,
+    // This participant's Layer 2, each item with its movement in the whole transaction
+    pub item_deltas: Vec<RowItemDelta>,
     // TX-level Layer 3
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
-    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None` on a
-    /// pool row, and on a committed row whose item's script the stores cannot say
-    /// (`item_types_unread` says why).
-    pub item_types: Option<Vec<ItemTypeResponse>>,
-    pub item_types_unread: Option<String>,
+    /// Every type script code the indexer recognises that ran in the transaction, each once, by
+    /// its code hash and hash type with the name of the code its pair runs ([`recognized_types`]):
+    /// read from the row (`TxActions::recognized_type_codes`), on a committed row and a pool row
+    /// alike. With `type_calls` (the unrecognised ones, with their args) they are every type
+    /// script code that ran.
+    pub recognized_types: Vec<TypeCodeResponse>,
     pub protocol_actions: Vec<ProtocolActionResponse>,
     // Other participants
     pub participants: Vec<ParticipantRef>,
@@ -299,6 +299,65 @@ pub struct TypeCallResponse {
     pub script_name_by: Option<String>,
 }
 
+/// One item delta of an address's row, with the item's movement in the whole transaction (the
+/// third read's Lb SHOULD 2, ruled): the row carries only its address's deltas, so its page cannot
+/// tell a burn from a send, nor a mint from a transfer in. `movement` is `mint` where the item's
+/// net over every party of the transaction rose, `burn` where it fell, `transfer` where it only
+/// changed hands ([`item_movement`], the rule every other feed's head reads off its whole row).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowItemDelta {
+    #[serde(flatten)]
+    pub delta: ItemDeltaResponse,
+    pub movement: &'static str,
+}
+
+/// An exact sum of u128 amounts: its low 128 bits and how many times they carried past a u128. A
+/// token amount is a u128 on chain (anyone can mint 2^127 units or more), so a transaction's amounts
+/// of one item can sum past a u128: the carries keep the sum exact for any number of deltas (a
+/// carry count bounded by the number of deltas a transaction holds, never near a usize), with no
+/// allocation, and two sums compare exactly, carries first (the derived order).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ExactSum {
+    carries: usize,
+    low: u128,
+}
+
+impl ExactSum {
+    fn add(&mut self, amount: u128) {
+        let (low, carried) = self.low.overflowing_add(amount);
+        self.low = low;
+        if carried {
+            self.carries += 1;
+        }
+    }
+}
+
+/// An item's movement in a transaction: the amounts every party received and the amounts every
+/// party sent, each summed apart and exactly ([`ExactSum`]), then compared: `mint` where more was
+/// received than sent, `burn` where more was sent, `transfer` where they are equal (a token by its
+/// type script hash, an object by its id, an identity by its id and standard: the item delta's
+/// kind and id). It cannot fail: an amount is never converted to a signed type (the lead's
+/// finding on a3c52252: a u128 past an i128 failed the whole page).
+fn item_movement(actions: &TxActions, item: &ItemDelta) -> &'static str {
+    let (mut received, mut sent) = (ExactSum::default(), ExactSum::default());
+    for delta in actions.participants.iter().flat_map(|p| &p.item_deltas) {
+        if delta.kind != item.kind || delta.item_id != item.item_id {
+            continue;
+        }
+        if delta.negative {
+            sent.add(delta.magnitude);
+        } else {
+            received.add(delta.magnitude);
+        }
+    }
+    match received.cmp(&sent) {
+        std::cmp::Ordering::Greater => "mint",
+        std::cmp::Ordering::Less => "burn",
+        std::cmp::Ordering::Equal => "transfer",
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LockCallResponse {
@@ -306,10 +365,14 @@ pub struct LockCallResponse {
     pub lock_hash_type: String,
     pub lock_args: String,
     pub script_hash: String,
-    pub script_name: Option<String>,
-    /// The script's hash type where its named pair is not the registry's
-    /// reference for its code, written beside the name; `None` otherwise.
-    pub script_name_by: Option<String>,
+    /// The name of the code the lock's pair runs (`utils::ScriptNamer`, lane rd/api-lock-names),
+    /// `lockScriptName` on the wire as on a party (the third read's T SHOULD-5: the bare
+    /// `scriptName` it was is a name the lock-words gate could only find by its variable's name).
+    /// The page decides the lock's words from it with the code hash and the hash type.
+    pub lock_script_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's reference for its code,
+    /// written beside the name (`lockScriptNameBy`); `None` otherwise.
+    pub lock_script_name_by: Option<String>,
     /// Decoded lock args; every integer in it is an exact decimal string
     /// (`utils::exact_json`). `null` when the lock's registry entry declares
     /// no args layout, or the args do not fit it (then `decodeError` says why).
@@ -345,11 +408,12 @@ pub struct GlobalActivityResponse {
     pub protocol_actions: Vec<ProtocolActionResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
-    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None` on a
-    /// pool row, and on a committed row whose item's script the stores cannot say
-    /// (`item_types_unread` says why).
-    pub item_types: Option<Vec<ItemTypeResponse>>,
-    pub item_types_unread: Option<String>,
+    /// Every type script code the indexer recognises that ran in the transaction, each once, by
+    /// its code hash and hash type with the name of the code its pair runs ([`recognized_types`]):
+    /// read from the row (`TxActions::recognized_type_codes`), on a committed row and a pool row
+    /// alike. With `type_calls` (the unrecognised ones, with their args) they are every type
+    /// script code that ran.
+    pub recognized_types: Vec<TypeCodeResponse>,
     // All participants with their data
     pub participants: Vec<ParticipantResponse>,
 }
@@ -385,14 +449,12 @@ fn default_latest_limit() -> usize {
     8
 }
 
-/// What an activity reads of a token's row, once: its symbol and decimals, and its type script's
-/// code (`item_types`); `None` when no token row exists.
+/// What an activity reads of a token's row, once: its symbol and decimals; `None` when no token
+/// row exists.
 #[derive(Clone)]
 struct TokenFacts {
     symbol: Option<String>,
     decimals: Option<u8>,
-    type_code_hash: Vec<u8>,
-    hash_type: i16,
 }
 type TokenDisplay = Option<TokenFacts>;
 
@@ -471,11 +533,11 @@ fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
     Ok(if item.negative { -1 } else { 1 })
 }
 
-/// One type script an activity's items or its Nervos DAO step carry, by its code: the code hash
-/// and the hash type, never the args (the fold compares the code, as ruled at Gate B).
+/// One type script code that ran in an activity's transaction: the code hash and the hash type,
+/// never the args (a page names and folds by the code, as ruled at Gate B).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ItemTypeResponse {
+pub struct TypeCodeResponse {
     pub type_code_hash: String,
     pub type_hash_type: String,
     /// The name of the code the type's pair runs (`utils::ScriptNamer`, the
@@ -486,248 +548,37 @@ pub struct ItemTypeResponse {
     pub script_name_by: Option<String>,
 }
 
-/// What a committed activity states of its items' scripts ([`item_types`]): the codes, or, where
-/// the stores cannot say one item's, why (`types` is then `None`). A part the stores cannot state
-/// fails that part only: the row says so and stands alone in a feed, never the response.
-pub(crate) struct ItemTypesRead {
-    pub types: Option<Vec<ItemTypeResponse>>,
-    pub unread: Option<String>,
-}
-
-/// The type scripts a committed activity's items and its Nervos DAO step carry, each code once,
-/// in code-hash then hash-type order: the type script of every token, object and identity a
-/// participant gained or lost, as the indexer classified the item ([`item_type_script`]), and the
-/// Nervos DAO's when the transaction took a DAO step. Read from ckbadger's own stores in the
-/// request's pinned view, never from the node. Beside it, `typeCalls` are the type scripts the
-/// indexer does not recognise (an item's type never is one), and `lockCalls` the non-standard
-/// locks attached to the transaction's OUTPUTS, which did not run: the locks that ran are its
-/// inputs', which the stored activity does not name yet (they wait for the indexer's
-/// per-participant input flag, a re-sync).
-fn item_types(
-    store: &CkbadgerStore,
-    cells_store: &CkbadgerStore,
-    actions: &TxActions,
+/// The recognised type script codes an activity's row records (`recognized_type_codes`, set by
+/// the indexer from the transaction's own cells), each named by its pair through the request's
+/// namer (`utils::ScriptNamer`, the one rule) as the row's other names are, with the hash type
+/// beside the name where the pair is not the registry's reference for the code it runs. Nothing
+/// is read per item and no cell payload: the row is the one source.
+fn recognized_types(
     names: &mut ScriptNameCache<'_>,
-    items: &mut ItemDeltaCache,
-) -> anyhow::Result<ItemTypesRead> {
-    let mut codes: std::collections::BTreeSet<(Vec<u8>, i16)> = std::collections::BTreeSet::new();
-    let mut read: Vec<(ItemKind, &[u8])> = Vec::new();
-    let mut outputs = CreatingOutputs::default();
-    for item in actions.participants.iter().flat_map(|p| &p.item_deltas) {
-        if read.contains(&(item.kind, item.item_id.as_slice())) {
-            continue;
-        }
-        read.push((item.kind, item.item_id.as_slice()));
-        match item_type_script(store, cells_store, item, &mut outputs, items)? {
-            Ok(code) => {
-                codes.insert(code);
-            }
-            Err(why) => {
-                return Ok(ItemTypesRead {
-                    types: None,
-                    unread: Some(format!(
-                        "item 0x{} ({:?}) of tx 0x{}: {why}",
-                        hex::encode(&item.item_id),
-                        item.kind,
-                        hex::encode(&actions.tx_hash)
-                    )),
-                })
-            }
-        }
-    }
-    if actions.protocol_actions.iter().any(|a| a.protocol == "dao") {
-        let dao =
-            ckbadger_indexer::rpc::parse_hex_to_bytes(ckbadger_indexer::parser::dao::DAO_CODE_HASH);
-        // the DAO's code hash is the type id of its deployment, so its cells name it by type
-        let type_byte = ckbadger_common::hash_type_from_label("type")
-            .ok_or_else(|| anyhow::anyhow!("the hash type table has no \"type\""))?;
-        codes.insert((dao, i16::from(type_byte)));
-    }
-    let types = codes
-        .into_iter()
-        .map(|(code, hash_type)| {
-            let name = names.name_stored(&code, hash_type)?;
-            Ok(ItemTypeResponse {
-                type_code_hash: format!("0x{}", hex::encode(&code)),
-                type_hash_type: hash_type_to_str(hash_type)
-                    .ok_or_else(|| anyhow::anyhow!("unsupported hash type {hash_type}"))?
+    actions: &TxActions,
+) -> anyhow::Result<Vec<TypeCodeResponse>> {
+    actions
+        .recognized_type_codes
+        .iter()
+        .map(|code| {
+            let name = names.name_stored(&code.code_hash, code.hash_type)?;
+            Ok(TypeCodeResponse {
+                type_code_hash: format!("0x{}", hex::encode(code.code_hash)),
+                type_hash_type: hash_type_to_str(code.hash_type)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "recognised type code 0x{} of tx 0x{} has unsupported hash type {}",
+                            hex::encode(code.code_hash),
+                            hex::encode(&actions.tx_hash),
+                            code.hash_type
+                        )
+                    })?
                     .to_string(),
                 script_name_by: name.as_ref().and_then(|name| name.by()),
                 script_name: name.map(|name| name.name),
             })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(ItemTypesRead {
-        types: Some(types),
-        unread: None,
-    })
-}
-
-/// A creating transaction's outputs as one activity reads them, each transaction once.
-#[derive(Default)]
-struct CreatingOutputs(HashMap<Vec<u8>, Vec<Option<ckbadger_store::types::LiveCellInfo>>>);
-
-impl CreatingOutputs {
-    /// The outputs of `tx_hash` (`None` where its payload is missing), or why there are none.
-    fn of(
-        &mut self,
-        store: &CkbadgerStore,
-        cells_store: &CkbadgerStore,
-        tx_hash: &[u8],
-    ) -> anyhow::Result<Result<&[Option<ckbadger_store::types::LiveCellInfo>], String>> {
-        if !self.0.contains_key(tx_hash) {
-            let Some((_, _, tx)) = store.get_tx_by_hash(tx_hash)? else {
-                return Ok(Err(format!(
-                    "its creating transaction 0x{} is not indexed",
-                    hex::encode(tx_hash)
-                )));
-            };
-            let outputs = cells_store.get_tx_output_payloads(tx_hash, tx.outputs_count)?;
-            self.0.insert(tx_hash.to_vec(), outputs);
-        }
-        Ok(Ok(self.0[tx_hash].as_slice()))
-    }
-}
-
-/// The type script of a cell the indexer recorded, or why its payload does not hold one.
-fn recorded_cell_type(
-    cells_store: &CkbadgerStore,
-    tx_hash: &[u8],
-    index: i16,
-) -> anyhow::Result<Result<(Vec<u8>, i16), String>> {
-    let at = format!("0x{}:{index}", hex::encode(tx_hash));
-    let Some(cell) =
-        cells_store.get_cell_by_outpoint_key(&keys::encode_outpoint(tx_hash, index))?
-    else {
-        return Ok(Err(format!("its recorded cell {at} has no payload")));
-    };
-    Ok(cell_type(&cell).ok_or_else(|| format!("its recorded cell {at} has no type script")))
-}
-
-fn cell_type(cell: &ckbadger_store::types::LiveCellInfo) -> Option<(Vec<u8>, i16)> {
-    Some((cell.type_code_hash?.to_vec(), cell.type_hash_type?))
-}
-
-/// The one code among `codes`, or why there is not one.
-fn the_one(
-    codes: std::collections::BTreeSet<(Vec<u8>, i16)>,
-    what: &str,
-) -> Result<(Vec<u8>, i16), String> {
-    match codes.len() {
-        1 => Ok(codes.into_iter().next().expect("one code")),
-        0 => Err(format!("no {what}")),
-        n => Err(format!("{n} {what}s under different codes")),
-    }
-}
-
-/// An item's type script (code hash, hash type) as the indexer classified the item, read from
-/// what the stores hold for it, never guessed from bytes a transaction carries (anyone can write a
-/// second output whose args equal an item's id under any code):
-///
-/// - a token: its row (`CF_TOKENS`, keyed by the type script hash the item is), the script itself;
-/// - a spore, and an identity of the shared id space (did:ckb, .bit Cell, `.cell`): the first cell
-///   the indexer recorded for it in the item outpoint index (`object_outpoint_by_id`); a .bit
-///   account: the first cell recorded for its account id; the payload holds its type script, and
-///   every cell recorded for one item was classified by the same rule;
-/// - an m-NFT token: the outputs of its creating transaction (its row's `created_at_tx`) the
-///   indexer recorded as this token (`object_outpoints`, MNFT_TOKEN);
-/// - a Spore cluster, for which the indexer records no cell: the outputs of its creating
-///   transaction it would classify as a cluster, a code the protocol registry names `Cluster`
-///   (the classifier's own table) with the cluster's id as args.
-///
-/// `Ok(Err(why))` where the stores cannot say: no row or no recorded cell, a recorded payload with
-/// no type script, or two codes for one item (a shape a transaction may carry). A read that fails
-/// is `Err`.
-fn item_type_script(
-    store: &CkbadgerStore,
-    cells_store: &CkbadgerStore,
-    item: &ItemDelta,
-    outputs: &mut CreatingOutputs,
-    items: &mut ItemDeltaCache,
-) -> anyhow::Result<Result<(Vec<u8>, i16), String>> {
-    use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
-    use ckbadger_store::types::ObjectStandard;
-    let id = item.item_id.as_slice();
-    let first_recorded = |outpoints: Vec<(Vec<u8>, i16)>| -> anyhow::Result<Result<_, String>> {
-        match outpoints.first() {
-            Some((tx_hash, index)) => recorded_cell_type(cells_store, tx_hash, *index),
-            None => Ok(Err("no cell recorded for it".to_string())),
-        }
-    };
-    match item.kind {
-        ItemKind::Token => Ok(match token_facts(store, &mut items.tokens, id)? {
-            Some(token) => Ok((token.type_code_hash, token.hash_type)),
-            None => Err("no token row".to_string()),
-        }),
-        ItemKind::Object => {
-            if let Some(entry) = store.get_spore(id)? {
-                return match entry.standard {
-                    ObjectStandard::Spore => {
-                        first_recorded(store.list_spore_outpoints_by_spore_id(id)?)
-                    }
-                    ObjectStandard::SporeCluster => {
-                        let made = match outputs.of(store, cells_store, &entry.created_at_tx)? {
-                            Ok(made) => made,
-                            Err(why) => return Ok(Err(why)),
-                        };
-                        let codes = made
-                            .iter()
-                            .flatten()
-                            .filter(|cell| cell.type_args.as_deref() == Some(id))
-                            .filter_map(cell_type)
-                            .filter(|(code, hash_type)| {
-                                PROTOCOL_REGISTRY.is(code, *hash_type, ProtocolScript::Cluster)
-                            })
-                            .collect();
-                        Ok(the_one(codes, "cluster cell in its creating transaction"))
-                    }
-                    other => Ok(Err(format!("a {other:?} row where an object's is read"))),
-                };
-            }
-            let Some(entry) = store.get_mnft(id)? else {
-                return Ok(Err("no spore, cluster or m-NFT row".to_string()));
-            };
-            if entry.standard != ObjectStandard::MnftToken {
-                return Ok(Err(format!(
-                    "a {:?} row where an m-NFT token's is read",
-                    entry.standard
-                )));
-            }
-            let made_by = entry.created_at_tx.clone();
-            let made = match outputs.of(store, cells_store, &made_by)? {
-                Ok(made) => made,
-                Err(why) => return Ok(Err(why)),
-            };
-            let indexes: Vec<i16> = (0..made.len())
-                .map(i16::try_from)
-                .collect::<Result<_, _>>()?;
-            let outpoints: Vec<(&[u8], i16)> = indexes
-                .iter()
-                .map(|index| (made_by.as_slice(), *index))
-                .collect();
-            let recorded: Vec<i16> = store
-                .get_mnft_token_ids_by_outpoints_batch(&outpoints)?
-                .into_iter()
-                .filter(|(_, _, token)| token.as_slice() == id)
-                .map(|(_, index, _)| index)
-                .collect();
-            let codes = recorded
-                .iter()
-                .filter_map(|index| made.get(usize::try_from(*index).ok()?)?.as_ref())
-                .filter_map(cell_type)
-                .collect();
-            Ok(the_one(
-                codes,
-                "recorded m-NFT token cell in its creating transaction",
-            ))
-        }
-        ItemKind::Identity(standard) => first_recorded(match standard {
-            IdentityStandard::DotBit => store.list_dotbit_account_outpoints_by_account_id(id)?,
-            IdentityStandard::BitCell | IdentityStandard::DidCkb | IdentityStandard::DotCell => {
-                store.list_spore_outpoints_by_spore_id(id)?
-            }
-        }),
-    }
+        .collect()
 }
 
 /// Look up token symbol and decimals from CF_TOKENS, caching results.
@@ -762,8 +613,6 @@ fn token_facts(
         .map(|t| TokenFacts {
             symbol: t.symbol.clone(),
             decimals: t.decimals.map(|d| d as u8),
-            type_code_hash: t.type_code_hash,
-            hash_type: i16::from(t.hash_type),
         });
     cache.insert(type_script_hash.to_vec(), result.clone());
     Ok(result)
@@ -1154,8 +1003,8 @@ fn convert_lock_call(
         lock_hash_type: hash_type.to_string(),
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
-        script_name_by: script_name.as_ref().and_then(|name| name.by()),
-        script_name: script_name.map(|name| name.name),
+        lock_script_name_by: script_name.as_ref().and_then(|name| name.by()),
+        lock_script_name: script_name.map(|name| name.name),
         decoded,
         decode_error,
     })
@@ -1226,18 +1075,17 @@ pub(crate) fn build_activity_response(
     script_info_cache: &mut ScriptNameCache<'_>,
     item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
-    item_types: Option<ItemTypesRead>,
     pool: Option<PoolRowMeta<'_>>,
 ) -> anyhow::Result<ActivityResponse> {
-    anyhow::ensure!(
-        item_types.is_some() == pool.is_none(),
-        "activity tx 0x{}: item types are a committed row's, and only a committed row's",
-        hex::encode(&actions.tx_hash)
-    );
     let item_deltas = participant
         .item_deltas
         .iter()
-        .map(|item| convert_item_delta(item, item_cache, store, pool.is_none()))
+        .map(|item| {
+            Ok(RowItemDelta {
+                delta: convert_item_delta(item, item_cache, store, pool.is_none())?,
+                movement: item_movement(actions, item),
+            })
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions
@@ -1270,8 +1118,7 @@ pub(crate) fn build_activity_response(
         item_deltas,
         type_calls: convert_type_calls(script_info_cache, &actions.type_calls)?,
         lock_calls: convert_lock_calls(script_info_cache, &actions.lock_calls)?,
-        item_types: item_types.as_ref().and_then(|read| read.types.clone()),
-        item_types_unread: item_types.and_then(|read| read.unread),
+        recognized_types: recognized_types(script_info_cache, actions)?,
         protocol_actions: actions
             .protocol_actions
             .iter()
@@ -1288,7 +1135,6 @@ pub(crate) fn build_activity_response(
 #[allow(clippy::type_complexity)]
 pub(crate) fn build_global_activity_response(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
     script_info_cache: &mut ScriptNameCache<'_>,
@@ -1296,7 +1142,6 @@ pub(crate) fn build_global_activity_response(
 ) -> anyhow::Result<GlobalActivityResponse> {
     build_global_activity_response_with_pool(
         store,
-        ao_store,
         network,
         actions,
         script_info_cache,
@@ -1308,7 +1153,6 @@ pub(crate) fn build_global_activity_response(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_global_activity_response_with_pool(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
     script_info_cache: &mut ScriptNameCache<'_>,
@@ -1350,13 +1194,6 @@ pub(crate) fn build_global_activity_response_with_pool(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let types = match pool_record {
-        None => item_types(store, ao_store, actions, script_info_cache, &mut item_cache)?,
-        Some(_) => ItemTypesRead {
-            types: None,
-            unread: None,
-        },
-    };
     Ok(GlobalActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
         block_number: actions.block_number,
@@ -1370,8 +1207,7 @@ pub(crate) fn build_global_activity_response_with_pool(
             .collect::<anyhow::Result<Vec<_>>>()?,
         type_calls: convert_type_calls(script_info_cache, &actions.type_calls)?,
         lock_calls: convert_lock_calls(script_info_cache, &actions.lock_calls)?,
-        item_types: types.types,
-        item_types_unread: types.unread,
+        recognized_types: recognized_types(script_info_cache, actions)?,
         participants,
     })
 }
@@ -1543,7 +1379,6 @@ pub(crate) fn build_pool_activity_rows(
             script_info_cache,
             item_cache,
             address_cache,
-            None,
             Some(PoolRowMeta {
                 status: record.pool_status.as_str().to_string(),
                 time_added_to_pool: crate::pool::pool_timestamp_rfc3339(i64::try_from(
@@ -1582,6 +1417,7 @@ async fn get_address_activities(
 
     let filter = params.filter.clone();
     let store = state.store.clone();
+    // the namer's (`utils::ScriptNamer`): a generic type reference is named by its code cells
     let cells = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
@@ -1674,13 +1510,6 @@ async fn get_address_activities(
                             actions.tx_index
                         )
                     })?;
-                let types = item_types(
-                    store.as_ref(),
-                    cells.as_ref(),
-                    actions,
-                    &mut script_info_cache,
-                    &mut item_cache,
-                )?;
                 activities.push(build_activity_response(
                     store.as_ref(),
                     &network,
@@ -1689,7 +1518,6 @@ async fn get_address_activities(
                     &mut script_info_cache,
                     &mut item_cache,
                     &mut address_cache,
-                    Some(types),
                     None,
                 )?);
             }
@@ -1934,7 +1762,6 @@ async fn get_transaction_activity(
             .map_err(|e| ApiError::internal(e.to_string()))?;
     let activity = build_global_activity_response(
         &state.store,
-        &state.append_only_store,
         &state.ckb_network,
         &actions,
         &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
@@ -1979,6 +1806,7 @@ async fn get_global_activities(
         }
     }
     let store = state.store.clone();
+    // the namer's (`utils::ScriptNamer`): a generic type reference is named by its code cells
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let node = state.ckb_store.clone();
@@ -2033,7 +1861,6 @@ async fn get_global_activities(
             .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
-                    ao_store.as_ref(),
                     &network,
                     actions,
                     &mut script_info_cache,
@@ -2061,6 +1888,7 @@ async fn get_latest_activities(
 ) -> ApiResult<Vec<GlobalActivityResponse>> {
     let limit = params.limit.clamp(1, 64);
     let store = state.store.clone();
+    // the namer's (`utils::ScriptNamer`): a generic type reference is named by its code cells
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -2075,7 +1903,6 @@ async fn get_latest_activities(
             .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
-                    ao_store.as_ref(),
                     &network,
                     actions,
                     &mut script_info_cache,

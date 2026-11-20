@@ -20,6 +20,7 @@ import {
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 it('reads the latest complete week by default instead of "No completed weekly total" (OB-C6)', () => {
   render(
@@ -105,7 +106,7 @@ it('says "at issue" for an m-NFT token’s lock footnote', () => {
 it('keeps an occupied change on one line in the lock-column grid', () => {
   const { container } = render(
     <ActivityRow
-      activity={{
+      activity={activityRead({
         txHash: '0x' + 'cd'.repeat(32),
         blockNumber: 1,
         timestamp: '1700000000000',
@@ -113,8 +114,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
-        itemTypes: [],
-        itemTypesUnread: null,
+        recognizedTypes: [],
         participants: [
           {
             lockHash: '0x' + '01'.repeat(32),
@@ -129,7 +129,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
             sent: true,
           },
         ],
-      }}
+      })}
     />
   );
   expect(container.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');

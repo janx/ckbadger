@@ -16,6 +16,7 @@ import {
   nameByOf,
   namedLockWords,
   namedPartyLockFacts,
+  partyLockWordsText,
   type LockFacts,
   type LockPlace,
   type LockWords,
@@ -28,7 +29,6 @@ export {
   lockWordsText,
   namedLockWords,
   partyLockSentence,
-  partyLockWordsText,
 } from '@/lib/lock-words';
 export type { LockWords } from '@/lib/lock-words';
 
@@ -136,6 +136,25 @@ export function partyLockFacts(party: ParticipantRef): LockFacts {
     lockScriptNameBy: party.lockKindBy,
     address: party.address,
   });
+}
+
+/**
+ * A named party's lock words drawn (the decision's column words), or the refusal in their place
+ * (ruling D7): a party from an API older than this page sends no `lockScriptName` and the part says
+ * so by name, never "undefined", never the page (lane P2's fifth round, item 3). `where` names the
+ * party (its lock-hash prefix).
+ */
+export function PartyLockWords({
+  party,
+  where,
+}: {
+  party: Parameters<typeof partyLockWordsText>[0];
+  where: string;
+}) {
+  const read = readPart(() => partyLockWordsText(party, 'row'));
+  if (read.error !== undefined)
+    return <PartReadError what="the party’s lock" where={where} error={read.error} />;
+  return <>{read.value}</>;
 }
 
 /**

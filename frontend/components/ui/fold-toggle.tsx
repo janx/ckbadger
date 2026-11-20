@@ -42,6 +42,12 @@ export function FoldToggle(
         count: number;
         singular: string;
         plural?: string;
+        /**
+         * The count is of what is read while more is unread (a feed's last run with older rows
+         * still to come; the lead's finding, the exactness lane's B9): `59 transactions so far ↓`,
+         * never "all".
+         */
+        soFar?: boolean;
       }
     | {
         form?: 'box';
@@ -82,8 +88,14 @@ export function FoldToggle(
   }
   if ('words' in props)
     throw new Error(`a box fold writes its own words (all … ↓), not "${String(props.words)}"`);
-  const whole =
-    'uncounted' in props ? props.uncounted : formatCount(props.count, props.singular, props.plural);
+  const counted =
+    'uncounted' in props ? null : formatCount(props.count, props.singular, props.plural);
+  const folded =
+    counted === null
+      ? `all ${(props as { uncounted: string }).uncounted} ↓`
+      : 'soFar' in props && props.soFar
+        ? `${counted} so far ↓`
+        : `all ${counted} ↓`;
   return (
     <button
       type="button"
@@ -94,7 +106,7 @@ export function FoldToggle(
       // the Pager's way to go: celadon words in a thumb's box, 32 px below 640 and 28 px from it
       className="text-jade text-small inline-flex h-8 items-center whitespace-nowrap underline-offset-4 hover:underline sm:h-7"
     >
-      {open ? 'fewer ↑' : `all ${whole} ↓`}
+      {open ? 'fewer ↑' : folded}
     </button>
   );
 }

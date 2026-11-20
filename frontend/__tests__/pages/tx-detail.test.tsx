@@ -18,6 +18,7 @@ import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines'
 import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -276,7 +277,7 @@ function createGenesisDepGroupTransactionDetail(): Awaited<
 
 /** Its activity, verbatim from mainnet :8101 (`/transactions/0x71a7…e46c/activity`). */
 const GENESIS_DEP_GROUP_ACTIVITY = JSON.parse(
-  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","scriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
+  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockScriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
 ) as Awaited<ReturnType<typeof api.getTransactionActivity>>;
 
 /** The keys the API omits (never nulls) for a transaction it has not indexed (TX-06). */
@@ -690,16 +691,19 @@ describe('TransactionDetailPage', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const [first, ...rest] = feedSamples.objectTransfer.participants;
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.objectTransfer,
-        txHash: TX_HASH,
-        typeCalls: [],
-        participants: [first, ...rest].map((p, i) => ({
-          ...p,
-          itemDeltas: [],
-          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
-        })),
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.objectTransfer,
+          recognizedTypes: [],
+          txHash: TX_HASH,
+          typeCalls: [],
+          participants: [first, ...rest].map((p, i) => ({
+            ...p,
+            itemDeltas: [],
+            ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+          })),
+        })
+      );
       render(
         <ErrorBoundary fallback={<p>page-level boundary</p>}>
           <TransactionDetailPage />
@@ -986,6 +990,123 @@ describe('TransactionDetailPage', () => {
     fireEvent.click(screen.getByText('Cell graph'));
     expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
+  });
+
+  // What the Cell graph's toggle does (lane cd-fixes-controls, the disclosure sweep): its state is
+  // its page's, so opening it asks for the graph. Re-pinned on purpose (the lead's ruling: each
+  // disclosure owns what it shows): "Raw data" was drawn open by the graph's state, so folding the
+  // graph folded the whole raw section a reader had open, a control that changed more than it
+  // named; it folds the graph only now, and Raw data stays as the reader left it.
+  it('holds the Cell graph’s state in its page: opened, the graph loads; folded, Raw data stays open', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    const graph = screen.getByText('Cell graph').closest('details')!;
+    fireEvent.click(screen.getByText('Raw data'));
+    expect(raw).toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Cell graph'));
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+    expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
+    fireEvent.click(screen.getByText('Cell graph'));
+    await waitFor(() => expect(graph).not.toHaveAttribute('open'));
+    expect(raw).toHaveAttribute('open');
+  });
+
+  // The raw evidence's disclosures are the library's (lane cd-fixes-controls, the disclosure sweep,
+  // second part): "Raw data" the section form under the tier's rule, the six inside it the inner
+  // form; their words 13 px in tier 2's quiet ink, all seven shut until a reader opens one
+  // The lead's ruling (lane cd-fixes-controls, the disclosure sweep): each disclosure owns what it
+  // shows. A `?tab=graph` link opens both (a deep link to the graph shows it, so its section
+  // opens); after that, folding the Cell graph folds the graph only, and folding Raw data folds Raw
+  // data, the graph inside keeping its own state. The address holds one truth: `tab=graph` while
+  // the graph is open (written as the graph opens or folds, in place), nothing of Raw data.
+  describe('the Cell graph and Raw data, each its own', () => {
+    const details = (words: string) => screen.getByText(words).closest('details')!;
+
+    it('folds the graph only: opened by ?tab=graph, Raw data stays open and the address drops the graph', async () => {
+      mockSearchParams = new URLSearchParams('tab=graph');
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      expect(details('Raw data')).toHaveAttribute('open');
+      fireEvent.click(screen.getByText('Cell graph'));
+      await waitFor(() => expect(details('Cell graph')).not.toHaveAttribute('open'));
+      expect(details('Raw data')).toHaveAttribute('open');
+      expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('tab=graph');
+    });
+
+    it('writes the graph into the address as it opens, in place, and nothing as Raw data opens', async () => {
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+      const replaces = mockReplace.mock.calls.length;
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).toHaveAttribute('open'));
+      expect(mockReplace.mock.calls.length).toBe(replaces);
+      fireEvent.click(screen.getByText('Cell graph'));
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('tab=graph')
+      );
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('folds Raw data only: opened again, the graph is as it was, open or shut', async () => {
+      mockSearchParams = new URLSearchParams('tab=graph');
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).not.toHaveAttribute('open'));
+      expect(details('Cell graph')).toHaveAttribute('open');
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).toHaveAttribute('open'));
+      expect(details('Cell graph')).toHaveAttribute('open');
+      expect(screen.getByTestId('mock-cell-graph')).toBeInTheDocument();
+    });
+
+    it('asks for the graph only while it is open and Raw data around it is too', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.mocked(api.getTransactionDetail)
+        .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+        .mockResolvedValue(createCommittedTransactionDetail());
+      render(<TransactionDetailPage />);
+      expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
+      // provisional: the graph waits for the store; open it, then fold the section around it
+      fireEvent.click(screen.getByText('Raw data'));
+      fireEvent.click(screen.getByText('Cell graph'));
+      await waitFor(() => expect(details('Cell graph')).toHaveAttribute('open'));
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).not.toHaveAttribute('open'));
+      // indexed: the graph could be read now, but nothing shows it
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
+      expect(api.getTransactionGraph).not.toHaveBeenCalled();
+      // Raw data opened again: the graph is open inside it, and asked for
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH));
+    });
+  });
+
+  it('draws its raw evidence in the library’s disclosures, their words 13 px in tier 2’s quiet ink', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    expect(raw).toHaveClass('border-t');
+    const summaries = [...raw.querySelectorAll('summary')];
+    expect(summaries.map((s) => s.textContent!.replace(/ · .*$/, ''))).toEqual([
+      'Raw data',
+      'Cells',
+      'Scripts',
+      'Witness bytes',
+      'Header deps',
+      'Cell graph',
+      'JSON',
+    ]);
+    for (const summary of summaries) {
+      expect(summary).toHaveClass('text-small', 'text-text-dim');
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+    }
+    for (const summary of summaries.slice(1))
+      expect(summary.closest('details')).not.toHaveClass('border-t');
   });
 
   it('renders witness tab with deterministic decode and byte interaction', async () => {
@@ -1484,6 +1605,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(screen.getByText('Raw data').parentElement).toHaveAttribute('open');
+    // and the Cell graph itself (lane cd-fixes-controls, the disclosure sweep: its state the page's)
+    expect(screen.getByText('Cell graph').closest('details')).toHaveAttribute('open');
   });
 
   it('shows not found message for 404 transaction errors', async () => {

@@ -5,6 +5,7 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ParticipantInfo } from '@/lib/api';
 import { PHONE_LINE_PX } from '@/lib/type-metrics';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // Lane D4 (the phone-rows board, its activities pane; PA-10): an activity row took three shapes on a
 // phone by the length of its strings — the block and its age dropped under the headline when the
@@ -34,7 +35,7 @@ function row(
   participants: ParticipantInfo[],
   over: Partial<ActivityRowData> = {}
 ): ActivityRowData {
-  return {
+  return activityRead({
     txHash: `0x${'fe'.repeat(32)}`,
     blockNumber: 21009129,
     timestamp: String(Date.now() - 50_000),
@@ -42,11 +43,10 @@ function row(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
     ...over,
-  };
+  });
 }
 
 const transfer = row([

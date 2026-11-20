@@ -53,6 +53,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * The row's panel, the same in either form (lane cd-fixes-controls, review-fix-logic-pages NOTE 4):
+ * a tab panel named by the current view, one stop of the tab order, the panel its control points
+ * at. Its narrow form drew a div with no role whose `aria-label` named nothing.
+ */
+function expectPanel(view: string, text: string, control: HTMLElement) {
+  const panel = screen.getByRole('tabpanel', { name: view });
+  expect(panel).toHaveTextContent(text);
+  expect(panel).toHaveAttribute('tabindex', '0');
+  expect(control).toHaveAttribute('aria-controls', panel.id);
+}
+
 describe('Tabs: roles, names and the panel', () => {
   it('is a tablist of tabs named by their words, the panel labelled by the current one', () => {
     render(<Row />);
@@ -71,6 +83,7 @@ describe('Tabs: roles, names and the panel', () => {
     expect(panel).toHaveTextContent('the activities list');
     expect(tabs[0]).toHaveAttribute('aria-controls', panel.id);
     expect(panel).toHaveAttribute('aria-labelledby', tabs[0].id);
+    expectPanel('activities 3', 'the activities list', tabs[0]);
     expect(tabs.slice(1).map((t) => t.getAttribute('aria-selected'))).toEqual(['false', 'false']);
   });
 
@@ -274,28 +287,50 @@ describe('Tabs: the narrow form, where the line cannot hold the names', () => {
     expect(containerContentPx(360)).toBe(328);
   });
 
+  // Re-pinned on purpose (lane cd-fixes-controls, review-fix-logic-pages NOTE 4): the Select is
+  // named by the row's label, as its tablist is, the word it stands after still "showing" (it was
+  // named "showing", so two such rows on one page had one name); its panel is the tab form's
   it('takes the Select after "showing" at 320, its options the tabs, and chooses through it', async () => {
     const user = userEvent.setup();
     at(320);
     render(<Views />);
     expect(screen.queryByRole('tablist')).toBeNull();
-    const select = screen.getByRole('combobox', { name: 'showing' });
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Transaction views' });
+    expect([...(select.labels ?? [])].map((l) => l.textContent)).toEqual(['showing']);
     expect(select).toHaveValue('committed');
     expect(
       within(select)
         .getAllByRole('option')
         .map((o) => o.textContent)
     ).toEqual(['transactions', 'cellbases', 'in the pool']);
-    expect(screen.getByText('the committed list')).toBeInTheDocument();
+    expectPanel('transactions', 'the committed list', select);
     await user.selectOptions(select, 'pool');
-    expect(screen.getByText('the pool list')).toBeInTheDocument();
+    expectPanel('in the pool', 'the pool list', select);
   });
 
   it('takes the Select for the address row at 320 too, counts and all', () => {
     at(320);
     render(<Row />);
     expect(screen.queryByRole('tablist')).toBeNull();
-    expect(screen.getByRole('combobox', { name: 'showing' })).toHaveValue('activities');
+    expect(screen.getByRole('combobox', { name: 'address' })).toHaveValue('activities');
+  });
+
+  it('tells two narrow rows on one page apart by their labels', () => {
+    at(320);
+    render(
+      <>
+        <Views />
+        <Row />
+      </>
+    );
+    expect(screen.getAllByRole('combobox').map((c) => c.getAttribute('aria-label'))).toEqual([
+      'Transaction views',
+      'address',
+    ]);
+    expect(screen.getAllByRole('tabpanel').map((p) => p.getAttribute('aria-label'))).toEqual([
+      'transactions',
+      'activities',
+    ]);
   });
 
   it('stays tabs at 360: the transactions row whole, the address row without its counts', () => {
@@ -475,7 +510,8 @@ describe('Tabs and TabLinks: a plain row takes the body step at every width', ()
     // past its line
     expect(tabRowPx(ADDRESS, 'section', true).bare).toBe(388.4);
     expect(screen.queryByRole('tablist')).toBeNull();
-    expect(screen.getByRole('combobox', { name: 'showing' })).toHaveValue('activities');
+    // named by its row's label (re-pinned on purpose, review-fix-logic-pages NOTE 4)
+    expect(screen.getByRole('combobox', { name: 'address' })).toHaveValue('activities');
   });
 
   it('draws a plain TabLinks row at the body step too', () => {

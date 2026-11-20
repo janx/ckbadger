@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { sentField } from '@/lib/api-fields';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
@@ -361,10 +362,7 @@ function stated<K extends 'liveCellsCount' | 'secondaryIssuance'>(
   statistics: DaoStatistics,
   field: K
 ): DaoStatistics[K] {
-  const value = (statistics as Partial<DaoStatistics>)[field];
-  if (value === undefined)
-    throw new Error(`DAO statistics send no ${field}: the API is older than this page`);
-  return value as DaoStatistics[K];
+  return sentField(statistics[field], 'DAO statistics', field);
 }
 
 /**

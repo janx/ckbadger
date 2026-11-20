@@ -175,7 +175,6 @@ pub(crate) fn project_actions(
         .map(|actions| {
             build_global_activity_response(
                 &state.store,
-                &state.append_only_store,
                 &state.ckb_network,
                 actions,
                 &mut scripts,

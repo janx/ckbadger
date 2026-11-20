@@ -100,9 +100,10 @@ describe('uncleRateFigure', () => {
   // (unclesInWindow, canonicalBlocksInWindow); the page summed the days' blocks, and checked the
   // days' uncles against the window's
   it('reads the window’s exact uncle rate from the route’s window figures', () => {
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 7,178 of 279,561 is 2.5676…%, 2.56% (half up 2.57%)
     expect(uncleRateFigure({ unclesInWindow: 7_178, canonicalBlocksInWindow: 279_561 })).toEqual({
-      rate: '2.57%',
-      percent: '2.57',
+      rate: '2.56%',
+      percent: '2.56',
       uncles: 7_178,
       blocks: 279_561,
     });

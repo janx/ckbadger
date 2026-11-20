@@ -19,9 +19,12 @@ const chart = {
   data: [
     {
       date: '2023-10-01',
-      values: { used: '100000000', unused: '200000000', capacity: '300000000' },
+      values: { occupiedCapacity: '100000000', freeCapacity: '200000000', capacity: '300000000' },
     },
-    { date: last, values: { used: '100000000', unused: '300000000', capacity: '400000000' } },
+    {
+      date: last,
+      values: { occupiedCapacity: '100000000', freeCapacity: '300000000', capacity: '400000000' },
+    },
   ],
 } as unknown as StackedAreaChartResponse;
 

@@ -9,6 +9,7 @@ import type {
 } from '@/lib/api';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { AlleleGel, NotGenesNote } from '@/components/ui/allele-gel';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { DnaStrip } from '@/components/ui/dna-strip';
@@ -396,15 +397,20 @@ export function ObjectGeneticsEvidence({
         />
       )}
       {dnaHex !== null && (
-        <details className="min-w-0">
-          <summary className="text-text-dim text-small cursor-pointer">
-            All {layout ? unitText(formatCount(layout.bytes.length, 'byte')) : 'bytes'} of DNA as
-            hex
-          </summary>
-          <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
+        // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep)
+        <SectionDisclosure
+          form="inner"
+          summary={
+            <>
+              All {layout ? unitText(formatCount(layout.bytes.length, 'byte')) : 'bytes'} of DNA as
+              hex
+            </>
+          }
+        >
+          <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
             {dnaHex}
           </pre>
-        </details>
+        </SectionDisclosure>
       )}
       {decoded && (decoded.media.length > 0 || decoded.render !== null) && (
         <ul aria-label="Decoder output" className="text-meta space-y-1">
@@ -1005,12 +1011,12 @@ function PatternReading({
         </p>
       )}
       {folded && (
-        <details className="min-w-0">
-          <summary className="text-text-dim text-small cursor-pointer">
-            All {unitText(formatCount(genes.length, 'gene'))}, one row each
-          </summary>
-          <div className="mt-2">{geneTable(everyGene, 'DOB blueprint, every gene')}</div>
-        </details>
+        <SectionDisclosure
+          form="inner"
+          summary={<>All {unitText(formatCount(genes.length, 'gene'))}, one row each</>}
+        >
+          {geneTable(everyGene, 'DOB blueprint, every gene')}
+        </SectionDisclosure>
       )}
       {sample && (
         <div

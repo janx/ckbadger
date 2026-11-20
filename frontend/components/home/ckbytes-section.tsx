@@ -326,7 +326,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
         // wrapping row of two items, the figure and its label (A4 Chrome F1): the label goes under
         // the figure, starting its line with no indent, when the line cannot hold both — the
         // figure ≈ 570 px from 640 (14 + 9 characters at 40 px and " CKB" at 20, −0.03 em) and
-        // 314.5 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
+        // 312.78 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
         // 682.8 px (1280's 828.8 px column), two at 1024 (649.6), 640 (608), 390 (358), 360 (328).
         className={cn(
           'text-text-bright text-index sm:text-display flex flex-wrap items-center gap-x-3 tabular-nums tracking-[-0.01em]',
@@ -336,14 +336,16 @@ function AllocationReady({ view }: { view: AllocationView }) {
         {/* The figure, one unbreakable run exact to the shannon (PA-19; the scripts pages' rule),
             and its unit, which goes under it where they cannot share the line, as a chart head's
             does on a phone (the lead's final round, item 5: at 320 the pair ran 14 px past the
-            window). Below 640 the decimals are body, so the integer (14 characters at 26 px, 214.8
-            px with the tracking) and the decimals (69.0) are 283.8 px, within a 320 px window's
-            288; with " CKB" at 13 px (30.7), 314.5, within a 360 px window's 328, where they share
+            window). Below 640 the decimals are small (13 px; at body, 14 px, the figure was 288.02 px
+            in 288, the third read's T NOTE-6 found by reading the type scale), the tracking an em
+            of the row's 26 px, −0.26 px a glyph: the integer (14 characters, 214.76 px) and the
+            decimals (9, 67.86) are 282.62 px, within a 320 px window's 288; with " CKB" at 13 px
+            (30.16), 312.78, within a 360 px window's 328, where they share
             it. The pair's one break is the space before the unit. */}
         <span>
           <span className="whitespace-nowrap">
             {total.integer}
-            <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+            <span className="text-text-dim max-sm:text-small">.{total.decimal}</span>
           </span>
           <span className="text-text-dim text-[0.5em]"> CKB</span>
         </span>
@@ -492,8 +494,9 @@ interface ChangeView {
   points: SignedPoint[];
   first: string;
   last: { label: string; delta: bigint };
-  min: number;
-  max: number;
+  /** The smallest and the largest change, exact (lane exactness, part B3: floats, rounded). */
+  min: bigint;
+  max: bigint;
 }
 
 /** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
@@ -519,15 +522,15 @@ export function changeView(chart: ChartResponse): ChangeView | null {
     label: dayLabel(d.date),
     value: shannonsToCkbNumber(d.delta),
     readout: exactSignedReadout(d.delta),
+    compact: formatCompactSigned(d.delta),
   }));
-  const values = points.map((p) => p.value);
   const last = deltas[deltas.length - 1];
   return {
     points,
     first: points[0].label,
     last: { label: dayLabel(last.date), delta: last.delta },
-    min: Math.min(...values),
-    max: Math.max(...values),
+    min: deltas.reduce((m, d) => (d.delta < m ? d.delta : m), deltas[0].delta),
+    max: deltas.reduce((m, d) => (d.delta > m ? d.delta : m), deltas[0].delta),
   };
 }
 
@@ -581,7 +584,8 @@ interface DaoView {
   apc: string;
   depositors: number;
   depositorsChange: number | null;
-  activeDeposits: number;
+  /** The deposit cells, "Active deposits" (a withdrawal request is no active deposit). */
+  depositCells: number;
   change: bigint | null;
 }
 
@@ -592,7 +596,9 @@ export function daoView(stats: DaoStatistics): DaoView {
     apc: stats.estimatedApc,
     depositors: stats.totalDepositors,
     depositorsChange: stats.depositorsChange24h ?? null,
-    activeDeposits: stats.activeDeposits,
+    // the figure the term names (lane exactness, part B5): it read the legacy activeDeposits, the
+    // live DAO cells with the withdrawal requests, which the route no longer sends
+    depositCells: stats.depositCellsCount,
     change: stats.depositChange24h === null ? null : parseCkbDecimal(stats.depositChange24h),
   };
 }
@@ -671,7 +677,7 @@ function DaoFigures({ view }: { view: DaoView }) {
             </span>
           )}
         </DaoStat>
-        <DaoStat term="Active deposits">{view.activeDeposits.toLocaleString('en-US')}</DaoStat>
+        <DaoStat term="Active deposits">{view.depositCells.toLocaleString('en-US')}</DaoStat>
         <DaoStat term="Change in 24 h">
           {change === null ? (
             <span className="text-text-dim">—</span>

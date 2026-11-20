@@ -8,6 +8,7 @@ import { inscriptionList } from '@/lib/dob-genes';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ClassMark } from '@/components/ui/class-mark';
 import { formatCount } from '@/lib/format-count';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
 import { NoBreak } from '@/components/ui/no-break';
@@ -185,33 +186,39 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
         </figure>
       )}
       {profile && (
-        <details className="text-meta min-w-0">
-          <summary className="cursor-pointer">
-            Media dependencies · {unitNode(formatCount(profile.sources.length, 'source'))}
-          </summary>
-          <ul className="mt-3 space-y-3">
-            {profile.sources.map((s, i) => (
-              <li key={`${s.uri}:${i}`}>
-                <span className="text-text-dim">
-                  {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
-                </span>
-                {/* only the raw URI breaks anywhere; the words around it break between them */}
-                <div className="break-all">{s.uri}</div>
-                {/* A further Bitcoin reference is read here, where the box no longer does. */}
-                {s.scheme === 'btcfs' && s !== firstReference && (
-                  <div className="mt-1">
-                    <BtcfsReading uri={s.uri} network={network} />
-                  </div>
-                )}
-              </li>
+        // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its
+        // references keep the 12 px they took from the disclosure
+        <SectionDisclosure
+          form="inner"
+          summary={
+            <>Media dependencies · {unitNode(formatCount(profile.sources.length, 'source'))}</>
+          }
+        >
+          <div className="text-meta">
+            <ul className="space-y-3">
+              {profile.sources.map((s, i) => (
+                <li key={`${s.uri}:${i}`}>
+                  <span className="text-text-dim">
+                    {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
+                  </span>
+                  {/* only the raw URI breaks anywhere; the words around it break between them */}
+                  <div className="break-all">{s.uri}</div>
+                  {/* A further Bitcoin reference is read here, where the box no longer does. */}
+                  {s.scheme === 'btcfs' && s !== firstReference && (
+                    <div className="mt-1">
+                      <BtcfsReading uri={s.uri} network={network} />
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {profile.issues.map((issue) => (
+              <p key={issue} className="max-w-measure mt-2">
+                {issue}
+              </p>
             ))}
-          </ul>
-          {profile.issues.map((issue) => (
-            <p key={issue} className="max-w-measure mt-2">
-              {issue}
-            </p>
-          ))}
-        </details>
+          </div>
+        </SectionDisclosure>
       )}
     </section>
   );

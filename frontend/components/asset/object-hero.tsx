@@ -2,7 +2,7 @@
 // F2 group `objects` (round 2): the pieces of the Object / m-NFT board heroes — one "Live" style
 // for both pages (OB-15), the composition badge with its one plain sentence (OB-6, OB-M4), the
 // readable traits linked to their genes (OB-5/6), and the life summary sentence (OB-6, OB-M5).
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { columnPx, fontPx, foreignTextPx } from '@/lib/type-metrics';
 import type { ItemCellVersion } from '@/lib/api';
 import { cellLockSentence, cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
@@ -63,6 +63,9 @@ export function CompositionLine({
   );
 }
 
+/** The trait label column's most: half of a 320 px window's 288 px row, less the 12 px gap. */
+const TRAIT_LABEL_CAP = (288 - 12) / 2;
+
 /**
  * The readable traits (OB-6): `prev.*` render hints and media values stay on the gel (OB-16).
  * Each row shares the hover state with its gene and its allele-gel lane (OB-5).
@@ -82,9 +85,14 @@ export function ObjectTraits({
   if (!shown.length) return null;
   // Lane P2's third round (item 4): a value follows its label at one gap (12 px), left-aligned,
   // the label column as wide as the grid's longest label at the line's 14 px, with the swatch's
-  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280)
-  const labelColumn = columnPx(
-    textPx(Math.max(...shown.map((t) => t.name.length)), fontPx('body')) + 16
+  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280).
+  // Lane P2's fifth round (NOTE 5): a trait's name is the creator's text, measured by its bound
+  // (`foreignTextPx`: a CJK grapheme 1.25 em, not the Latin 0.6), and the column is capped at half
+  // of the narrowest row a window gives the traits (288 px at 320, less the 12 px gap: 138), where
+  // a longer name breaks and its value keeps the rest
+  const labelColumn = Math.min(
+    TRAIT_LABEL_CAP,
+    columnPx(Math.max(...shown.map((t) => foreignTextPx(t.name, fontPx('body')))) + 16)
   );
   return (
     <div className="space-y-2">
@@ -109,7 +117,7 @@ export function ObjectTraits({
               )}
               style={{ gridTemplateColumns: `${labelColumn}px minmax(0, 1fr)` }}
             >
-              <dt className="text-text-dim flex items-center">
+              <dt className="text-text-dim flex min-w-0 items-center [overflow-wrap:anywhere]">
                 <span
                   aria-hidden
                   className="mr-2 inline-block h-2 w-2 shrink-0"
@@ -264,8 +272,13 @@ export function ckbText(shannons: bigint): string {
 }
 
 /**
- * OB-9: what the cell is worth over its life — now, at minting, and which part of its bytes
- * changed between them. Every number is read from the canonical cell versions.
+ * OB-9: what the cell held over its life, in the state it is in, every figure one the route sent
+ * (lane P2's fifth round, item 2). The last version first: a live cell "holds" its CKB; a consumed
+ * one "held" it "when it was consumed", and nothing is said in the present. With more than one
+ * version, what minting (or issue) held, the size of each part that differs between the first
+ * version and the last, both sizes as the versions state them, and over how many moves: no
+ * difference the page computes (it said "so the cell grew by 13 CKB when it moved", which over
+ * several moves named one move that did not happen alone).
  */
 export function cellLifeSentence(
   versions: readonly ItemCellVersion[],
@@ -275,26 +288,32 @@ export function cellLifeSentence(
     last = versions.at(-1)!;
   const cap = BigInt(last.capacity),
     occupied = BigInt(last.occupiedCapacity);
-  const now =
-    cap === occupied
-      ? `The ${noun}’s cell holds ${ckbText(cap)} CKB.`
-      : `The ${noun}’s cell holds ${ckbText(cap)} CKB, ${ckbText(occupied)} of it occupied by its bytes.`;
-  if (versions.length === 1) return now;
-  const was = BigInt(first.capacity);
-  const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
-    const key = `${part}Bytes` as const;
-    const d = last.anatomy[key] - first.anatomy[key];
-    return d === 0
-      ? []
-      : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${formatCount(Math.abs(d), 'byte')}`];
-  });
-  const dCap = cap - was,
-    dOcc = occupied - BigInt(first.occupiedCapacity);
-  const why =
-    changes.length && dCap === dOcc && dCap !== BigInt(0)
-      ? `; ${changes.join(', ')}, so the cell ${dCap > BigInt(0) ? 'grew' : 'shrank'} by ${ckbText(dCap > BigInt(0) ? dCap : -dCap)} CKB when it moved.`
-      : '.';
-  return `${now} It held ${ckbText(was)} ${noun === 'token' ? 'at issue' : 'at minting'}${why}`;
+  const live = last.isLive;
+  const whose = live || versions.length === 1 ? `The ${noun}’s cell` : `The ${noun}’s last cell`;
+  const occupiedPart = cap === occupied ? '' : `, ${ckbText(occupied)} of it occupied by its bytes`;
+  const state = live
+    ? `${whose} holds ${ckbText(cap)} CKB${occupiedPart}.`
+    : `${whose} held ${ckbText(cap)} CKB${occupiedPart}${occupiedPart ? ',' : ''} when it was consumed.`;
+  if (versions.length === 1) return state;
+  const at = noun === 'token' ? 'At issue' : 'At minting';
+  const moves = versions.length - 1;
+  const parts = (['lock', 'type', 'data'] as const).filter(
+    (part) => first.anatomy[`${part}Bytes`] !== last.anatomy[`${part}Bytes`]
+  );
+  const size = (v: ItemCellVersion, part: (typeof parts)[number]) =>
+    formatCount(v.anatomy[`${part}Bytes`], 'byte');
+  const then = parts.map((part) => `, its ${part} ${size(first, part)}`).join('');
+  const after = parts.length
+    ? `; after ${formatCount(moves, 'move')} ${parts
+        .map(
+          (part, k) =>
+            `${k === 0 ? 'its' : 'and its'} ${part} ${live ? 'is' : 'was'} ${size(last, part)}`
+        )
+        .join(' ')}.`
+    : live
+      ? `; it has moved ${formatCount(moves, 'time')} since.`
+      : `; it moved ${formatCount(moves, 'time')} before its last cell was consumed.`;
+  return `${state} ${at} it held ${ckbText(BigInt(first.capacity))} CKB${then}${after}`;
 }
 
 /**

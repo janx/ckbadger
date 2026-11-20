@@ -9,6 +9,7 @@ import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { api, type GlobalActivity } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
@@ -26,32 +27,32 @@ const activity = (
   txHash: string,
   at: string,
   extra: Partial<GlobalActivity> = {}
-): GlobalActivity => ({
-  txHash,
-  blockNumber: 20835685,
-  txIndex: 1,
-  timestamp: String(Date.parse(at)),
-  isCellbase: false,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
-  participants: [
-    {
-      address: seededAddress('wlng7r'),
-      lockHash: `0x${'aa'.repeat(32)}`,
-      lockHashPrefix: null,
-      roles: [],
-      ckbDelta: '-100000000',
-      usedDelta: '0',
-      itemDeltas: [],
-      tags: 0,
-      sent: true,
-    },
-  ],
-  ...extra,
-});
+): GlobalActivity =>
+  activityRead({
+    txHash,
+    blockNumber: 20835685,
+    txIndex: 1,
+    timestamp: String(Date.parse(at)),
+    isCellbase: false,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    recognizedTypes: [],
+    participants: [
+      {
+        address: seededAddress('wlng7r'),
+        lockHash: `0x${'aa'.repeat(32)}`,
+        lockHashPrefix: null,
+        roles: [],
+        ckbDelta: '-100000000',
+        usedDelta: '0',
+        itemDeltas: [],
+        tags: 0,
+        sent: true,
+      },
+    ],
+    ...extra,
+  });
 
 class NoopObserver {
   observe() {}

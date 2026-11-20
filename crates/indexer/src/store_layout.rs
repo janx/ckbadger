@@ -158,6 +158,33 @@ pub(crate) mod tests {
         assert_eq!(store.get_store_layout().unwrap(), None);
     }
 
+    /// The recognised type codes (C7, layout 7) change the layout once more: a
+    /// store built by resync/protocol-pairs carries stamp 6, and its activities
+    /// rows end at the participants, without the type codes that ran (the
+    /// row's strict decode refuses such a row too, the row's own guard).
+    /// Refused before anything is written, both layouts named.
+    #[test]
+    fn a_store_stamped_before_the_recognised_type_codes_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        store.set_store_layout(6).unwrap();
+        let before = domain_rows(&store);
+
+        let error = ensure_store_layout(&store).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let words = error.to_string();
+        assert!(
+            words.contains("store layout 6")
+                && words.contains(&format!("store layout {STORE_LAYOUT}"))
+                && words.contains("recognised type codes")
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+        assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+        assert_eq!(store.get_store_layout().unwrap(), Some(6));
+    }
+
     #[test]
     fn a_store_of_another_layout_is_refused_naming_both() {
         let dir = tempfile::tempdir().unwrap();
