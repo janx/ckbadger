@@ -202,6 +202,11 @@ pub enum RegisteredScript {
 /// protocol's pair only once its version is registered here.
 pub struct ProtocolRegistry {
     pub(crate) by_pair: HashMap<([u8; 32], u8), RegisteredScript>,
+    /// The code hashes of the Unique Cell's registered pairs (a fixed
+    /// handful, both networks), compared before its pair is looked up: bulk's
+    /// serial lane asks [`Self::is_unique_cell`] for every typed output
+    /// (resync fix round 2, C).
+    unique_cell_code_hashes: Vec<[u8; 32]>,
 }
 
 /// The registry file stem of the Nervos DAO.
@@ -314,7 +319,17 @@ impl ProtocolRegistry {
             by_pair.values().any(|s| *s == RegisteredScript::UniqueCell),
             "protocol registry missing the Unique Cell — check docs/metadata/scripts/unique-cell.toml"
         );
-        Self { by_pair }
+        let mut unique_cell_code_hashes: Vec<[u8; 32]> = by_pair
+            .iter()
+            .filter(|(_, script)| **script == RegisteredScript::UniqueCell)
+            .map(|((code_hash, _), _)| *code_hash)
+            .collect();
+        unique_cell_code_hashes.sort_unstable();
+        unique_cell_code_hashes.dedup();
+        Self {
+            by_pair,
+            unique_cell_code_hashes,
+        }
     }
 
     /// THE lookup: what the script `(code_hash, hash_type)` runs, if it is
@@ -349,7 +364,19 @@ impl ProtocolRegistry {
     /// Whether the pair runs the Unique Cell ([`Self::script`]): the one
     /// recognition of a Unique Cell, for the xUDT extension binding and claim
     /// and the issuance co-occurrence binding, on both sync paths.
+    ///
+    /// The code hash is compared with the Unique Cell's few first (32-byte
+    /// comparisons, most decided by the first byte); only a match asks the
+    /// pair, whose hash type decides. Bulk's serial lane asks this for every
+    /// typed output (resync fix round 2, C).
     pub fn is_unique_cell(&self, code_hash: &[u8], hash_type: i16) -> bool {
+        if !self
+            .unique_cell_code_hashes
+            .iter()
+            .any(|unique| unique.as_slice() == code_hash)
+        {
+            return false;
+        }
         #[cfg(test)]
         UNIQUE_CELL_PAIR_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
         self.script(code_hash, hash_type) == Some(RegisteredScript::UniqueCell)
