@@ -97,25 +97,36 @@ async fn network_transaction_window_uses_effective_time_when_raw_tip_moves_backw
 /// layout the domain store was built with (`storeLayout`), so the verify
 /// check `store_layout_matches_build` sees a skipped re-sync: the stamp's
 /// value on a stamped store, `null` on one not stamped.
+///
+/// Resync fix round NOTE-8: a store stamped with another layout too, so the
+/// test tells the stamp read from the store from the build's own number
+/// (a route that answered `STORE_LAYOUT` would pass the stamped case alone).
+/// The test router opens no store and reads no layout check, so it can show
+/// what the route reads; it cannot show what the API serves: `run_api`
+/// refuses a store of another layout, or with rows and no stamp, before
+/// this route answers (`entry::api_store_readiness`), so in a running API
+/// the route meets this build's stamp only, and the verify check sees
+/// another one only from an API of the build that wrote it.
 #[tokio::test]
 async fn network_stats_state_the_store_layout() {
-    for stamped in [true, false] {
+    for stamp in [
+        Some(ckbadger_store::STORE_LAYOUT),
+        Some(ckbadger_store::STORE_LAYOUT - 1),
+        None,
+    ] {
         let store = test_store();
         seed_block_headers_at(&store, &[(0, 1_700_337_600_000)]);
-        if stamped {
-            store
-                .set_store_layout(ckbadger_store::STORE_LAYOUT)
-                .unwrap();
+        if let Some(stamp) = stamp {
+            store.set_store_layout(stamp).unwrap();
         }
         let mut config = test_config(store);
         let _rpc = mock_indexed_node_tip(&mut config).await;
         let app = create_router(config).await;
         let (status, json) = get_json(&app, "/statistics/network").await;
         assert_eq!(status, StatusCode::OK, "{json}");
-        if stamped {
-            assert_eq!(json["storeLayout"], ckbadger_store::STORE_LAYOUT, "{json}");
-        } else {
-            assert!(json["storeLayout"].is_null(), "{json}");
+        match stamp {
+            Some(stamp) => assert_eq!(json["storeLayout"], stamp, "{json}"),
+            None => assert!(json["storeLayout"].is_null(), "{json}"),
         }
     }
 }
