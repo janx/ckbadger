@@ -224,6 +224,36 @@ describe('the activity-row reader finds a row no checker holds, and passes one i
     expect(rowsOf(code, 'x.tsx')).toEqual({ unchecked: [], unsent: 1 });
   });
 
+  // The lead's F4 on lane feed: the checker gives back the row it checked as the route states it,
+  // `{ ...checked, participants, partyIds, … }`; that literal, returned from activityRead's own
+  // body in the checker's own module, is the checker's output, not a fixture's row. There and only
+  // there: the same literal elsewhere in that module, returned by a function of another name, or
+  // returned by an activityRead of another file, is still found.
+  it('passes the row activityRead returns from its own body in the checker’s module, and no other', () => {
+    const code = `
+      export function activityRead(checked) {
+        const kept = { ...checked, participants: drawn };
+        const inner = () => { return { ...checked, participants: drawn }; };
+        return { ...checked, participants: drawn, partyIds: ids } as Stated;
+      }
+      function stateParties(checked) { return { ...checked, participants: drawn }; }
+      const loose = { ...checked, participants: drawn };
+    `;
+    expect(uncheckedRows(code, '__tests__/utils/activity-read.ts')).toEqual([
+      '3: participants',
+      '4: participants',
+      '7: participants',
+      '8: participants',
+    ]);
+    expect(uncheckedRows(code, '__tests__/components/x.test.tsx')).toEqual([
+      '3: participants',
+      '4: participants',
+      '5: participants',
+      '7: participants',
+      '8: participants',
+    ]);
+  });
+
   it('does not take a row handed to another call inside activityRead as held', () => {
     expect(
       uncheckedRows(
