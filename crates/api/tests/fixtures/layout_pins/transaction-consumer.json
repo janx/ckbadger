@@ -32,8 +32,14 @@
       }
     ],
     "partyIds": [
-      ["0x95add7c28976054c39c8a2a95fe6e8a8053a9898", 0],
-      ["0xe283d25800772fa5df7552b9e1e60bc7a34848ac", 0]
+      [
+        "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
+        0
+      ],
+      [
+        "0xe283d25800772fa5df7552b9e1e60bc7a34848ac",
+        0
+      ]
     ],
     "protocolActions": [],
     "timestamp": "1790041200000",

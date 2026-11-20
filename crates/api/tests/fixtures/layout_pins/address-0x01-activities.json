@@ -31,8 +31,14 @@
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [
-        ["0xbe1a32103e168e4e382dcaf294c7743c7a482c02", 2],
-        ["0xbf7373a319dce28331dfdf2b158db8b67ba213c6", 2]
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          2
+        ],
+        [
+          "0xbf7373a319dce28331dfdf2b158db8b67ba213c6",
+          2
+        ]
       ],
       "protocolActions": [],
       "roles": [],
@@ -74,8 +80,14 @@
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [
-        ["0xbe1a32103e168e4e382dcaf294c7743c7a482c02", 2],
-        ["0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6", 0]
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          2
+        ],
+        [
+          "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6",
+          0
+        ]
       ],
       "protocolActions": [],
       "roles": [],
@@ -117,8 +129,14 @@
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [
-        ["0xbe1a32103e168e4e382dcaf294c7743c7a482c02", 2],
-        ["0xc7f452d9580bd9e6d031614261265af1c85ed2ae", 0]
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          2
+        ],
+        [
+          "0xc7f452d9580bd9e6d031614261265af1c85ed2ae",
+          0
+        ]
       ],
       "protocolActions": [],
       "roles": [],
