@@ -11,9 +11,9 @@ import {
 import { MINUS } from '@/lib/chart-ticks';
 import type { GlobalActivity } from '@/lib/api';
 import { Dotted } from '@/components/ui/phone-row';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { activityRead, ITEM_TYPE, type Written } from '@/__tests__/utils/activity-read';
 
-function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
+function makeGlobal(overrides: Partial<Written<GlobalActivity>> = {}): GlobalActivity {
   return activityRead({
     txHash: '0x54522856aa00000000000000000000000000000000000000000000000000007b60c3',
     blockNumber: 20_819_142,

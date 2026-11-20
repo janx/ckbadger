@@ -2,14 +2,14 @@
 // not lay out, so these assert the structure and the breakpoint classes that decide the layout.
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
-import type { ItemDelta, ParticipantInfo } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import type { ItemDelta } from '@/lib/api';
+import { activityRead, ITEM_TYPE, type WrittenParty } from '@/__tests__/utils/activity-read';
 
 /** A real JoyID address (RFC 0021 full format): a row names its lock, the default lock it leaves unnamed (B4). */
 const JOYID_ADDRESS =
   'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqxeeh0qtxeeu05my2z7pfn7d45k4t8rvvsfavygk';
 
-function party(over: Partial<ParticipantInfo> = {}): ParticipantInfo {
+function party(over: Partial<WrittenParty> = {}): WrittenParty {
   return {
     lockHash: '0x' + '01'.repeat(32),
     lockHashPrefix: null,
@@ -33,7 +33,7 @@ const objectArrived: ItemDelta = {
 } as ItemDelta;
 
 function activity(
-  participants: ParticipantInfo[],
+  participants: WrittenParty[],
   // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
   over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
 ): ActivityRowData {
@@ -97,7 +97,7 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
   // Report A#15: the lock label wrapped alone or split "Default / Lock" beside a long amount. On
   // the T7 line the address, the lock tag and the amount are each one unbreakable item; the line
   // wraps between them, in that order.
-  function plainRow(p: ParticipantInfo) {
+  function plainRow(p: WrittenParty) {
     const { container } = render(<ActivityRow activity={activity([p])} />);
     const row = container.querySelector('[data-role="participant"]') as HTMLElement;
     expect(row).not.toBeNull();

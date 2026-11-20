@@ -14,16 +14,17 @@ import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtur
 import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { AddressActivity } from '@/components/address/address-history';
-import type { ItemDelta, ParticipantInfo } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import type { ItemDelta } from '@/lib/api';
+import {
+  activityRead,
+  ITEM_TYPE,
+  type WrittenParty,
+  type Written,
+} from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 
-function party(
-  seed: string,
-  ckbDelta: string,
-  over: Partial<ParticipantInfo> = {}
-): ParticipantInfo {
+function party(seed: string, ckbDelta: string, over: Partial<WrittenParty> = {}): WrittenParty {
   return {
     address: seededAddress(seed),
     lockHash: `0x${seed.padStart(64, '0')}`,
@@ -39,8 +40,8 @@ function party(
 }
 
 function row(
-  participants: ParticipantInfo[],
-  over: Partial<ActivityRowData> = {}
+  participants: WrittenParty[],
+  over: Partial<Written<ActivityRowData>> = {}
 ): ActivityRowData {
   return activityRead({
     txHash: `0x${'fe'.repeat(32)}`,

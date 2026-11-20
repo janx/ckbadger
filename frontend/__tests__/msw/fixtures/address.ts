@@ -227,6 +227,10 @@ export const addressActivitiesFixture: Activity[] = [
     participants: [],
     roles: [],
     tags: 0,
+    // the one party, this address, by its short id; it received, so it paid no fee alone
+    participantCount: 1,
+    partyIds: [[addressHash.slice(0, 42), 0]],
+    feePayer: null,
   }),
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [

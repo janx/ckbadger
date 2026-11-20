@@ -9,12 +9,12 @@ import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { CompositionTier } from '@/lib/asset-utils';
-import type { ItemDelta, ParticipantInfo } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import type { ItemDelta } from '@/lib/api';
+import { activityRead, ITEM_TYPE, type WrittenParty } from '@/__tests__/utils/activity-read';
 
 const TX = '0xa46efcd8' + 'ef'.repeat(26) + 'dac2e0';
 
-function party(tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo {
+function party(tail: string, over: Partial<WrittenParty> = {}): WrittenParty {
   return {
     address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
@@ -42,7 +42,7 @@ function object(n: number, delta: 1 | -1, composition: CompositionTier | null): 
 }
 
 function row(
-  participants: ParticipantInfo[],
+  participants: WrittenParty[],
   // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
   over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
 ): ActivityRowData {
@@ -72,7 +72,7 @@ const joy = party('joyid1', {
 
 const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-role="participant"]')];
 /** A party's address as a row writes it: `ckb1…` and its last 8 characters (R9). */
-const tail = (p: ParticipantInfo) => p.address!.slice(-8);
+const tail = (p: WrittenParty) => p.address!.slice(-8);
 const roles = (line: HTMLElement) => [...line.children].map((e) => e.getAttribute('data-role'));
 
 describe('focusLockHash: the participant the page is about', () => {

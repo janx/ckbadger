@@ -701,7 +701,14 @@ interface PoolTransaction {
   interpretation: PoolInterpretation;
   activity: Pick<
     GlobalActivity,
-    'participants' | 'protocolActions' | 'typeCalls' | 'lockCalls' | 'isCellbase'
+    | 'participants'
+    | 'participantCount'
+    | 'partyIds'
+    | 'feePayer'
+    | 'protocolActions'
+    | 'typeCalls'
+    | 'lockCalls'
+    | 'isCellbase'
   > | null;
 }
 interface PoolTransactionsResponse {
@@ -1337,11 +1344,33 @@ type ItemDelta =
 export type ItemMovement = 'mint' | 'burn' | 'transfer';
 
 /**
- * One item delta of an address's row (the third read's Lb SHOULD 2): the row carries only its
- * address's deltas, so the route states the item's movement in the whole transaction beside it,
- * which the page cannot tell from one party's change.
+ * One item delta of a party with the item's movement in the whole transaction, as the route states
+ * it (the third read's Lb SHOULD 2 for an address's row; lane feed for every party a row draws):
+ * a row carries only some parties' deltas, so the page reads a mint, burn or transfer here and
+ * never sums it from the parties it was sent.
  */
 export type RowItemDelta = ItemDelta & { movement: ItemMovement };
+
+/**
+ * A party by its short id, as the route names every party of an activity (`partyIds`, lane feed):
+ * the first 20 bytes of its lock hash as `0x` and 40 hex digits (for a party a protocol named by a
+ * prefix, that prefix), and its participant tags.
+ */
+export type PartyId = [shortId: string, tags: number];
+
+/**
+ * Every party of an activity as the route states it once from all of them (lane feed, ruling 14
+ * of gate P; docs/API.md, "The parties a row draws"): a row sends in full only the parties it
+ * draws, so whatever a page says of all of them it reads here, never from `participants`.
+ */
+interface ActivityParties {
+  /** How many parties the transaction has, exactly: `partyIds` holds each. */
+  participantCount: number;
+  /** Every party, in the transaction's order: what a feed's fold counts distinct parties from. */
+  partyIds: PartyId[];
+  /** The lock hash of the party whose only movement is the fee, or null. */
+  feePayer: string | null;
+}
 
 interface ActivityTypeCall {
   typeCodeHash: string;
@@ -1417,8 +1446,11 @@ const TAG_OBJECT = 2;
 const TAG_IDENTITY = 4;
 const TAG_CELLBASE = 32;
 
-/** Address activity response (GET /addresses/{addr}/activities). */
-interface Activity {
+/**
+ * Address activity response (GET /addresses/{addr}/activities): this address's changes, and every
+ * party of the transaction by its short id (`ActivityParties`); no other party in full.
+ */
+interface Activity extends ActivityParties {
   txHash: string;
   /** Null while the transaction is still in the node's pool. */
   blockNumber: number | null;
@@ -1471,12 +1503,16 @@ interface ParticipantRef {
 interface ParticipantInfo extends ParticipantRef {
   ckbDelta: string;
   usedDelta: string;
-  itemDeltas: ItemDelta[];
+  /** Each with its movement in the whole transaction, the route's. */
+  itemDeltas: RowItemDelta[];
   tags: number;
 }
 
-/** Global activity response (GET /activities, GET /activities/latest). */
-interface GlobalActivity {
+/**
+ * A transaction's activity across its parties (GET /activities, /activities/latest, the asset
+ * feeds, a transaction list's `activity`; GET /transactions/{hash}/activity draws every party).
+ */
+interface GlobalActivity extends ActivityParties {
   txHash: string;
   blockNumber: number;
   txIndex: number;
@@ -1492,6 +1528,11 @@ interface GlobalActivity {
    */
   itemTypes: ActivityItemType[] | null;
   itemTypesUnread: string | null;
+  /**
+   * The parties the row draws, in full, in the transaction's order: every party of a row of at
+   * most six; beyond, the five largest CKB changes, the fee payer and every party whose items
+   * moved. So it holds every item delta of the transaction, and the CKB of these parties only.
+   */
   participants: ParticipantInfo[];
 }
 
@@ -4055,6 +4096,7 @@ export type {
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,
+  ActivityParties,
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,

@@ -901,7 +901,7 @@ function ItemsOnLine({
 }
 
 /** "+2 objects", "−1 object", "+1 −1 objects": a participant's object changes as one signed count. */
-export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
+export function objectCountLabel(items: readonly ItemDelta[]): string {
   const objects = items.filter((i) => i.kind === 'object');
   const arrived = objects.filter((o) => o.delta > 0).length;
   const departed = objects.length - arrived;

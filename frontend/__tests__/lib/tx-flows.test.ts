@@ -14,6 +14,7 @@ import {
   type FlowEnd,
 } from '@/lib/tx-flows';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { withRouteMovements, type WrittenParty } from '@/__tests__/utils/activity-read';
 import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 
 const HASH = `0x${'91'.repeat(32)}`;
@@ -24,7 +25,7 @@ function party(
   ckbDelta: string,
   itemDeltas: ItemDelta[] = [],
   lockKind: string | null = 'Default Lock'
-): ParticipantInfo {
+): WrittenParty {
   return {
     address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
     lockHash: `0x${tail.padStart(64, '0')}`,
@@ -45,10 +46,11 @@ const token = (delta: string): ItemDelta => ({
   decimals: 8,
 });
 // re-pinned (lane P1, third round): an activity with no protocol step, as onlyFeeMoved reads it
+// its parties' items with their movement, as the route states it
 const activity = (
-  participants: ParticipantInfo[]
+  participants: WrittenParty[]
 ): Pick<GlobalActivity, 'participants' | 'protocolActions'> => ({
-  participants,
+  participants: withRouteMovements(participants),
   protocolActions: [],
 });
 const amounts = (ends: readonly FlowEnd[]) =>
@@ -271,7 +273,7 @@ describe('txFlows', () => {
   // Re-pinned on purpose (lane P1, third round; review p-logic-chain MUST 2): the one decision reads
   // the activity's protocol steps too, so it takes the activity beside its flows
   it('tells a transaction that moved only its fee', () => {
-    const only = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) => {
+    const only = (participants: WrittenParty[], fee: string, compensation: bigint | null) => {
       const a = activity(participants);
       return onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee, compensation }));
     };
@@ -326,7 +328,7 @@ describe('foldEnds', () => {
   const ends = (n: number): FlowEnd[] =>
     Array.from({ length: n }, (_, i) => ({
       t: 'party' as const,
-      party: party(String(i).padStart(6, 'p'), '-1'),
+      party: withRouteMovements([party(String(i).padStart(6, 'p'), '-1')])[0],
       amount: BigInt(100 - i),
     }));
 
