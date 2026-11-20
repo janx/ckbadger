@@ -10380,6 +10380,103 @@ mod tests {
         }
     }
 
+    /// Lane feed (ruling 14 of gate P): a feed row sends in full only the parties it draws, so
+    /// `participant_rows_consistency` reads EVERY party of each sampled activity from the
+    /// transaction's own activity (which draws them all), holds the feed row's
+    /// `participantCount` and `partyIds` against them, and looks each one up. Eight parties, five
+    /// drawn on the feed: a party the feed does not draw whose own index lacks the transaction
+    /// is a finding naming it; ids or a count that disagree with the transaction's parties are a
+    /// finding; every party found passes, one item a sampled activity as before.
+    #[test]
+    fn participant_rows_check_reads_every_party_not_only_the_drawn() {
+        const TX: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let lock = |i: usize| format!("0x{i:02x}{}", "ab".repeat(31));
+        let party = |i: usize| json!({ "lockHash": lock(i), "lockHashPrefix": null });
+        let ids = |n: usize| -> Vec<serde_json::Value> {
+            (0..n)
+                .map(|i| json!([lock(i)[..42].to_string(), 0]))
+                .collect()
+        };
+        let run = |feed_ids: Vec<serde_json::Value>, missing: Option<usize>| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            runtime.block_on(async {
+                let get = |route: String, body: serde_json::Value| {
+                    Mock::given(method("GET"))
+                        .and(path(format!("/api/v1/{route}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                };
+                get(
+                    "activities".into(),
+                    json!({"data": [{
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 8,
+                        "partyIds": feed_ids,
+                        "feePayer": null,
+                        "participants": (0..5).map(party).collect::<Vec<_>>(),
+                    }], "nextCursor": null}),
+                )
+                .mount(&server)
+                .await;
+                get(
+                    format!("transactions/{TX}/activity"),
+                    json!({
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 8,
+                        "partyIds": ids(8),
+                        "feePayer": null,
+                        "participants": (0..8).map(party).collect::<Vec<_>>(),
+                    }),
+                )
+                .mount(&server)
+                .await;
+                for i in 0..8 {
+                    let rows = if missing == Some(i) {
+                        json!([])
+                    } else {
+                        json!([{ "txHash": TX }])
+                    };
+                    get(
+                        format!("addresses/{}/transactions", lock(i)),
+                        json!({"data": rows, "nextCursor": null}),
+                    )
+                    .mount(&server)
+                    .await;
+                }
+            });
+            let check = registered_check("participant_rows_consistency");
+            let completed = execute_check(
+                check.as_ref(),
+                &mock_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            let result = completed.result.expect("a completed run has a result");
+            (completed.status, result)
+        };
+
+        let (status, result) = run(ids(8), None);
+        assert_eq!(status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+
+        // party 7 is not drawn on the feed; its own index lacks the transaction
+        let (status, result) = run(ids(8), Some(7));
+        assert_eq!(status, CheckStatus::Fail, "{:?}", result.findings);
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert_eq!(result.findings[0].entity, format!("lock_hash={}", lock(7)));
+
+        // the feed row names seven of the eight parties it counts
+        let (status, result) = run(ids(7), None);
+        assert_eq!(status, CheckStatus::Fail, "{:?}", result.findings);
+        assert_eq!(result.findings[0].entity, format!("tx={TX}"));
+        assert!(
+            result.findings[0].details[0].contains("partyIds"),
+            "{:?}",
+            result.findings
+        );
+    }
+
     /// An owner holding more names than one `dotcell-names` page must be read
     /// to the end before its list is compared with its counter. The address
     /// endpoint returns `identityId`, `label`, `name`, and `expiredAt`, not the
