@@ -28,7 +28,7 @@ export function BlocksOfDay({ date }: { date: string }) {
           : readErrorText(day.error)}
       </span>
     );
-  if (!day.data) return <span className="text-text-dim">{unitText(title)}: reading…</span>;
+  if (!day.data) return <span className="text-text">{unitText(title)}: reading…</span>;
   const { first, last, blocksCount, complete } = day.data;
   if (day.data.date !== date || last.number - first.number + 1 !== blocksCount)
     throw new Error(`${title}: the API answered ${JSON.stringify(day.data)}`);

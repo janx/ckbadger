@@ -851,6 +851,56 @@ describe('Block board · R2b-a fields', () => {
     expect(party).not.toHaveClass('hover:text-jade');
   });
 
+  // A cellbase that pays a block's reward has one output at most (CKB's consensus), and its
+  // headline names every party it pays: a row of it that draws fewer than it counts is refused,
+  // by name. (Block 0's cellbase pays no reward and is outside this: block-genesis.test.tsx.)
+  it('refuses a paying cellbase whose row draws fewer parties than it counts', async () => {
+    const payee = {
+      address: seededAddress('ratvu9'),
+      lockHash: h('9a'),
+      lockHashPrefix: null,
+      roles: [],
+      ckbDelta: '55951224916',
+      usedDelta: '6100000000',
+      itemDeltas: [],
+      tags: 0,
+    };
+    const cellbase = activityRead({
+      ...activity(0),
+      participants: [payee],
+      participantCount: 2,
+      partyIds: [
+        [h('9a').slice(0, 42), 0],
+        [h('9b').slice(0, 42), 0],
+      ],
+      feePayer: null,
+      items: [],
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [cellbase, ...[1, 2, 3].map(activity)],
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<BlockDetailPage />);
+    await waitFor(() =>
+      expect(
+        errors.mock.calls.some((call) =>
+          call.some((arg) =>
+            String(arg instanceof Error ? arg.message : arg).includes(
+              `cellbase ${cellbase.txHash} pays a block's reward: it draws 1 of its 2 parties, where it has one output at most`
+            )
+          )
+        )
+      ).toBe(true)
+    );
+    expect(screen.queryByText('Cellbase')).toBeNull();
+    errors.mockRestore();
+  });
+
   it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {
     render(<BlockDetailPage />);
     const section = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(

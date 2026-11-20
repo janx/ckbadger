@@ -1654,6 +1654,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
     let app = create_router(config).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -1676,14 +1677,29 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     assert_eq!(rows[0]["itemDeltas"][0]["delta"], 1);
     assert_eq!(rows[0]["itemDeltas"][0]["standard"], "dotcell");
     assert_eq!(rows[0]["roles"][0], "owner_to");
-    let participants = rows[0]["participants"].as_array().unwrap();
-    assert_eq!(participants.len(), 1, "only the other party: {json:?}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row draws this party
+    // alone and names every party by its short id, the other one too, and sends no other party in
+    // full (it sent `participants`, the other party with its address); the other party's address
+    // is on the transaction's own activity, which draws every party
+    assert!(rows[0].get("participants").is_none(), "{json:?}");
+    assert_eq!(rows[0]["participantCount"], 2);
     assert_eq!(
-        participants[0]["lockHash"],
-        format!("0x{}", hex::encode(&other))
+        rows[0]["partyIds"],
+        serde_json::json!([
+            [format!("0x{}", hex::encode(&other[..20])), 0],
+            [format!("0x{}", hex::encode(prefix)), TAG_IDENTITY],
+        ])
     );
-    assert!(participants[0]["address"].is_string());
-    assert!(participants[0]["lockHashPrefix"].is_null());
+    let (status, own) = get_json(
+        &app,
+        &format!("/transactions/0x{}/activity", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    let party = &own["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(&other)));
+    assert!(party["address"].is_string(), "{own}");
+    assert!(party["lockHashPrefix"].is_null());
 }
 
 #[tokio::test]
@@ -1734,7 +1750,12 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
     batch.commit().unwrap();
     sync_address_tx_counters(&core_store, &lock_hash);
 
-    let uri = format!("/api/v1/addresses/0x{}/activities", hex::encode(&lock_hash));
+    // Re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the other
+    // parties by their short ids and sends none in full, so it reads no other party's lock; the
+    // named party is resolved where a row draws it, the global feed (two parties: both drawn).
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(&lock_hash));
+    let named_id = serde_json::json!([format!("0x{}", hex::encode(named_prefix)), 0]);
+    let named = |json: &serde_json::Value| json["data"][0]["participants"][1].clone();
 
     // Unresolved: no lock script starts with this prefix.
     let app = create_router(test_config_with_append_only(
@@ -1742,14 +1763,12 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let participant = &json["data"][0]["participants"][0];
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["partyIds"][1], named_id, "{feed}");
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let participant = named(&json);
     assert!(participant["address"].is_null(), "{json:?}");
     assert!(participant["lockHash"].is_null());
     assert_eq!(
@@ -1779,21 +1798,17 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let participant = &json["data"][0]["participants"][0];
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let participant = named(&json);
     assert_eq!(
         participant["lockHash"],
         format!("0x{}", hex::encode(resolved_hash))
     );
     assert!(participant["address"].as_str().unwrap().starts_with("ck"));
 
-    // Ambiguous: a second lock script with the same prefix is an error, never a guess.
+    // Ambiguous: a second lock script with the same prefix is an error, never a guess, where the
+    // party is drawn; the address row, which names it by its prefix alone, reads neither script.
     let mut second_hash = [0x99u8; 32];
     second_hash[31] = 0x02;
     let mut batch = StoreBatch::new(core_store.as_ref());
@@ -1814,17 +1829,15 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         append_only_store.clone(),
     ))
     .await;
-    let response = app
-        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
-        String::from_utf8_lossy(&body).contains("ambiguous"),
-        "{}",
-        String::from_utf8_lossy(&body)
+        json["message"].as_str().unwrap().contains("ambiguous"),
+        "{json}"
     );
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["partyIds"][1], named_id, "{feed}");
 }
 
 #[tokio::test]
@@ -2180,6 +2193,9 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
 
 /// A party whose lock script the store does not know is reported by its lock
 /// hash with no address — never with the hex lock hash posing as an address.
+/// Re-pinned on purpose (lane feed, ruling 14 of gate P): read where the party
+/// is drawn, the transaction's own activity; the address row names the other
+/// party by its short id and sends it in full no more.
 #[tokio::test]
 async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
     let store = test_store();
@@ -2190,18 +2206,20 @@ async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
 
     let (status, json) = get_json(
         &app,
-        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+        &format!("/transactions/0x{}/activity", hex::encode([0xaa; 32])),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let party = &json["data"][0]["participants"][0];
+    let party = &json["participants"][1];
     assert_eq!(party["lockHash"], format!("0x{}", hex::encode(other)));
     assert!(party["address"].is_null(), "{json}");
 }
 
 /// A lock script the store holds but cannot encode (a hash_type no chain
 /// allows) is store corruption, reported with the lock — not rendered as a
-/// guess or dropped.
+/// guess or dropped. Re-pinned on purpose (lane feed, ruling 14 of gate P):
+/// read where the party is drawn, the transaction's own activity; the address
+/// row reads no other party's lock any more, and answers.
 #[tokio::test]
 async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
     let store = test_store();
@@ -2222,7 +2240,7 @@ async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
 
     let (status, json) = get_json(
         &app,
-        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+        &format!("/transactions/0x{}/activity", hex::encode([0xaa; 32])),
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
@@ -2232,6 +2250,16 @@ async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
             .unwrap()
             .contains(&hex::encode(other)),
         "{json}"
+    );
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"][0]["partyIds"][1],
+        serde_json::json!([format!("0x{}", hex::encode(&other[..20])), 0])
     );
 }
 
@@ -2297,9 +2325,24 @@ async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
-    let party = &row["participants"][0];
-    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(recipient)));
-    assert_eq!(party["address"], expected, "{json}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the recipient
+    // by its short id and sends no other party in full; the recipient's address, encoded from the
+    // record, is on the pool's own row, which draws both parties
+    assert_eq!(
+        row["partyIds"][1],
+        serde_json::json!([format!("0x{}", hex::encode(&recipient[..20])), 0]),
+        "{json}"
+    );
+    let (status, pool) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
+    let recipient_hex = format!("0x{}", hex::encode(recipient));
+    let party = pool["data"][0]["activity"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["lockHash"] == recipient_hex)
+        .unwrap_or_else(|| panic!("the recipient is a party of the pool row: {pool}"));
+    assert_eq!(party["address"], expected, "{pool}");
 }
 
 // ── 2.6b: identity item deltas name their standard ──────────────────────
@@ -2632,8 +2675,11 @@ async fn object_item_deltas_name_collection_class_and_composition() {
 
     let (status, global) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{global}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): every party's item states its
+    // movement in the whole transaction, as an address's row does
     assert_eq!(
-        global["data"][0]["participants"][0]["itemDeltas"], expected,
+        global["data"][0]["participants"][0]["itemDeltas"],
+        with_movements(&expected, &["mint", "burn"]),
         "global feed"
     );
 }
@@ -2716,18 +2762,21 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         "role": "cluster",
     }]);
 
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): every party's item states its
+    // movement in the whole transaction, on every response that draws the party
+    let minted = with_movements(&expected, &["mint"]);
     for uri in ["/activities?filter=object&limit=20", "/activities?limit=20"] {
         let (status, json) = get_json(&app, uri).await;
         assert_eq!(status, StatusCode::OK, "{uri}: {json}");
         assert_eq!(
-            json["data"][0]["participants"][0]["itemDeltas"], expected,
+            json["data"][0]["participants"][0]["itemDeltas"], minted,
             "{uri}"
         );
     }
     let (status, json) = get_json(&app, "/transactions?activity_type=object&limit=20").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
-        json["data"][0]["activity"]["participants"][0]["itemDeltas"], expected,
+        json["data"][0]["activity"]["participants"][0]["itemDeltas"], minted,
         "transactions?activity_type=object"
     );
     let (status, json) = get_json(
@@ -2749,7 +2798,7 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
-        json["participants"][0]["itemDeltas"], expected,
+        json["participants"][0]["itemDeltas"], minted,
         "transaction activity: {json}"
     );
 }
@@ -2870,9 +2919,9 @@ async fn pending_object_delta_names_what_the_store_knows() {
 
 /// A pending transaction may spend a cell whose lock exists so far only as the
 /// output of another pending transaction, so no store row knows it. The mirror
-/// keeps that lock script on the record (`input_locks`); the address page must
-/// encode the sender from it exactly as it does for the record's own outputs —
-/// never `null`, never a store-derived guess.
+/// keeps that lock script on the record (`input_locks`); a row that draws the
+/// sender (the pool's own row) must encode it from there exactly as it does for
+/// the record's own outputs — never `null`, never a store-derived guess.
 #[tokio::test]
 async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
     use ckbadger_store::types::{ParticipantDelta, ParticipantId};
@@ -2929,14 +2978,24 @@ async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let row = &json["data"][0];
     assert_eq!(row["poolStatus"], "pending", "{json}");
+    // re-pinned on purpose (lane feed, ruling 14 of gate P): the address row names the sender by
+    // its short id and sends no other party in full; the sender's address, encoded from the
+    // record's spent input, is on the pool's own row, which draws both parties
+    let sender_id = serde_json::json!([format!("0x{}", hex::encode(&sender[..20])), 0]);
+    assert!(
+        row["partyIds"].as_array().unwrap().contains(&sender_id),
+        "{json}"
+    );
+    let (status, pool) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
     let sender_hex = format!("0x{}", hex::encode(sender));
-    let party = row["participants"]
+    let party = pool["data"][0]["activity"]["participants"]
         .as_array()
         .unwrap()
         .iter()
         .find(|p| p["lockHash"] == sender_hex)
-        .unwrap_or_else(|| panic!("the sender is a party of the row: {json}"));
-    assert_eq!(party["address"], expected, "{json}");
+        .unwrap_or_else(|| panic!("the sender is a party of the pool row: {pool}"));
+    assert_eq!(party["address"], expected, "{pool}");
 }
 
 #[tokio::test]
@@ -4098,4 +4157,465 @@ async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
         format!("0x{}", "5e".repeat(32)),
         "{json}"
     );
+}
+
+// ── Lane feed, ruling 14 of gate P: a row states how many parties it has, sends in full only the
+//    parties it draws, and names every party by its short id ──────────────────────────────────
+
+/// How many parties the many-party row holds: more than a Godwoken row's 600 to 770.
+const MANY_PARTIES: usize = 720;
+
+/// The lock hash of party `i` of the many-party row: its first two bytes are `i`, so the parties
+/// sort by `i` (the indexer's order) and each has its own 20-byte short id.
+fn many_party_lock(i: usize) -> [u8; 32] {
+    let mut hash = [0x5a; 32];
+    hash[0] = u8::try_from(i >> 8).unwrap();
+    hash[1] = u8::try_from(i & 0xff).unwrap();
+    hash
+}
+
+/// The many-party row's parties: the five largest CKB changes are 400 (+5,000 CKB) and 100 to 103
+/// (−1,000 CKB and a little more each); 104 is the sixth largest (−900 CKB); 7, 101 and 650 moved a
+/// token (101 is also one of the five largest); every other party changed by a few shannons.
+fn many_party_actions(tx_hash: &[u8]) -> TxActions {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_TOKEN};
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0x7e; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let participants = (0..MANY_PARTIES)
+        .map(|i| {
+            let shannons = i128::try_from(i).unwrap();
+            let ckb_delta: i128 = match i {
+                400 => 500_000_000_000,
+                100..=103 => -100_000_000_000 - shannons,
+                104 => -90_000_000_000,
+                _ => 1_000 + shannons,
+            };
+            let item_deltas = match i {
+                7 => vec![token(50, true)],
+                101 => vec![token(10, true)],
+                650 => vec![token(60, false)],
+                _ => vec![],
+            };
+            ParticipantDelta {
+                id: ParticipantId::Lock(many_party_lock(i)),
+                ckb_delta,
+                used_delta: 0,
+                tags: if item_deltas.is_empty() { 0 } else { TAG_TOKEN },
+                item_deltas,
+                roles: 0,
+            }
+        })
+        .collect();
+    TxActions {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: vec![0xb7; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    }
+}
+
+/// `["0x<the first 20 bytes of the lock hash>", tags]`: a party's short id as the route sends it.
+fn short_id(lock: &[u8; 32], tags: u16) -> serde_json::Value {
+    serde_json::json!([format!("0x{}", hex::encode(&lock[..20])), tags])
+}
+
+/// Ruling 14 of gate P (the owner, 2026-11-20): `/activities?filter=token` answered 8.25 MB for one
+/// page of 50, every field of each of a Godwoken row's 600 to 770 parties (about 680 bytes a
+/// party). A row now states its exact `participantCount`; sends in full only the parties a row
+/// draws, by one stated rule (the five largest CKB changes, the fee payer, every party whose items
+/// moved; a row of at most six parties draws them all), in the transaction's order, each once; and
+/// names EVERY party by its short id with its tags, which the page's fold counts distinct parties
+/// from. The serialized row stays within 52 bytes a party and 8 KB, which the old shape (every
+/// party in full) does not.
+#[tokio::test]
+async fn a_many_party_row_states_its_count_draws_by_the_rule_and_names_every_party() {
+    let store = test_store();
+    let tx_hash = vec![0xa7; 32];
+    let actions = many_party_actions(&tx_hash);
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+
+    assert_eq!(row["participantCount"], MANY_PARTIES, "participantCount");
+    // every party, by its short id and its tags, in the transaction's order
+    let expected_ids: Vec<serde_json::Value> = actions
+        .participants
+        .iter()
+        .enumerate()
+        .map(|(i, p)| short_id(&many_party_lock(i), p.tags))
+        .collect();
+    assert_eq!(row["partyIds"], serde_json::Value::Array(expected_ids));
+
+    // the drawn set: the five largest (100, 101, 102, 103, 400; not the sixth, 104), in the
+    // transaction's order. Re-pinned on purpose (lane feed, part 4): a party is drawn for moving
+    // an item no more (7 and 650 were; 101 is drawn as one of the five), the row states its items
+    // once instead
+    let drawn: Vec<String> = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap().to_string())
+        .collect();
+    let expected_drawn: Vec<String> = [100, 101, 102, 103, 400]
+        .iter()
+        .map(|i| format!("0x{}", hex::encode(many_party_lock(*i))))
+        .collect();
+    assert_eq!(drawn, expected_drawn);
+    // no party paid the fee alone: many changed
+    assert_eq!(row["feePayer"], serde_json::Value::Null);
+    // a drawn party's own item carries its movement in the whole transaction (−50 −10 +60)
+    let own = &row["participants"][1]["itemDeltas"][0];
+    assert_eq!(own["movement"], "transfer", "{own}");
+    // and the row states the token once: it changed hands, 60 of it, among three parties
+    assert_eq!(
+        row["items"],
+        serde_json::json!([{
+            "kind": "token",
+            "typeScriptHash": format!("0x{}", "7e".repeat(32)),
+            "symbol": null,
+            "decimals": null,
+            "movement": "transfer",
+            "amount": "60",
+            "parties": 3,
+        }])
+    );
+
+    let row_bytes = serde_json::to_string(row).unwrap().len();
+    let id_bytes = serde_json::to_string(&row["partyIds"]).unwrap().len();
+    assert!(
+        id_bytes <= 52 * MANY_PARTIES,
+        "the id list takes {id_bytes} bytes for {MANY_PARTIES} parties"
+    );
+    assert!(
+        row_bytes <= 52 * MANY_PARTIES + 8 * 1024,
+        "the row takes {row_bytes} bytes for {MANY_PARTIES} parties"
+    );
+}
+
+/// The same activity on the transaction's own page draws every party (that page lists each one's
+/// change), with the same count and ids; an address's feed states the count, every party's id and
+/// the fee payer beside the address's own changes, and sends no other party in full: its row
+/// draws the address's party alone (the route's `participants` of the other parties is gone).
+#[tokio::test]
+async fn the_transaction_page_draws_every_party_and_an_address_row_names_them_by_id() {
+    let store = test_store();
+    let tx_hash = vec![0xa8; 32];
+    let actions = many_party_actions(&tx_hash);
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let focus = many_party_lock(600);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(&focus, 10, 0, &AddrTxValue::new(1_600, true, true, 0));
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &focus);
+    let app = create_router(test_config(store)).await;
+
+    let own_uri = format!("/transactions/0x{}/activity", hex::encode(&tx_hash));
+    let (status, own) = get_json(&app, &own_uri).await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert_eq!(own["participantCount"], MANY_PARTIES, "participantCount");
+    assert_eq!(own["participants"].as_array().unwrap().len(), MANY_PARTIES);
+    assert_eq!(own["partyIds"].as_array().unwrap().len(), MANY_PARTIES);
+
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(focus));
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let row = &feed["data"][0];
+    assert_eq!(row["ckbDelta"], "1600", "ckbDelta");
+    assert_eq!(row["participantCount"], MANY_PARTIES, "participantCount");
+    assert_eq!(row["partyIds"].as_array().unwrap().len(), MANY_PARTIES);
+    assert_eq!(row["partyIds"][600], short_id(&focus, 0));
+    assert_eq!(row["feePayer"], serde_json::Value::Null);
+    assert!(
+        row.get("participants").is_none(),
+        "the address row sends no other party in full"
+    );
+}
+
+/// The fee payer (the party whose only movement is the fee): stated by the route from every party,
+/// and drawn. Only the payer's CKB changed and nothing else moved: a row of two parties names it;
+/// a row of eight draws it once though it is also the largest change, beside the four next
+/// largest (all zero: the earliest four). A party that received, an item moved, and a Nervos DAO
+/// withdrawal (whose compensation enters) leave no fee payer.
+#[tokio::test]
+async fn the_route_states_the_fee_payer_from_every_party_and_draws_it() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+
+    let party = |i: u8, ckb_delta: i128| ParticipantDelta {
+        id: ParticipantId::Lock([0x10 + i; 32]),
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags: 0,
+        roles: 0,
+    };
+    let row = |n: u8, participants: Vec<ParticipantDelta>| TxActions {
+        tx_hash: vec![0xe0 + n; 32],
+        block_hash: vec![0xc0 + n; 32],
+        block_number: 100 + i64::from(n),
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    };
+    let lock_of = |i: u8| format!("0x{}", hex::encode([0x10 + i; 32]));
+
+    let two = row(1, vec![party(0, 0), party(1, -1_000)]);
+    let eight = row(
+        2,
+        (0..8)
+            .map(|i| party(i, if i == 6 { -2_000 } else { 0 }))
+            .collect(),
+    );
+    let received = row(3, vec![party(0, -1_000), party(1, 500)]);
+    let mut moved = row(4, vec![party(0, -1_000), party(1, 0)]);
+    moved.participants[1].item_deltas = vec![ItemDelta {
+        item_id: vec![0x7e; 32],
+        kind: ItemKind::Token,
+        magnitude: 5,
+        negative: false,
+    }];
+    let mut withdrawal = row(5, vec![party(0, -1_000)]);
+    withdrawal.protocol_actions = vec![ProtocolAction::new(
+        "dao",
+        "withdraw_complete",
+        serde_json::json!({}),
+    )];
+
+    let store = test_store();
+    for actions in [&two, &eight, &received, &moved, &withdrawal] {
+        seed_named_tx(&store, actions.block_number, &actions.tx_hash, actions);
+    }
+    let app = create_router(test_config(store)).await;
+    let own =
+        |actions: &TxActions| format!("/transactions/0x{}/activity", hex::encode(&actions.tx_hash));
+    let (_, json) = get_json(&app, &own(&two)).await;
+    assert_eq!(json["feePayer"], lock_of(1), "{json}");
+    let (_, json) = get_json(&app, "/activities?limit=10").await;
+    let eight_hash = format!("0x{}", hex::encode(&eight.tx_hash));
+    let eight_row = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["txHash"] == eight_hash)
+        .unwrap();
+    assert_eq!(eight_row["feePayer"], lock_of(6), "{eight_row}");
+    let drawn: Vec<&str> = eight_row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        drawn,
+        [lock_of(0), lock_of(1), lock_of(2), lock_of(3), lock_of(6)]
+    );
+    for none in [&received, &moved, &withdrawal] {
+        let (_, json) = get_json(&app, &own(none)).await;
+        assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
+    }
+}
+
+/// Two fee rules, two questions (the lead's F3 on lane feed). The route's `feePayer` names the one
+/// party whose line is the fee exactly (a feed row says "fee" on it): a protocol step is allowed,
+/// so a Nervos DAO deposit from its owner's own address names the owner, whose one change is the
+/// fee. The transaction page's `onlyFeeMoved` (frontend/lib/tx-flows.ts) asks whether nothing but
+/// the fee moved: no protocol step, and the fee paid by one party or several, so two parties that
+/// paid the fee together are "only the fee" and name no fee payer here. The page's answer on the
+/// same two transactions is held in frontend/__tests__/lib/tx-flows.test.ts.
+#[tokio::test]
+async fn the_fee_payer_names_a_depositor_and_none_of_two_payers() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+
+    let party = |i: u8, ckb_delta: i128| ParticipantDelta {
+        id: ParticipantId::Lock([0x20 + i; 32]),
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags: 0,
+        roles: 0,
+    };
+    let row = |n: u8, participants: Vec<ParticipantDelta>| TxActions {
+        tx_hash: vec![0xf0 + n; 32],
+        block_hash: vec![0xd0 + n; 32],
+        block_number: 200 + i64::from(n),
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    };
+    let mut deposit = row(1, vec![party(0, -1_000)]);
+    deposit.protocol_actions = vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))];
+    let shared = row(2, vec![party(0, -600), party(1, -400)]);
+
+    let store = test_store();
+    for actions in [&deposit, &shared] {
+        seed_named_tx(&store, actions.block_number, &actions.tx_hash, actions);
+    }
+    let app = create_router(test_config(store)).await;
+    let own =
+        |actions: &TxActions| format!("/transactions/0x{}/activity", hex::encode(&actions.tx_hash));
+    let (_, json) = get_json(&app, &own(&deposit)).await;
+    assert_eq!(
+        json["feePayer"],
+        format!("0x{}", hex::encode([0x20; 32])),
+        "{json}"
+    );
+    let (_, json) = get_json(&app, &own(&shared)).await;
+    assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
+}
+
+// ── Lane feed, part 4 (the owner's "做", 2026-11-20): a row states its items once and draws no
+//    party for moving one ───────────────────────────────────────────────────────────────────
+
+/// How many parties the item-mover row holds, and how many of them moved token T.
+const MOVER_PARTIES: usize = 600;
+const T_MOVERS: usize = 550;
+
+/// A party of the item-mover row: its lock hash names it by `i` in its first two bytes.
+fn mover_lock(i: usize) -> [u8; 32] {
+    let mut hash = [0x3c; 32];
+    hash[0] = u8::try_from(i >> 8).unwrap();
+    hash[1] = u8::try_from(i & 0xff).unwrap();
+    hash
+}
+
+/// The item-mover row: 600 parties. 0..275 send 10 of token T and 275..550 receive 10 (a transfer
+/// among 550 parties); 560 receives 100 of M that no one gave (a mint); 561 sends 30 of B and 562
+/// receives 10 (a burn of 20, 30 moved out); 570 sends 5 of T2 from one cell and takes 3 back in
+/// another (−2 net) and 571 receives 2 (a transfer of 2, the 3 it paid itself changing no holder);
+/// the five largest CKB changes are 595 to 599; every other party changed a few shannons.
+fn mover_actions(tx_hash: &[u8]) -> TxActions {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_TOKEN};
+    let token = |id: u8, magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![id; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let participants = (0..MOVER_PARTIES)
+        .map(|i| {
+            let item_deltas = match i {
+                0..=274 => vec![token(0x71, 10, true)],
+                275..=549 => vec![token(0x71, 10, false)],
+                560 => vec![token(0x72, 100, false)],
+                561 => vec![token(0x73, 30, true)],
+                562 => vec![token(0x73, 10, false)],
+                570 => vec![token(0x74, 5, true), token(0x74, 3, false)],
+                571 => vec![token(0x74, 2, false)],
+                _ => vec![],
+            };
+            ParticipantDelta {
+                id: ParticipantId::Lock(mover_lock(i)),
+                ckb_delta: if i >= 595 {
+                    -1_000_000_000_000 - i128::try_from(i).unwrap()
+                } else {
+                    100 + i128::try_from(i).unwrap()
+                },
+                used_delta: 0,
+                tags: if item_deltas.is_empty() { 0 } else { TAG_TOKEN },
+                item_deltas,
+                roles: 0,
+            }
+        })
+        .collect();
+    TxActions {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: vec![0xb8; 32],
+        block_number: 11,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    }
+}
+
+/// Part 4 of lane feed: on Godwoken rows hundreds of parties' items move, and a row drew every
+/// one of them in full (the live token page: 2,054 parties drawn for 50 rows, about 1.4 MB). A row
+/// now draws the five largest CKB changes and the fee payer, nothing else, and states the
+/// transaction's items once, each computed from every party: what it is, its movement, the token
+/// amount moved (the larger of what holders received and what they gave, each party's change
+/// netted first) and how many parties' holdings of it changed. The transaction's own activity
+/// still draws every party; the address feed states the same items.
+#[tokio::test]
+async fn a_row_states_its_items_once_and_draws_no_party_for_moving_one() {
+    let store = test_store();
+    let tx_hash = vec![0xa9; 32];
+    let actions = mover_actions(&tx_hash);
+    seed_named_tx(&store, 11, &tx_hash, &actions);
+    let focus = mover_lock(300);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(&focus, 11, 0, &AddrTxValue::new(400, true, true, 0));
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &focus);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    let drawn: Vec<String> = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap().to_string())
+        .collect();
+    let largest: Vec<String> = (595..600)
+        .map(|i| format!("0x{}", hex::encode(mover_lock(i))))
+        .collect();
+    assert_eq!(drawn, largest, "the five largest CKB changes alone");
+
+    let token = |id: u8, movement: &str, amount: &str, parties: usize| {
+        serde_json::json!({
+            "kind": "token",
+            "typeScriptHash": format!("0x{}", hex::encode([id; 32])),
+            "symbol": null,
+            "decimals": null,
+            "movement": movement,
+            "amount": amount,
+            "parties": parties,
+        })
+    };
+    let items = serde_json::json!([
+        token(0x71, "transfer", "2750", T_MOVERS),
+        token(0x72, "mint", "100", 1),
+        token(0x73, "burn", "30", 2),
+        token(0x74, "transfer", "2", 2),
+    ]);
+    assert_eq!(row["items"], items, "the row's items, once each");
+
+    let row_bytes = serde_json::to_string(row).unwrap().len();
+    assert!(
+        row_bytes <= 52 * MOVER_PARTIES + 8 * 1024,
+        "the row takes {row_bytes} bytes for {MOVER_PARTIES} parties"
+    );
+
+    let own_uri = format!("/transactions/0x{}/activity", hex::encode(&tx_hash));
+    let (_, own) = get_json(&app, &own_uri).await;
+    assert_eq!(own["participants"].as_array().unwrap().len(), MOVER_PARTIES);
+    assert_eq!(own["items"], items);
+
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(focus));
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["data"][0]["items"], items);
 }

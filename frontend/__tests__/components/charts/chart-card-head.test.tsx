@@ -41,13 +41,21 @@ describe('the index card’s head (rule 9)', () => {
       });
       const head = readout.closest('[data-role="card-head"]') as HTMLElement;
       const caption = head.querySelector('[data-role="card-caption"]')!.textContent!;
-      const date = head.querySelector('[data-role="card-date"]')?.textContent ?? '';
+      const dated = head.querySelector('[data-role="card-date"]');
+      const date = dated?.textContent ?? '';
       expect(caption).toBe(definition.cardSubtitle);
-      // line 2: the caption and the date, 12 px
+      // Re-pinned on purpose (BRIEF-roles-rest part F, the owner's ruling at gate P, ruling 2,
+      // second question, "都同意"; it was the caption and the date both at 12 px): line 2 is the
+      // caption at 12 px, a label, and the date at 13 px, the datum
       const line2 =
         textPx(caption.length, fontPx('meta')) +
-        (date ? GAP_PX + textPx(date.length, fontPx('meta')) : 0);
+        (date ? GAP_PX + textPx(date.length, fontPx('small')) : 0);
       expect(line2, `${caption} · ${date}`).toBeLessThanOrEqual(CARD_PX);
+      if (dated) expect(dated).toHaveClass('text-small');
+      // and line 2 stands on one line height, with its date or without (the row line, 20 px:
+      // the 13 px date's 19.5 rounded up), so the plots of a row start on one line
+      const line2Box = head.querySelector('[data-role="card-caption"]')!.parentElement!;
+      expect(line2Box).toHaveClass('leading-row');
       // line 1: the name (14 px), the figure (17 px) and its unit (12 px)
       const unit = readout.querySelector('span')?.textContent ?? '';
       const figure = readout.textContent!.slice(0, readout.textContent!.length - unit.length);

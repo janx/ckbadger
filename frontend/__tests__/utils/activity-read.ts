@@ -16,10 +16,29 @@
  *   states every party's items (a feed's row), no other code when it moves none and no more codes
  *   than the items it moves. An address's row states its own items only (its parties are the
  *   others), so another party's item may name a code on a row that moves none of its own.
+ *
+ * And what the route states of every party (lane feed, ruling 14 of gate P; `activity_parties` in
+ * crates/api/src/routes/activities.rs), which a page reads and never derives: a row a fixture
+ * writes with EVERY party in full and no statement is stated as the route states such a row,
+ * its `participantCount` their count, its `partyIds` each party's id (see `partyShortId`) with its
+ * tags, its `feePayer` by the route's rule, its `items` (part 4) by the route's rule over every
+ * party; and every item of a party a row draws states its `movement` in the whole transaction where
+ * the fixture writes none, the route's rule over the parties written. A fixture that writes a
+ * statement writes all four, and they agree with its parties; an address's row (no
+ * `participants`: the route sends no other party in full) writes them, since its own party's lock
+ * hash is the page's, not the row's.
  */
 
 import type { ActivityRowData } from '@/components/activity/activity-row';
-import type { Activity, GlobalActivity } from '@/lib/api';
+import type {
+  Activity,
+  GlobalActivity,
+  ItemDelta,
+  ItemMovement,
+  ParticipantInfo,
+  PartyId,
+  RowItem,
+} from '@/lib/api';
 
 /** The Nervos DAO's type code hash (crates/indexer/src/parser/dao.rs `DAO_CODE_HASH`). */
 const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
@@ -91,8 +110,10 @@ interface RowLike {
   itemTypesUnread?: string | null;
   /** An address's row: its own items. */
   itemDeltas?: readonly ItemLike[];
-  /** A feed's row: every party's items; an address's row: the other parties, without items. */
+  /** A feed's row: the parties it draws, with their items. */
   participants?: readonly { itemDeltas?: readonly ItemLike[] }[];
+  /** The transaction's items, stated once by the route (lane feed, part 4): every one it moves. */
+  items?: readonly ItemLike[];
 }
 
 const itemKey = (item: ItemLike): string => {
@@ -107,35 +128,80 @@ const itemKey = (item: ItemLike): string => {
   return `${item.kind}:${String(id)}`;
 };
 
+/** What the route states of every party of an activity (lane feed). */
+type StatementKey = 'participantCount' | 'partyIds' | 'feePayer' | 'items';
+type Statements = Pick<GlobalActivity, StatementKey>;
+
 /**
- * The row, checked. Typed by the API's rows, a feed's, an address's, or the row component's, so a
- * literal written inside keeps its literal fields (an item's `kind`) and its own fields beyond the
- * row's (an item feed's context) as its type wants them; the checker reads it through `RowLike`.
- * Where the literal's own type cannot be inferred, the caller names it:
- * `activityRead<GlobalActivity>(…)`.
+ * A party as a fixture writes it: every field the route sends, its items' movement the route's
+ * rule where it writes none (the checker states it).
  */
-export function activityRead<R extends GlobalActivity | Activity | ActivityRowData>(checked: R): R {
-  const row = checked as RowLike;
+export type WrittenParty = Omit<ParticipantInfo, 'itemDeltas'> & {
+  itemDeltas: (ItemDelta & { movement?: ItemMovement })[];
+};
+
+/** A row as a fixture writes it: the route's statements its own, or left to the checker. */
+export type Written<R> = Omit<R, StatementKey | 'participants'> &
+  Partial<Pick<R, StatementKey & keyof R>> &
+  (R extends { participants: ParticipantInfo[] } ? { participants: WrittenParty[] } : unknown);
+
+type WrittenRow = Written<GlobalActivity> | Written<Activity> | Written<ActivityRowData>;
+
+/**
+ * The row, checked, and stated as the route states it (see the module's head). Typed by the
+ * API's rows, a feed's, an address's, or the row component's, as a fixture writes them
+ * (`Written`), so a literal written inside keeps its literal fields (an item's `kind`) and its own
+ * fields beyond the row's (an item feed's context) as its type wants them; the checker reads it
+ * through `RowLike`. Where the literal's own type cannot be inferred, the caller names it:
+ * `activityRead<Written<GlobalActivity>>(…)`. What it gives back carries the statements and its
+ * parties as the route sends them (an address's row has none: it is typed with them for the
+ * row types that do).
+ */
+export function activityRead<R extends WrittenRow>(
+  checked: R
+): R & Statements & { participants: ParticipantInfo[] } {
+  checkItemTypes(checked as RowLike);
+  const parties = stateParties(checked);
+  // an address's row: the route sends no other party in full, and the fixture states the rest
+  if (parties === null) return checked as R & Statements & { participants: ParticipantInfo[] };
+  // the row it checked as the route states it: the checker's output (the gate's reader passes a
+  // row returned here, from this body, and nowhere else)
+  return { ...checked, ...parties.statements, participants: parties.drawn } as R &
+    Statements & { participants: ParticipantInfo[] };
+}
+
+/** The item types a row states, checked by the route's rule (see the module's head). */
+function checkItemTypes(row: RowLike): void {
   const where = `activityRead: transaction ${row.txHash ?? '(no hash)'}`;
   if (row.itemTypes === undefined || row.itemTypesUnread === undefined)
     throw new Error(`${where} states no itemTypes or no itemTypesUnread: the route states both`);
   const parties = row.participants ?? [];
-  // a feed's row states every party's items; an address's states its own beside the others
-  const whole = parties.length > 0 && parties.every((p) => Array.isArray(p.itemDeltas));
+  // the transaction's items: the route's statement of them where the fixture writes it (a row
+  // draws no party for moving an item), else the parties it writes, every one of them (a
+  // statement the checker made for a row spread here is the spread row's, not this one's)
+  const statedItems =
+    row.items !== undefined && !checkerItems.has(row.items) ? row.items : undefined;
+  const whole =
+    statedItems !== undefined ||
+    (parties.length > 0 && parties.every((p) => Array.isArray(p.itemDeltas)));
   const items = new Set(
-    [...(row.itemDeltas ?? []), ...parties.flatMap((p) => p.itemDeltas ?? [])].map(itemKey)
+    [
+      ...(statedItems ?? []),
+      ...(row.itemDeltas ?? []),
+      ...parties.flatMap((p) => p.itemDeltas ?? []),
+    ].map(itemKey)
   );
   if (row.blockNumber === null) {
     if (row.itemTypes !== null || row.itemTypesUnread !== null)
       throw new Error(`${where} is a pool row: the route sends itemTypes null and no reason`);
-    return checked;
+    return;
   }
   if (row.itemTypes === null) {
     if (typeof row.itemTypesUnread !== 'string' || row.itemTypesUnread.trim() === '')
       throw new Error(`${where} states itemTypes null and no reason: the route says why`);
     if (whole && items.size === 0)
       throw new Error(`${where} reads no item and says its type is unread: only an item’s can be`);
-    return checked;
+    return;
   }
   if (row.itemTypesUnread !== null)
     throw new Error(`${where} lists its item types and gives a reason they are unread`);
@@ -165,7 +231,222 @@ export function activityRead<R extends GlobalActivity | Activity | ActivityRowDa
     throw new Error(
       `${where} names ${others} item code(s) for ${items.size} item(s) moved: each item carries one`
     );
-  return checked;
+  return;
+}
+
+/**
+ * A fixture's party's id, as the route names a party by its short id (the first 20 bytes of its
+ * lock hash, else the prefix a protocol named it by): its whole lock hash, else its prefix. A
+ * fixture's lock hashes are seeds padded with zeros, which share their first 20 bytes, so the
+ * route's 20 bytes would name every one of them alike; the page compares ids and reads nothing
+ * else of them (an id names a lock whose hash it begins, `namesLock`), and the route's own form is
+ * pinned by the API's tests (crates/api/tests/api_activities.rs).
+ */
+export function partyShortId(
+  party: { lockHash: string | null; lockHashPrefix: string | null },
+  where: string
+): string {
+  const id = party.lockHash ?? party.lockHashPrefix;
+  if (typeof id !== 'string') throw new Error(`${where}: a party with no lock hash and no prefix`);
+  return id;
+}
+
+/** The same item, by its kind and id (and, for an identity, its standard): the route's identity. */
+function sameItem(a: ItemDelta, b: ItemDelta): boolean {
+  if (a.kind === 'token') return b.kind === 'token' && a.typeScriptHash === b.typeScriptHash;
+  if (a.kind === 'object') return b.kind === 'object' && a.objectId === b.objectId;
+  return b.kind === 'identity' && a.identityId === b.identityId && a.standard === b.standard;
+}
+
+/** An item's movement over the row's items, which are every item delta of its transaction. */
+function movementOf(parties: readonly WrittenParty[], item: ItemDelta): ItemMovement {
+  let net = BigInt(0);
+  for (const p of parties)
+    for (const i of p.itemDeltas) if (sameItem(i, item)) net += BigInt(i.delta);
+  return net > BigInt(0) ? 'mint' : net < BigInt(0) ? 'burn' : 'transfer';
+}
+
+/**
+ * A row's parties with each item's movement in the whole transaction where the fixture writes
+ * none, the route's rule over the parties given, which must be every party that moved an item (a
+ * row holds every item delta of its transaction). For a test whose input is its pick of a row.
+ */
+export function withRouteMovements(
+  parties: readonly WrittenParty[],
+  anew = false
+): ParticipantInfo[] {
+  return parties.map((p) => ({
+    ...p,
+    itemDeltas: p.itemDeltas.map((i) => ({
+      ...i,
+      movement: (anew ? undefined : i.movement) ?? movementOf(parties, i),
+    })),
+  }));
+}
+
+/**
+ * The route's fee payer of a row that holds every party (`fee_payer`): not a cellbase, no Nervos
+ * DAO withdrawal completed, no item moved, and exactly one party's CKB changed, down. A fixture
+ * that writes a CKB change no route sends (not an integer, to see a page refuse it) names none:
+ * no party's change can be read, so none is the fee.
+ */
+function feePayerOf(
+  row: { isCellbase?: boolean; protocolActions?: readonly { protocol: string; action: string }[] },
+  parties: readonly WrittenParty[],
+  where: string
+): string | null {
+  if (row.isCellbase) return null;
+  if (
+    (row.protocolActions ?? []).some(
+      (a) => a.protocol === 'dao' && a.action === 'withdraw_complete'
+    )
+  )
+    return null;
+  let payer: WrittenParty | null = null;
+  for (const p of parties) {
+    if (p.itemDeltas.length > 0) return null;
+    if (!/^-?\d+$/.test(p.ckbDelta)) return null;
+    const delta = BigInt(p.ckbDelta);
+    if (delta === BigInt(0)) continue;
+    if (delta > BigInt(0) || payer !== null) return null;
+    payer = p;
+  }
+  if (payer === null) return null;
+  if (payer.lockHash === null) throw new Error(`${where}: a fee payer named by a prefix alone`);
+  return payer.lockHash;
+}
+
+/**
+ * The route's items of a row that holds every party (`ItemsMoved`, lane feed part 4): each item
+ * once in the order it first appears, each party's deltas of it netted first; `parties` the parties
+ * whose holdings changed; `movement` by what they gained against what they gave; a token's
+ * `amount` the larger of the two.
+ */
+function itemsOf(parties: readonly WrittenParty[]): RowItem[] {
+  const totals: { first: ItemDelta; received: bigint; sent: bigint; parties: number }[] = [];
+  for (const p of parties) {
+    const nets: { first: ItemDelta; net: bigint }[] = [];
+    for (const d of p.itemDeltas) {
+      const net = nets.find((n) => sameItem(n.first, d));
+      if (net) net.net += BigInt(d.delta);
+      else nets.push({ first: d, net: BigInt(d.delta) });
+    }
+    for (const { first, net } of nets) {
+      let total = totals.find((t) => sameItem(t.first, first));
+      if (!total) {
+        total = { first, received: BigInt(0), sent: BigInt(0), parties: 0 };
+        totals.push(total);
+      }
+      if (net === BigInt(0)) continue;
+      if (net > BigInt(0)) total.received += net;
+      else total.sent -= net;
+      total.parties += 1;
+    }
+  }
+  return totals.map(({ first, received, sent, parties }) => {
+    const movement: ItemMovement = received > sent ? 'mint' : received < sent ? 'burn' : 'transfer';
+    const { delta: _delta, ...named } = first as ItemDelta & { movement?: ItemMovement };
+    delete (named as { movement?: ItemMovement }).movement;
+    const amount = (received > sent ? received : sent).toString();
+    return (
+      named.kind === 'token'
+        ? { ...named, movement, parties, amount }
+        : { ...named, movement, parties }
+    ) as RowItem;
+  });
+}
+
+/**
+ * The statements the checker stated for a row that writes every party, by the id list it made: a
+ * fixture that spreads such a row and writes other parties over it carries them stale (and its
+ * items' movements), and is stated again from its own parties (what it writes anew of the
+ * statements stands).
+ */
+const stated = new WeakMap<object, Omit<Statements, 'partyIds'>>();
+
+/** The item statements the checker made, which a row spread from a stated one carries stale. */
+const checkerItems = new WeakSet<object>();
+
+/**
+ * What the route states of every party of a row (see the module's head): the parties it draws,
+ * their items' movement stated, and its statements; null for an address's row, which states them
+ * itself and draws no party.
+ */
+function stateParties(
+  written: WrittenRow
+): { drawn: ParticipantInfo[]; statements: Statements } | null {
+  const row = written as Partial<Statements> & {
+    txHash?: string;
+    ckbDelta?: string;
+    isCellbase?: boolean;
+    protocolActions?: readonly { protocol: string; action: string }[];
+    participants?: WrittenParty[];
+  };
+  const where = `activityRead: transaction ${row.txHash ?? '(no hash)'}`;
+  const written4 = [row.participantCount, row.partyIds, row.feePayer, row.items].filter(
+    (s) => s !== undefined
+  );
+  if (written4.length !== 0 && written4.length !== 4)
+    throw new Error(
+      `${where} states some of participantCount, partyIds, feePayer and items: the route states all four`
+    );
+  if (row.ckbDelta !== undefined) {
+    // an address's row: its own changes are the row's; its own party's id is the page's, so the
+    // fixture states what the route states of every party; it sends no other party in full
+    if (row.participants !== undefined)
+      throw new Error(
+        `${where} is an address's row and draws parties: the route sends none but the address's own changes`
+      );
+    if (written4.length === 0)
+      throw new Error(
+        `${where} is an address's row and states no participantCount, partyIds, feePayer or items`
+      );
+    if (row.partyIds!.length !== row.participantCount)
+      throw new Error(`${where} names ${row.partyIds!.length} parties of ${row.participantCount}`);
+    return null;
+  }
+  const parties = row.participants;
+  if (parties === undefined) throw new Error(`${where} is no address's row and draws no party`);
+  const spread = row.partyIds === undefined ? undefined : stated.get(row.partyIds);
+  // a row written over a stated one carries its parties' movements stale too: stated again
+  const drawn = withRouteMovements(parties, spread !== undefined);
+  if (written4.length === 4 && spread === undefined) {
+    const ids = row.partyIds as PartyId[];
+    if (ids.length !== row.participantCount || drawn.length > ids.length)
+      throw new Error(
+        `${where} draws ${drawn.length} parties and names ${ids.length} of ${row.participantCount}`
+      );
+    return {
+      drawn,
+      statements: {
+        participantCount: row.participantCount!,
+        partyIds: ids,
+        feePayer: row.feePayer!,
+        items: row.items!,
+      },
+    };
+  }
+  const partyIds = parties.map((p): PartyId => [partyShortId(p, where), p.tags]);
+  const own = {
+    participantCount: parties.length,
+    feePayer: feePayerOf(row, parties, where),
+    items: itemsOf(parties),
+  };
+  stated.set(partyIds, own);
+  checkerItems.add(own.items);
+  return {
+    drawn,
+    statements: {
+      partyIds,
+      // over a spread row, a statement it writes anew stands
+      participantCount:
+        spread && row.participantCount !== spread.participantCount
+          ? row.participantCount!
+          : own.participantCount,
+      feePayer: spread && row.feePayer !== spread.feePayer ? row.feePayer! : own.feePayer,
+      items: spread && row.items !== spread.items ? row.items! : own.items,
+    },
+  };
 }
 
 /**

@@ -153,6 +153,12 @@ describe('ErrorPageShell', () => {
     // a link and a value, the reading ink
     expect(inkOf(within(caption).getByRole('link', { name: '#1,000,000' }))).toBe('text-text');
     expect(inkOf(within(caption).getByText('0xabc123de…34abcd'))).toBe('text-text');
+    // BRIEF-roles-rest part B: a link is never 12 px, and the hash beside it is a value with it:
+    // both 13 px in the caption's 12 px (they took its text-meta)
+    expect(
+      within(caption).getByRole('link', { name: '#1,000,000' }).closest('.text-small')
+    ).not.toBeNull();
+    expect(within(caption).getByText('0xabc123de…34abcd').closest('.text-small')).not.toBeNull();
     // no WebGL, no CSS night, no 256 squares
     expect(document.querySelector('canvas, .error-night, .error-night-bits')).toBeNull();
   });
@@ -608,6 +614,12 @@ describe('the caption under the 404 seal never opens a line with a separator', (
   interface Unit {
     /** The text drawn, the block number at its widest. */
     text: string;
+    /**
+     * Its width, each character at the step of the element that draws it (BRIEF-roles-rest part
+     * B: the figures after the words are 13 px in the caption's 12 px, so a unit is not measured
+     * at the caption's step alone), white space collapsed as `text` is.
+     */
+    px: number;
     /** A line may break before it (a space precedes it). */
     breakBefore: boolean;
     /** An inline Dotted list: one box on a line, its separators its own (hidden at a line start). */
@@ -630,6 +642,33 @@ describe('the caption under the 404 seal never opens a line with a separator', (
         ? (node.textContent ?? '')
         : Array.from(node.childNodes).map(drawn).join('');
   /**
+   * The width of what an element draws at a window: each character at its own element's step and
+   * tracking (`textRunPx`), the block link's number at its widest, a run of white space one space
+   * at the step of its first, and none at either end, as `drawn(…).replace(/\s+/g, ' ').trim()`.
+   */
+  const drawnPx = (node: Node, viewport: number): number => {
+    const chars: { ch: string; px: number }[] = [];
+    const walk = (n: Node, parent: Element) => {
+      if (isBlockLink(n)) {
+        for (const ch of WIDEST_BLOCK_NUMBER) chars.push({ ch, px: textRunPx(ch, n, viewport) });
+        return;
+      }
+      if (n.nodeType === 3) {
+        for (const ch of n.textContent ?? '')
+          chars.push({ ch, px: textRunPx(/\s/.test(ch) ? ' ' : ch, parent, viewport) });
+        return;
+      }
+      n.childNodes.forEach((c) => walk(c, n as Element));
+    };
+    walk(node, node.nodeType === 3 ? node.parentElement! : (node as Element));
+    const collapsed = chars.filter(
+      (c, i) => !(/\s/.test(c.ch) && i > 0 && /\s/.test(chars[i - 1].ch))
+    );
+    while (collapsed.length && /\s/.test(collapsed[0].ch)) collapsed.shift();
+    while (collapsed.length && /\s/.test(collapsed[collapsed.length - 1].ch)) collapsed.pop();
+    return collapsed.reduce((sum, c) => sum + c.px, 0);
+  };
+  /**
    * The caption's units in order at a window: words, and the boxes a line never breaks inside,
    * each element read by its display at the window (review rules-fixes-tests NOTE-4): a box hidden
    * there counts nothing; a separated list is one inline box (inline-flex) or a block; any other
@@ -646,7 +685,13 @@ describe('the caption under the 404 seal never opens a line with a separator', (
           if (piece === '') continue;
           if (/^\s+$/.test(piece)) space = true;
           else {
-            out.push({ text: piece, breakBefore: space, dotted: false, block: false });
+            out.push({
+              text: piece,
+              px: textRunPx(piece, node.parentElement!, viewport),
+              breakBefore: space,
+              dotted: false,
+              block: false,
+            });
             space = false;
           }
         }
@@ -668,7 +713,13 @@ describe('the caption under the 404 seal never opens a line with a separator', (
           throw new Error(
             `${viewport}: the block link holds words ("${own}"), the reader counts it as one number`
           );
-        out.push({ text: WIDEST_BLOCK_NUMBER, breakBefore: space, dotted: false, block: false });
+        out.push({
+          text: WIDEST_BLOCK_NUMBER,
+          px: textRunPx(WIDEST_BLOCK_NUMBER, el, viewport),
+          breakBefore: space,
+          dotted: false,
+          block: false,
+        });
         space = false;
         return;
       }
@@ -677,6 +728,7 @@ describe('the caption under the 404 seal never opens a line with a separator', (
         if (/^\s/.test(text)) space = true;
         out.push({
           text: text.trim(),
+          px: drawnPx(el, viewport),
           breakBefore: space || block,
           dotted: dotted && !block,
           block,
@@ -701,7 +753,7 @@ describe('the caption under the 404 seal never opens a line with a separator', (
     let x = 0;
     let closed = false;
     for (const unit of units(caption, viewport)) {
-      const w = px(unit.text);
+      const w = unit.px;
       if (w > width)
         throw new Error(`${viewport}: "${unit.text}" (${w} px) is wider than its ${width} px line`);
       const line = out[out.length - 1];
@@ -829,13 +881,19 @@ describe('the caption under the 404 seal never opens a line with a separator', (
   });
 
   // Where the caption breaks, at the widest block number: the words (29 glyphs at 12 px, 208.8),
-  // then "#99,999,999 · 0xabc123de…34abcd" (31 glyphs, 223.2) as one box; one line from 439.2 px.
+  // then "#99,999,999 · 0xabc123de…34abcd" as one box; one line from 456 px. Re-pinned on purpose
+  // (BRIEF-roles-rest part B; the box was 31 glyphs at 12 px, 223.2, one line from 439.2): the
+  // block link and its hash read at 13 px, the separator at the caption's 12, so the box is
+  // 11 × 7.8 + 3 × 7.2 + 17 × 7.8 = 85.8 + 21.6 + 132.6 = 240 px, inside the stone's 256 px column
+  // and a 288 px line at 320; the lines at every window stay as they were.
   it('breaks where the arithmetic says: before the block number, or nowhere', async () => {
     const node = await caption();
     const words = 'the seal of the newest block,';
     const figures = `${WIDEST_BLOCK_NUMBER} · 0xabc123de…34abcd`;
     expect(textRunPx(words, node, 1280)).toBeCloseTo(208.8, 10);
-    expect(textRunPx(figures, node, 1280)).toBeCloseTo(223.2, 10);
+    const box = units(node, 1280).find((u) => u.dotted)!;
+    expect(box.text).toBe(figures);
+    expect(box.px).toBeCloseTo(240, 10);
     const table = VIEWPORTS.map((viewport) => ({
       viewport,
       box: captionPx(viewport),

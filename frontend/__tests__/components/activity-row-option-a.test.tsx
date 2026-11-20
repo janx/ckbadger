@@ -8,9 +8,9 @@ import { namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address'
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
-import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import type { ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { activityRead, ITEM_TYPE, type WrittenParty } from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 const TX = '0x8a39e8e3' + 'ab'.repeat(26) + 'd67305';
@@ -20,7 +20,7 @@ const CKB = (whole: string) => `${whole}00000000`;
  * A fixture party on a real address (B4: a row reads the lock off the address): the default lock
  * unless its `lockKind` names another, then a lock of its own.
  */
-function party(tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo {
+function party(tail: string, over: Partial<WrittenParty> = {}): WrittenParty {
   const named = over.lockKind !== undefined && over.lockKind !== null;
   return {
     address: seededAddress(tail, named ? namedLockCodeHash(over.lockKind!) : undefined),
@@ -40,10 +40,7 @@ function token(symbol: string, delta: string, hash: string): ItemDelta {
   return { kind: 'token', typeScriptHash: hash, delta, symbol, decimals: 8 } as ItemDelta;
 }
 
-function row(
-  participants: ParticipantInfo[],
-  over: Partial<ActivityRowData> = {}
-): ActivityRowData {
+function row(participants: WrittenParty[], over: Partial<ActivityRowData> = {}): ActivityRowData {
   return activityRead({
     txHash: TX,
     blockNumber: 20904081,
@@ -130,7 +127,7 @@ const swap = row(
 
 const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-role="participant"]')];
 /** The line of a party, found by its address as the row writes it (its last 8 characters). */
-const lineOf = (c: HTMLElement, p: ParticipantInfo) =>
+const lineOf = (c: HTMLElement, p: WrittenParty) =>
   lines(c).find((l) => l.textContent?.includes(p.address!.slice(-8))) as HTMLElement;
 const head = (c: HTMLElement) => c.querySelector('[data-role="row-head"]') as HTMLElement;
 

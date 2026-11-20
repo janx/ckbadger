@@ -213,6 +213,8 @@ describe('script code evidence', () => {
     ).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByRole('button', { name: /2024-01-02 · deployed · #10/ })[0]);
     expect(screen.getByText(/Never signed: every indexed cell/)).toBeInTheDocument();
+    // BRIEF-roles-rest part G: the holder's state, a sentence of the fact: the reading ink
+    expect(screen.getByText(/Never signed: every indexed cell/)).toHaveClass('text-text');
     expect(markers.some((marker) => marker.custody.witnessState === 'unavailable')).toBe(true);
     expect(
       screen.getByLabelText('Custodian band aligned with capacity chart days')

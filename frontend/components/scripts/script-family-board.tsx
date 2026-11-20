@@ -41,7 +41,7 @@ import {
   HISTORY_PLOT_HEIGHT,
   HeldSentence,
 } from '@/components/asset/asset-history';
-import { unitNode, unitText } from '@/components/ui/units';
+import { NoteCount, unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { charPx } from '@/lib/type-metrics';
 import { assertHeldSeries, heldPoint } from '@/lib/held-point';
@@ -273,10 +273,15 @@ export function ScriptHeroMetrics({
       {code && (
         <HeroMetric
           label="Code"
+          // a metric's note is quiet (R13); its values read in the reading ink, its label words stay
+          // quiet (BRIEF-roles-rest part A): the day, the tx, a holder's state
           note={
             code === 'upgradable' && last && lineage!.length > 1 ? (
               <>
-                last replaced <Utc8Date timestamp={last.timestamp} />
+                last replaced{' '}
+                <span className="text-text">
+                  <Utc8Date timestamp={last.timestamp} />
+                </span>
               </>
             ) : undefined
           }
@@ -290,7 +295,11 @@ export function ScriptHeroMetrics({
       {last && (
         <HeroMetric
           label="Code cell held by"
-          note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
+          note={
+            last.custody.witnessState === 'never_signed' ? (
+              <span className="text-text">has never signed</span>
+            ) : undefined
+          }
         >
           <Link look="key" href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}>
             {/* a hero tile: tight below sm, the row size from it (R9) */}
@@ -306,16 +315,18 @@ export function ScriptHeroMetrics({
               deployed in{' '}
               {/* the deploying transaction opened at the code cell it created, which its page then
                   never folds away (lane P2's third round, item 16: it linked the transaction bare) */}
-              <Link
-                look="inline"
-                href={transactionAtCellHref(deployment.codeCellTxHash, {
-                  txHash: deployment.codeCellTxHash,
-                  index: deployment.codeCellOutputIndex,
-                })}
-                title={deployment.codeCellTxHash}
-              >
-                <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
-              </Link>
+              <span className="text-text">
+                <Link
+                  look="inline"
+                  href={transactionAtCellHref(deployment.codeCellTxHash, {
+                    txHash: deployment.codeCellTxHash,
+                    index: deployment.codeCellOutputIndex,
+                  })}
+                  title={deployment.codeCellTxHash}
+                >
+                  <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
+                </Link>
+              </span>
             </>
           }
         >
@@ -672,7 +683,7 @@ export function ScriptHistoryReading({
           ]}
         />
       ) : (
-        <span className="text-text-dim">No capacity history in this range.</span>
+        <span className="text-text">No capacity history in this range.</span>
       )}
     </div>
   );
@@ -934,8 +945,11 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
         ? 'as their type'
         : 'as lock or type';
   return (
+    // a line of values: the count, the script's name and the amounts read in the reading ink, the
+    // words between them quiet (BRIEF-roles-rest part G: the count and the name stood quiet)
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
-      {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
+      <NoteCount count={family.liveCellsCount} singular="live cell" /> use{' '}
+      <span className="text-text">{family.name}</span> {role} ·{' '}
       <CkbAmount
         form="summary"
         shannons={BigInt(family.ownedCapacitySum)}

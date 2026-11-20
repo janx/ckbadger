@@ -10,6 +10,7 @@ import {
   dotcellProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 const rec = (key: string, valueUtf8: string | null, valueHex = '0x00') => ({
   key,
@@ -215,6 +216,12 @@ describe('DotcellRoles sub-lines (R-5)', () => {
     expect(within(section).getByLabelText('Manager · edits its records')).toHaveTextContent(
       /since \d{4}-\d{2}-\d{2} · made the last 2 record edits$/
     );
+    // BRIEF-roles-rest part E: "since" is a label; the day and the card's statement are values,
+    // the reading ink (the line was quiet whole)
+    const owner = within(section).getByLabelText('Owner · holds the name');
+    expect(inkOf(within(owner).getByText('2026-09-23'))).toBe(READING);
+    expect(inkOf(within(owner).getByText('this address holds 1 cell'))).toBe(READING);
+    expect(inkOf(within(owner).getByText(/^since/))).toBe(QUIET);
   });
   it('names the earlier manager who made the last edit, and a name never edited', () => {
     const earlier = { ...managerParty, hashPrefix: '0x' + '57'.repeat(20), address: 'ckb1old' };
@@ -332,6 +339,8 @@ describe('AmongDidCkb (ID-D3)', () => {
     expect(promptNote(heading)).toContainElement(
       within(section).getByRole('link', { name: 'All 114' })
     );
+    // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+    expect(within(section).getByRole('link', { name: 'All 114' })).toHaveClass('text-small');
     const mine = within(section).getByText('web5.bbs.fans').closest('li')!;
     expect(mine).toHaveTextContent('99');
     expect(mine).toHaveTextContent('this one');

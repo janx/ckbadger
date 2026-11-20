@@ -286,7 +286,9 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
       // re-pinned on purpose (the lead's final round, item 2): a folded head names its item types
       // first and six names at most, as a row's head does; the eight were "… · lock
       // 0xede19974…56f0ba · Godwoken Withdrawal Lock · lock 0xff022d55…d32733"
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 149 participants',
+      // re-pinned on purpose (ruling 6 of gate P): the run counts its tokens too, the six sets'
+      // five (USDC, USDC|bsc, dCKB, WBTC, BTCB|bsc), each by its type script
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 149 participants · 5 tokens',
     ]);
   });
 

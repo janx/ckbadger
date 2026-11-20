@@ -6,7 +6,7 @@ import {
   missingAddressWords,
   orphanFateWords,
   parseForkRoute,
-  uncleDistanceWords,
+  uncleDistanceParts,
   uncleRateFigure,
 } from '@/lib/fork-format';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
@@ -126,14 +126,23 @@ describe('blockClock', () => {
   });
 });
 
-describe('uncleDistanceWords', () => {
+// Re-pinned on purpose (BRIEF-roles-rest part G; it was uncleDistanceWords, which joined the parts
+// into one string): the count is apart from its words so the forks page reads it in the reading ink;
+// the words the board reads are the same, joined here as the page joins them
+describe('uncleDistanceParts', () => {
+  const read = (parts: { count: number; words: string }[]) =>
+    parts.map((p) => `${p.count.toLocaleString('en-US')} ${p.words}`).join(', ');
   it('reads uncle distances the board’s way', () => {
     expect(
-      uncleDistanceWords([
-        { distance: 1, count: 51 },
-        { distance: 2, count: 215 },
-      ])
+      read(
+        uncleDistanceParts([
+          { distance: 1, count: 51 },
+          { distance: 2, count: 215 },
+        ])
+      )
     ).toBe('51 one block later, 215 two blocks later');
-    expect(uncleDistanceWords([{ distance: 12, count: 1 }])).toBe('1 12 blocks later');
+    expect(uncleDistanceParts([{ distance: 12, count: 1 }])).toEqual([
+      { count: 1, words: '12 blocks later' },
+    ]);
   });
 });

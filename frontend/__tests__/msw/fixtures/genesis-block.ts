@@ -1,10 +1,13 @@
-import type { Block, BlockProposalFees, GlobalActivity, Transaction } from '@/lib/api';
+import type { Block, BlockProposalFees, GlobalActivity, PartyId, Transaction } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 import { activityRead } from '@/__tests__/utils/activity-read';
+import genesisCellbaseParties from '@/__tests__/fixtures/genesis-cellbase-parties.json';
 
 // Mainnet's genesis block as the API serves it (GET /blocks/0 and the page's other reads, captured
-// 2026-11-12 from a synced mainnet node), verbatim but for one cut: the cellbase activity keeps the
-// first 3 of its 667 participants. What the chain's first block is: epoch "0/0" (number, index and
+// 2026-11-12 from a synced mainnet node), verbatim but for the cellbase activity's parties: the
+// capture kept the first 3 of its 667; it states them as the route sends them since lane feed part
+// 4 (every party by its short id, the five largest CKB changes drawn), derived from the chain spec
+// and checked against the capture (fixtures/genesis-cellbase-parties.json says how). What the chain's first block is: epoch "0/0" (number, index and
 // length 0; its header's packed epoch is 0x0), no miner, no reward, no parent timestamp, a parent
 // hash of 32 zero bytes, and 1,236,271 bytes against a 597,000-byte block limit. Its proposals
 // read is `[]`.
@@ -144,7 +147,7 @@ export const genesisTransactions: Transaction[] = [
   },
 ];
 
-/** GET /activities?limit=20&blockNumber=0&order=asc (the cellbase's participants cut to 3). */
+/** GET /activities?limit=20&blockNumber=0&order=asc (the cellbase's parties as the route draws them). */
 export const genesisActivities: GlobalActivity[] = [
   activityRead({
     txHash: '0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c',
@@ -179,44 +182,14 @@ export const genesisActivities: GlobalActivity[] = [
     lockCalls: [],
     itemTypes: [],
     itemTypesUnread: null,
-    participants: [
-      {
-        address:
-          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfwcwjlksyck9853p64tljcm9nv4vkx5ccj6almg',
-        lockHash: '0x0034bc751826a545fad9d1d01f34ebe2088901677d84d7df1be89baed630ecbd',
-        lockHashPrefix: null,
-        lockKind: 'Default Lock',
-        roles: [],
-        ckbDelta: '681231900000000',
-        usedDelta: '6100000000',
-        itemDeltas: [],
-        tags: 32,
-      },
-      {
-        address:
-          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0lrjamydluk523hgfk44x29rrxa6dcy5qt86gez',
-        lockHash: '0x0063fb7121443186655fc0f9b63f8786f23f44836a06db7601317b64ff3a5240',
-        lockHashPrefix: null,
-        lockKind: 'Default Lock',
-        roles: [],
-        ckbDelta: '11200000000000000',
-        usedDelta: '6100000000',
-        itemDeltas: [],
-        tags: 32,
-      },
-      {
-        address:
-          'ckb1qpw9q60tppt7l3j7r09qcp7lxnp3vcanvgha8pmvsa3jplykxn32sqf0838rsggkhkzdltufeyfrql9peezzymhgqvqggqcgqusq69elcn',
-        lockHash: '0x00b1cf480ffff2bc27a0d732be32116f08c011703d59fe610d4da176369b4720',
-        lockHashPrefix: null,
-        lockKind: 'Default Multisig',
-        roles: [],
-        ckbDelta: '2800000000000000',
-        usedDelta: '6900000000',
-        itemDeltas: [],
-        tags: 32,
-      },
-    ],
+    // the five largest of its 667 parties (the burn cell's zero lock and four multisig locks), and
+    // every party by its short id: a cellbase of many outputs, the only one (CKB's consensus allows
+    // a later cellbase one output at most)
+    participants: genesisCellbaseParties.participants,
+    participantCount: genesisCellbaseParties.participantCount,
+    partyIds: genesisCellbaseParties.partyIds as PartyId[],
+    feePayer: null,
+    items: [],
   }),
   activityRead({
     txHash: '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c',

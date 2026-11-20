@@ -86,10 +86,11 @@ it('shows exact RGB++ Bitcoin evidence with the lock transition', () => {
 });
 
 it('interprets an uncommitted body without fabricated block evidence', () => {
-  const { participants, protocolActions, typeCalls, lockCalls, isCellbase } =
+  // re-pinned on purpose (lane feed, part 4): a body's interpretation reads its stated items
+  const { participants, protocolActions, typeCalls, lockCalls, isCellbase, items } =
     feedSamples.objectTransfer;
   expect(
-    activityHeadline({ participants, protocolActions, typeCalls, lockCalls, isCellbase })
+    activityHeadline({ participants, protocolActions, typeCalls, lockCalls, isCellbase, items })
   ).toBe('Object transfer');
 });
 
@@ -125,6 +126,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       itemTypes: [],
       parties: [],
+      tokens: null,
     })
   ).toBe(
     runKey({
@@ -139,6 +141,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       itemTypes: [],
       parties: [],
+      tokens: null,
     })
   );
 });

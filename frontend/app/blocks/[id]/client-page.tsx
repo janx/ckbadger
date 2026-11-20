@@ -14,6 +14,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ActivityRow } from '@/components/activity/activity-row';
+import { participantCount } from '@/lib/activity-parties';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { BlockPosition } from '@/components/blocks/block-position';
@@ -1044,31 +1045,35 @@ function UncleRow({
  * "Cellbase  reward for #N, to ckb1…xxxxxxxx" (R2b-a 1, BA-12; lane P1, the plan's P1 paragraph):
  * the block whose reward this cellbase pays, and to whom — its parties, the cells it creates, in
  * the row form — so its amount is not read as this block's own reward, which the status strip
- * states. The words are the row's statement, the reading ink; its links are inside the line.
+ * states. The words are the row's statement, the reading ink; its links are inside the line. A
+ * cellbase that pays no block's reward (block 0's) is headed "Cellbase" alone: its row says whom
+ * it pays.
  */
 function CellbaseHeadline({
   block,
   activity,
 }: {
   block: Pick<Block, 'cellbasePays'>;
-  activity: Pick<GlobalActivity, 'participants'>;
+  activity: Pick<GlobalActivity, 'txHash' | 'participants' | 'participantCount'>;
 }) {
+  const pays = block.cellbasePays;
+  const paid = pays ? partiesPaid(activity) : null;
   return (
     <>
       Cellbase
-      {block.cellbasePays && (
+      {pays && paid && (
         <span className="text-text font-normal">
           {' '}
           reward for{' '}
-          <Link look="inline" href={`/blocks/${block.cellbasePays.hash}`}>
-            {formatBlockNumber(block.cellbasePays.number)}
+          <Link look="inline" href={`/blocks/${pays.hash}`}>
+            {formatBlockNumber(pays.number)}
           </Link>
-          {activity.participants.length > 0 && (
+          {paid.length > 0 && (
             <>
               , to{' '}
-              {activity.participants.map((party, i) => (
+              {paid.map((party, i) => (
                 <Fragment key={party.lockHash ?? party.lockHashPrefix ?? i}>
-                  {i > 0 && (i === activity.participants.length - 1 ? ' and ' : ', ')}
+                  {i > 0 && (i === paid.length - 1 ? ' and ' : ', ')}
                   <ParticipantRefView participant={party} size="row" compact quiet look="inline" />
                 </Fragment>
               ))}
@@ -1078,4 +1083,24 @@ function CellbaseHeadline({
       )}
     </>
   );
+}
+
+/**
+ * Every party a cellbase that pays a block's reward pays, which its headline names. Every cellbase
+ * after block 0 has one output at most (CKB's consensus: the cellbase verifier refuses more), so
+ * it has one party at most, and the route draws every party of a row of at most six: a row that
+ * draws fewer than it counts is refused. Block 0's cellbase is outside this: consensus verifies no
+ * genesis block, and its 671 outputs issue the chain's first CKB to 667 parties. It pays no
+ * block's reward (`cellbasePays` is null), so this names none of them, and its row draws five of
+ * them as any row of more than six does, the others on its transaction's page.
+ */
+function partiesPaid(
+  activity: Pick<GlobalActivity, 'txHash' | 'participants' | 'participantCount'>
+): GlobalActivity['participants'] {
+  const count = participantCount(activity);
+  if (count !== activity.participants.length)
+    throw new Error(
+      `cellbase ${activity.txHash} pays a block's reward: it draws ${activity.participants.length} of its ${count} parties, where it has one output at most`
+    );
+  return activity.participants;
 }

@@ -224,9 +224,14 @@ export const addressActivitiesFixture: Activity[] = [
     itemTypes: [],
     itemTypesUnread: null,
     protocolActions: [],
-    participants: [],
     roles: [],
     tags: 0,
+    // the one party, this address, by its short id; it received, so it paid no fee alone
+    participantCount: 1,
+    partyIds: [[addressHash.slice(0, 42), 0]],
+    feePayer: null,
+    // it moved no item (lane feed, part 4: the route states the transaction's items once)
+    items: [],
   }),
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [

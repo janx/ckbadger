@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
@@ -22,19 +22,25 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { WIDEST_BLOCK_NUMBER, WIDEST_SIBLING_GAP, shortChars } from '@/lib/list-bounds';
+import {
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_SIBLING_GAP,
+  shortChars,
+} from '@/lib/list-bounds';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
   forkEventHref,
   missingAddressWords,
   orphanFateWords,
-  uncleDistanceWords,
+  uncleDistanceParts,
   uncleRateFigure,
 } from '@/lib/fork-format';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
-import { unitNode, unitText } from '@/components/ui/units';
+import { NoteCount, unitNode, unitText } from '@/components/ui/units';
+import { NoBreak } from '@/components/ui/no-break';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
 
@@ -96,18 +102,46 @@ function nodeFigures(overview: Overview): TopicFigure[] {
   ];
 }
 
-/** "since 2026-09-25, 1 of them more than one block deep" — the node's own record (R2b-b). */
-function switchedSub(record: ForkNodeRecord): string {
-  const parts = [
-    record.observedSince ? `since ${formatUtc8Date(record.observedSince)}` : 'not live yet',
+/**
+ * "since 2026-09-25, 1 of them more than one block deep" — the node's own record (R2b-b). A note,
+ * quiet (R13); its values read in the reading ink, the day, the counts and "not live yet", its
+ * label words quiet (BRIEF-roles-rest part G).
+ */
+function switchedSub(record: ForkNodeRecord): ReactNode {
+  const parts: ReactNode[] = [
+    record.observedSince ? (
+      <>
+        since{' '}
+        <span className="text-text">
+          <NoBreak>{formatUtc8Date(record.observedSince)}</NoBreak>
+        </span>
+      </>
+    ) : (
+      <span className="text-text">not live yet</span>
+    ),
   ];
   if (record.switchesDeeperThanOneBlock > 0)
     parts.push(
-      `${record.switchesDeeperThanOneBlock.toLocaleString('en-US')} of them more than one block deep`
+      <>
+        <span className="text-text">
+          {record.switchesDeeperThanOneBlock.toLocaleString('en-US')}
+        </span>{' '}
+        of them more than one block deep
+      </>
     );
   if (record.deepDetections > 0)
-    parts.push(`${formatCount(record.deepDetections, 'deep detection')}`);
-  return parts.join(', ');
+    parts.push(<NoteCount count={record.deepDetections} singular="deep detection" />);
+  return joinParts(parts, ', ');
+}
+
+/** Parts of a note joined by a separator, each keyed by its place. */
+function joinParts(parts: readonly ReactNode[], separator: string): ReactNode {
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 && separator}
+      {part}
+    </Fragment>
+  ));
 }
 
 function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
@@ -115,25 +149,36 @@ function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
   // Nothing dropped yet: no orphan figures at all, rather than "0 uncles" and "0 of 0".
   if (!fates || fates.blocks.total === 0) return [];
   const { blocks, userTransactions: txs } = fates;
+  // the note's counts read in the reading ink, their words quiet (BRIEF-roles-rest part G)
+  const counted = (count: number, words: string) => (
+    <>
+      <span className="text-text">{count.toLocaleString('en-US')}</span> {words}
+    </>
+  );
   const rest = [
-    blocks.canonicalNow > 0 &&
-      `${blocks.canonicalNow.toLocaleString('en-US')} back on the main chain`,
-    blocks.notIncludedAsUncle > 0 &&
-      `${blocks.notIncludedAsUncle.toLocaleString('en-US')} never taken as an uncle`,
-    blocks.uncleFatePending > 0 &&
-      `${blocks.uncleFatePending.toLocaleString('en-US')} can still be taken`,
+    blocks.canonicalNow > 0 && counted(blocks.canonicalNow, 'back on the main chain'),
+    blocks.notIncludedAsUncle > 0 && counted(blocks.notIncludedAsUncle, 'never taken as an uncle'),
+    blocks.uncleFatePending > 0 && counted(blocks.uncleFatePending, 'can still be taken'),
   ].filter(Boolean);
+  const distances = uncleDistanceParts(blocks.uncleDistances).map(({ count, words }) =>
+    counted(count, words)
+  );
   return [
     {
       label: 'Its orphans',
       value: formatCount(blocks.includedAsUncle, 'uncle'),
-      sub: [uncleDistanceWords(blocks.uncleDistances), ...rest].filter(Boolean).join(' · '),
+      sub: joinParts([...(distances.length ? [joinParts(distances, ', ')] : []), ...rest], ' · '),
     },
     {
       label: 'Orphaned transactions',
       value: `${txs.committedLater.toLocaleString('en-US')} of ${txs.total.toLocaleString('en-US')}`,
+      // a statement when nothing was dropped, the reading ink; else the label of the figure
       sub:
-        txs.total === 0 ? 'the dropped blocks held only cellbases' : 'committed in a later block',
+        txs.total === 0 ? (
+          <span className="text-text">the dropped blocks held only cellbases</span>
+        ) : (
+          'committed in a later block'
+        ),
     },
   ];
 }
@@ -259,7 +304,7 @@ function Shape({ event }: { event: ReorgEvent }) {
 function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactNode {
   if (event.eventType === 'deep') return <span className="text-text-dim">—</span>;
   if (!event.preview)
-    return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
+    return <span className="text-text">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
   const {
     oldMinerLockHash: dropped,
     oldMinerAddress,
@@ -324,14 +369,16 @@ function Fate({ event }: { event: ReorgEvent }) {
     return (
       <span>
         <span className="text-text">No rollback at detection</span>
+        {/* the two tips are values, the reading ink; "indexed", "node" their labels; 12 px,
+            the line the fate column is budgeted on (38 characters, 273.6 px) */}
         <span className="text-text-dim text-meta block w-fit">
-          indexed {formatBlockNumber(event.oldTipNumber)} → node{' '}
-          {formatBlockNumber(event.newTipNumber)}
+          indexed <span className="text-text">{formatBlockNumber(event.oldTipNumber)}</span> → node{' '}
+          <span className="text-text">{formatBlockNumber(event.newTipNumber)}</span>
         </span>
       </span>
     );
   if (!event.preview)
-    return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
+    return <span className="text-text">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
   const { fate, uncleInBlock, noncellbaseTransactions, committedLaterTransactions } = event.preview;
   const words = orphanFateWords(fate as Parameters<typeof orphanFateWords>[0]);
   return (
@@ -344,17 +391,28 @@ function Fate({ event }: { event: ReorgEvent }) {
           <Link href={`/blocks/${uncleInBlock}`} look="inline">
             {formatBlockNumber(uncleInBlock)}
           </Link>
+          {/* the count is a value, the reading ink; "after it" its label (12 px) */}
           <span className="text-text-dim text-meta block w-fit">
-            {unitNode(`${formatCount(uncleInBlock - event.forkPointNumber - 1, 'block')} after it`)}
+            <NoteCount count={uncleInBlock - event.forkPointNumber - 1} singular="block" /> after it
           </span>
         </>
       ) : (
         <span className="text-text">{words}</span>
       )}
-      <span className="text-text-dim text-meta block w-fit">
-        {noncellbaseTransactions === 0
-          ? 'held no transaction but its cellbase'
-          : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
+      {/* the cell's statement of the transactions, a sentence and its figures in the reading
+          ink at 13 px (BRIEF-roles-rest part G; it was quiet at 12): "held no transaction but its
+          cellbase", 36 characters, 280.8 px, the fate column's widest line */}
+      <span className="text-text text-small block w-fit">
+        {noncellbaseTransactions === 0 ? (
+          'held no transaction but its cellbase'
+        ) : (
+          <>
+            {committedLaterTransactions.toLocaleString('en-US')}{' '}
+            <span className="text-text-dim">of</span>{' '}
+            {noncellbaseTransactions.toLocaleString('en-US')}{' '}
+            <span className="text-text-dim">tx committed later</span>
+          </>
+        )}
       </span>
     </span>
   );
@@ -559,16 +617,24 @@ export default function ForksPage() {
                       key: 'fate',
                       className: ROW,
                       label: 'What became of it',
-                      // The widest of its two lines: the fate "uncle inclusion still possible"
-                      // (252 at 14 px), or a deep switch's "indexed #99,999,999 → node
-                      // #99,999,999" on its meta line (38 characters at 12 px, 273.6, the wider);
-                      // the last column, no gap. It was 210, which broke both lines.
+                      // The widest of its lines: the fate "uncle inclusion still possible"
+                      // (252 at 14 px), a deep switch's "indexed #99,999,999 → node
+                      // #99,999,999" on its meta line (38 characters at 12 px, 273.6), or the
+                      // statement "held no transaction but its cellbase" at 13 px (36 characters,
+                      // 280.8, the widest; BRIEF-roles-rest part G: it was 12 px and quiet, and
+                      // the column 273.6); "9,999 of 9,999 tx committed later" is 33 at 13 px,
+                      // 257.4; the last column, no gap. It was 210, which broke both lines.
                       minWidth: columnPx(
                         Math.max(
                           body('uncle inclusion still possible'.length),
                           textPx(
                             `indexed ${WIDEST_BLOCK_NUMBER} → node ${WIDEST_BLOCK_NUMBER}`.length,
                             fontPx('meta')
+                          ),
+                          textPx('held no transaction but its cellbase'.length, fontPx('small')),
+                          textPx(
+                            `${WIDEST_COUNT} of ${WIDEST_COUNT} tx committed later`.length,
+                            fontPx('small')
                           )
                         )
                       ),

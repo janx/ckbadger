@@ -621,6 +621,13 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     expect(metric('Deposits')).toHaveTextContent(/^2 · 2 withdrawals requested$/);
     for (const label of ['Depositors', 'Deposits'])
       expect(metric(label).querySelector('span')).toHaveClass('text-small', 'text-text-dim');
+    // BRIEF-roles-rest part G: a metric's note is quiet (R13), its values read in the reading ink:
+    // the day's change and the count; "in 24 h", "withdrawals" and "requested" stay quiet
+    expect(inkOf(within(metric('Depositors') as HTMLElement).getByText('−3'))).toBe(READING);
+    const requested = metric('Deposits').querySelector('[data-note-count]') as HTMLElement;
+    expect(requested).toHaveTextContent(/^2 withdrawals$/);
+    expect(inkOf(requested.firstElementChild!)).toBe(READING);
+    expect(inkOf(requested.lastElementChild!)).toBe('text-text-dim');
     // The former sub-lines moved to tier 2 (hierarchy v3). Re-pinned (lane P4: the DAO page keys
     // its rates in one line each): the two rates' keys stand in tier 1 under the row, said once,
     // not in tier 2; still no sub-line inside a metric (above)
@@ -654,6 +661,14 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     expect(metric('Compensation, last 365 days')).toHaveTextContent(
       /^— · the chain is younger than 365 days$/
     );
+    // BRIEF-roles-rest part G: why there is no figure, a statement: the reading ink
+    expect(
+      inkOf(
+        within(metric('Compensation, last 365 days') as HTMLElement).getByText(
+          'the chain is younger than 365 days'
+        )
+      )
+    ).toBe(READING);
   });
 
   it('fails when the deposit history arrives without its R8 peak', () => {

@@ -12,6 +12,7 @@ import {
   type DotCellOutPoint,
   type GlobalActivity,
   type GlobalActivityFilter,
+  type RowItem,
   type GraphResponse,
   type HardforkTimelineResponse,
   type MinerDistributionResponse,
@@ -27,6 +28,7 @@ import {
   type TransactionLifecycle,
 } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { participantCount } from '@/lib/activity-parties';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
@@ -261,14 +263,16 @@ function renderActivityDetail(activity: GlobalActivity): string {
     return `${pa.protocol}:${pa.action}`;
   }
 
-  if (classified.primaryItemDelta) {
-    switch (classified.primaryItemDelta.kind) {
+  // the row's first stated item (lane feed, part 4): its movement, and a token's amount moved
+  const item = classified.primaryItemDelta as RowItem | null;
+  if (item) {
+    switch (item.kind) {
       case 'token':
-        return `${classified.primaryItemDelta.symbol ?? hashShort(classified.primaryItemDelta.typeScriptHash)} delta=${classified.primaryItemDelta.delta}`;
+        return `${item.symbol ?? hashShort(item.typeScriptHash)} ${item.movement} amount=${item.amount}`;
       case 'object':
-        return `object ${hashShort(classified.primaryItemDelta.objectId)} delta=${classified.primaryItemDelta.delta}`;
+        return `object ${hashShort(item.objectId)} ${item.movement}`;
       case 'identity':
-        return `identity ${hashShort(classified.primaryItemDelta.identityId)} delta=${classified.primaryItemDelta.delta}`;
+        return `identity ${hashShort(item.identityId)} ${item.movement}`;
     }
   }
 
@@ -288,6 +292,31 @@ function renderActivityDetail(activity: GlobalActivity): string {
   return '-';
 }
 
+/** The activities table's columns, each named for what it holds (`renderGlobalActivityRows`). */
+const GLOBAL_ACTIVITY_COLUMNS = [
+  'timestamp',
+  'txHash',
+  'blockNumber',
+  'kind',
+  'participants',
+  'drawn',
+  'firstDrawnParty',
+  'firstDrawnCkbDelta',
+  'detail',
+];
+
+/**
+ * What the table's party columns and its detail hold, said under it (lane feed, ruling 14 of gate
+ * P; part 4: a row draws no party for moving an item, its items are stated once).
+ */
+const GLOBAL_ACTIVITY_PARTIES_NOTE =
+  "firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes and the fee payer. detail names the row's first item as the route states it from every party: its movement and, for a token, its amount moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.";
+
+/**
+ * One line an activity: every party counted (the route's `participantCount`), how many the row
+ * draws, and the first of those with its CKB change (lane feed: a row draws some of its parties, so
+ * the party listed is the first drawn, named so, never the transaction's).
+ */
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
@@ -305,10 +334,12 @@ function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
     const ckbDelta = party ? party.ckbDelta : '-';
     return [
       activity.timestamp,
-      addr === null ? '-' : hashShort(addr),
       hashShort(activity.txHash),
       activity.blockNumber,
       classified.displayType,
+      participantCount(activity),
+      activity.participants.length,
+      addr === null ? '-' : hashShort(addr),
       ckbDelta,
       renderActivityDetail(activity),
     ];
@@ -707,10 +738,9 @@ export async function renderMarkdownPage(
         '',
         activities.data.length === 0
           ? 'No activities found.'
-          : markdownTable(
-              ['timestamp', 'address', 'txHash', 'blockNumber', 'kind', 'ckbDelta', 'detail'],
-              renderGlobalActivityRows(activities.data)
-            ),
+          : markdownTable(GLOBAL_ACTIVITY_COLUMNS, renderGlobalActivityRows(activities.data)),
+        '',
+        GLOBAL_ACTIVITY_PARTIES_NOTE,
         '',
         markdownTable(
           ['field', 'value'],

@@ -9,7 +9,7 @@ import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { api, type GlobalActivity } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
-import { activityRead } from '@/__tests__/utils/activity-read';
+import { activityRead, type Written } from '@/__tests__/utils/activity-read';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 
 vi.mock('@/lib/api', async () => ({
@@ -27,7 +27,7 @@ const page = (data: GlobalActivity[]) =>
 const activity = (
   txHash: string,
   at: string,
-  extra: Partial<GlobalActivity> = {}
+  extra: Partial<Written<GlobalActivity>> = {}
 ): GlobalActivity =>
   activityRead({
     txHash,
@@ -171,6 +171,8 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
         collection: { id: `0x${'cc'.repeat(32)}`, name: 'Nervape Headwear' },
         class: 'object',
         composition: 'btc_ckb',
+        // its one party lost it, so the route states a burn
+        movement: 'burn',
       },
     ];
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([row]));

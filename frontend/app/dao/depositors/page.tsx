@@ -1,6 +1,7 @@
 'use client';
 
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { NoteCount } from '@/components/ui/units';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
@@ -19,7 +20,6 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { AmountForm } from '@/lib/amount-form';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
-import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
@@ -260,7 +260,7 @@ export default function DaoDepositorsPage() {
                       </span>
                     }
                     share={`${d.sharePercent}%`}
-                    note={formatCount(d.depositCount, 'deposit')}
+                    note={<NoteCount count={d.depositCount} singular="deposit" />}
                     bar={{
                       value: percentHundredths(d.sharePercent),
                       scale: shareScale(page.data),

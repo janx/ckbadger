@@ -11,8 +11,8 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
-import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import type { GlobalActivity, ItemDelta } from '@/lib/api';
+import { activityRead, ITEM_TYPE, type WrittenParty } from '@/__tests__/utils/activity-read';
 import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const HASH = `0x${'54'.repeat(32)}`;
@@ -37,7 +37,7 @@ function party(
   ckbDelta: string,
   itemDeltas: ItemDelta[] = [],
   lockKind: string | null = 'JoyID'
-): ParticipantInfo {
+): WrittenParty {
   return {
     // B4 fix round: a real address on the lock the fixture names (JoyID, else the unnamed lock)
     address: seededAddress(tail, lockKind === null ? UNNAMED_LOCK : JOYID),
@@ -72,7 +72,7 @@ const rgbpp = (delta: string): ItemDelta => ({
   decimals: 8,
 });
 function activity(
-  participants: ParticipantInfo[],
+  participants: WrittenParty[],
   // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
   over: Pick<GlobalActivity, 'itemTypes'> = { itemTypes: [] }
 ): GlobalActivity {

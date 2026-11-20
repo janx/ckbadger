@@ -131,9 +131,15 @@ function addressRow(activity: Activity, address: Address) {
     roles: activity.roles,
     tags: activity.tags,
   };
-  // The endpoint supplies this participant's deltas only. Other parties remain references;
-  // do not invent zero balances for them to construct a cross-user transaction.
-  const row: ActivityRowData = { ...activity, participants: [participant] };
+  // The endpoint supplies this participant's deltas only, and every party by its short id
+  // (`partyIds`); do not invent zero balances for the others to construct a cross-user transaction.
+  // The row is this address's: its items, by which it is classified, headed and folded, are the
+  // address's own (each with the route's movement), never the transaction's (lane feed, part 4).
+  const row: ActivityRowData = {
+    ...activity,
+    participants: [participant],
+    items: activity.itemDeltas,
+  };
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
@@ -166,7 +172,8 @@ function addressRow(activity: Activity, address: Address) {
 /**
  * One activity of this address: the site's one activity row (consistency C3), its participant line
  * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
- * this participant's deltas only; the other parties of the transaction are on its page.
+ * this participant's deltas only; the other parties of the transaction are on its page. Its line
+ * says "fee" where the route names this address the fee payer, read from every party (lane feed).
  */
 export function AddressActivity({ activity, address }: AddressActivityProps) {
   const { row, headline } = addressRow(activity, address);
@@ -177,16 +184,14 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
       focusLockHash={address.lockScriptHash}
       foldObjects
       itemTone="sign"
-      // the transaction's other parties are references here, their changes not on the row
-      unlistedParties={activity.participants.length}
     />
   );
 }
 /**
  * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`, the
- * rule of Gate B: what was done and the script code, not the parties): a run counts this address
- * and the transaction's other parties, which the row does not draw but the activity names. A run
- * folds within the page shown.
+ * rule of Gate B: what was done and the script code, not the parties): a run counts every party of
+ * its transactions, this address and the others the route names by their short ids (`partyIds`),
+ * which the row does not draw. A run folds within the page shown.
  */
 export function AddressActivities({
   rows,
@@ -202,13 +207,10 @@ export function AddressActivities({
     <ActivityRuns
       more={more}
       rows={rows.map((activity) => {
-        const { row, participant, headline } = addressRow(activity, address);
+        const { row, headline } = addressRow(activity, address);
         return {
           key: activity.txHash,
-          subject: runSubject(row, activityTitleText(row, headline.text), [
-            participant,
-            ...activity.participants,
-          ]),
+          subject: runSubject(row, activityTitleText(row, headline.text)),
           activity: row,
           title: <ActivityTitle activity={row} headline={headline.node} />,
           row: <AddressActivity activity={activity} address={address} />,

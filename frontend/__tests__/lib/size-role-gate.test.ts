@@ -23,12 +23,17 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  * 12 px or less, `text-[11px]`), or, when it sets no size of its own, by the nearest size its JSX
  * ancestors in the same file set around it (a link in a 12 px note). A class is read through `?:`,
  * `&&`, `cn(…)`, template literals and the file's own constants, so one that is 12 px in one branch
- * counts. An element handed to a component as a prop is the component's to size, and is not
- * followed into it.
+ * counts. An element handed to a component as a prop (in the attribute, in an array or an object
+ * literal there, or returned by a function there) takes the size a component pinned in PROP_SIZES
+ * gives that prop, else the size around the component: its own class, then its ancestors'
+ * (BRIEF-roles-rest part B: the walk stopped at the attribute, and the onward links in
+ * PromptHeading's note, "Open the collection" and "Open the class", and home's supply block in
+ * SectionHeading's note stood at the note's 12 px, unseen).
  *
- * Limits, what it cannot see: a size set by a component on its children (PhoneRow's line tones, a
- * `size` prop such as Hash's `tight`), a size from a module's constant imported into the file, a
- * size in CSS, and SVG text (`fontSize` on a `<text>`: the chart lane's own probe holds it).
+ * Limits, what it cannot see: a size set by a component on its children or a prop that is not in
+ * PROP_SIZES (PhoneRow's line tones, a `size` prop such as Hash's `tight`), a size from a module's
+ * constant imported into the file, a size in CSS, and SVG text (`fontSize` on a `<text>`: the chart
+ * lane's own probe holds it).
  *
  * The sites tolerated today are listed per file with their family and a reason: the page lanes'
  * work list in the ink and size round, driven to 0. A new site fails, and so does a site that went
@@ -93,6 +98,28 @@ function sizeOfClass(token: string): 'meta' | 'step' | null {
 
 const LINK = (tag: string) => tag === 'a' || tag === 'Address' || /^(?:[A-Z]\w*)?Link$/.test(tag);
 
+/**
+ * The components known to size a prop themselves (BRIEF-roles-rest part B): an element handed to
+ * one of them in that prop takes the size the component gives it, not the size around the
+ * component. Named by the module and the export a file imports it from, never by a pattern, each
+ * with what its source draws; pinned (PROP_SIZES_PINNED), and only a reading adds to it.
+ */
+const PROP_SIZES: Readonly<
+  Record<string, { props: Readonly<Record<string, 'meta' | 'step'>>; reason: string }>
+> = {
+  '@/components/ui/prompt-heading#PromptHeading': {
+    props: { note: 'meta' },
+    reason:
+      'its note, the right prompt, in text-text-dim text-meta beside the heading (a heading’s note, B23)',
+  },
+  '@/components/home/section#SectionHeading': {
+    props: { note: 'meta' },
+    reason: "a home section's heading: hands its note to PromptHeading as it is",
+  },
+};
+/** The components and props PROP_SIZES names: its pinned count, which only a reading changes. */
+const PROP_SIZES_PINNED = { components: 2, props: 2 };
+
 /** Every site of the two kinds at the meta size in a TSX source. */
 export function sizeRoleSites(code: string): Site[] {
   const source = ts.createSourceFile(
@@ -106,9 +133,23 @@ export function sizeRoleSites(code: string): Site[] {
   const text = (n: ts.Node) => n.getText(source).replace(/\s+/g, ' ');
 
   const locals = new Map<string, ts.Expression[]>();
+  /** The file's imported names: a local name to `module#export` (`#default` for a default import). */
+  const imports = new Map<string, string>();
   const collect = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer)
       locals.set(node.name.text, [...(locals.get(node.name.text) ?? []), node.initializer]);
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.importClause
+    ) {
+      const from = node.moduleSpecifier.text;
+      const clause = node.importClause;
+      if (clause.name) imports.set(clause.name.text, `${from}#default`);
+      if (clause.namedBindings && ts.isNamedImports(clause.namedBindings))
+        for (const s of clause.namedBindings.elements)
+          imports.set(s.name.text, `${from}#${(s.propertyName ?? s.name).text}`);
+    }
     ts.forEachChild(node, collect);
   };
   collect(source);
@@ -167,11 +208,27 @@ export function sizeRoleSites(code: string): Site[] {
     const of = (value ? tokensOf(value) : []).map(sizeOfClass);
     return { meta: of.includes('meta'), sized: of.some((s) => s !== null) };
   };
-  /** The size an element takes from around it in its file: the nearest JSX ancestor's. */
+  /** The element a JSX attribute is written on: the component its value is handed to. */
+  const ownerOf = (a: ts.JsxAttribute): El => {
+    const o = a.parent.parent;
+    return ts.isJsxOpeningElement(o) ? o.parent : o;
+  };
+  /**
+   * The size an element takes from around it in its file: the nearest JSX ancestor's. An element
+   * handed to a component as a prop (in the attribute, in an array or an object literal there, or
+   * returned by a function there) takes the size a component pinned in PROP_SIZES gives that prop,
+   * else the size around the component: its own class, then its ancestors'.
+   */
   const around = (node: ts.Node): 'meta' | 'step' | 'none' => {
     for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
-      if (ts.isJsxAttribute(p)) return 'none';
-      if (ts.isJsxElement(p)) {
+      if (ts.isJsxAttribute(p)) {
+        const component = imports.get(tagOf(ownerOf(p)));
+        const pinned =
+          component === undefined ? undefined : PROP_SIZES[component]?.props[text(p.name)];
+        if (pinned !== undefined) return pinned;
+        p = ownerOf(p);
+      }
+      if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) {
         const s = sizes(p);
         if (s.meta) return 'meta';
         if (s.sized) return 'step';
@@ -320,14 +377,52 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
     ).toEqual(['link 3 <Link> words <span>']);
   });
 
-  it('leaves an element handed to a component as a prop to the component', () => {
+  // Re-pinned on purpose (BRIEF-roles-rest part B; renamed, it was "leaves an element handed to a
+  // component as a prop to the component", expecting []): that was the route by which "Open the
+  // collection", "Open the class" (the onward look in PromptHeading's note) and home's supply block
+  // stood at 12 px: `around()` stopped at the attribute. An element handed to a component takes the
+  // size around the component, its own class first.
+  it('finds a link handed to a component that stands in a 12 px line', () => {
     expect(
       found(`export const A = () => (
         <div className="text-meta">
           <Row right={<Link href="/x">x</Link>} />
+          <Dotted parts={[<BlockLink key="b" number={1} />, <span key="s">s</span>]} />
+          <List render={(r) => <AppLink href={r}>{r}</AppLink>} />
+          <Row right={<Link href="/y" className="text-small">y</Link>} />
+        </div>
+      );
+      export const B = () => <Dotted className="text-meta" parts={[<a key="a" href="/a">a</a>]} />;`)
+    ).toEqual(['link 3 <Link>', 'link 4 <BlockLink>', 'link 5 <AppLink>', 'link 9 <a>']);
+  });
+
+  // BRIEF-roles-rest part B: PromptHeading sets its note at text-meta itself, so a link in a
+  // heading's note is 12 px whatever stands around the heading (PROP_SIZES, by the import)
+  it('gives a link the size a pinned component gives its prop, by the import, not the name', () => {
+    expect(
+      found(`import { PromptHeading } from '@/components/ui/prompt-heading';
+      import { SectionHeading as Heading } from '@/components/home/section';
+      export const A = () => (
+        <div className="text-body">
+          <PromptHeading command="c" note={<AppLink look="onward" href="/c">Open the collection</AppLink>} />
+          <Heading command="s" note={<span>at <BlockLink look="inline" number={1} /></span>} />
+          <PromptHeading command="d" note={<AppLink look="onward" href="/d" className="text-small">Open</AppLink>} />
+          <PromptHeading command="e" args={<BlockLink look="inline" number={2} />} />
+          <SectionHeading command="f" note={<Link look="inline" href="/f">f</Link>} />
         </div>
       );`)
-    ).toEqual([]);
+    ).toEqual(['link 5 <AppLink>', 'link 6 <BlockLink>']);
+  });
+
+  it('pins the components known to size a prop: two, two props, each with its reason', () => {
+    expect({
+      components: Object.keys(PROP_SIZES).length,
+      props: Object.values(PROP_SIZES).reduce((n, c) => n + Object.keys(c.props).length, 0),
+    }).toEqual(PROP_SIZES_PINNED);
+    for (const [component, entry] of Object.entries(PROP_SIZES)) {
+      expect(component).toMatch(/^@\/[\w/-]+#\w+$/);
+      expect(entry.reason.length).toBeGreaterThan(30);
+    }
   });
 });
 

@@ -2204,8 +2204,13 @@ async fn redesign_pool_pages_newest_first_with_exact_values_and_interpretation()
     assert_eq!(first["data"][0]["interpretation"]["status"], "complete");
     assert_eq!(first["totals"]["pending"], 1);
     assert_eq!(first["totals"]["proposed"], 1);
-    // lane exactness, part A, A4: the transactions waiting in the pool, pending and proposed, the route's count
-    assert_eq!(first["totals"]["waiting"], 2, "{first}");
+    // re-pinned on purpose (the plan's Phase E): `totals.waiting` (pending and proposed, lane
+    // exactness A4) is gone, read by no page; the totals are the three counts apart
+    assert_eq!(
+        first["totals"],
+        serde_json::json!({"pending": 1, "proposed": 1, "awaitingIndex": 0}),
+        "{first}"
+    );
     assert_eq!(first["data"][0]["feeRate"], "2000");
     assert_eq!(
         first["summary"],

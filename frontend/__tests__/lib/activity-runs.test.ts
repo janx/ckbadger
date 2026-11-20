@@ -5,16 +5,14 @@
 // scripts with their args and the parties with their roles, which left the live feed unfolded,
 // 100 activities 99 rows).
 import { describe, expect, it } from 'vitest';
-import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runParties, runTokens, type RunSubject } from '@/lib/activity-runs';
+import { partyIds } from '@/lib/activity-parties';
 import live from '@/__tests__/fixtures/activities-live-mainnet.json';
-import type { GlobalActivity } from '@/lib/api';
+import type { GlobalActivity, PartyId } from '@/lib/api';
 import { activityTitleText } from '@/components/activity/activity-row';
 
-const party = (id: string) => ({
-  lockHash: `0x${id.padStart(64, '0')}`,
-  lockHashPrefix: null,
-  address: `ckb1${id}`,
-});
+/** A party as the route names it (lane feed): its short id, the first 20 bytes of its lock hash. */
+const party = (id: string, tags = 0): PartyId => [`0x${id.padStart(40, '0')}`, tags];
 const typeCall = (code: string, hashType = 'type') => ({
   typeCodeHash: `0x${code.padStart(64, '0')}`,
   typeHashType: hashType,
@@ -39,6 +37,7 @@ function oracle(over: Partial<RunSubject> = {}): RunSubject {
     lockCalls: [],
     itemTypes: [],
     parties: [party('01')],
+    tokens: null,
     ...over,
   };
 }
@@ -190,18 +189,43 @@ describe('runKey: the code an item carries', () => {
 });
 
 describe('runParties: how many parties a run names', () => {
-  it('counts each party once across the run, by its lock hash, else its prefix, else its address', () => {
+  // re-pinned on purpose (lane feed, ruling 14 of gate P): a party is the route's short id (the
+  // first 20 bytes of its lock hash, the prefix a protocol names it by), every party of each
+  // transaction, drawn or not; it was its lock hash, else its prefix, else its address, of the
+  // parties a row was sent in full, so a protocol-named party and the same party by its full hash
+  // were two
+  it('counts each party once across the run, by the short id the route names it by', () => {
     expect(runParties([oracle(), oracle(), oracle({ parties: [party('02')] })])).toBe(2);
     expect(runParties([oracle({ parties: [party('01'), party('02')] }), oracle()])).toBe(2);
-    const prefixed = { lockHash: null, lockHashPrefix: '0x1234', address: null };
-    const addressed = { lockHash: null, lockHashPrefix: null, address: 'ckb1only' };
-    expect(runParties([oracle({ parties: [prefixed, addressed] }), oracle()])).toBe(3);
+    // its tags are not its name: one party in two rows, a sender in one
+    expect(
+      runParties([oracle({ parties: [party('03', 256)] }), oracle({ parties: [party('03')] })])
+    ).toBe(1);
   });
 
-  it('refuses a party it cannot name, with the transaction', () => {
-    const nobody = { lockHash: null, lockHashPrefix: null, address: null };
-    expect(() => runParties([oracle({ parties: [nobody] })])).toThrow(
-      `transaction 0x${'aa'.repeat(32)}: a party with no lock hash, prefix or address`
+  // re-pinned on purpose (lane feed): every party the route names has its short id, so the
+  // refusal moved to where the ids are read, `partyIds`, which refuses a row naming fewer than its
+  // count (it was a party with no lock hash, prefix or address)
+  it('refuses a row that names fewer parties than it counts, with the transaction', () => {
+    expect(() =>
+      partyIds({ txHash: `0x${'aa'.repeat(32)}`, participantCount: 2, partyIds: [party('01')] })
+    ).toThrow(`transaction 0x${'aa'.repeat(32)}: it names 1 of its 2 parties`);
+  });
+});
+
+describe('runTokens: how many tokens a run of token rows moved (ruling 6 of gate P)', () => {
+  const tokens = (...ids: string[]) => ({ title: 'tokens: Token transfer', tokens: ids });
+  it('counts each token once across the run, by its type script hash', () => {
+    expect(
+      runTokens([oracle(tokens('0x7e')), oracle(tokens('0x7e', '0x7f')), oracle(tokens('0x7e'))])
+    ).toBe(2);
+    expect(runTokens([oracle(tokens('0x7e')), oracle(tokens('0x7e'))])).toBe(1);
+  });
+
+  it('counts none on a run of another kind, and refuses a run that mixes the two', () => {
+    expect(runTokens([oracle(), oracle()])).toBeNull();
+    expect(() => runTokens([oracle(tokens('0x7e')), oracle()])).toThrow(
+      `transaction 0x${'aa'.repeat(32)}: a run of token rows holds a row of another kind`
     );
   });
 });
@@ -282,7 +306,8 @@ describe('the rule on the live feeds', () => {
       typeCalls: a.typeCalls,
       lockCalls: a.lockCalls,
       itemTypes: a.itemTypes,
-      parties: a.participants,
+      parties: partyIds(a),
+      tokens: null,
     };
   };
   const runsOf = (rows: GlobalActivity[]) => foldRuns(rows, (a) => runKey(subject(a)));

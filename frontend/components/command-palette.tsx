@@ -370,7 +370,7 @@ export function CommandPalette() {
                   ))}
                 </ul>
               ) : (
-                <div className="text-text-dim text-body px-3 py-2 font-mono">
+                <div className="text-text text-body px-3 py-2 font-mono">
                   No command matched. Press Enter to run search.
                 </div>
               )}

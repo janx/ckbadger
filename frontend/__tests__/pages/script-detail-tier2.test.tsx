@@ -153,6 +153,11 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     expect(within(facts).getByTestId('script-cells-summary')).toHaveTextContent(
       '161,049 live cells use JoyID as their lock'
     );
+    // BRIEF-roles-rest part G: the line's count and the script's name are values, the reading
+    // ink; "live cells", "use" and "as their lock" quiet
+    const summary = within(facts).getByTestId('script-cells-summary');
+    expect(summary.querySelector('[data-note-count]')!.firstElementChild).toHaveClass('text-text');
+    expect(within(summary).getByText('JoyID')).toHaveClass('text-text');
     expect(facts).toHaveTextContent('Script · 33 bytes, then the args each cell sets');
     expect(
       [...within(facts).getByRole('group', { name: 'lock script byte map' }).children].map(

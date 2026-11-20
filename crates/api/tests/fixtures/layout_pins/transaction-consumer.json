@@ -1,10 +1,13 @@
 {
   "activity": {
     "blockNumber": 4,
+    "feePayer": null,
     "isCellbase": false,
     "itemTypes": [],
     "itemTypesUnread": null,
+    "items": [],
     "lockCalls": [],
+    "participantCount": 2,
     "participants": [
       {
         "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf3xycnzvf3xycnzvf3xycnzvf3xycnzvgsa4m7y",
@@ -28,6 +31,16 @@
         "tags": 0,
         "usedDelta": "6100000000"
       }
+    ],
+    "partyIds": [
+      [
+        "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
+        0
+      ],
+      [
+        "0xe283d25800772fa5df7552b9e1e60bc7a34848ac",
+        0
+      ]
     ],
     "protocolActions": [],
     "timestamp": "1790041200000",

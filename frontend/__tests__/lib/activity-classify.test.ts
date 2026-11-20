@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobalActivity } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { activityRead, ITEM_TYPE, type Written } from '@/__tests__/utils/activity-read';
 
-function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
+function makeActivity(overrides: Partial<Written<GlobalActivity>> = {}): GlobalActivity {
   return activityRead({
     txHash: overrides.txHash ?? '0xtx',
     blockNumber: overrides.blockNumber ?? 10_000,
