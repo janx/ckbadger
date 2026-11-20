@@ -785,7 +785,10 @@ function activityDetails(
  * exactly one party's CKB changed and went down, so that change is the fee exactly; its line says
  * so, in the reading ink. Its index among the parties drawn, or null. A cross-user row draws the
  * fee payer (the route's rule), so one it does not draw is refused; a focus row (the address page)
- * draws its own party alone, and another party may have paid.
+ * draws its own party alone, and another party may have paid. Not the transaction page's
+ * `onlyFeeMoved` (lib/tx-flows.ts), which asks whether nothing but the fee moved: a protocol step
+ * stops that one and not this (a DAO deposit from its owner's own address is "fee" on the owner's
+ * line), two payers stop this one and not that.
  */
 function feePayerAt(
   activity: Pick<ActivityRowData, 'txHash' | 'participants' | 'feePayer'>,

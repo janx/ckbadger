@@ -316,6 +316,40 @@ describe('txFlows', () => {
     }
   });
 
+  // Two fee rules, two questions (the lead's F3 on lane feed): this page's `onlyFeeMoved` asks
+  // whether nothing but the fee moved (no protocol step; one payer or several); the route's
+  // `feePayer` names the one party whose line is the fee exactly (a protocol step allowed; one
+  // payer only). On the two transactions of the route's own test
+  // (crates/api/tests/api_activities.rs, `the_fee_payer_names_a_depositor_and_none_of_two_payers`)
+  // they differ, each way.
+  it('holds the two transactions on which the fee rules differ', () => {
+    // a Nervos DAO deposit from its owner's own address: the route names the owner its fee payer
+    const owner = { ...party('aaaaaa', '-1000'), tags: 8 };
+    const deposit = {
+      ...activity([owner]),
+      protocolActions: [
+        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata: {} },
+      ],
+      feePayer: owner.lockHash,
+    };
+    const depositFlows = txFlows({
+      hash: HASH,
+      activity: deposit,
+      fee: '1000',
+      compensation: null,
+    });
+    expect(deposit.feePayer).not.toBeNull();
+    expect(onlyFeeMoved(deposit, depositFlows)).toBe(false);
+    // two parties paid the fee together: the route names no fee payer, and only the fee moved
+    const shared = {
+      ...activity([party('aaaaaa', '-600'), party('bbbbbb', '-400')]),
+      feePayer: null,
+    };
+    const sharedFlows = txFlows({ hash: HASH, activity: shared, fee: '1000', compensation: null });
+    expect(shared.feePayer).toBeNull();
+    expect(onlyFeeMoved(shared, sharedFlows)).toBe(true);
+  });
+
   it('keys objects and identities by what they are', () => {
     expect(flowKey({ kind: 'object', objectId: '0xo1', delta: 1 })).toBe('object:0xo1');
     expect(flowKey({ kind: 'identity', standard: 'dotbit', identityId: 'a.bit', delta: -1 })).toBe(

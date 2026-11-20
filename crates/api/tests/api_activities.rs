@@ -4417,3 +4417,55 @@ async fn the_route_states_the_fee_payer_from_every_party_and_draws_it() {
         assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
     }
 }
+
+/// Two fee rules, two questions (the lead's F3 on lane feed). The route's `feePayer` names the one
+/// party whose line is the fee exactly (a feed row says "fee" on it): a protocol step is allowed,
+/// so a Nervos DAO deposit from its owner's own address names the owner, whose one change is the
+/// fee. The transaction page's `onlyFeeMoved` (frontend/lib/tx-flows.ts) asks whether nothing but
+/// the fee moved: no protocol step, and the fee paid by one party or several, so two parties that
+/// paid the fee together are "only the fee" and name no fee payer here. The page's answer on the
+/// same two transactions is held in frontend/__tests__/lib/tx-flows.test.ts.
+#[tokio::test]
+async fn the_fee_payer_names_a_depositor_and_none_of_two_payers() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+
+    let party = |i: u8, ckb_delta: i128| ParticipantDelta {
+        id: ParticipantId::Lock([0x20 + i; 32]),
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags: 0,
+        roles: 0,
+    };
+    let row = |n: u8, participants: Vec<ParticipantDelta>| TxActions {
+        tx_hash: vec![0xf0 + n; 32],
+        block_hash: vec![0xd0 + n; 32],
+        block_number: 200 + i64::from(n),
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    };
+    let mut deposit = row(1, vec![party(0, -1_000)]);
+    deposit.protocol_actions = vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))];
+    let shared = row(2, vec![party(0, -600), party(1, -400)]);
+
+    let store = test_store();
+    for actions in [&deposit, &shared] {
+        seed_named_tx(&store, actions.block_number, &actions.tx_hash, actions);
+    }
+    let app = create_router(test_config(store)).await;
+    let own =
+        |actions: &TxActions| format!("/transactions/0x{}/activity", hex::encode(&actions.tx_hash));
+    let (_, json) = get_json(&app, &own(&deposit)).await;
+    assert_eq!(
+        json["feePayer"],
+        format!("0x{}", hex::encode([0x20; 32])),
+        "{json}"
+    );
+    let (_, json) = get_json(&app, &own(&shared)).await;
+    assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
+}

@@ -460,7 +460,10 @@ fn party_short_id(id: &ParticipantId) -> [u8; 20] {
 /// conserved but for what enters (a cellbase's reward, a Nervos DAO withdrawal's compensation) and
 /// what leaves (the fee). When nothing entered, no item moved, and exactly one party's CKB changed
 /// and went down, that change is the fee exactly. Nothing is summed to find it. (The rule the
-/// page's row applied to the parties it was sent, `feeOnlyParty`, now the route's alone.)
+/// page's row applied to the parties it was sent, `feeOnlyParty`, now the route's alone.) It names
+/// the one party whose line is the fee; the transaction page's `onlyFeeMoved` asks another question,
+/// whether nothing but the fee moved: a protocol step stops that one and not this (a DAO deposit
+/// from its owner's own address names the owner), two payers stop this one and not that.
 fn fee_payer(actions: &TxActions) -> Option<usize> {
     if actions.is_cellbase
         || actions
