@@ -535,6 +535,54 @@ async fn test_activity_lock_call_states_why_its_args_do_not_decode() {
     assert_eq!(calls[1].get("scriptNameBy"), None, "{json}");
 }
 
+/// resync fix round S2 (logic S2): a lock call is decoded and named by its pair. The Default
+/// Lock's code hash by `data` and JoyID's by `data` run no registered code (anyone can lock a
+/// cell under them; no deployed binary has that data hash), so their args decode nothing and
+/// name nothing: no `decoded`, no `decodeError` naming "Default Lock" or "JoyID". The same code
+/// hashes by their registered pair still decode.
+#[tokio::test]
+async fn test_activity_lock_call_is_decoded_only_by_its_registered_pair() {
+    let lock_hash = vec![0x26; 32];
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xac; 32], &[0xbd; 32], 88, 1, 100, 0);
+    let default_lock =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let joyid =
+        hex::decode("d00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323").unwrap();
+    let call =
+        |code_hash: &[u8], hash_type: i16, args: Vec<u8>| ckbadger_store::types::LockCallEntry {
+            lock_code_hash: code_hash.to_vec(),
+            lock_hash_type: hash_type,
+            lock_args: args,
+        };
+    actions.lock_calls = vec![
+        call(&default_lock, 0, vec![0; 20]),
+        call(&joyid, 0, vec![0; 23]),
+        call(&default_lock, 1, vec![0; 20]),
+        call(&joyid, 1, vec![0; 23]),
+    ];
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let calls = &json["data"][0]["lockCalls"];
+    for (index, what) in [(0, "Default Lock by data"), (1, "JoyID by data")] {
+        assert_eq!(
+            (calls[index].get("decoded"), calls[index].get("decodeError")),
+            (
+                Some(&serde_json::Value::Null),
+                Some(&serde_json::Value::Null)
+            ),
+            "{what}: a pair that runs no registered code decodes nothing: {json}"
+        );
+    }
+    assert_eq!(
+        calls[2]["decoded"]["lock"], "secp256k1_blake160",
+        "the Default Lock by type decodes: {json}"
+    );
+    assert_eq!(
+        calls[3]["decodeError"],
+        "JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22",
+        "JoyID by type states why: {json}"
+    );
+}
+
 #[tokio::test]
 async fn test_address_activities_rejects_unknown_filter() {
     let core_store = test_store();

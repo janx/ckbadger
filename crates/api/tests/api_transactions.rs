@@ -3845,6 +3845,67 @@ fn r2b_bytes(content: &[u8]) -> Vec<u8> {
 /// with no known schema keeps only its hashes and raw data.
 #[tokio::test]
 async fn detail_names_cobuild_actions_of_a_known_schema() {
+    // a Spore pair by data1, as the fixture's type says
+    let json = cobuild_detail_with_a_spore_type_by("data1", 2).await;
+    let actions = json["witnessDetails"][0]["actions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("CoBuild actions: {json}"));
+    assert_eq!(actions.len(), 2, "{json}");
+    assert_eq!(actions[0]["schema"], "spore", "{json}");
+    assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
+    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
+    // null and the action is identified by its `scriptInfoHash`.
+    assert_eq!(
+        actions[1].get("schema"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1].get("name"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1]["scriptInfoHash"],
+        format!("0x{}", "11".repeat(32))
+    );
+    assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+}
+
+/// resync fix round S2 (logic S2, `transaction_structure.rs:316-330`): a CoBuild
+/// schema is read by the pair the type script runs, not by its code hash. The
+/// Spore binary's code hash by `data2` is the same code (a registered binary
+/// pair) and its actions are named; by `type` it runs no registered code (no
+/// Type ID cell has that hash), so its action keeps its hashes and raw data.
+#[tokio::test]
+async fn detail_names_cobuild_actions_by_the_pair_the_type_runs() {
+    for (label, byte, schema, name) in [
+        (
+            "data2",
+            4,
+            serde_json::json!("spore"),
+            serde_json::json!("TransferSpore"),
+        ),
+        ("type", 1, serde_json::Value::Null, serde_json::Value::Null),
+    ] {
+        let json = cobuild_detail_with_a_spore_type_by(label, byte).await;
+        let action = &json["witnessDetails"][0]["actions"][0];
+        assert_eq!(
+            (action.get("schema"), action.get("name")),
+            (Some(&schema), Some(&name)),
+            "the Spore binary by {label}: {json}"
+        );
+    }
+}
+
+/// The detail of a pending transaction whose output is typed by the Spore
+/// binary (the registered Spore pair's code hash) by `hash_type_label`
+/// (`hash_type_byte`), with a CoBuild witness carrying a TransferSpore
+/// action for that script and one action for an unknown script.
+async fn cobuild_detail_with_a_spore_type_by(
+    hash_type_label: &str,
+    hash_type_byte: u8,
+) -> serde_json::Value {
     use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
     let store = test_store();
     seed_genesis_baseline(&store);
@@ -3855,7 +3916,7 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
         funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
     )
     .await;
-    // a Spore pair by data1, as the fixture's type says
+    // the Spore binary: a registered Spore pair by data1
     let spore_code = PROTOCOL_REGISTRY
         .protocol_pairs()
         .filter(|((_, hash_type), p)| *p == ProtocolScript::SporeNft && *hash_type == 2)
@@ -3867,10 +3928,11 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     let spore_id = [0x41u8; 32];
     let spore_type = serde_json::json!({
         "code_hash": format!("0x{}", hex::encode(&spore_code)),
-        "hash_type": "data1",
+        "hash_type": hash_type_label,
         "args": format!("0x{}", hex::encode(spore_id)),
     });
-    let spore_hash = ckbadger_api::utils::address::compute_script_hash(&spore_code, 2, &spore_id);
+    let spore_hash =
+        ckbadger_api::utils::address::compute_script_hash(&spore_code, hash_type_byte, &spore_id);
     let lock = |args: u8| {
         r2b_table(&[
             TEST_SECP_LOCK_CODE_HASH
@@ -3928,29 +3990,7 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     let app = create_router(config).await;
     let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let actions = json["witnessDetails"][0]["actions"]
-        .as_array()
-        .unwrap_or_else(|| panic!("CoBuild actions: {json}"));
-    assert_eq!(actions.len(), 2, "{json}");
-    assert_eq!(actions[0]["schema"], "spore", "{json}");
-    assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
-    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
-    // null and the action is identified by its `scriptInfoHash`.
-    assert_eq!(
-        actions[1].get("schema"),
-        Some(&serde_json::Value::Null),
-        "{json}"
-    );
-    assert_eq!(
-        actions[1].get("name"),
-        Some(&serde_json::Value::Null),
-        "{json}"
-    );
-    assert_eq!(
-        actions[1]["scriptInfoHash"],
-        format!("0x{}", "11".repeat(32))
-    );
-    assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+    json
 }
 
 /// R-7 (TX-36): every schema the scripts registry declares names its
