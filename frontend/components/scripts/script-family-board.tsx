@@ -273,10 +273,15 @@ export function ScriptHeroMetrics({
       {code && (
         <HeroMetric
           label="Code"
+          // a metric's note is quiet (R13); its values read in the reading ink, its label words stay
+          // quiet (BRIEF-roles-rest part A): the day, the tx, a holder's state
           note={
             code === 'upgradable' && last && lineage!.length > 1 ? (
               <>
-                last replaced <Utc8Date timestamp={last.timestamp} />
+                last replaced{' '}
+                <span className="text-text">
+                  <Utc8Date timestamp={last.timestamp} />
+                </span>
               </>
             ) : undefined
           }
@@ -290,7 +295,11 @@ export function ScriptHeroMetrics({
       {last && (
         <HeroMetric
           label="Code cell held by"
-          note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
+          note={
+            last.custody.witnessState === 'never_signed' ? (
+              <span className="text-text">has never signed</span>
+            ) : undefined
+          }
         >
           <Link look="key" href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}>
             {/* a hero tile: tight below sm, the row size from it (R9) */}
@@ -306,16 +315,18 @@ export function ScriptHeroMetrics({
               deployed in{' '}
               {/* the deploying transaction opened at the code cell it created, which its page then
                   never folds away (lane P2's third round, item 16: it linked the transaction bare) */}
-              <Link
-                look="inline"
-                href={transactionAtCellHref(deployment.codeCellTxHash, {
-                  txHash: deployment.codeCellTxHash,
-                  index: deployment.codeCellOutputIndex,
-                })}
-                title={deployment.codeCellTxHash}
-              >
-                <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
-              </Link>
+              <span className="text-text">
+                <Link
+                  look="inline"
+                  href={transactionAtCellHref(deployment.codeCellTxHash, {
+                    txHash: deployment.codeCellTxHash,
+                    index: deployment.codeCellOutputIndex,
+                  })}
+                  title={deployment.codeCellTxHash}
+                >
+                  <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
+                </Link>
+              </span>
             </>
           }
         >

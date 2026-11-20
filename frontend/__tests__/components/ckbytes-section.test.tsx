@@ -58,9 +58,13 @@ describe('CkbytesSection', () => {
     expect(total.lastElementChild).toBe(label);
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     // Lane L: the block the total is exact at is a link.
-    expect(
-      within(screen.getByTestId('ckbytes-block')).getByRole('link', { name: '#20,820,045' })
-    ).toHaveAttribute('href', '/mainnet/blocks/20820045');
+    const block = within(screen.getByTestId('ckbytes-block')).getByRole('link', {
+      name: '#20,820,045',
+    });
+    expect(block).toHaveAttribute('href', '/mainnet/blocks/20820045');
+    // BRIEF-roles-rest part A: the block is a value, a link in the reading ink inside the note's
+    // quiet "at" (it took the right prompt's quiet ink)
+    expect(block.parentElement).toHaveClass('text-text');
     expect(screen.getByRole('link', { name: 'supply' })).toHaveAttribute(
       'href',
       '/mainnet/charts/total-supply'

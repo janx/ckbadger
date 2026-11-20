@@ -90,8 +90,14 @@ export function CkbytesSection() {
             }
             note={
               view === null ? undefined : (
+                // "at" labels the block the figure is read at; the block is a value, a link, in
+                // the reading ink (BRIEF-roles-rest part A; the home board drew the line as the
+                // right prompt's quiet figure, boards/home.js:85, which the lead rules)
                 <span data-testid="ckbytes-block" className="tabular-nums">
-                  at <BlockLink look="inline" number={view.blockNumber} />
+                  at{' '}
+                  <span className="text-text">
+                    <BlockLink look="inline" number={view.blockNumber} />
+                  </span>
                 </span>
               )
             }
