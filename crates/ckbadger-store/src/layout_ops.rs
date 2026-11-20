@@ -356,7 +356,9 @@ fn holds_domain_rows_in(db: &DB) -> anyhow::Result<bool> {
 /// has not stamped it yet. One holding the first column families of
 /// [`domain_creation_order`], no row and no stamp, is `NotReady`: a creating
 /// open of this build is still making them, or stopped before it made them
-/// all (resync fix round 3, M). Any other is the inner error, each with
+/// all (resync fix round 3, M); and so is one holding them beside THIS
+/// build's stamp: the stamp says this build made it, and the list is the stale
+/// half of a reader's two reads (round 4, A). Any other is the inner error, each with
 /// evidence of another layout: another stamp, rows and no stamp (a build from
 /// before stamps), a column family this build does not know, or a set of
 /// column families no creating open of this build leaves (an earlier build's
@@ -372,13 +374,62 @@ fn layout_of(
             None if !holds_domain_rows_in(db)? => return Ok(Ok(StoreLayoutState::Fresh)),
             _ => {}
         }
-    } else if found.is_none() && still_being_created(column_families) && !holds_domain_rows_in(db)?
+    } else if still_being_created(column_families)
+        && match found {
+            // this build made the store: the family list is the stale half of
+            // a reader's two reads (listed before the creating open ended, the
+            // stamp read after; resync fix round 4, A)
+            Some(layout) => layout == STORE_LAYOUT,
+            // no stamp: not ready only while nothing was written (this build
+            // stamps before any row)
+            None => !holds_domain_rows_in(db)?,
+        }
     {
         return Ok(Ok(StoreLayoutState::NotReady));
     }
     Ok(Err(StoreLayoutMismatch {
         found,
         column_families: column_families.clone(),
+    }))
+}
+
+/// What a reader can see changed in a store without opening it (resync fix
+/// round 4, A): the MANIFEST its `CURRENT` names, and that MANIFEST's length.
+/// A column family is made, and every flush and compaction installed, by an
+/// append to the MANIFEST, and a new MANIFEST is named by a new `CURRENT`; so
+/// a store whose signature has not changed has the same column families and
+/// table files. A reader reads it BEFORE its open lists the families, so a
+/// family made after that list changes it. One look reads `CURRENT` (a few
+/// bytes) and the MANIFEST's metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreSignature {
+    manifest: String,
+    manifest_len: u64,
+}
+
+/// The [`StoreSignature`] of the store at `primary_path`; `None` while no
+/// store exists there (no `CURRENT`).
+pub fn store_signature(primary_path: &std::path::Path) -> anyhow::Result<Option<StoreSignature>> {
+    let current = match std::fs::read_to_string(primary_path.join("CURRENT")) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => anyhow::bail!(
+            "read the CURRENT of the store at '{}': {error}",
+            primary_path.display()
+        ),
+    };
+    let manifest = current.trim().to_string();
+    let manifest_len = std::fs::metadata(primary_path.join(&manifest))
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "read the length of {manifest} in the store at '{}': {error}",
+                primary_path.display()
+            )
+        })?
+        .len();
+    Ok(Some(StoreSignature {
+        manifest,
+        manifest_len,
     }))
 }
 
@@ -407,6 +458,7 @@ pub fn inspect_domain_store(
     table.set_block_cache(&rocksdb::Cache::new_lru_cache(8 << 20));
     table.set_cache_index_and_filter_blocks(true);
     opts.set_block_based_table_factory(&table);
+    crate::store::prune_secondary_info_logs(secondary_path)?;
     let existing = DB::list_cf(&opts, primary_path).map_err(|e| {
         anyhow::anyhow!(
             "list the column families of the domain store at '{}': {e}",

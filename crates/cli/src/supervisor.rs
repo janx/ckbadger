@@ -546,6 +546,12 @@ struct BulkStatusSample {
 ///
 /// Every method here is BLOCKING (RocksDB open/catch-up/read). Callers on the
 /// async supervisor runtime must go through `spawn_blocking`.
+/// A store the probe read and holds no handle on (resync fix round 4, A).
+enum SeenStore {
+    Refused(StoreLayoutMismatch),
+    NotReady,
+}
+
 struct BulkStatusReader {
     /// The gating network's child label, used for log context.
     label: String,
@@ -556,6 +562,12 @@ struct BulkStatusReader {
     /// [`SequencedIndexer::store_runtime_config`].
     runtime_config: StoreRuntimeConfig,
     store: Option<CkbadgerStore>,
+    /// The store's signature read before `store` was opened (resync fix
+    /// round 4, A).
+    opened_at: Option<ckbadger_store::StoreSignature>,
+    /// A store last read refused or not ready, no handle kept, and the
+    /// signature it was read at: opened again only once that has changed.
+    seen: Option<(ckbadger_store::StoreSignature, SeenStore)>,
     failures: ReadFailureTracker,
     /// The store's refusal was logged (resync fix round 2, A): logged once,
     /// again only after the store reads as this build's.
@@ -574,6 +586,8 @@ impl BulkStatusReader {
             bulk_sync_threshold: idx.bulk_sync_threshold,
             runtime_config: idx.store_runtime_config,
             store: None,
+            opened_at: None,
+            seen: None,
             failures: ReadFailureTracker::default(),
             refusal_logged: false,
         }
@@ -592,8 +606,9 @@ impl BulkStatusReader {
     fn poll(&mut self) -> BulkStatusSample {
         match self.read() {
             // A store this build refuses (resync fix round 2, A) is no read
-            // failure: no signal, the refusal said once, the handle kept so
-            // the next poll reads its layout again without reopening it.
+            // failure: no signal, the refusal said once. No handle is kept:
+            // the next poll looks again, opening anew only once the store has
+            // changed (resync fix round 4, A).
             Err(error) if error.downcast_ref::<StoreLayoutMismatch>().is_some() => {
                 if !self.refusal_logged {
                     error!(
@@ -668,8 +683,23 @@ impl BulkStatusReader {
     /// sequencer actually uses.
     fn read(&mut self) -> Result<BulkStatusSample> {
         if self.store.is_none() {
-            if !self.domain_data_path.join("CURRENT").is_file() {
+            // What the store looks like, read before the open lists its
+            // column families (resync fix round 4, A).
+            let Some(signature) = ckbadger_store::store_signature(&self.domain_data_path)? else {
+                self.seen = None;
                 return Ok(BulkStatusSample::default());
+            };
+            // A store last read refused or not ready, unchanged since: the
+            // same answer, nothing opened (one look: CURRENT and the
+            // MANIFEST's length).
+            match &self.seen {
+                Some((seen, SeenStore::Refused(mismatch))) if *seen == signature => {
+                    return Err(anyhow::Error::new(mismatch.clone()));
+                }
+                Some((seen, SeenStore::NotReady)) if *seen == signature => {
+                    return Ok(BulkStatusSample::default());
+                }
+                _ => {}
             }
             let store = CkbadgerStore::open_domain_secondary_with_runtime(
                 &self.domain_data_path,
@@ -683,6 +713,7 @@ impl BulkStatusReader {
                 )
             })?;
             self.store = Some(store);
+            self.opened_at = Some(signature);
         }
         let store = self
             .store
@@ -700,14 +731,33 @@ impl BulkStatusReader {
         // being created is not ready: the handle is dropped, since a secondary
         // never gains a column family made after it opened, and the store is
         // opened again on the next poll (resync fix round 3, M).
-        match store.check_store_layout()? {
-            Err(mismatch) => return Err(anyhow::Error::new(mismatch)),
-            Ok(ckbadger_store::StoreLayoutState::NotReady) => {
-                self.store = None;
-                return Ok(BulkStatusSample::default());
+        // Refused or not ready: no handle kept (a secondary never gains a
+        // column family made after it opened), the signature it opened at
+        // kept, so the next poll opens again only once the store has changed
+        // (resync fix round 4, A).
+        let seen = match store.check_store_layout()? {
+            Err(mismatch) => SeenStore::Refused(mismatch),
+            Ok(ckbadger_store::StoreLayoutState::NotReady) => SeenStore::NotReady,
+            Ok(_) => {
+                self.seen = None;
+                return self.read_bulk_status();
             }
-            Ok(_) => {}
+        };
+        self.store = None;
+        let opened_at = self
+            .opened_at
+            .take()
+            .expect("the signature is read before every open");
+        self.seen = Some((opened_at, seen));
+        match &self.seen {
+            Some((_, SeenStore::Refused(mismatch))) => Err(anyhow::Error::new(mismatch.clone())),
+            _ => Ok(BulkStatusSample::default()),
         }
+    }
+
+    /// The bulk status of the store held, read once its layout passed.
+    fn read_bulk_status(&self) -> Result<BulkStatusSample> {
+        let store = self.store.as_ref().expect("read with a store held");
         let status = store.get_sync_status().with_context(|| {
             format!(
                 "failed to read sync status from {}",

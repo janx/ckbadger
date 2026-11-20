@@ -136,6 +136,54 @@ impl SecondaryStoreOwner {
 /// store's sibling, named after it. The path is read by its components, so a
 /// trailing separator (a config's `data/domain/`) names the same store and
 /// never puts the directory inside it (resync fix round 3, item 5).
+/// How many info logs a secondary keeps in its own directory (its `LOG` and
+/// the rotated `LOG.old.*`): each open of a secondary rotates one, and a
+/// long-lived reader opens again whenever the store changed (resync fix round
+/// 4, A).
+pub const SECONDARY_INFO_LOG_FILES: usize = 4;
+
+/// Before a secondary opens at `secondary_path`: remove its oldest rotated
+/// info logs (`LOG.old.*`, named by the time they were rotated), keeping the
+/// newest `SECONDARY_INFO_LOG_FILES - 2`, so that after the open rotates its
+/// `LOG` the directory holds at most `SECONDARY_INFO_LOG_FILES` info logs.
+/// RocksDB prunes no info log of a secondary (`keep_log_file_num` is a
+/// primary's). The directory is the reader's own, never the store's.
+pub(crate) fn prune_secondary_info_logs(secondary_path: &Path) -> anyhow::Result<()> {
+    let entries = match std::fs::read_dir(secondary_path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => anyhow::bail!(
+            "list the secondary directory '{}': {error}",
+            secondary_path.display()
+        ),
+    };
+    let mut rotated = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            anyhow::anyhow!(
+                "list the secondary directory '{}': {error}",
+                secondary_path.display()
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("LOG.old.") {
+            rotated.push(name);
+        }
+    }
+    // rotated at increasing times: the decimal number in the name orders
+    // them, as (length, name) does; the newest kept, the rest removed
+    rotated.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
+    for name in rotated.iter().rev().skip(SECONDARY_INFO_LOG_FILES - 2) {
+        std::fs::remove_file(secondary_path.join(name)).map_err(|error| {
+            anyhow::anyhow!(
+                "remove the rotated info log '{}' of the secondary: {error}",
+                secondary_path.join(name).display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 pub fn secondary_store_path<P: AsRef<Path>>(
     primary_path: P,
     owner: SecondaryStoreOwner,
@@ -1683,6 +1731,7 @@ impl CkbadgerStore {
         let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
             Self::configured_options(&memory_profile, runtime_config);
+        prune_secondary_info_logs(secondary_path.as_ref())?;
         let existing_cfs = match DB::list_cf(&opts, &primary_path) {
             Ok(cfs) => cfs,
             Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
@@ -5228,6 +5277,40 @@ mod tests {
         assert_eq!(
             secondary_store_path("/tmp/domain", SecondaryStoreOwner::Cli),
             PathBuf::from("/tmp/domain-cli-secondary")
+        );
+    }
+
+    /// resync fix round 4, A (the third read's NOTE-2): each open of a
+    /// secondary rotates its info log, and a long-lived reader opens again
+    /// whenever the store changed; the secondary's own directory keeps at
+    /// most `SECONDARY_INFO_LOG_FILES` info logs, however often it reopens.
+    #[test]
+    fn a_secondary_keeps_a_bounded_number_of_info_logs() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("domain");
+        let secondary = dir.path().join("domain-tui-secondary");
+        let store = CkbadgerStore::open_domain(&primary).unwrap();
+        for open in 0..12u8 {
+            store
+                .put_cf(store.cf_sync_meta(), &[open], &[open])
+                .unwrap();
+            drop(CkbadgerStore::open_domain_secondary(&primary, &secondary).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let logs = std::fs::read_dir(&secondary)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("LOG")
+            })
+            .count();
+        assert!(
+            logs <= SECONDARY_INFO_LOG_FILES,
+            "{logs} info logs after 12 opens"
         );
     }
 
