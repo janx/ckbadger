@@ -1282,7 +1282,14 @@ disabled or empty state. A point lookup still returns not found.
   `verifiedByTx`, and the code cell it spent, `verifiedCodeCell`
   (`0x<tx hash>:<output index>`): both or neither, so a page opens the
   transaction at the cell it spent (lane exactness, part B, the third read's
-  N3).
+  N3). A type reference's custody is read from its live code cells only
+  (`live_code_cells_by_type`, one bounded read, never the type's whole live
+  set: resync fix round S3), or its one live cell for a Type ID reference.
+  Two answers changed with that read (resync fix round 2, D): a generic type
+  reference whose code cell sits beside a token or state cell under the same
+  type script names the code cell's owner (it was `ambiguous`, two data hashes
+  among the live cells), and one with no live code cell is `retired` (several
+  data hashes among its non-code cells made it `ambiguous`).
 - `ScriptUsageResponse` — totals + `by_deployment: Vec<DeploymentUsage>`
 - `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 

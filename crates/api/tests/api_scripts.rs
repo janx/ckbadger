@@ -346,6 +346,162 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
     }
 }
 
+/// A generic type reference of the family "Custody Read" whose live set holds
+/// `code` code cells (the family's binary), the non-code cells of
+/// `non_code_data` (one each, under the same type script, as a token's or a
+/// state cell's) and `traps` live cells whose payload is withheld (any read
+/// of one fails): the read the custody route makes (resync fix round 2, D).
+fn seed_custody_reference(
+    store: &CkbadgerStore,
+    code: u8,
+    non_code_data: &[[u8; 32]],
+    traps: u8,
+) -> (Vec<u8>, [u8; 32]) {
+    let version = [0x87; 32];
+    let reference = compute_script_hash(&[0x64; 32], 1, &[]);
+    seed_block_headers_at(store, &[(10, 1_700_000_000_000)]);
+    set_script_fixture_block_tx_count(store, 10, 64);
+    let mut batch = StoreBatch::new(store);
+    batch.put_script_family(
+        "custody-read",
+        &ScriptFamilyInfo {
+            family_id: "custody-read".to_string(),
+            name: "Custody Read".to_string(),
+            versions_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Custody Read", "custody-read");
+    batch.put_script_version_by_family("custody-read", &version);
+    batch.put_script_version(
+        &version,
+        &ScriptVersionInfo {
+            version_hash: version.to_vec(),
+            family_id: Some("custody-read".to_string()),
+            registered_references: vec![(reference.clone(), 1)],
+            type_id_deployments: Vec::new(),
+            canonical_reference_hash: Some(reference.clone()),
+            canonical_hash_type: Some(1),
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        1,
+        &reference,
+        &ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(1, &reference, &version);
+    let cell = |args: u8, data_hash: [u8; 32]| LiveCellInfo {
+        capacity: 100_00000000,
+        lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        lock_hash_type: 1,
+        lock_args: vec![args; 20],
+        type_code_hash: Some([0x64; 32]),
+        type_hash_type: Some(1),
+        type_args: Some(vec![]),
+        data_size: 32,
+        udt_amount: None,
+        data_hash: Some(data_hash),
+    };
+    for i in 0..code {
+        let tx = vec![0x41 + i; 32];
+        put_canonical_script_tx(&mut batch, &tx, 10, i32::from(i), 1);
+        batch.put_cell(&tx, 0, &cell(0x51, version), 10);
+        batch.put_cell_by_type(&reference, 10, &tx, 0);
+        batch.put_cell_by_data_hash(&version, 10, &tx, 0);
+        batch.put_live_code_cell(&reference, &tx, 0, &version);
+    }
+    for (i, data_hash) in non_code_data.iter().enumerate() {
+        let tx = vec![0x61 + i as u8; 32];
+        put_canonical_script_tx(&mut batch, &tx, 10, 10 + i as i32, 1);
+        batch.put_cell(&tx, 0, &cell(0x52 + i as u8, *data_hash), 10);
+        batch.put_cell_by_type(&reference, 10, &tx, 0);
+    }
+    for trap in 0..traps {
+        let tx = [0xa0u8.wrapping_add(trap); 32];
+        batch.put_live_cell_marker(&ckbadger_store::keys::encode_outpoint(&tx, 0), 10);
+        batch.put_cell_by_type(&reference, 10, &tx, 0);
+    }
+    batch.commit().unwrap();
+    (reference, version)
+}
+
+/// resync fix round 2, D (tests SHOULD-2): the custody route reads a generic
+/// type reference's live CODE cells only (`resolve_live_type_reference`,
+/// one prefix seek of `live_code_cells_by_type`), never the type's whole
+/// live set: fifty live cells whose payload is withheld (any read of one
+/// fails) and a token cell sit beside the one code cell. And the answer that
+/// read changed: a code cell beside a token cell under one type script names
+/// the code cell's owner; it was `ambiguous` (two data hashes among the live
+/// cells).
+#[tokio::test]
+async fn custody_reads_a_generic_references_code_cells_only_and_names_their_owner() {
+    let store = test_store();
+    let (reference, version) = seed_custody_reference(&store, 1, &[[0x84; 32]], 50);
+    let app = create_router(test_config(store)).await;
+    let (status, detail) = get_json(&app, "/scripts/Custody%20Read").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let listed = detail["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|listed| listed["referenceHash"] == format!("0x{}", hex::encode(&reference)))
+        .unwrap_or_else(|| panic!("the reference is listed: {detail}"));
+    assert_eq!(
+        listed["currentVersionHash"],
+        format!("0x{}", hex::encode(version))
+    );
+    let custody = &listed["custody"];
+    assert_ne!(custody["class"], "ambiguous", "{custody}");
+    let owners = custody["owners"].as_array().unwrap();
+    assert_eq!(owners.len(), 1, "{custody}");
+    assert_eq!(
+        owners[0]["lockArgs"],
+        format!("0x{}", hex::encode([0x51; 20])),
+        "{custody}"
+    );
+}
+
+/// resync fix round 2, D: the other answer the code-cells-only read changed.
+/// A generic type reference with no current code (no live code cell) whose
+/// live cells hold several data hashes, none of them code, is `retired`: it
+/// runs nothing now. It was `ambiguous` (several data hashes among the live
+/// cells).
+#[tokio::test]
+async fn custody_of_a_generic_reference_with_no_live_code_is_retired() {
+    let store = test_store();
+    let (reference, _) = seed_custody_reference(&store, 0, &[[0x84; 32], [0x85; 32]], 0);
+    let app = create_router(test_config(store)).await;
+    let (status, detail) = get_json(&app, "/scripts/Custody%20Read").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let custodies: Vec<&serde_json::Value> = detail["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|listed| listed["referenceHash"] == format!("0x{}", hex::encode(&reference)))
+        .map(|listed| &listed["custody"])
+        .chain(
+            detail["versions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|version| version["deployments"].as_array().unwrap())
+                .map(|deployment| &deployment["custody"]),
+        )
+        .collect();
+    assert!(!custodies.is_empty(), "{detail}");
+    for custody in custodies {
+        assert_eq!(custody["class"], "retired", "{custody}");
+    }
+}
+
 #[tokio::test]
 async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
     let store = test_store();
