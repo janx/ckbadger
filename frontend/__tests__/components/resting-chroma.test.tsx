@@ -1,3 +1,4 @@
+import { linkLookClass } from '@/components/ui/link';
 // Visual finish V5 (resting chroma, 2026-11-04): quiet at rest, light on interaction. Inside a
 // table, a feed or a list row a link rests as ink with a faint aqua underline
 // (`text-text-bright underline decoration-aqua/35 underline-offset-[3px]`) and carries no hover
@@ -8,7 +9,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { AQUA_AT_REST, expectRestingLink } from '@/__tests__/utils/resting-link';
+import { AQUA_AT_REST } from '@/__tests__/utils/resting-link';
+import type { LinkLook } from '@/components/ui/link';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { Address } from '@/components/ui/address';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -17,6 +19,7 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { ActivityStats } from '@/components/home/activity-stats';
 import type { ParticipantInfo } from '@/lib/api';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const ADDRESS =
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq22xdj8q4jdql98qkdhnqzgrsk4nqyavdcratvu9';
@@ -44,16 +47,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A link that states its look rests in that look's ink (components/ui/link.tsx), with no aqua at
+ * rest and no hover colour of its own: the global `a:hover` lights it.
+ */
+function expectLookedLink(link: HTMLElement, look: LinkLook) {
+  expect(link.tagName).toBe('A');
+  expect(link).toHaveClass(...linkLookClass(look)!.split(' '));
+  const classes = Array.from(link.classList);
+  expect(classes.filter((c) => AQUA_AT_REST.test(c))).toEqual([]);
+  expect(classes.filter((c) => c.startsWith('hover:text-'))).toEqual([]);
+}
+
 describe('resting chroma (V5): links in rows rest as ink and light up on hover', () => {
-  it('Address rests as ink with the faint aqua underline; the global a:hover is its hover', () => {
-    render(<Address address={ADDRESS} size="row" />);
-    expectRestingLink(screen.getByRole('link'));
+  // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): an Address states its
+  // look, which is required; the V5 resting look (bright over a faint aqua underline) was what an
+  // Address drew for a caller that stated none, and went with the last of them. It rests in its
+  // look's ink, with no aqua and no hover colour of its own (it was "Address rests as ink with the
+  // faint aqua underline; the global a:hover is its hover")
+  it('Address rests in the look its caller states; the global a:hover is its hover', () => {
+    render(<Address look="inline" address={ADDRESS} size="row" />);
+    expectLookedLink(screen.getByRole('link'), 'inline');
   });
 
-  it('keeps the resting ink when a caller sets only the size (the blocks table miner)', () => {
-    render(<Address address={ADDRESS} size="row" className="text-small" />);
+  // re-pinned on purpose, as above: the blocks table's miner is a row's key at the small step
+  it('keeps its look when a caller sets only the size (the blocks table miner)', () => {
+    render(<Address look="key" address={ADDRESS} size="row" className="text-small" />);
     const link = screen.getByRole('link');
-    expectRestingLink(link);
+    expectLookedLink(link, 'key');
     expect(link).toHaveClass('text-small');
     expect(link).not.toHaveClass('text-body');
   });
@@ -72,7 +93,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
         key: 'miner',
         label: 'Miner',
         minWidth: 200,
-        render: (b) => <Address address={b.miner} size="row" className="text-small" />,
+        render: (b) => <Address look="key" address={b.miner} size="row" className="text-small" />,
       },
     ];
     render(
@@ -88,7 +109,8 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
     // R9 (re-pinned): the row size is `ckb1…` and the last 8 characters
-    expectRestingLink(within(row).getByRole('link', { name: 'ckb1…dcratvu9' }));
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-4): its look's ink, as above
+    expectLookedLink(within(row).getByRole('link', { name: 'ckb1…dcratvu9' }), 'key');
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -108,7 +130,12 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     );
     const [, row] = screen.getAllByRole('row');
     expectNoAquaLink(row);
-    expectRestingLink(within(row).getByRole('link', { name: ADDRESS }));
+    // re-pinned on purpose (lane p-assets, the link-look gate): a link in the row states its look,
+    // inline, the line's ink over the muted underline of components/ui/link.tsx (it drew V5's
+    // resting look by hand: bright ink over a faint aqua underline); no hover colour of its own
+    const link = within(row).getByRole('link', { name: ADDRESS });
+    expect(link).toHaveClass(...linkLookClass('inline')!.split(' '));
+    expect(Array.from(link.classList).filter((c) => c.startsWith('hover:text-'))).toEqual([]);
   });
 
   it('a party: the standalone form is an Address; a bare lock hash hovers jade, not aqua', () => {
@@ -118,10 +145,12 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       lockHashPrefix: null,
       roles: [],
     };
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-4): the standalone form states its
+    // Address's look, which is required (it drew the resting look of a caller that stated none)
     const { container, rerender } = render(
-      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" />
+      <ParticipantRefView participant={{ ...party, address: ADDRESS }} size="row" look="inline" />
     );
-    expectRestingLink(screen.getByRole('link'));
+    expectLookedLink(screen.getByRole('link'), 'inline');
     for (const compact of [false, true]) {
       rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');
@@ -145,7 +174,9 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     };
     for (const sample of Object.values(feedSamples)) {
       const { container, unmount } = render(
-        <ActivityRow activity={{ ...sample, participants: [...sample.participants, lockOnly] }} />
+        <ActivityRow
+          activity={activityRead({ ...sample, participants: [...sample.participants, lockOnly] })}
+        />
       );
       const row = container.querySelector('[data-feed-row]');
       expect(row).not.toBeNull();
@@ -153,11 +184,15 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       unmount();
     }
   });
-  it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {
+  // Re-pinned on purpose (lists lane P3, the link-look gate: a link's ink is its look's): the
+  // section's call to action is a way onward, celadon, its arrow the look's; it kept the aqua
+  // text-interactive by hand (renamed: "… keeps its aqua (text-interactive) — untouched")
+  it('a section CTA outside every row is a way onward, celadon — no row link', () => {
     stubChartWidth(560);
     render(<ActivityStats />);
-    const cta = screen.getByRole('link', { name: 'charts →' });
-    expect(cta).toHaveClass('text-interactive', 'hover:text-jade');
+    const cta = screen.getByRole('link', { name: /^charts/ });
+    expect(cta).toHaveClass('text-jade');
+    expect(cta).not.toHaveClass('text-interactive', 'hover:text-jade');
     expect(cta).not.toHaveClass('underline', 'decoration-aqua/35');
     expect(cta.closest('table, [role="row"], [data-feed-row]')).toBeNull();
   });

@@ -18,6 +18,8 @@ import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { color } from '@/lib/palette';
 import { percentOf } from '@/lib/format-unit';
+import { cutScaledInteger } from '@/lib/exact-integer';
+import { MINUS } from '@/lib/chart-ticks';
 import { ClockText } from '@/components/ui/utc8-date';
 
 /**
@@ -58,10 +60,33 @@ export type TxInfo =
   | { kind: 'committed'; tx: PipelineTx; block: PipelineBlock }
   | { kind: 'cellbase'; block: PipelineBlock };
 
-export const fmtBytes = (b: number) =>
-  b >= 1e6 ? `${(b / 1e6).toFixed(2)} MB` : b >= 1000 ? `${(b / 1000).toFixed(1)} KB` : `${b} B`;
-export const fmtCycles = (c: number) =>
-  c >= 1e9 ? `${(c / 1e9).toFixed(2)} B` : c >= 1e6 ? `${(c / 1e6).toFixed(1)} M` : fmtInt(c);
+/**
+ * A size and a count of cycles in the unit the value reaches, cut in it (lane exactness, part B3:
+ * they were rounded, 1,999,999 bytes read 2.00 MB); both are integers, read exactly.
+ */
+export const fmtBytes = (b: number) => {
+  const n = BigInt(b);
+  return n >= BigInt(1_000_000)
+    ? `${cutScaledInteger(n, BigInt(1_000_000), 2)} MB`
+    : n >= BigInt(1000)
+      ? `${cutScaledInteger(n, BigInt(1000), 1)} KB`
+      : `${n} B`;
+};
+export const fmtCycles = (c: number) => {
+  const n = BigInt(c);
+  return n >= BigInt(1_000_000_000)
+    ? `${cutScaledInteger(n, BigInt(1_000_000_000), 2)} B`
+    : n >= BigInt(1_000_000)
+      ? `${cutScaledInteger(n, BigInt(1_000_000), 1)} M`
+      : fmtInt(c);
+};
+/** A wait in seconds, cut at a tenth, from two clocks' whole ms; a wait the clocks read negative says so. */
+const fmtWait = (ms: number) => {
+  const n = BigInt(ms);
+  return n < BigInt(0)
+    ? `${MINUS}${cutScaledInteger(-n, BigInt(1000), 1)} s`
+    : `${cutScaledInteger(n, BigInt(1000), 1)} s`;
+};
 /** A share of a block's room, the one percentage (CH-14). */
 export const pct = (a: number, b: number) => percentOf(BigInt(a), BigInt(b));
 const num = (n: number) => `${formatBlockNumber(n)}`;
@@ -111,7 +136,7 @@ export function txTip(info: TxInfo, s: PipelineSnapshot): TipContent {
   let foot: string | null = null;
   if (info.kind === 'pending') {
     const { arrivedAt } = info.tx;
-    rows.push(['waiting', (now) => `${((now - arrivedAt) / 1000).toFixed(1)} s`]);
+    rows.push(['waiting', (now) => fmtWait(now - arrivedAt)]);
   } else if (info.kind === 'proposed') {
     const p = info.tx.proposedIn as NonNullable<PipelinePoolTx['proposedIn']>;
     rows.push(['proposal in', `${num(p.block)}${p.uncleIndex !== null ? ' · via uncle' : ''}`]);

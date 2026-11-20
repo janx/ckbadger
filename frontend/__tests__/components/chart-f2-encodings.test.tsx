@@ -143,6 +143,34 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(reading.textContent).toContain('3! PH/s');
   });
 
+  // Readability F3 (the defect step 1 found): the box was as wide as its widest line at the head's
+  // advance, but its figures are set at the reading size, so a long figure ran past its padding.
+  it('holds each line of the hover reading inside its box, at the size the line is set in', () => {
+    const { container } = render(
+      <Chart
+        title="Hash rate"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="PH/s"
+        pointDots
+        formatLabel={(label) => `day ${label}`}
+        formatValue={(v) => `${v}.123456789012345678`}
+      />
+    );
+    fireEvent.keyDown(container.querySelector('svg[role="img"]')!, { key: 'ArrowLeft' });
+    const reading = container.querySelector('[data-hover-reading]')!;
+    const box = reading.querySelector('rect')!;
+    const left = Number(box.getAttribute('x'));
+    const right = left + Number(box.getAttribute('width'));
+    for (const text of Array.from(reading.querySelectorAll('text'))) {
+      const x = Number(text.getAttribute('x'));
+      const end = x + text.textContent!.length * 0.6 * Number(text.getAttribute('font-size'));
+      expect(end + 10, text.textContent!).toBeLessThanOrEqual(right);
+      expect(x - 10).toBeGreaterThanOrEqual(left);
+    }
+  });
+
   it('draws the in-plot hover reading in a square-cornered box (U-02, R1)', () => {
     const { container } = render(
       <Chart
@@ -290,8 +318,9 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(ticks.map((n) => n.textContent)).toEqual(labels);
     const rows = new Set(ticks.map((n) => n.getAttribute('y')));
     expect(rows.size).toBe(2);
-    // The second row is added below the plot, not taken from it.
-    expect(container.querySelector('svg[role="img"]')).toHaveAttribute('height', '132');
+    // The second row is added below the plot, not taken from it: a tight tick line, 15 px at the
+    // 12 px tick (re-pinned, readability R4: it was 12 px, 1.2 × the 10 px tick).
+    expect(container.querySelector('svg[role="img"]')).toHaveAttribute('height', '135');
   });
 
   it('refuses a categorical axis that does not name every bar', () => {
@@ -325,20 +354,22 @@ describe('shared Chart encodings for the charts boards', () => {
       label,
       values: { count: ['8000', '120'][i] },
     }));
-    expect(() =>
-      render(
-        <Chart
-          title="Transactions per week"
-          subtitle="weekly"
-          data={weeks}
-          series={[{ key: 'count', label: 'Transactions', color: 'var(--c-jade)' }]}
-          unit="transactions"
-          kind="bars"
-          plotLeft={100}
-          formatValue={(v) => v}
-        />
-      )
-    ).toThrow(/plotLeft 100.*"10k transactions" needs 104/);
+    expect(
+      () =>
+        render(
+          <Chart
+            title="Transactions per week"
+            subtitle="weekly"
+            data={weeks}
+            series={[{ key: 'count', label: 'Transactions', color: 'var(--c-jade)' }]}
+            unit="transactions"
+            kind="bars"
+            plotLeft={100}
+            formatValue={(v) => v}
+          />
+        )
+      // re-pinned (readability R4): 16 × 7.2 + 8 = 123.2 at the 12 px tick (was 104 at 10 px)
+    ).toThrow(/plotLeft 100.*"10k transactions" needs 123.2/);
   });
 
   it('keys many bands with a compact swatch legend instead of headline numbers (C#5, C#9)', () => {
@@ -426,7 +457,10 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
     expect(container.querySelector('figcaption')).toBeNull();
     const name = container.querySelector('svg [data-role="chart-name"]')!;
     expect(name).toHaveTextContent('AR, the accumulated rate');
-    expect(name).toHaveAttribute('font-size', '11');
+    // re-pinned (the ink and size roles, finished): a plot's name line is a sentence, the reading
+    // ink at 13 px (it was the label role, 12 px, quiet; 11 before readability R4)
+    expect(name).toHaveAttribute('font-size', '13');
+    expect(name).toHaveAttribute('fill', 'var(--c-text)');
     // The accessible name still carries the title.
     expect(screen.getByRole('img', { name: /^AR by date/ })).toBeInTheDocument();
   });

@@ -441,7 +441,8 @@ this required field must be re-synced from genesis.
 
 ### Total Supply Chart
 
-Shows stacked area of CKB distribution:
+Shows C, the total issuance, as a stacked area of five layers that make it,
+and the protocol circulation beside them:
 
 ```
 total_issuance = DAO field C
@@ -450,21 +451,54 @@ secondary_treasury = S - unclaimed_compensation
 total_burnt = GenesisBaseline.burnt + secondary_treasury
 protocol_circulating =
     total_issuance - GenesisBaseline.burnt - unissued_secondary
-liquid = protocol_circulating - locked_in_dao
+outside_dao = protocol_circulating - protocol_deposited
+withdrawing = protocol_deposited - total_deposited
 ```
 
-| Layer                | Calculation                                  | At Genesis |
-| -------------------- | -------------------------------------------- | ---------- |
-| Circulating (liquid) | `protocol_circulating - locked_in_dao`       | ~25.2B     |
-| Locked in DAO        | active DAO deposit principal                 | ~0         |
-| Burnt                | `GenesisBaseline.burnt + secondary_treasury` | 8.4B       |
+| Layer (key)                                          | Calculation                                  | At Genesis |
+| ---------------------------------------------------- | -------------------------------------------- | ---------- |
+| Outside the Nervos DAO (`outsideDao`)                | `outside_dao`                                | ~25.2B     |
+| Deposited in the Nervos DAO (`daoDeposited`)         | `total_deposited`                            | ~0         |
+| Withdrawing from the Nervos DAO (`daoWithdrawing`)   | `withdrawing`                                | 0          |
+| Unclaimed DAO compensation (`unclaimedCompensation`) | `unclaimed_compensation`                     | 0          |
+| Burnt (`burnt`)                                      | `GenesisBaseline.burnt + secondary_treasury` | 8.4B       |
 
-Outstanding `unclaimed_compensation` (interest accruing on live deposits plus
-interest frozen on phase-1 withdraw-request cells) is not circulating yet and is
-not treasury/burnt. Consequently the three displayed layers sum to
-`C - unclaimed_compensation`.
+Each layer is named for what it holds. `protocol_deposited` is the capacity of
+every live DAO cell, deposits and withdrawal requests; the indexer writes it
+into each day's `DaoDailySnapshot` (`dao_snapshot.rs`, up at a deposit, down at
+a phase-2 withdrawal). `total_deposited` is the status-0 deposits only, the
+amount the DAO page and the circulation-ratio chart call deposited. A
+withdrawing cell (a phase-1 withdraw request) is in the DAO's layers whole: its
+principal in "Withdrawing from the Nervos DAO", its frozen compensation in
+"Unclaimed DAO compensation". The protocol circulation is the first three
+layers.
+
+Outstanding `unclaimed_compensation` (compensation accruing on live deposits
+plus compensation frozen on phase-1 withdraw-request cells) is part of S: it is
+not circulating yet and it is not treasury or burnt, so it is a layer of its
+own. The five layers sum to C exactly:
+
+```
+outside_dao + total_deposited + withdrawing + unclaimed_compensation
+  + total_burnt
+  = (C - genesis burnt - S) + unclaimed_compensation
+    + genesis burnt + (S - unclaimed_compensation)
+  = C
+```
+
+The route checks for every row that no layer is negative and that the five
+make C, and fails with the date and every operand where either does not hold.
+A day whose snapshot has no `protocol_deposited` (a store older than its
+writer) is refused with the date and "delete RocksDB and re-sync from
+genesis"; the chart never falls back to four layers.
+
+`circulating` is sent as its own value, `protocol_circulating`, the same amount
+the site calls circulating everywhere (the home page, the DAO page, the
+circulation-ratio chart): the first two layers together. It is never the
+`liquid` layer.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_total_supply_chart()`
+and `total_supply_bands()`
 
 ### Total Deposit Chart
 
@@ -660,7 +694,8 @@ statistics `estimated_apc`.
 | Estimated APC                                   | Theoretical issuance seeded by `GenesisBaseline.total_issuance`     |
 | Nominal APC chart                               | Modeled supply seeded by `baseline.total_issuance - baseline.burnt` |
 | Protocol circulating supply / circulation ratio | `C - baseline.burnt - S`                                            |
-| Total Supply Chart circulating layer            | Protocol circulation minus DAO-locked principal                     |
+| Total Supply Chart's "Outside the Nervos DAO"   | Protocol circulation minus every live DAO cell's capacity           |
+| Total Supply Chart's `circulating`              | `C - baseline.burnt - S` (the protocol circulation)                 |
 
 ### DAO Compensation vs Secondary Allocation
 

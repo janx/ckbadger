@@ -1,3 +1,5 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -12,6 +14,11 @@ import {
   type GlobalActivity,
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -78,6 +85,7 @@ const history: TokenHistory = {
       supply: '1000000000000',
       capacity: '50000000000001',
       occupiedCapacity: '15300000000000',
+      freeCapacity: '34700000000001',
     },
   ],
   weeklyTransactions: [{ weekStart: '2024-01-01', transactionsCount: 5 }],
@@ -85,8 +93,8 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
-const activity: GlobalActivity = {
+const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
+const activity: GlobalActivity = activityRead({
   txHash: other,
   blockNumber: 12345,
   txIndex: 0,
@@ -106,8 +114,10 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [ITEM_TYPE.xudt],
+  itemTypesUnread: null,
   protocolActions: [],
-};
+});
 describe('TokenDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,6 +129,7 @@ describe('TokenDetailPage', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,
@@ -132,6 +143,59 @@ describe('TokenDetailPage', () => {
     });
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue(empty);
     vi.mocked(api.getTokenTransactions).mockResolvedValue(empty);
+  });
+
+  // Lane B4 fix round (review-rules-logic NOTE 3, the coordinator's item 13): the token that
+  // leads its line is the page's token as the API returned it, not the address's spelling of it.
+  // A link may spell the hash in capitals (the API reads it either way); the feed's rows carry the
+  // API's lowercase type script hash.
+  it('leads each line with the page’s token however the address spells its hash', async () => {
+    const lettered = `0x${'ab'.repeat(32)}`;
+    vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, typeScriptHash: lettered });
+    const moved = activityRead({
+      ...activity,
+      itemTypes: [ITEM_TYPE.xudt],
+      participants: [
+        {
+          ...activity.participants[0],
+          itemDeltas: [{ kind: 'token' as const, typeScriptHash: lettered, delta: '100000000000' }],
+        },
+      ],
+    });
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [moved] });
+    render(<TokenDetailPage typeHash={`0x${'AB'.repeat(32)}`} />);
+    await screen.findAllByRole('article');
+    const line = document.querySelector('[data-role="participant"]')!;
+    expect([...line.children].map((e) => e.getAttribute('data-role'))).toEqual([
+      'party',
+      'item',
+      'ckb',
+    ]);
+  });
+
+  // B4 second fix round (review-rules-fixes-logic NOTE 8, the coordinator's item 14, ruling D7):
+  // an issuer whose address spells another lock than it says is refused by the lock decision, and
+  // the refusal fails the issuer's note in its place, never the page.
+  it('says in the issuer’s note that its lock cannot be read, and draws the page', async () => {
+    const joy = seededAddress('issuer', JOYID_CODE_HASH);
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: joy,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+        lockKind: 'Default Lock',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { level: 1 });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    const alert = within(metrics).getByRole('alert');
+    // third round (re-pinned on purpose, the coordinator's item 4): said where (the issuer)
+    expect(alert).toHaveTextContent(
+      `Could not draw the issuer’s lock (issuer ${other}): address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`
+    );
+    expect(metrics).toHaveTextContent('owner lock proven by token script');
   });
 
   it('uses entity 404 only for the token read, not a secondary history error', async () => {
@@ -204,7 +268,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
       '100.00%'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
       'Not computed'
     );
@@ -247,14 +311,19 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByText(/^It last moved/)).toBeInTheDocument();
+    // re-pinned (lane c2-assets): the scope line stands under the tab row, in the section, no
+    // longer inside the tablist (a tablist holds its tabs alone)
     expect(
-      screen.getByRole('tablist', { name: 'What happened' }).textContent?.match(/newest first/g)
+      screen.getByRole('region', { name: 'What happened' }).textContent?.match(/newest first/g)
     ).toHaveLength(1);
+    expect(screen.getByRole('tablist', { name: 'What happened' })).not.toHaveTextContent(
+      'newest first'
+    );
   });
   it('defaults to full participant activities and retains the separate transaction layer', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByRole('tab', { name: 'Activities' })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
       'aria-selected',
       'true'
     );
@@ -267,7 +336,7 @@ describe('TokenDetailPage', () => {
       'href',
       '/mainnet/blocks/12345'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     await waitFor(() =>
       expect(api.getTokenTransactions).toHaveBeenCalledWith(hash, { limit: 20, cursor: undefined })
     );
@@ -301,7 +370,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -320,7 +389,7 @@ describe('TokenDetailPage', () => {
           supplyAfter: '1000000000000',
           lockHash: other,
           address: null,
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
       ],
@@ -351,7 +420,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -384,7 +453,8 @@ describe('TokenDetailPage', () => {
       ...mockToken,
       issuer: {
         lockHash: other,
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+        // B4 fix round: a real address on the unregistered lock (the lock is read off it)
+        address: seededAddress('test', unregistered),
         lockCodeHash: unregistered,
         lockKind: null,
       },
@@ -395,9 +465,32 @@ describe('TokenDetailPage', () => {
     expect(metrics).toHaveTextContent('lock 0x43434343…434343 · owner lock proven by token script');
     expect(within(metrics).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
       'href',
-      expect.stringMatching(new RegExp(`/script/${unregistered}$`))
+      // B4 second fix round (re-pinned on purpose): that lock's page, by the hash type its address
+      // spells, as a lock
+      expect.stringMatching(new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`))
     );
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  // B4 fix round (review-rules MUST 1): the default lock is silent beside the issuer, and the note
+  // leaves that part out: one separator, never "· ·". On the real default lock, by type.
+  it('writes one separator before the proof for an issuer on the default lock', async () => {
+    const address =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4';
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+        lockKind: 'Default Lock',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('ckb1…eqxwquc4 · owner lock proven by token script');
+    expect(metrics).not.toHaveTextContent(/·\s*·/);
+    expect(metrics).not.toHaveTextContent('Default Lock');
   });
   it('writes no lock kind for an issuer lock that is not indexed (U-15)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
@@ -421,8 +514,9 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
-        lockKind: 'SECP256K1/blake160',
+        // B4 fix round: a real other lock (the made-up 0x9b… is no SECP256K1/blake160)
+        lockCodeHash: JOYID_CODE_HASH,
+        lockKind: 'JoyID',
       },
     });
     render(<TokenDetailPage typeHash={hash} />);
@@ -432,33 +526,44 @@ describe('TokenDetailPage', () => {
       'href',
       expect.stringMatching(new RegExp(`/address/${other}$`))
     );
-    expect(metrics).toHaveTextContent(
-      /343434 · SECP256K1\/blake160 · owner lock proven by token script/
-    );
+    expect(metrics).toHaveTextContent(/343434 · JoyID · owner lock proven by token script/);
   });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
-    vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
-      ...empty,
-      data: [
-        { lockScriptHash: hash, address: null, balance: '1', lockCodeHash: null, lockKind: null },
-      ],
-      total: 2,
-      totalSupply: '2',
-      anchor: null,
-      hasMore: !p?.cursor,
-      nextCursor: p?.cursor ? null : 'page2',
-    }));
+    // Re-pinned (lane c2-assets): the pager reads its pages from the response, so the pages agree
+    // with it: 21 holders, a full first page of 20 and one on the second (it was one holder a page
+    // of 20 with more after it, a count of 2); the way on is the board's "next →" (was "Next").
+    const holder = (i: number) => ({
+      lockScriptHash: '0x' + i.toString(16).padStart(64, '0'),
+      address: null,
+      balance: '1',
+      lockCodeHash: null,
+      lockKind: null,
+    });
+    vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) =>
+      pagedRead({
+        ...empty,
+        data: p?.cursor ? [holder(21)] : Array.from({ length: 20 }, (_, i) => holder(i + 1)),
+        total: 21,
+        totalSupply: '21',
+        anchor: null,
+        // page two's first row is the 21st (lane exactness, part B5: the route ranks the page)
+        firstRank: p?.cursor ? 21 : 1,
+        hasMore: !p?.cursor,
+        nextCursor: p?.cursor ? null : 'page2',
+      })
+    );
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('History read failed');
-    fireEvent.click(screen.getByRole('button', { name: /All .*holders/ }));
+    // Re-pinned on purpose (lane p-assets, the placement lane's toggles with the lead's ruling): the
+    // short list's form under the top ten, "all 21 holders ↓" (it was "All 21 holders →" in the
+    // heading row); its way back "fewer ↑"
+    fireEvent.click(await screen.findByRole('button', { name: /^all 21\sholders ↓$/ }));
     await screen.findByRole('table', { name: 'All holders' });
-    fireEvent.click(
-      within(screen.getByRole('table', { name: 'All holders' }).closest('section')!).getByRole(
-        'button',
-        { name: 'Next' }
-      )
-    );
+    expect(screen.getByRole('button', { name: 'fewer ↑' })).toBeInTheDocument();
+    const pager = screen.getByRole('navigation', { name: 'holders' });
+    expect(pager).toHaveTextContent('1–20 of 21');
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getTokenHolders).toHaveBeenCalledWith(hash, { limit: 20, cursor: 'page2' })
     );

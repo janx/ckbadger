@@ -6,6 +6,7 @@ import { CurrentPatternEvidence } from '@/components/asset/genetics';
 import { DecodeCoverage } from '@/components/asset/collection-objects';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AppLink } from '@/components/ui/app-link';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { TintedJson } from '@/components/ui/tinted-json';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
@@ -18,6 +19,7 @@ import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 /**
  * "The cluster cell, byte by byte" (consistency C5, Main board tier 2): the current cluster cell's
@@ -32,6 +34,7 @@ export function ClusterCellEvidence({
 }) {
   const { cell } = current;
   const type = cell.type;
+  const holderLock = cellOwnerLockPart(cell, 'text-text');
   return (
     <ProtocolEvidence
       title="The cluster cell, byte by byte"
@@ -45,28 +48,39 @@ export function ClusterCellEvidence({
       >
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
-          <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
+          <AppLink
+            look="inline"
+            href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+            title={cell.txHash}
+          >
             <ShortId value={cell.txHash} kind="hash" size="row" />
             <OutpointIndex index={cell.outputIndex} />
           </AppLink>{' '}
           · created in{' '}
-          <AppLink href={`/blocks/${cell.blockNumber}`}>
+          <AppLink look="inline" href={`/blocks/${cell.blockNumber}`}>
             {formatBlockNumber(cell.blockNumber)}
           </AppLink>{' '}
           · <Utc8Date timestamp={cell.timestamp} />
         </dd>
         <dt className="text-text-dim">held by</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
-          <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
+          <AppLink look="inline" href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
             <ShortId value={cell.ownerAddress} kind="address" size="row" />
-          </AppLink>{' '}
-          · {cell.lockName ?? 'Unregistered lock'}
+          </AppLink>
+          {/* the holder's lock by the one decision (B4): nothing for the default lock */}
+          {holderLock && (
+            <>
+              {' · '}
+              {holderLock}
+            </>
+          )}
         </dd>
         {type && (
           <>
             <dt className="text-text-dim">type</dt>
             <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               <AppLink
+                look="inline"
                 href={getScriptDetailHref({
                   name: cell.typeName,
                   codeHash: type.codeHash,
@@ -93,7 +107,7 @@ export function ClusterCellEvidence({
  */
 export function StoredDescription({ description }: { description: string | null }) {
   if (description === null)
-    return <p className="text-text-dim text-meta">No description bytes recorded.</p>;
+    return <p className="text-text text-small">No description bytes recorded.</p>;
   let pretty: string | null = null;
   try {
     pretty = JSON.stringify(JSON.parse(description), null, 2);
@@ -101,18 +115,19 @@ export function StoredDescription({ description }: { description: string | null 
     // not JSON: shown exactly as stored
   }
   return (
-    <details className="min-w-0">
-      <summary className="text-text-dim text-small cursor-pointer">
-        Description, as stored{pretty !== null ? ' · pretty JSON' : ''}
-      </summary>
+    // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep)
+    <SectionDisclosure
+      form="inner"
+      summary={<>Description, as stored{pretty !== null ? ' · pretty JSON' : ''}</>}
+    >
       {pretty !== null ? (
-        <TintedJson text={pretty} className="mt-2" />
+        <TintedJson text={pretty} />
       ) : (
-        <pre className="text-meta text-text-dim mt-2 max-w-full whitespace-pre-wrap break-all">
+        <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
           {description}
         </pre>
       )}
-    </details>
+    </SectionDisclosure>
   );
 }
 
@@ -246,18 +261,15 @@ export function MnftClassEvidence({
         )}
       </dl>
       {issuerDetail?.infoHex && info && (
-        <details className="min-w-0">
-          <summary className="text-text-dim text-small cursor-pointer">
-            Issuer info, as stored · {info.kind}
-          </summary>
+        <SectionDisclosure form="inner" summary={<>Issuer info, as stored · {info.kind}</>}>
           {info.kind === 'pretty JSON' ? (
-            <TintedJson text={info.text} className="mt-2" />
+            <TintedJson text={info.text} />
           ) : (
-            <pre className="text-meta text-text-dim mt-2 max-w-full whitespace-pre-wrap break-all">
+            <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
               {info.text}
             </pre>
           )}
-        </details>
+        </SectionDisclosure>
       )}
     </ProtocolEvidence>
   );

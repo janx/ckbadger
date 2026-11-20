@@ -4,6 +4,14 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { AlleleGel, type GenotypeOverlay } from '@/components/ui/allele-gel';
 import { ALLELE_GEL, alleleGelLayout } from '@/lib/allele-gel-layout';
 import type { AlleleLane } from '@/lib/dob-genes';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 // PB-04 (UI review 2026-11-14): "this one" on the object page's allele gel was a line drawn through
 // the middle of its own band's name ("COPPER", "Bitcoin inscr…" read as struck out), and on a
@@ -160,5 +168,145 @@ describe('the margin for a genotype tag (PB-04)', () => {
     const first = container.querySelector('[data-lane="Level"] rect')!;
     // the lane's hit box starts 1 px into its slot
     expect(num(first, 'x')).toBe(1);
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the gel stands whole in its place — a gene's caption in its lane's head (across, or turned on
+// end inside its lane), a variant's name inside its band, the count of variants under its lane,
+// the genotype's tag in the margin — touches no other word, and stays inside the svg, measured by
+// the type modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The
+// real cases: the object page's two genes with "this one", and a DOB of 16 and of 24 genes (their
+// captions turned on end), at the object column at 1280 (1232), at 640 (608), on phones (358, 326).
+describe('every word of the gel in its place (readability F3)', () => {
+  const genes = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      lane(`prev.gene${String(i).padStart(2, '0')}`, [
+        [`trait ${i} first`, 50],
+        ['second', 30],
+        ['third', 20],
+      ])
+    );
+  // a gene whose rare variants are bands 14 to 19 px tall in the 250 px gel, each named
+  const rare = lane('Eyes', [
+    ['common', 76],
+    ['rare', 6],
+    ['rarer', 7],
+    ['rarest', 8],
+    ['the last', 3],
+  ]);
+  const cases = [
+    ['two genes and "this one"', LANES, [THIS_ONE]],
+    ['three genes, one with rare variants', [...LANES, rare], []],
+    ['16 genes', genes(16), []],
+    ['24 genes', genes(24), []],
+  ] as const;
+  it.each([1232, 608, 358, 326].flatMap((w) => cases.map(([n, l, o]) => [w, n, l, o] as const)))(
+    'at %i px, %s',
+    (width, _name, lanes, overlays) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <AlleleGel lanes={lanes} total={100} subject="Nervape" overlays={overlays} />
+      );
+      const svg = container.querySelector('svg')!;
+      const lines = allTextLines(svg);
+      for (const line of lines) expectInside(line, viewBox(svg), 'the gel', 'flush');
+      expectApart(lines, `the gel at ${width}`);
+      for (const g of [...svg.querySelectorAll('[data-lane]')]) {
+        const lane = rectBox(g.querySelector('rect')!);
+        // a caption, across or on end, stands inside its lane's width
+        for (const line of textLines(g.querySelector('[data-gene-caption]')!))
+          expectInside(line, { ...lane, top: -Infinity, bottom: Infinity }, 'a caption', 'flush');
+        // a variant's name inside its band
+        for (const band of [...g.querySelectorAll('rect[data-allele]')]) {
+          const text = band.parentElement!.querySelector('text');
+          if (text)
+            for (const line of textLines(text))
+              expectInside(line, rectBox(band), `"${line.text}" in its band`);
+        }
+      }
+    }
+  );
+});
+
+// Lane P2's third round (item 5; the review's "gel: two saturated blocks each write one word"): a
+// band wrote its trait value alone ("COPPER"), its share of the objects only in its hover title,
+// and under each lane a bare "3", which only the legend's "variants per gene" explained. A band
+// now prints its share under its value where the band holds two lines and the lane holds the
+// figure, and a lane its count with the noun where the lane holds it (else the bare count the
+// legend reads).
+describe('a band says its share, a lane its variants', () => {
+  it('prints each band’s share under its value, and the lane’s count with its noun', () => {
+    stubChartWidth(1248);
+    const { container } = render(<AlleleGel lanes={LANES} total={90} subject="Gel" />);
+    const level = container.querySelector('[data-lane="Level"]')!;
+    const words = [...level.querySelectorAll('text')].map((t) => t.textContent);
+    // 40, 30 and 20 of 90 objects
+    expect(words).toEqual(
+      expect.arrayContaining(['COPPER', '44.44%', 'SILVER', '33.33%', 'GOLD', '22.22%'])
+    );
+    // one unit: the count and its noun joined by a no-break space
+    expect(level.querySelector('[data-variants]')!.textContent).toBe('3\u00a0variants');
+    // the share stands inside its band, under the value
+    const copper = level.querySelector('[data-allele="COPPER"]')!;
+    const share = [...level.querySelectorAll('text')].find((t) => t.textContent === '44.44%')!;
+    const value = [...level.querySelectorAll('text')].find((t) => t.textContent === 'COPPER')!;
+    const top = Number(copper.getAttribute('y'));
+    const bottom = top + Number(copper.getAttribute('height'));
+    expect(Number(share.getAttribute('y'))).toBeGreaterThan(Number(value.getAttribute('y')));
+    expect(Number(share.getAttribute('y'))).toBeLessThan(bottom);
+    expect(Number(value.getAttribute('y'))).toBeGreaterThan(top);
+  });
+
+  it('keeps the bare count where the noun does not fit the lane, and no share it cannot hold', () => {
+    stubChartWidth(1248);
+    // twenty lanes at 1,248 px: 62 px each, which holds a band's value but not "3 variants"
+    // (10 glyphs at 7.2 px, 72 px, in the 48 px between its insets) nor a share (6 glyphs, 43.2 px,
+    // in 40 px of label room)
+    const many = Array.from({ length: 20 }, (_, i) =>
+      lane(`g${i}`, [
+        ['A', 40],
+        ['B', 30],
+        ['C', 20],
+      ])
+    );
+    const { container } = render(<AlleleGel lanes={many} total={90} subject="Gel" />);
+    const first = container.querySelector('[data-lane="g0"]')!;
+    expect(first.querySelector('[data-variants]')!.textContent).toBe('3');
+    const words = [...first.querySelectorAll('text')].map((t) => t.textContent);
+    expect(words).toContain('A');
+    expect(words).not.toContain('44.44%');
+  });
+});
+
+// Lane P2's fifth round (NOTE 6): the lanes' counts took two forms in one gel, "3 variants" where
+// the words fit the lane and a bare "12" where they did not ("3 variants · 12"). One form a gel:
+// the noun where every lane's count holds it, else every count bare (the legend reads them). Two
+// lanes in a 202 px gel are 90 px each, 76 px between the insets: "3 variants" (10 glyphs, 72 px)
+// fits it and "12 variants" (11 glyphs, 79.2 px) does not.
+describe('one form of the lanes’ counts in one gel', () => {
+  const mixed = [
+    lane('A', [
+      ['x', 3],
+      ['y', 2],
+      ['z', 1],
+    ]),
+    lane(
+      'B',
+      Array.from({ length: 12 }, (_, k): [string, number] => [`v${k}`, 12 - k])
+    ),
+  ];
+  it('writes every count bare where one lane cannot hold the noun', () => {
+    stubChartWidth(202);
+    const { container } = render(<AlleleGel lanes={mixed} total={78} subject="Gel" />);
+    const counts = [...container.querySelectorAll('[data-variants]')].map((t) => t.textContent);
+    expect(counts).toEqual(['3', '12']);
+  });
+
+  it('writes every count with its noun where every lane holds it', () => {
+    stubChartWidth(1248);
+    const { container } = render(<AlleleGel lanes={mixed} total={78} subject="Gel" />);
+    const counts = [...container.querySelectorAll('[data-variants]')].map((t) => t.textContent);
+    expect(counts).toEqual(['3\u00a0variants', '12\u00a0variants']);
   });
 });

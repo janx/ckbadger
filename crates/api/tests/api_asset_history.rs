@@ -133,6 +133,22 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
         json["data"][1]["anatomy"],
         serde_json::json!({"capacityBytes":8,"lockBytes":53,"typeBytes":53,"dataBytes":0})
     );
+    // lane exactness, part B5: each version states its free part beside the whole and the occupied, so a page
+    // subtracts nothing (the pages wrote capacity − occupied)
+    for version in json["data"].as_array().unwrap() {
+        let int = |key: &str| -> i128 {
+            version[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("no {key}: {version}"))
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(
+            int("freeCapacity"),
+            int("capacity") - int("occupiedCapacity"),
+            "{version}"
+        );
+    }
 }
 
 /// Lane B carry-over 4(b): a cell's data hash is the one a script references
@@ -2533,6 +2549,29 @@ async fn same_spore_producer_detail_protocol_genetics_and_cell_versions_agree() 
     assert_eq!(collection["activitiesCount"], cluster["activitiesCount"]);
 }
 
+/// Every day of a "CKB held" history states the capacity and the occupied its seed gives that day
+/// (the running sums of the seeded deltas, `expected`), and the free part as their difference
+/// (lane exactness, part A2, the test review's SHOULD-1: the helper checked `used + unused ==
+/// capacity` of the route's own output, true by the route's definition of `unused`).
+fn assert_held_points_follow_the_seed(json: &serde_json::Value, expected: &[(i128, i128)]) {
+    let points = json["data"]
+        .as_array()
+        .expect("a capacity history has data");
+    assert_eq!(points.len(), expected.len(), "{json}");
+    for (point, (capacity, used)) in points.iter().zip(expected) {
+        let int = |key: &str| -> i128 {
+            point["values"][key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} has no {key}: {point}", point["date"]))
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(int("capacity"), *capacity, "{point}");
+        assert_eq!(int("occupiedCapacity"), *used, "{point}");
+        assert_eq!(int("freeCapacity"), capacity - used, "{point}");
+    }
+}
+
 #[tokio::test]
 async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
     let store = test_store();
@@ -2642,10 +2681,14 @@ async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["data"].as_array().unwrap().len(), 2, "{json}");
         assert_eq!(json["data"][1]["date"], "2026-10-26");
+        // re-pinned on purpose (lane p-assets): each day states the whole its cells hold beside
+        // its parts (it sent used and unused, and a page summed them)
         assert_eq!(
             json["data"][1]["values"],
-            serde_json::json!({"used":"60","unused":"60"})
+            serde_json::json!({"occupiedCapacity":"60","freeCapacity":"60","capacity":"120"})
         );
+        // the seed's running sums: 100 and 50 CKB on the 25th, 120 and 60 on the 26th
+        assert_held_points_follow_the_seed(&json, &[(100, 50), (120, 60)]);
         assert_eq!(json["completeThrough"], "2026-10-26");
         assert_eq!(json["anchor"]["blockNumber"], 2);
         assert_eq!(json["source"], "indexedChainTimeUtc8");

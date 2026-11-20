@@ -1,3 +1,5 @@
+import { addressScript } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { onlineManager } from '@tanstack/react-query';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -14,6 +16,9 @@ import { expectOnePageSeal } from '@/__tests__/utils/seals';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
+import { factsOf } from '@/__tests__/utils/facts';
+import { activityRead } from '@/__tests__/utils/activity-read';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -88,7 +93,12 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
           hashType: 'type',
           args: '0x',
         },
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({
+          codeHash: LOCK_CODE_HASH,
+          args: '0x1111111111111111111111111111111111111111',
+        }),
       },
     ],
     outputs: [
@@ -108,7 +118,12 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
           hashType: 'type',
           args: '0x',
         },
-        address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({
+          codeHash: LOCK_CODE_HASH,
+          args: '0x2222222222222222222222222222222222222222',
+        }),
       },
     ],
     scriptGroups: [
@@ -229,11 +244,21 @@ function createGenesisDepGroupTransactionDetail(): Awaited<
         cellType: undefined,
         type: undefined,
         address: GENESIS_DEP_GROUP_SENDER,
+        // the lock its address spells (B4 second fix round: a tile refuses an address that
+        // spells another lock; it kept the base transaction's), its hash the activity's
+        lock: addressScript(GENESIS_DEP_GROUP_SENDER),
       },
     ],
     outputs: [output, { ...output }],
     scriptGroups: [
-      { ...tx.scriptGroups![0], ran: false, cycles: null, witnessIndex: null },
+      {
+        ...tx.scriptGroups![0],
+        scriptHash: '0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2',
+        script: addressScript(GENESIS_DEP_GROUP_SENDER),
+        ran: false,
+        cycles: null,
+        witnessIndex: null,
+      },
       {
         scriptHash: '0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590',
         kind: 'lock',
@@ -252,7 +277,7 @@ function createGenesisDepGroupTransactionDetail(): Awaited<
 
 /** Its activity, verbatim from mainnet :8101 (`/transactions/0x71a7…e46c/activity`). */
 const GENESIS_DEP_GROUP_ACTIVITY = JSON.parse(
-  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","scriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
+  '{"txHash":"0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c","blockNumber":0,"txIndex":1,"timestamp":"1573852190812","isCellbase":false,"protocolActions":[],"typeCalls":[],"lockCalls":[{"lockCodeHash":"0x0000000000000000000000000000000000000000000000000000000000000000","lockHashType":"data","lockArgs":"0x","scriptHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockScriptName":"Zero Lock","decoded":null,"decodeError":null}],"participants":[{"address":"ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz","lockHash":"0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2","lockHashPrefix":null,"lockKind":null,"roles":[],"ckbDelta":"-23400000000","usedDelta":"-6100000000","itemDeltas":[],"tags":128},{"address":"ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d","lockHash":"0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590","lockHashPrefix":null,"lockKind":"Zero Lock","roles":[],"ckbDelta":"23400000000","usedDelta":"23400000000","itemDeltas":[],"tags":0}]}'
 ) as Awaited<ReturnType<typeof api.getTransactionActivity>>;
 
 /** The keys the API omits (never nulls) for a transaction it has not indexed (TX-06). */
@@ -352,6 +377,8 @@ vi.mock('@/src/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
   usePathname: () => `/tx/${TX_HASH}`,
   useSearchParams: () => mockSearchParams,
+  // lane D3: the page reads the URL's anchor (a cell's out point); these tests give none
+  useSearchAndHash: () => (mockSearchParams.size ? `?${mockSearchParams}` : ''),
   useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
@@ -449,7 +476,7 @@ describe('TransactionDetailPage', () => {
       )
     ).toEqual([
       '1\u00a0cell became 1.',
-      '0.00064119 ckb to the miner.',
+      // re-pinned on purpose (lane D2, "said once"): no fee line; the fee is in the status strip
       'common knowledge unchanged.',
     ]);
   });
@@ -494,6 +521,34 @@ describe('TransactionDetailPage', () => {
     // readability 2026-11-18: the range is one unit; the line broke after its dash ("2–" / "10")
     expect(within(line).getByText('2–10')).toHaveAttribute('data-nobreak');
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
+    // lane P1, the ink and size roles: the position, the distance and the window are values, the
+    // reading ink (they were quiet), as are the fee rate and the change of common knowledge
+    expect(inkOf(line)).toBe(READING);
+    expect(inkOf(screen.getByText(/^fee rate /))).toBe(READING);
+    expect(inkOf(screen.getByText(/· common knowledge /))).toBe(READING);
+  });
+
+  // lane P1, the ink and size roles: a sentence in the evidence tier reads in the reading ink (the
+  // paused cycles, the cell deps being resolved, none of them); the witness list's "Select a
+  // witness to inspect its bytes." is a hint of how to use it, quiet
+  it('says its evidence’s sentences in the reading ink, its witness hint quiet (lane P1)', async () => {
+    vi.mocked(useCyclesCalculation).mockReturnValue({
+      cycles: null,
+      hasCycles: false,
+      isCalculating: false,
+      hasFailed: false,
+      isPaused: true,
+    });
+    render(<TransactionDetailPage />);
+    expect(inkOf(await screen.findByText('Paused: indexer is on a deep fork'))).toBe(READING);
+    expect(inkOf(await screen.findByText('none'))).toBe(READING);
+    expect(inkOf(screen.getByTestId('tx-witness-selection-empty'))).toBe(QUIET);
+  });
+
+  it('says its cell deps being resolved in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getTransactionCellDeps).mockReturnValue(new Promise(() => {}));
+    render(<TransactionDetailPage />);
+    expect(inkOf(await screen.findByText('Resolving cell deps…'))).toBe(READING);
   });
 
   // Rubbing × Song print, phase 5 (T1): the cells heading is a command and its args, `cells 1 in →
@@ -519,10 +574,13 @@ describe('TransactionDetailPage', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));
     render(<TransactionDetailPage />);
-    const time = await screen.findByRole('time');
-    expect(time).toHaveTextContent('2026-02-21 00:46:12 UTC+8');
-    expect(time).toHaveTextContent(/1h ago$/);
-    expect(time.textContent).not.toMatch(/Z/);
+    // re-pinned on purpose (lane D2): the time is the status strip's fact, the date-time and its
+    // age two units of the site's clock (Utc8DateTime, Utc8Age); the rail's one <time> held both
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const [time, age] = within(strip).getAllByRole('time');
+    expect(time).toHaveTextContent(/^2026-02-21 00:46:12 UTC\+8$/);
+    expect(age).toHaveTextContent(/^1h ago$/);
+    for (const t of [time, age]) expect(t.textContent).not.toMatch(/Z/);
   });
 
   // Review 45fd finding 3 (ruling D4): the node's clock 2 s ahead of this browser's is two
@@ -535,19 +593,22 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
       'Waiting in the pool'
     );
-    const row = screen.getByText('Pending since').parentElement!;
+    // re-pinned on purpose (lane D2): the strip's fact, its label lowercase (the rail's "Pending
+    // since")
+    const row = screen.getByText('pending since').parentElement!;
     expect(row).toHaveTextContent('2026-03-12 20:00:00 UTC+8');
     expect(row).toHaveTextContent(/0s ago$/);
   });
 
   // Lane E4: the facts' ages (the commit time's, a pool transaction's pending-since) read the
   // page's one clock, so they move with no data change; they were written once at render. The
-  // clock stops with the page.
+  // clock stops with the page. Re-pinned on purpose (lane D2): the facts are the status strip's,
+  // their labels lowercase ("time", "pending since"; the rail's were "Time", "Pending since").
   it.each([
-    ['the commit time', 'Time', { timestamp: new Date(T0 - 20_000).toISOString() }],
+    ['the commit time', 'time', { timestamp: new Date(T0 - 20_000).toISOString() }],
     [
       'the pending-since time',
-      'Pending since',
+      'pending since',
       { ...createPendingTransactionDetail(), pendingSince: new Date(T0 - 20_000).toISOString() },
     ],
   ])(
@@ -630,18 +691,19 @@ describe('TransactionDetailPage', () => {
     expect(moved.querySelector('[data-flow-end="miner"]')).toBeNull();
     expect(moved).not.toHaveTextContent(/genesis|issued/);
     const net = screen.getByTestId('tx-balance-net');
-    expect(net).toHaveTextContent(/^Net0 CKB\+173no fee: nothing paid to the miner$/);
+    // B4 item 2 (re-pinned on purpose): the occupied change carries its unit
+    expect(net).toHaveTextContent(/^Net0 CKB\+173 Bno fee: nothing paid to the miner$/);
     expect(net).toHaveTextContent('no fee: nothing paid to the miner');
     expect(net).not.toHaveTextContent(/fee, paid|genesis|issued/);
     expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
-    // Its comment: not a cellbase, so a fee line, the rail's zero (T4).
+    // Its comment (re-pinned on purpose, lane D2, "said once"): no fee line, the zero fee is the
+    // status strip's (it was the comment's second line, "0 ckb to the miner.")
     expect(
       Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
         (l) => l.textContent
       )
     ).toEqual([
       '1\u00a0cell became 2.',
-      '0 ckb to the miner.',
       // 61 occupied bytes in, 117 + 117 out
       'common knowledge grew by 173\u00a0bytes.',
     ]);
@@ -654,16 +716,19 @@ describe('TransactionDetailPage', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const [first, ...rest] = feedSamples.objectTransfer.participants;
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.objectTransfer,
-        txHash: TX_HASH,
-        typeCalls: [],
-        participants: [first, ...rest].map((p, i) => ({
-          ...p,
-          itemDeltas: [],
-          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
-        })),
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.objectTransfer,
+          itemTypes: [],
+          txHash: TX_HASH,
+          typeCalls: [],
+          participants: [first, ...rest].map((p, i) => ({
+            ...p,
+            itemDeltas: [],
+            ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+          })),
+        })
+      );
       render(
         <ErrorBoundary fallback={<p>page-level boundary</p>}>
           <TransactionDetailPage />
@@ -676,9 +741,10 @@ describe('TransactionDetailPage', () => {
       expect(screen.queryByText('page-level boundary')).toBeNull();
       const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
       expect(within(header).getByText(TX_HASH)).toBeInTheDocument();
-      // the summary slot, under the h1
+      // the summary slot, under the h1. B4 third round (re-pinned on purpose, the coordinator's
+      // item 4): the error in its own words, its name with them where it is not a plain Error
       expect(within(header).getByTestId('activity-read-error')).toHaveTextContent(
-        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+        `Cannot read tx ${TX_HASH}: SyntaxError: Cannot convert abc to a BigInt`
       );
       expect(within(header).queryByTestId('tx-summary')).toBeNull();
       const moved = screen.getByRole('heading', { name: 'What moved' }).closest('section')!;
@@ -689,12 +755,13 @@ describe('TransactionDetailPage', () => {
       // Balance changes keeps its heading; its body is one error, the table is gone
       expect(within(balance).getAllByTestId('activity-read-error')).toHaveLength(1);
       expect(within(balance).getByTestId('activity-read-error')).toHaveTextContent(
-        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+        `Cannot read tx ${TX_HASH}: SyntaxError: Cannot convert abc to a BigInt`
       );
       expect(within(balance).queryByRole('table')).toBeNull();
-      // The sections that do not read the activity render as always.
-      const facts = screen.getByRole('complementary', { name: 'Transaction facts' });
-      expect(within(facts).getByText('Fee')).toBeInTheDocument();
+      // The sections that do not read the activity render as always (re-pinned on purpose, lane
+      // D2: the fee is the status strip's fact, its label lowercase; it was the rail's "Fee").
+      const facts = screen.getByRole('group', { name: 'Transaction status' });
+      expect(within(facts).getByText('fee')).toBeInTheDocument();
       expect(screen.getByTestId('tx-io-input-0')).toBeInTheDocument();
       expect(screen.getByTestId('tx-io-output-0')).toBeInTheDocument();
       expect(screen.getByTestId('tx-capacity-equation')).toBeInTheDocument();
@@ -709,7 +776,9 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect((await screen.findAllByText('Pending')).length).toBeGreaterThan(0);
+    // re-pinned on purpose (lane D2): the status is the strip's word, lowercase as the board
+    // writes it (the rail's "Pending"); the evidence still says "pending…" where a figure waits
+    expect((await screen.findAllByText('pending')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Cell deps' })).toBeInTheDocument();
     expect(screen.getByText('Cell graph')).toBeInTheDocument();
@@ -735,9 +804,15 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     // The committing block is known and shown; the block time and the
-    // confirmation count are not known yet and are shown as pending.
+    // confirmation count are not known yet and are shown as pending. Re-pinned on purpose (lane
+    // D2): the status strip says "confirming", lowercase (the rail's "Confirming"), and passes no
+    // fact it does not know, so the block time is not in it at all (the rail said "pending…"
+    // there); the evidence tier still says "pending…" where a figure waits.
     expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('confirming').length).toBeGreaterThan(0);
+    expect(
+      factsOf(screen.getByRole('group', { name: 'Transaction status' })).map(([label]) => label)
+    ).toEqual(['status', 'block', 'fee']);
     expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
@@ -754,13 +829,16 @@ describe('TransactionDetailPage', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
     expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
-    expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
+    expect(screen.queryByText('confirming')).not.toBeInTheDocument();
     // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
-    // one on each sheet).
+    // one on each sheet). Re-pinned on purpose (lane D3): in two forms, one shown at a width, from
+    // lg across the seam and below it across the gap of the stacked sheets, two halves each (it
+    // was the first form's two)
     expectHeadStone('pressed');
-    expect(document.querySelectorAll('[data-seam-seal] [data-seal-state="pressed"]')).toHaveLength(
-      2
-    );
+    for (const form of ['side-by-side', 'stacked'])
+      expect(
+        document.querySelectorAll(`[data-seam-seal="${form}"] [data-seal-state="pressed"]`)
+      ).toHaveLength(2);
 
     await act(() => vi.advanceTimersByTimeAsync(9000));
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(3);
@@ -776,6 +854,11 @@ describe('TransactionDetailPage', () => {
 
     // Provisional, not failed: a placeholder that says what it waits for.
     expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
+    // lane P1, the ink and size roles: what it waits for and the node's message are sentences, the
+    // reading ink (they were quiet)
+    const waiting = screen.getByTestId('tx-inputs-not-yet-resolvable');
+    expect(waiting.querySelectorAll('p')).toHaveLength(2);
+    for (const p of waiting.querySelectorAll('p')) expect(inkOf(p)).toBe(READING);
     expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
     expect(document.querySelector('.comment')).toBeNull();
     // C2: no transaction yet, so no stone.
@@ -786,7 +869,8 @@ describe('TransactionDetailPage', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the strip's label, lowercase (the rail's "Pending since")
+    expect(await screen.findByText('pending since')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
     // Then the pool transaction: its stone, dashed.
@@ -801,11 +885,12 @@ describe('TransactionDetailPage', () => {
       .mockResolvedValue(createPendingTransactionDetail());
 
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the strip's label, lowercase (the rail's "Pending since")
+    expect(await screen.findByText('pending since')).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('Pending since')).toBeInTheDocument();
+    expect(screen.getByText('pending since')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
 
     // Still polling after the 503.
@@ -937,6 +1022,123 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
   });
 
+  // What the Cell graph's toggle does (lane cd-fixes-controls, the disclosure sweep): its state is
+  // its page's, so opening it asks for the graph. Re-pinned on purpose (the lead's ruling: each
+  // disclosure owns what it shows): "Raw data" was drawn open by the graph's state, so folding the
+  // graph folded the whole raw section a reader had open, a control that changed more than it
+  // named; it folds the graph only now, and Raw data stays as the reader left it.
+  it('holds the Cell graph’s state in its page: opened, the graph loads; folded, Raw data stays open', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    const graph = screen.getByText('Cell graph').closest('details')!;
+    fireEvent.click(screen.getByText('Raw data'));
+    expect(raw).toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Cell graph'));
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+    expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
+    fireEvent.click(screen.getByText('Cell graph'));
+    await waitFor(() => expect(graph).not.toHaveAttribute('open'));
+    expect(raw).toHaveAttribute('open');
+  });
+
+  // The raw evidence's disclosures are the library's (lane cd-fixes-controls, the disclosure sweep,
+  // second part): "Raw data" the section form under the tier's rule, the six inside it the inner
+  // form; their words 13 px in tier 2's quiet ink, all seven shut until a reader opens one
+  // The lead's ruling (lane cd-fixes-controls, the disclosure sweep): each disclosure owns what it
+  // shows. A `?tab=graph` link opens both (a deep link to the graph shows it, so its section
+  // opens); after that, folding the Cell graph folds the graph only, and folding Raw data folds Raw
+  // data, the graph inside keeping its own state. The address holds one truth: `tab=graph` while
+  // the graph is open (written as the graph opens or folds, in place), nothing of Raw data.
+  describe('the Cell graph and Raw data, each its own', () => {
+    const details = (words: string) => screen.getByText(words).closest('details')!;
+
+    it('folds the graph only: opened by ?tab=graph, Raw data stays open and the address drops the graph', async () => {
+      mockSearchParams = new URLSearchParams('tab=graph');
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      expect(details('Raw data')).toHaveAttribute('open');
+      fireEvent.click(screen.getByText('Cell graph'));
+      await waitFor(() => expect(details('Cell graph')).not.toHaveAttribute('open'));
+      expect(details('Raw data')).toHaveAttribute('open');
+      expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('tab=graph');
+    });
+
+    it('writes the graph into the address as it opens, in place, and nothing as Raw data opens', async () => {
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+      const replaces = mockReplace.mock.calls.length;
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).toHaveAttribute('open'));
+      expect(mockReplace.mock.calls.length).toBe(replaces);
+      fireEvent.click(screen.getByText('Cell graph'));
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('tab=graph')
+      );
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('folds Raw data only: opened again, the graph is as it was, open or shut', async () => {
+      mockSearchParams = new URLSearchParams('tab=graph');
+      render(<TransactionDetailPage />);
+      expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).not.toHaveAttribute('open'));
+      expect(details('Cell graph')).toHaveAttribute('open');
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).toHaveAttribute('open'));
+      expect(details('Cell graph')).toHaveAttribute('open');
+      expect(screen.getByTestId('mock-cell-graph')).toBeInTheDocument();
+    });
+
+    it('asks for the graph only while it is open and Raw data around it is too', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.mocked(api.getTransactionDetail)
+        .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+        .mockResolvedValue(createCommittedTransactionDetail());
+      render(<TransactionDetailPage />);
+      expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
+      // provisional: the graph waits for the store; open it, then fold the section around it
+      fireEvent.click(screen.getByText('Raw data'));
+      fireEvent.click(screen.getByText('Cell graph'));
+      await waitFor(() => expect(details('Cell graph')).toHaveAttribute('open'));
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(details('Raw data')).not.toHaveAttribute('open'));
+      // indexed: the graph could be read now, but nothing shows it
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
+      expect(api.getTransactionGraph).not.toHaveBeenCalled();
+      // Raw data opened again: the graph is open inside it, and asked for
+      fireEvent.click(screen.getByText('Raw data'));
+      await waitFor(() => expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH));
+    });
+  });
+
+  it('draws its raw evidence in the library’s disclosures, their words 13 px in tier 2’s quiet ink', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    expect(raw).toHaveClass('border-t');
+    const summaries = [...raw.querySelectorAll('summary')];
+    expect(summaries.map((s) => s.textContent!.replace(/ · .*$/, ''))).toEqual([
+      'Raw data',
+      'Cells',
+      'Scripts',
+      'Witness bytes',
+      'Header deps',
+      'Cell graph',
+      'JSON',
+    ]);
+    for (const summary of summaries) {
+      expect(summary).toHaveClass('text-small', 'text-text-dim');
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+    }
+    for (const summary of summaries.slice(1))
+      expect(summary.closest('details')).not.toHaveClass('border-t');
+  });
+
   it('renders witness tab with deterministic decode and byte interaction', async () => {
     render(<TransactionDetailPage />);
 
@@ -1029,6 +1231,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByText('Witnesses · unavailable')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-tab')).toHaveTextContent('Witness bytes are unavailable');
+    // lane P1, the ink and size roles: a sentence, the reading ink (it was quiet)
+    expect(inkOf(screen.getByText('Witness bytes are unavailable'))).toBe(READING);
   });
 
   it('decodes .cell records next to the witness that carries them', async () => {
@@ -1156,11 +1360,13 @@ describe('TransactionDetailPage', () => {
   it('renders exact occupied bytes, output liveness, and output locks that did not run', async () => {
     render(<TransactionDetailPage />);
     const output = await screen.findByTestId('tx-io-output-0');
-    expect(output).toHaveTextContent('occupied 94');
+    // B4 fix round (re-pinned on purpose): the tile's occupied bytes carry their unit
+    expect(output).toHaveTextContent('occupied 94 B');
     expect(output).not.toHaveTextContent('occupied 94.00000000');
     expect(output).toHaveTextContent('live');
+    // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
     expect(screen.getByText(/^occupied 94 → 94/)).toHaveTextContent(
-      'occupied 94 → 94 · common knowledge 0'
+      /^occupied 94 → 94 B · common knowledge 0 B$/
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)
@@ -1431,6 +1637,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(screen.getByText('Raw data').parentElement).toHaveAttribute('open');
+    // and the Cell graph itself (lane cd-fixes-controls, the disclosure sweep: its state the page's)
+    expect(screen.getByText('Cell graph').closest('details')).toHaveAttribute('open');
   });
 
   it('shows not found message for 404 transaction errors', async () => {

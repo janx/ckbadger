@@ -6,6 +6,14 @@ import { percentOf } from '@/lib/format-unit';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
+/** The contents glyph's height: the cellbase diamond, the squares and the dots on its 9 px middle. */
+export const BLOCK_GLYPH_HEIGHT = 18;
+
+/**
+ * What a block's contents glyph takes on its line beside its count (a list column budgets them):
+ * the glyph's width, the diamond and seven squares and the dots after them, and its `gap-2`.
+ */
+export const CONTENTS_GLYPH = { width: GLYPH_WIDTH, gap: 8 } as const;
 const DOT_STEP = 6;
 const DOT_R = 2.4;
 
@@ -18,6 +26,19 @@ interface BlockContentsProps {
 }
 
 /** The same square/diamond/dot grammar as the transaction pipeline. */
+/**
+ * A count beside the glyph: the figure a value, the reading ink at 13 px; its word a unit, quiet at
+ * 12 px (the ink and size round, the shared lane: the whole count was quiet at 12).
+ */
+function Count({ figure, unit }: { figure: string; unit: string }) {
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-text text-small tabular-nums">{figure}</span>{' '}
+      <span className="text-text-dim text-meta">{unit}</span>
+    </span>
+  );
+}
+
 export function BlockContents({
   transactionSizes,
   proposalsCount,
@@ -46,9 +67,9 @@ export function BlockContents({
         <svg
           role="img"
           aria-label={label}
-          viewBox={`0 0 ${GLYPH_WIDTH} 18`}
+          viewBox={`0 0 ${GLYPH_WIDTH} ${BLOCK_GLYPH_HEIGHT}`}
           width={GLYPH_WIDTH}
-          height="18"
+          height={BLOCK_GLYPH_HEIGHT}
           className="shrink-0"
         >
           <path d="M5 4.5 9.5 9 5 13.5.5 9z" fill={DATA_COLOR} />
@@ -59,7 +80,7 @@ export function BlockContents({
                 key={index}
                 data-transaction-size={size}
                 x={14 + index * 13}
-                y={(18 - side) / 2}
+                y={(BLOCK_GLYPH_HEIGHT - side) / 2}
                 width={side}
                 height={side}
                 fill={DATA_COLOR}
@@ -78,22 +99,24 @@ export function BlockContents({
             />
           ))}
         </svg>
-        {showCount && (
-          <span className="text-text-dim text-meta">
-            {transactionSizes.length.toLocaleString('en-US')} tx
-          </span>
-        )}
+        {showCount && <Count figure={transactionSizes.length.toLocaleString('en-US')} unit="tx" />}
       </span>
       {showCount && (userSizes.length > shown.length || proposalsCount > dots) && (
         <span className="text-text-dim text-meta">
           {[
             ...(userSizes.length > shown.length
-              ? [`+${userSizes.length - shown.length} tiles`]
+              ? [<Count key="tiles" figure={`+${userSizes.length - shown.length}`} unit="tiles" />]
               : []),
             ...(proposalsCount > dots
-              ? [`${proposalsCount.toLocaleString('en-US')} proposed`]
+              ? [
+                  <Count
+                    key="proposed"
+                    figure={proposalsCount.toLocaleString('en-US')}
+                    unit="proposed"
+                  />,
+                ]
               : []),
-          ].join(' · ')}
+          ].flatMap((part, i) => (i === 0 ? [part] : [' · ', part]))}
         </span>
       )}
     </span>
@@ -107,10 +130,23 @@ interface ResourceBarProps {
   overhead?: number;
   /** Keep the exact count above its bar when a table column is narrow. */
   stacked?: boolean;
+  /**
+   * The bar's track in px, its column's: its head's ticks stand whole over it (the rule at
+   * `trackPx`). Inline, AlignedBar's default when not given; stacked, required (it was a fixed 80
+   * px under heads whose ticks ran 120).
+   */
+  trackWidth?: number;
 }
 
 /** Geometry uses numbers; the printed resource count stays an exact integer. */
-export function ResourceBar({ label, value, scale, overhead, stacked = false }: ResourceBarProps) {
+export function ResourceBar({
+  label,
+  value,
+  scale,
+  overhead,
+  stacked = false,
+  trackWidth,
+}: ResourceBarProps) {
   if (
     !Number.isSafeInteger(value) ||
     value < 0 ||
@@ -126,12 +162,15 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
   ) {
     throw new Error(`${label}: overhead ${overhead} exceeds resource value ${value}`);
   }
+  if (stacked && !(trackWidth !== undefined && Number.isFinite(trackWidth) && trackWidth > 0))
+    throw new Error(`${label}: a stacked bar needs its column's track, got ${trackWidth}`);
   // Inline: the shared aligned bar, so every row starts at one left baseline (BA-01).
   if (!stacked)
     return (
       <AlignedBar
         label={label}
         scale={scale}
+        trackWidth={trackWidth}
         segments={
           overhead === undefined
             ? [{ key: 'value', label, value, tone: 'data' }]
@@ -152,7 +191,8 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}
-        className="bg-bar-track flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
+        className="bg-bar-track flex h-2 shrink-0 overflow-hidden"
+        style={{ width: `${trackWidth}px` }}
       >
         {overhead !== undefined && (
           <span
@@ -225,7 +265,8 @@ export function BlocksLimitsNote({ blocks }: { blocks: readonly LimitRow[] }) {
   const bytesLimit = BigInt(maxBlockBytes);
   const cyclesLimit = BigInt(maxBlockCycles);
   return (
-    <p className="text-text-dim text-small">
+    // a reading of the figure, its figures values: the reading ink (R3; lane P1 follow-up)
+    <p className="text-text text-small max-w-measure">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
       <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
       {percentOf(BigInt(fullest.size), bytesLimit)} of the {maxBlockBytes.toLocaleString('en-US')}

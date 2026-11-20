@@ -15,6 +15,13 @@ export interface ProtocolActionMeta {
   channelOutpoint: string | null;
   btcTxid: string | null;
   btcOutputIndex: bigint | null;
+  /**
+   * A Nervos DAO step's owner, the lock hash of the cell that took it, `0x` and lower case
+   * (lane exactness, part B6): the indexer writes it into every DAO action's metadata as
+   * `lockHash`, hex without the prefix (a deposit's output deposit cell, a withdrawal request's output request cell, a
+   * completed withdrawal's input request cell). Null where the metadata has none.
+   */
+  owner: string | null;
 }
 
 function where(pa: ActivityProtocolAction, key: string): string {
@@ -31,6 +38,18 @@ function integerOf(pa: ActivityProtocolAction, key: string): bigint | null {
     throw new Error(`${where(pa, key)} ${JSON.stringify(v)} is not an integer`);
   }
   return BigInt(v);
+}
+
+/**
+ * The owner's lock hash, normalised once: 32 bytes of hex, with or without `0x` (lane exactness,
+ * part B6).
+ */
+function ownerOf(pa: ActivityProtocolAction): string | null {
+  const v = stringOf(pa, 'lockHash');
+  if (v === null) return null;
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(v))
+    throw new Error(`${where(pa, 'lockHash')} ${JSON.stringify(v)} is not a lock hash`);
+  return `0x${v.replace(/^0x/, '').toLowerCase()}`;
 }
 
 function stringOf(pa: ActivityProtocolAction, key: string): string | null {
@@ -63,6 +82,7 @@ export function protocolActionMeta(pa: ActivityProtocolAction): ProtocolActionMe
     channelOutpoint: stringOf(pa, 'channelOutpoint'),
     btcTxid: stringOf(pa, 'btcTxid'),
     btcOutputIndex: integerOf(pa, 'outIndex'),
+    owner: ownerOf(pa),
   };
   if (pa.protocol === 'dao') {
     for (const key of DAO_REQUIRED[pa.action] ?? []) {

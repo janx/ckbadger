@@ -5,16 +5,18 @@
 // line whose items are all objects of one composition tier says it once, at the end of its items;
 // mixed tiers, or a token / identity on the line, keep one badge per object. jsdom does not lay
 // out, so these assert structure and order.
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const TX = '0xa46efcd8' + 'ef'.repeat(26) + 'dac2e0';
 
 function party(tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     lockKind: 'Default Lock',
@@ -39,8 +41,12 @@ function object(n: number, delta: 1 | -1, composition: CompositionTier | null): 
   };
 }
 
-function row(participants: ParticipantInfo[]): ActivityRowData {
-  return {
+function row(
+  participants: ParticipantInfo[],
+  // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+): ActivityRowData {
+  return activityRead({
     txHash: TX,
     blockNumber: 17627981,
     timestamp: '1761174000000',
@@ -48,29 +54,39 @@ function row(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+
+    itemTypesUnread: null,
     participants,
-  };
+    ...over,
+  });
 }
 
 const sender = party('sendr1', { ckbDelta: '-326700000000', usedDelta: '-323100000000' });
 const receiver = party('hprdnn', { ckbDelta: '326699990000', usedDelta: '323100000000' });
 const transfer = row([sender, receiver]);
+/** A party on a lock that is not the default: its line names the lock (B4). */
+const joy = party('joyid1', {
+  lockKind: 'JoyID',
+  address: seededAddress('joyid1', JOYID_CODE_HASH),
+});
 
 const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-role="participant"]')];
+/** A party's address as a row writes it: `ckb1…` and its last 8 characters (R9). */
+const tail = (p: ParticipantInfo) => p.address!.slice(-8);
 const roles = (line: HTMLElement) => [...line.children].map((e) => e.getAttribute('data-role'));
 
 describe('focusLockHash: the participant the page is about', () => {
   it('draws the focused participant first, before the CKB order would put it', () => {
     // Without a focus the payer leads (negative first); the receiver is this page's address.
     const { container: plain } = render(<ActivityRow activity={transfer} />);
-    expect(lines(plain)[0]).toHaveTextContent('sendr1');
+    expect(lines(plain)[0]).toHaveTextContent(tail(sender));
     const { container } = render(
       <ActivityRow activity={transfer} focusLockHash={receiver.lockHash!} />
     );
     const shown = lines(container);
     expect(shown).toHaveLength(2);
-    expect(shown[0]).toHaveTextContent('hprdnn');
-    expect(shown[1]).toHaveTextContent('sendr1');
+    expect(shown[0]).toHaveTextContent(tail(receiver));
+    expect(shown[1]).toHaveTextContent(tail(sender));
   });
 
   it('writes its address as text with the full address in the hover, never a link to itself', () => {
@@ -81,7 +97,7 @@ describe('focusLockHash: the participant the page is about', () => {
     const party = focus.querySelector('[data-role="party"]') as HTMLElement;
     expect(party).toHaveAttribute('data-party');
     expect(within(party).queryByRole('link')).toBeNull();
-    expect(within(party).getByTitle(receiver.address!)).toHaveTextContent('ckb1…sqhprdnn');
+    expect(within(party).getByTitle(receiver.address!)).toHaveTextContent(`ckb1…${tail(receiver)}`);
     expect(container.querySelector(`a[href="/mainnet/address/${receiver.address}"]`)).toBeNull();
     // Every other participant is unchanged: its address is the link to its page.
     expect(
@@ -91,13 +107,14 @@ describe('focusLockHash: the participant the page is about', () => {
 
   // Material pass v2 (move 5): the "this address" tag is gone — the party a page is about is
   // underlined jade (`.this-address` on its address text) and says "this address" to a screen
-  // reader only; the lock kind follows as dim small caps, in the line order of the board.
+  // reader only. Readability B4 (re-pinned): its lock follows only when it is not the default lock
+  // (R9), so these default-lock lines carry none; a JoyID party's line names its lock.
   it('underlines it jade with its lock kind after it, saying "this address" to a reader only', () => {
     const { container } = render(
       <ActivityRow activity={transfer} focusLockHash={receiver.lockHash!} />
     );
     const [focus, other] = lines(container);
-    expect(roles(focus)).toEqual(['party', 'lock-kind', 'ckb', 'occupied']);
+    expect(roles(focus)).toEqual(['party', 'ckb', 'occupied']);
     const party = focus.querySelector('[data-role="party"]') as HTMLElement;
     expect(party).toHaveAttribute('data-this-address', 'true');
     expect(within(party).getByTitle(receiver.address!)).toHaveClass('this-address');
@@ -107,17 +124,19 @@ describe('focusLockHash: the participant the page is about', () => {
     // Only the focused line carries it.
     expect(within(other).queryByText('this address')).toBeNull();
     expect(other.querySelector('[data-role="party"]')).not.toHaveAttribute('data-this-address');
-    expect(roles(other)).toEqual(['party', 'lock-kind', 'ckb', 'occupied']);
+    expect(roles(other)).toEqual(['party', 'ckb', 'occupied']);
     expect(within(container).getAllByText('this address')).toHaveLength(1);
+    const { container: named } = render(
+      <ActivityRow activity={row([joy, sender])} focusLockHash={joy.lockHash!} />
+    );
+    expect(roles(lines(named)[0])).toEqual(['party', 'lock-kind', 'ckb']);
+    expect(lines(named)[0].querySelector('[data-role="lock-kind"]')).toHaveTextContent('JoyID');
   });
 
   it('keeps every participant: the count of lines equals the participants, with or without a focus', () => {
-    const many = row([
-      sender,
-      party('third1', { ckbDelta: '-1000' }),
-      receiver,
-      party('fourth', { ckbDelta: '0' }),
-    ]);
+    const third = party('third1', { ckbDelta: '-1000' });
+    const fourth = party('fourth', { ckbDelta: '0' });
+    const many = row([sender, third, receiver, fourth]);
     const { container: plain } = render(<ActivityRow activity={many} />);
     const { container } = render(
       <ActivityRow activity={many} focusLockHash={receiver.lockHash!} />
@@ -126,13 +145,11 @@ describe('focusLockHash: the participant the page is about', () => {
     expect(lines(container)).toHaveLength(4);
     expect(container.querySelectorAll('[data-party]')).toHaveLength(4);
     // The others keep their own order (negative by size, then zero).
-    // R9 (re-pinned): a row address keeps its last 8 characters, `sq` and the fixture's tail
-    expect(lines(container).map((l) => l.textContent?.match(/…(\w{8})/)?.[1])).toEqual([
-      'sqhprdnn',
-      'sqsendr1',
-      'sqthird1',
-      'sqfourth',
-    ]);
+    // R9: a row address keeps its last 8 characters (B4 re-pinned: real addresses, whose last
+    // characters are their checksum, so the fixture's tail is in the args, not the text)
+    expect(lines(container).map((l) => l.textContent?.match(/…(\w{8})/)?.[1])).toEqual(
+      [receiver, sender, third, fourth].map(tail)
+    );
   });
 
   it('leads with the focus over six participants and folds the others as before', () => {
@@ -143,11 +160,12 @@ describe('focusLockHash: the participant the page is about', () => {
     const focus = party('hprdnn', { ckbDelta: '1' });
     const big = row([...others, focus]);
     const { container } = render(<ActivityRow activity={big} focusLockHash={focus.lockHash!} />);
-    expect(lines(container)[0]).toHaveTextContent('hprdnn');
+    expect(lines(container)[0]).toHaveTextContent(tail(focus));
     expect(lines(container)).toHaveLength(6);
-    fireEvent.click(within(container).getByRole('button', { name: '+2 participants' }));
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's box, the whole count
+    fireEvent.click(within(container).getByRole('button', { name: /^all 8\sparticipants ↓$/ }));
     expect(lines(container)).toHaveLength(8);
-    expect(lines(container)[0]).toHaveTextContent('hprdnn');
+    expect(lines(container)[0]).toHaveTextContent(tail(focus));
   });
 
   it('fails loudly when the focus is not a participant of the transaction', () => {
@@ -163,19 +181,21 @@ describe('composition badges: once per participant line when all its items share
   const badges = (el: HTMLElement) => el.querySelectorAll('[data-composition]');
 
   it('says a shared tier once, after the items and before occupied', () => {
-    const batch = row([
-      party('hprdnn', {
-        ckbDelta: '108900000000',
-        usedDelta: '107700000000',
-        itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'btc_ckb'), object(3, 1, 'btc_ckb')],
-      }),
-    ]);
+    const batch = row(
+      [
+        party('hprdnn', {
+          ckbDelta: '108900000000',
+          usedDelta: '107700000000',
+          itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'btc_ckb'), object(3, 1, 'btc_ckb')],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={batch} />);
     const [line] = lines(container);
     expect(badges(line)).toHaveLength(1);
     expect(roles(line)).toEqual([
       'party',
-      'lock-kind',
       'ckb',
       'item',
       'item',
@@ -191,11 +211,14 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('keeps one badge per object when the tiers differ', () => {
-    const mixed = row([
-      party('hprdnn', {
-        itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'pure_ckb'), object(3, 1, null)],
-      }),
-    ]);
+    const mixed = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'pure_ckb'), object(3, 1, null)],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={mixed} />);
     const [line] = lines(container);
     expect(line.querySelector('[data-role="composition"]')).toBeNull();
@@ -206,31 +229,51 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('keeps the shared badge on a folded batch and after it opens', () => {
-    const batch = row([
-      party('hprdnn', {
-        itemDeltas: [1, 2, 3, 4, 5].map((n) => object(n, 1, 'btc_ckb')),
-      }),
-    ]);
+    const batch = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [1, 2, 3, 4, 5].map((n) => object(n, 1, 'btc_ckb')),
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={batch} foldObjects />);
     const [line] = lines(container);
-    const more = within(line).getByRole('button', { name: '+4 more objects' });
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline form, one button
+    // that stays and folds back ("fewer"); it was a chip that went once pressed
+    const more = within(line).getByRole('button', { name: /^\+4\smore\sobjects$/ });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(more.getAttribute('aria-controls')!)).toBe(line);
     expect(badges(line)).toHaveLength(1);
+    more.focus();
     fireEvent.click(more);
     expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(5);
     expect(badges(line)).toHaveLength(1);
+    expect(within(line).getByRole('button', { name: 'fewer' })).toBe(more);
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(1);
   });
 
   it('keeps the badge on the object when the line also moves a token or an identity, which carry no tier', () => {
     // A .cell mint: the deed object arrives and the name identity departs on one line. A badge at
     // the line's end would read as the identity's tier.
-    const deed = row([
-      party('hprdnn', {
-        itemDeltas: [
-          object(1, 1, 'pure_ckb'),
-          { kind: 'identity', standard: 'dotcell', identityId: '0x' + 'f6'.repeat(20), delta: -1 },
-        ],
-      }),
-    ]);
+    const deed = row(
+      [
+        party('hprdnn', {
+          itemDeltas: [
+            object(1, 1, 'pure_ckb'),
+            {
+              kind: 'identity',
+              standard: 'dotcell',
+              identityId: '0x' + 'f6'.repeat(20),
+              delta: -1,
+            },
+          ],
+        }),
+      ],
+      { itemTypes: [ITEM_TYPE.spore, ITEM_TYPE.dotcell] }
+    );
     const { container } = render(<ActivityRow activity={deed} />);
     const [line] = lines(container);
     expect(line.querySelector('[data-role="composition"]')).toBeNull();
@@ -239,9 +282,10 @@ describe('composition badges: once per participant line when all its items share
   });
 
   it('draws no badge for objects that carry no tier', () => {
-    const untiered = row([
-      party('hprdnn', { itemDeltas: [object(1, 1, null), object(2, 1, null)] }),
-    ]);
+    const untiered = row(
+      [party('hprdnn', { itemDeltas: [object(1, 1, null), object(2, 1, null)] })],
+      { itemTypes: [ITEM_TYPE.spore] }
+    );
     const { container } = render(<ActivityRow activity={untiered} />);
     expect(badges(container)).toHaveLength(0);
     expect(container.querySelector('[data-role="composition"]')).toBeNull();

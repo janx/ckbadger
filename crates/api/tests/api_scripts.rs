@@ -981,9 +981,11 @@ async fn test_scripts_list_supports_cursor_pagination() {
         }])
     );
     let page_one_summary = json["classSummary"].clone();
+    // re-pinned on purpose (the page-phase review's SHOULD 3): the role counts say how locks and
+    // types overlap (`both`) and what has neither role, so the parts make the whole
     assert_eq!(
         json["roleCounts"],
-        serde_json::json!({"all":3,"locks":2,"types":1})
+        serde_json::json!({"all":3,"locks":2,"types":1,"both":0,"neither":0})
     );
 
     let request = Request::builder()
@@ -1021,7 +1023,79 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(filtered["classSummary"][0]["referenceCount"], 1);
     assert_eq!(
         filtered["roleCounts"],
-        serde_json::json!({"all":3,"locks":2,"types":1})
+        serde_json::json!({"all":3,"locks":2,"types":1,"both":0,"neither":0})
+    );
+}
+
+/// The page-phase review's SHOULD 3 (the P3 follow-up): the scripts list wrote "70 scripts: 41 locks
+/// and 34 types", a breakdown whose parts (75) do not make its whole, as a family used as both a
+/// lock and a type counts in both and one with no role in neither. The route states those two, so
+/// the sentence says what is counted and does no arithmetic.
+#[tokio::test]
+async fn test_scripts_role_counts_state_the_overlap_and_the_rest() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // (family, lock cells, type cells): two locks, a type, one used as both, two with no role, so
+    // no two of the four counts are equal (the third read's T NOTE-2: with one of each, swapping
+    // `both` and `neither`, or `locks` and `types`, passed)
+    for (i, (family_id, lock_cells, type_cells)) in [
+        ("only-lock", 2, 0),
+        ("only-lock-too", 5, 0),
+        ("only-type", 0, 3),
+        ("lock-and-type", 1, 1),
+        ("no-role", 0, 0),
+        ("no-role-too", 0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let version = vec![i as u8 + 0x31; 32];
+        let name = family_id.to_uppercase();
+        batch.put_script_family(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: name.clone(),
+                versions_count: 1,
+                lock_cells_count: lock_cells,
+                type_cells_count: type_cells,
+                ..Default::default()
+            },
+        );
+        batch.put_script_family_by_name(&name, family_id);
+        batch.put_script_version_by_family(family_id, &version);
+        batch.put_script_version(
+            &version,
+            &ScriptVersionInfo {
+                version_hash: version.clone(),
+                family_id: Some(family_id.to_string()),
+                registered_references: vec![(version.clone(), 2)],
+                canonical_reference_hash: Some(version.clone()),
+                canonical_hash_type: Some(2),
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_info(
+            2,
+            &version,
+            &ScriptReferenceInfo {
+                reference_hash: version.clone(),
+                hash_type: 2,
+                lock_cells_count: lock_cells,
+                type_cells_count: type_cells,
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_to_version(2, &version, &version);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/scripts?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["roleCounts"],
+        serde_json::json!({"all":6,"locks":3,"types":2,"both":1,"neither":2}),
+        "{json}"
     );
 }
 
@@ -2923,8 +2997,10 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             assert_eq!(
                 json["data"],
                 serde_json::json!([
-                    {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
-                    {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+                    // re-pinned on purpose (lane p-assets): each day states the whole its cells
+                    // hold, `capacity`, beside its parts, so a page sums nothing
+                    {"date": "2024-01-15", "values": {"occupiedCapacity": "600", "freeCapacity": "400", "capacity": "1000"}},
+                    {"date": "2024-01-16", "values": {"occupiedCapacity": "500", "freeCapacity": "300", "capacity": "800"}},
                 ])
             );
         }
@@ -3057,8 +3133,9 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     assert_eq!(
         chart["data"],
         serde_json::json!([
-            {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
-            {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+            // re-pinned on purpose (lane p-assets): `capacity` beside the parts
+            {"date": "2024-01-15", "values": {"occupiedCapacity": "600", "freeCapacity": "400", "capacity": "1000"}},
+            {"date": "2024-01-16", "values": {"occupiedCapacity": "500", "freeCapacity": "300", "capacity": "800"}},
         ])
     );
     for suffix in ["", "&hash_type=type"] {
@@ -3531,14 +3608,14 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "90");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "90");
-    assert_eq!(data[1]["values"]["unused"], "60");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[1]["values"]["freeCapacity"], "60");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "85");
-    assert_eq!(data[2]["values"]["unused"], "55");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "85");
+    assert_eq!(data[2]["values"]["freeCapacity"], "55");
     // SC-S8: the peak of total CKB held (used + unused), the first greatest day.
     assert_eq!(
         json["totalPeak"],
@@ -3556,8 +3633,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "90");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -3644,8 +3721,8 @@ async fn test_script_capacity_history_chart_aggregates_family_member_references(
     let last = data.last().unwrap();
     // Family counters: owned 300 / knowledge 180 -> used 180, unused 120.
     // The chart end state must equal the family/usage counters exactly.
-    assert_eq!(last["values"]["used"], "180");
-    assert_eq!(last["values"]["unused"], "120");
+    assert_eq!(last["values"]["occupiedCapacity"], "180");
+    assert_eq!(last["values"]["freeCapacity"], "120");
 
     // Same-source lock: the usage endpoint totals must match the chart end state.
     let request = Request::builder()
@@ -3730,8 +3807,8 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["values"]["used"], "40");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -3794,14 +3871,14 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "40");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "40");
-    assert_eq!(data[1]["values"]["unused"], "60");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[1]["values"]["freeCapacity"], "60");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "40");
-    assert_eq!(data[2]["values"]["unused"], "60");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[2]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -4531,9 +4608,10 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                 let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 if suffix.starts_with("/charts") {
                     if owns {
+                        // re-pinned on purpose (lane p-assets): `capacity` beside the parts
                         assert_eq!(
                             json["data"][0]["values"],
-                            serde_json::json!({"used":"500","unused":"300"})
+                            serde_json::json!({"occupiedCapacity":"500","freeCapacity":"300","capacity":"800"})
                         );
                     } else {
                         assert_eq!(json["data"], serde_json::json!([]));
@@ -4577,16 +4655,26 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
         assert_eq!(json["capacityShare"]["data"][0]["date"], "2024-01-15");
         assert_eq!(json["capacityShare"]["data"][1]["date"], "2024-01-16");
         for (chart, expected) in [("capacityShare", 800), ("usedShare", 500)] {
-            let total: i128 = json[chart]["data"][0]["values"]
-                .as_object()
+            // the series' values (re-pinned for the D1 hand-back: a point also states the day's
+            // `total`, the whole the page divides by, which is not a series)
+            let values = &json[chart]["data"][0]["values"];
+            let total: i128 = json[chart]["series"]
+                .as_array()
                 .unwrap()
-                .values()
-                .map(|value| value.as_str().unwrap().parse::<i128>().unwrap())
+                .iter()
+                .map(|series| {
+                    values[series["key"].as_str().unwrap()]
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()
+                        .unwrap()
+                })
                 .sum();
             assert_eq!(
                 total, expected,
                 "retirement must preserve loose reference history: {json}"
             );
+            assert_eq!(values["total"], expected.to_string(), "{json}");
         }
         let series = json["capacityShare"]["series"].as_array().unwrap();
         for (index, family) in families.iter().enumerate() {

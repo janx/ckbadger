@@ -1,7 +1,7 @@
 import type { Config } from 'tailwindcss';
 import plugin from 'tailwindcss/plugin';
 import { TYPE_SCALE } from './lib/type-scale';
-import { LABEL_LINE_PX, ROW_LINE_PX } from './lib/type-metrics';
+import { LABEL_LINE_PX, MEASURE_CHARS, ROW_LINE_PX } from './lib/type-metrics';
 import { glowAlpha, themeBaseStyles, twColor } from './lib/palette';
 
 /**
@@ -164,6 +164,15 @@ export default {
       lineHeight: {
         row: `${ROW_LINE_PX}px`,
         label: `${LABEL_LINE_PX}px`,
+      },
+      // The one measure of running text (readability R4, lane B7): `max-w-measure`, 76 characters
+      // of the element that carries it (lib/type-metrics.ts, MEASURE_CHARS).
+      maxWidth: {
+        measure: `${MEASURE_CHARS}ch`,
+      },
+      // `h-row`: a box one row line tall, the line a row stone stands centred on (RowSeal).
+      height: {
+        row: `${ROW_LINE_PX}px`,
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],

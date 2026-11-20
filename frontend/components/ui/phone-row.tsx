@@ -4,9 +4,10 @@ import { unitNode } from '@/components/ui/units';
 
 /**
  * The three voices of a phone row (boards L1–L8): the identity line, the line that says what the
- * row is, and the quiet developer figures last. The quiet line is quieter by its size, not its ink:
- * its figures are values, so they read in the reading ink (readability ruling R3); a label among
- * them is the call site's to set in the quiet ink, and the separators are quiet here.
+ * row is, and the quiet developer figures last. The quiet line is set apart by its place and its
+ * figures, not by its ink or its size: its figures are values, links and ids, so they read in the
+ * reading ink (readability ruling R3) at 13 px (the ink and size round); a label among them is the
+ * call site's to set in the quiet ink at 12 px, and the separators are quiet here.
  */
 export type PhoneLineTone = 'head' | 'body' | 'quiet';
 
@@ -15,19 +16,38 @@ export interface PhoneLine {
   key: string;
   tone: PhoneLineTone;
   left: ReactNode;
-  /** The figure the line ends with; it keeps the right edge, and drops under `left` whole. */
+  /**
+   * The figure the line ends with; it keeps the right edge, and drops under `left` whole. It is
+   * never wider than the line: on a line of its own a part longer than the line takes the line's
+   * width and breaks inside itself (a `Dotted` list between its figures, from the line's left
+   * edge), so a long run of figures makes the row taller, never the page wider.
+   */
   right?: ReactNode;
   /** The left part takes the free width (a bar). */
   grow?: boolean;
+  /**
+   * The right part holds the line's right edge: the left part wraps beside it (a separated list
+   * between its items, words between words), so where the right part lands does not depend on how
+   * long the left part is (PB-09: a holder's chip, a collection's composition). Where the right
+   * part and the left's widest unbreakable item cannot share the line, the right part goes under
+   * the left, at the right edge (review of phases C and D, logic SHOULD 4: it stayed, and the left
+   * was drawn over it). The left part's flex basis is nothing and its least width its min-content,
+   * so whether the two share the line is that item's width and the right part's, never the left's
+   * whole length. A list that holds a line states its budget beside its head's.
+   */
+  hold?: boolean;
 }
 
 const TONE: Record<PhoneLineTone, string> = {
   head: 'text-body text-text-bright',
   body: 'text-small text-text',
   // An exact amount takes the ink of its line here (CkbAmount sets its own), so the developer
-  // figures read in one ink, the reading ink, a step under the body line by size (R3); a part that
-  // wraps itself in brighter ink keeps it.
-  quiet: 'text-meta text-text [&_[data-ckb-amount]]:[color:inherit]',
+  // figures read in one ink, the reading ink (R3); a part that wraps itself in brighter ink keeps
+  // it. 13 px (lane cd-fixes-controls, the ink and size round: it was 12, a step under the body
+  // line): the line holds values, links and ids (a block, a transaction, an address, a date), and
+  // 12 px is a label's, a unit's or a hint's; the line is set apart from the body line by its
+  // place and its figures, not by a smaller size.
+  quiet: 'text-small text-text [&_[data-ckb-amount]]:[color:inherit]',
 };
 
 /**
@@ -41,11 +61,19 @@ const TONE: Record<PhoneLineTone, string> = {
 export function PhoneRow({
   lines,
   mark,
+  head,
   className,
   testId,
 }: {
   lines: readonly (PhoneLine | null | false)[];
   mark?: ReactNode;
+  /**
+   * The first line's width as the list states it (`phoneHead`, lib/type-metrics.ts): the stone,
+   * the key at its widest real value, the room between the parts and the widest figure at the
+   * right. Written on the row (`data-head-px`), so a test reads what the row draws against what
+   * its list claims.
+   */
+  head?: number;
   className?: string;
   testId?: string;
 }) {
@@ -54,6 +82,7 @@ export function PhoneRow({
   return (
     <div
       data-phone-row
+      data-head-px={head}
       data-testid={testId}
       className={cn(
         mark
@@ -76,6 +105,8 @@ export function PhoneRow({
           key={line.key}
           data-line={line.key}
           data-tone={line.tone}
+          // gap-x-3: PHONE_PART_GAP_PX, the 12 px a list's stated first line counts between its
+          // parts (lib/type-metrics.ts; phone-row.test reads the class against it)
           className={cn(
             'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5',
             mark && 'col-start-2',
@@ -85,7 +116,9 @@ export function PhoneRow({
           <span
             data-part="left"
             className={cn(
-              'min-w-0 [overflow-wrap:anywhere]',
+              '[overflow-wrap:anywhere]',
+              // hold: the basis nothing, the least width the widest unbreakable item (see `hold`)
+              line.hold ? 'min-w-min grow basis-0' : 'min-w-0',
               line.grow && 'flex flex-1 items-center'
             )}
           >
@@ -95,7 +128,7 @@ export function PhoneRow({
             <span
               data-part="right"
               className={cn(
-                'ml-auto shrink-0 text-right tabular-nums',
+                'ml-auto max-w-full shrink-0 text-right tabular-nums',
                 line.tone === 'head' && 'text-text text-small'
               )}
             >
@@ -105,6 +138,45 @@ export function PhoneRow({
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * A labelled figure of a phone row (the phone-rows board: never a value without its name): the label
+ * in the quiet ink, the value in its line's ink, one item a line never breaks inside. `after` puts
+ * the label after the value, as a count reads ("11 holders"). `words`: the value is words someone
+ * else wrote (a trait's value), as long as they wrote it: it may break between its words, and inside
+ * a word longer than the line, never past the line.
+ */
+export function Labelled({
+  label,
+  children,
+  after = false,
+  words = false,
+}: {
+  label: string;
+  children: ReactNode;
+  after?: boolean;
+  words?: boolean;
+}) {
+  // the label's role is named, so a test reads every figure of a row against its name
+  const name = (
+    <span data-role="figure-label" className="text-text-dim">
+      {label}
+    </span>
+  );
+  return (
+    <span className={words ? 'min-w-0 [overflow-wrap:anywhere]' : 'whitespace-nowrap'}>
+      {after ? (
+        <>
+          {children} {name}
+        </>
+      ) : (
+        <>
+          {name} {children}
+        </>
+      )}
+    </span>
   );
 }
 
@@ -121,6 +193,12 @@ export interface DottedGroup {
   readonly className?: string;
   /** A navigation landmark of the run's links (named by `label`) in place of a plain span. */
   readonly nav?: { label: string };
+  /**
+   * Its first part follows the item before it with no separator, one space's room apart (a head's
+   * "+3 more locks" after its last name, the lead's final round, item 2): a word of that item's
+   * line that wraps as an item of its own.
+   */
+  readonly joined?: boolean;
 }
 
 /**
@@ -130,9 +208,14 @@ export interface DottedGroup {
  */
 export function dottedGroup(
   parts: readonly ReactNode[],
-  { role, className, nav }: { role: string; className?: string; nav?: { label: string } }
+  {
+    role,
+    className,
+    nav,
+    joined,
+  }: { role: string; className?: string; nav?: { label: string }; joined?: boolean }
 ): DottedGroup {
-  return { [GROUP]: true, parts, role, className, nav };
+  return { [GROUP]: true, parts, role, className, nav, joined };
 }
 
 function isGroup(part: ReactNode | DottedGroup): part is DottedGroup {
@@ -169,26 +252,37 @@ const shownPart = (part: ReactNode) =>
  *
  * `oneLine`: the same parts and separators as inline text, for a line that never wraps (a table
  * cell that ends in an ellipsis): with no line to start, no separator can open or end one.
+ *
+ * `inline`: the list stands in running text after other words (the 404 seal's caption), one box
+ * on its line (`inline-flex`): where it does not fit what is left of the line it moves to the next
+ * line whole, so the words before it break before it, never between its parts; only a line
+ * narrower than the whole list wraps it inside, by the rule above.
  */
 export function Dotted({
   parts,
   className,
   oneLine = false,
+  inline = false,
 }: {
   parts: readonly (ReactNode | DottedGroup)[];
   className?: string;
   oneLine?: boolean;
+  inline?: boolean;
 }) {
   if (useContext(InDotted))
     throw new Error('a separated list inside another: pass its parts to the outer list');
   let index = 0;
-  const item = (part: ReactNode) => {
+  // An item is keyed by its place: a loose part by its place in the list, a group's part by its
+  // place in its group, so a group's items stay the same elements while a group before it grows
+  // (a head's names opening behind the fold that stays after them). A joined part draws no
+  // separator: it follows the item before it, one space's room apart (3ch gap less 2ch).
+  const item = (part: ReactNode, key: string, joined = false) => {
     const i = index++;
     if (oneLine)
       return (
-        <span key={i} data-dotted-item="">
+        <span key={key} data-dotted-item="">
           {/* a separator: quiet by rule (R3) */}
-          {i > 0 && (
+          {i > 0 && !joined && (
             <span data-dotted-separator="" aria-hidden="true" className="text-text-dim">
               {' · '}
             </span>
@@ -196,12 +290,19 @@ export function Dotted({
           {unitNode(part)}
         </span>
       );
+    if (i > 0 && joined)
+      return (
+        <span key={key} data-dotted-item="" className="-ml-[2ch] min-w-0">
+          {/* a space for the words read whole (a line drops it where the item starts one) */}{' '}
+          {unitNode(part)}
+        </span>
+      );
     return i === 0 ? (
-      <span key={i} data-dotted-item="" className="min-w-0">
+      <span key={key} data-dotted-item="" className="min-w-0">
         {unitNode(part)}
       </span>
     ) : (
-      <span key={i} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
+      <span key={key} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
         {/* a separator: quiet by rule (R3) */}
         <span
           data-dotted-separator=""
@@ -215,7 +316,7 @@ export function Dotted({
     );
   };
   const nodes = parts.flatMap((part, g) => {
-    if (!isGroup(part)) return shownPart(part) ? [item(part)] : [];
+    if (!isGroup(part)) return shownPart(part) ? [item(part, `${index}`)] : [];
     const shown = part.parts.filter(shownPart);
     if (shown.length === 0) return [];
     const Group = part.nav ? 'nav' : 'span';
@@ -226,7 +327,7 @@ export function Dotted({
         aria-label={part.nav?.label}
         className={cn('contents', part.className)}
       >
-        {shown.map(item)}
+        {shown.map((p, j) => item(p, `g${g}.${j}`, j === 0 && part.joined === true))}
       </Group>,
     ];
   });
@@ -242,7 +343,8 @@ export function Dotted({
       <span
         data-dotted=""
         className={cn(
-          'flex min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_-0.75ch)]',
+          inline ? 'inline-flex' : 'flex',
+          'min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_-0.75ch)]',
           className
         )}
       >

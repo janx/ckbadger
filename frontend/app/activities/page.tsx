@@ -4,13 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
-import { api } from '@/lib/api';
-import {
-  completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
-  previousChainDay,
-} from '@/lib/activity-stats';
+import { api, dayUserTransactions } from '@/lib/api';
+import { completedYesterdayActivities, previousChainDay } from '@/lib/activity-stats';
 import { countNoun } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
 
@@ -20,18 +15,10 @@ export default function ActivitiesPage() {
     queryFn: () => api.getDailyActivityStats(2),
     refetchInterval: 60000,
   });
-  const { data: txStats, error: txStatsError } = useQuery({
-    queryKey: ['tx-stats'],
-    queryFn: () => api.getTxStats(),
-    refetchInterval: 60000,
-  });
   const yesterday = previousChainDay();
   const summary = data ? completedYesterdayActivities(data) : undefined;
-  const transactions = txStats ? completedYesterdayTransactions(txStats) : undefined;
-  const count =
-    summary && transactions !== undefined
-      ? nonCellbaseCount(transactions, summary.coinbaseCount, yesterday)
-      : undefined;
+  // yesterday's activities: the day's user transactions, the route's count (no page subtracts)
+  const count = summary === undefined ? undefined : dayUserTransactions(summary);
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
@@ -39,29 +26,35 @@ export default function ActivitiesPage() {
           title="Activities"
           kind="index"
           actions={
-            <Link href="/transactions" className="text-text-dim hover:text-jade text-small">
-              Transactions →
+            <Link href="/transactions" look="onward" className="text-small">
+              Transactions
             </Link>
           }
         >
+          {/* What the page says first (lists lane P3): yesterday's activities, a count with its
+              noun and its period; the list below is the latest, by day (its own line says so). */}
           {summary && count !== undefined ? (
-            <p className="text-text text-body">
-              <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
-              (UTC+8) ·{' '}
+            <p data-role="lede" className="text-text text-body max-w-measure">
+              <NoBreak>
+                <span className="text-text-bright">{count.toLocaleString('en-US')}</span>{' '}
+                {countNoun(count, 'activity', 'activities')}
+              </NoBreak>{' '}
+              yesterday (UTC+8), by{' '}
               <NoBreak>
                 <span className="text-text-bright">
                   {summary.uniqueAddressCount.toLocaleString('en-US')}
                 </span>{' '}
                 {countNoun(summary.uniqueAddressCount, 'address', 'addresses')}
-              </NoBreak>{' '}
-              took part
+              </NoBreak>
+              .
             </p>
-          ) : error || txStatsError ? (
-            <p role="alert" className="text-text-dim text-small">
-              Could not load yesterday’s activity: {(error ?? txStatsError)!.message}
+          ) : error ? (
+            <p role="alert" className="text-text text-small max-w-measure">
+              Could not load yesterday’s activity: {error.message}
             </p>
-          ) : data && txStats ? (
-            <p className="text-text-dim text-small">
+          ) : data ? (
+            // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+            <p className="text-small max-w-measure">
               No complete activity statistics for {yesterday} (UTC+8).
             </p>
           ) : (

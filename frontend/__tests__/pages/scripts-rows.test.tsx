@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, type KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
@@ -135,14 +137,16 @@ const empty = family({
 });
 
 const rows = [defaultLock, joyid, bitLock, pwLock, empty];
-const response = {
+// a full page of the five rows with more after it (lane cd-fixes-controls, SHOULD-5: it was five
+// rows on a page of fifty that said more followed)
+const response = pagedRead({
   data: rows,
   total: 70,
-  limit: 50,
+  limit: 5,
   hasMore: true,
   nextCursor: 'c',
-  roleCounts: { all: 70, locks: 41, types: 34 },
-};
+  roleCounts: { all: 70, locks: 41, types: 34, both: 5, neither: 0 },
+});
 
 const table = () => screen.findByRole('table', { name: 'Scripts' });
 const rowOf = (t: HTMLElement, name: string) =>
@@ -215,17 +219,22 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(rowOf(t, 'JoyID').querySelectorAll('.text-text-bright')).toHaveLength(1);
   });
 
-  it('writes the code status on one dim line, "by whom · since" in its title (D3)', async () => {
+  // Re-pinned on purpose (lists lane P3, the plan: "upgradable" with who can upgrade is the
+  // reading ink): the cell says who can replace the code, the versions in its title (it was
+  // "upgradable · N versions" on one dim line; renamed: "… on one dim line, \"by whom · since\" in
+  // its title")
+  it('writes who can upgrade the code in the reading ink, the versions and "since" in its title (D3)', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const code = (name: string) => within(rowOf(t, name)).getByTestId('script-code-class');
-    expect(code('JoyID')).toHaveTextContent(/^upgradable · 5 versions$/);
-    expect(code('JoyID')).toHaveClass('text-text-dim');
+    expect(code('JoyID')).toHaveTextContent(/^upgradable by a multisig$/);
+    expect(within(code('JoyID')).getByText(/^upgradable by/)).toHaveClass('text-text');
     expect(code('JoyID')).toHaveAttribute(
       'title',
       'upgradable · 5\u00a0versions · by a multisig · since 2023-10-07'
     );
-    expect(code('.bit Lock')).toHaveTextContent(/^upgradable · 34 versions$/);
+    expect(code('.bit Lock')).toHaveTextContent(/^upgradable by /);
+    expect(code('.bit Lock').getAttribute('title')).toMatch(/^upgradable · 34\u00a0versions · /);
     expect(code('Default Lock')).toHaveTextContent(/^immutable$/);
     expect(code('Default Lock')).toHaveAttribute(
       'title',
@@ -241,6 +250,10 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     // T5 still holds: the name is the row's one bright thing; the tag is an accent, not bright.
     expect(rowOf(t, 'Default Lock').querySelectorAll('.text-text-bright')).toHaveLength(1);
     expect(code('AlwaysSuccess')).toHaveTextContent(/^code evidence unavailable$/);
+    // BRIEF-ink-size-roles item 1: a cell's content, the reading ink (it was quiet)
+    expect(within(code('AlwaysSuccess')).getByText('code evidence unavailable')).not.toHaveClass(
+      'text-text-dim'
+    );
   });
 
   it('shows live cells alone — "of N ever" leaves the row for its title (T1)', async () => {
@@ -279,13 +292,14 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
   });
 
   // Re-pinned on purpose (B5): the share now stands right of its bar, so the dim share is the bar's
-  // figure, not the cell's first element.
-  it('keeps the occupied share in the last column, dim', async () => {
+  // figure, not the cell's first element. Re-pinned on purpose and renamed (BRIEF-ink-size-roles
+  // item 1: a figure in a cell is the reading ink; it was "…, dim")
+  it('keeps the occupied share in the last column, in the reading ink', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const occupied = cells(rowOf(t, 'JoyID'))[4];
     expect(occupied).toHaveTextContent(/^4\.20%$/);
-    expect(within(occupied).getByText('4.20%')).toHaveClass('text-text-dim');
+    expect(within(occupied).getByText('4.20%')).not.toHaveClass('text-text-dim');
   });
 
   it('puts every field that left the row in its title (D3: nothing deleted)', async () => {
@@ -295,9 +309,10 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
       'title',
       'JoyID · lock · An universal Account Protocol for Web3 Mass-adoption. · upgradable · 5\u00a0versions · by a multisig · since 2023-10-07 · 161,008 live of 2,707,977\u00a0cells ever · 454,352,694.86181731 CKB · 19,093,577.00000000 occupied (4.20%)'
     );
+    // lane exactness, part B2: 65,309,701 of 46,743,236,111.96022084 CKB occupied is 0.1397…%, 0.13% (half up 0.14%)
     expect(rowOf(t, 'Default Lock')).toHaveAttribute(
       'title',
-      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235\u00a0cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.14%)'
+      'Default Lock · lock · SECP256K1/blake160 is the default lock script · immutable · genesis · code cell unspendable · pinned by data hash · 886,257 live of 78,323,235\u00a0cells ever · 46,743,236,111.96022084 CKB · 65,309,701.00000000 occupied (0.13%)'
     );
     expect(rowOf(t, 'PW Lock').getAttribute('title')).toContain('PW Lock · lock · deprecated · ');
     expect(rowOf(t, 'AlwaysSuccess')).toHaveAttribute(
@@ -355,6 +370,65 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     await table();
     expect(screen.queryByRole('group', { name: 'Bar shows' })).toBeNull();
     expect(screen.queryByText(/^bar:$/)).toBeNull();
+  });
+
+  // Readability F3-e: every column budgeted from the widest value it writes (lib/list-bounds.ts),
+  // at 0.6 em a glyph (the name 14 px, the cells 13, tags and ticks 12) and the 16 px gap after
+  // every column but the last. Script is the flexible column: the default lock's name whole,
+  // "Secp256k1 Blake160" (18 characters), beside the widest role tag at its minimum.
+  it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the name, its 8 px gap and the role tag "unregistered" (its words, 5 px sides, 1 px border)
+      ceil(at('Secp256k1 Blake160', 14) + 8 + at('unregistered', 12) + 12 + 16),
+      // the pip, its gap and "upgradable · 99 versions" (wider than "code evidence unavailable")
+      ceil(
+        Math.max(10 + 8 + at('upgradable · 99 versions', 13), at('code evidence unavailable', 13)) +
+          16
+      ),
+      // eight digits of live cells, or "unavailable"
+      ceil(Math.max(at('99,999,999', 13), at('unavailable', 13)) + 16),
+      // whole CKB under 100 billion
+      ceil(at('99,999,999,999', 13) + 16),
+      // the tick row "0 50 100%" over the track, the 10 px gap, "100.00%"; the last column
+      ceil(at('0 50 100%', 12) + 10 + Math.ceil(at('100.00%', 13))),
+    ];
+    expect(budgets).toEqual([274, 222, 102, 126, 130]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(854);
+    render(<ScriptsPage />);
+    const t = await table();
+    const cols = [...t.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[0].width).toBe('auto');
+    expect(Number.parseFloat(t.style.minWidth)).toBe(sum);
+    const track = cells(rowOf(t, 'JoyID'))[4].querySelector<HTMLElement>('[data-track]')!;
+    expect(Number.parseFloat(track.style.width)).toBe(at('0 50 100%', 12));
+  });
+
+  it('draws the table where its 854 px fit and the phone rows below (F3-e)', async () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [854, 'table'],
+      [853, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(<ScriptsPage />);
+      await waitFor(() =>
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form)
+      );
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
   });
 
   it('keeps each row within 90 visible characters (T6)', async () => {

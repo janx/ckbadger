@@ -1,19 +1,22 @@
 'use client';
+import { HeadId } from '@/components/ui/head-id';
 import { useState } from 'react';
 import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { AppLink } from '@/components/ui/app-link';
-import { Hash } from '@/components/ui/hash';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
-import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
+import { Select } from '@/components/ui/select';
+import { cellLockWords } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -27,47 +30,71 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
       : protocol.versions.find((v) => `${v.cell.txHash}:${v.cell.outputIndex}` === selected);
   if (!version) throw new Error(`${protocol.itemId}: missing selected protocol version`);
   const { cell } = version;
+  const lock = readPart(() => {
+    const words = cellLockWords(cell);
+    return words.form === 'not-indexed' ? null : words.name;
+  });
   return (
     <section aria-label="Raw item evidence" className="min-w-0 space-y-5">
-      <label className="text-meta flex flex-wrap items-center gap-3">
-        Cell version{' '}
-        <select
-          className="bg-base-bg border-base-border max-w-full border p-2"
-          value={`${cell.txHash}:${cell.outputIndex}`}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          {protocol.versions.map((v, i) => (
-            <option
-              key={`${v.cell.txHash}:${v.cell.outputIndex}`}
-              value={`${v.cell.txHash}:${v.cell.outputIndex}`}
-            >
-              Version {i + 1} · block {formatBlockNumber(v.cell.blockNumber)}
-              {v.cell.isLive ? ' · current' : ''}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="text-meta [overflow-wrap:anywhere]">
-        Outpoint{' '}
-        {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a
-            1024 column's 460 px; at 13 px it took 514.8 and scrolled */}
-        <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-          <Hash hash={cell.txHash} truncate={false} copyable={false} className="text-meta" />
-          <OutpointIndex index={cell.outputIndex} />
+      {/* the controls board's select, after its label; the well no wider than the column. A
+          native select is as wide as its widest option and clips its value where its well is
+          narrower, so an option is the version's number, its block and "current", no word the
+          label says: "12 · #21,016,901 · current", 26 glyphs, 202.8 px at 13 px, the pair 304.4 px
+          with the label "version" (54.6), the gap (10), the well's border (2) and the select's
+          padding (35), inside a 360 px phone's 328 px line up to a five-digit version */}
+      <Select
+        label="version"
+        value={`${cell.txHash}:${cell.outputIndex}`}
+        options={protocol.versions.map((v, i) => ({
+          value: `${v.cell.txHash}:${v.cell.outputIndex}`,
+          label: `${i + 1} · ${formatBlockNumber(v.cell.blockNumber)}${v.cell.isLive ? ' · current' : ''}`,
+        }))}
+        onChange={setSelected}
+        className="max-w-full"
+      />
+      {/* Lane P2's follow-up (item 8): the out point's hash is set as a head's id (HeadId), one
+          line where its line holds it, else two halves, never a box that scrolls. At the line's
+          11 px it is 66 × 6.6 = 435.6 px: one line in the tier's column at 1280 (588 px) and 1024
+          (460), and at 640 (608); two halves of 34 characters (224.4 px) at 390 (358) and 360
+          (328). Its index is said in words before it, the link opening the cell. */}
+      {/* The ink and size roles: the label quiet at 12 px, the out point a link at 13 px, 66 × 7.8 =
+          514.8 px: one line at 1280 (588), two halves of 257.4 at 1024 (460), 640, 390 and 360. */}
+      <div className="text-small min-w-0">
+        <span className="text-text-dim text-meta">Outpoint · output {cell.outputIndex} of</span>
+        <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+          <HeadId value={cell.txHash} kind="hash" />
         </AppLink>
       </div>
+      {/* the lock script's name is the one decision's (lane P2's follow-up, item 6): a lock on the
+          default lock's code hash by data has no registered name; a refusal fails in place */}
+      {lock.error !== undefined && (
+        <PartReadError
+          what="the lock script"
+          where={`cell ${cell.txHash}:${cell.outputIndex}`}
+          error={lock.error}
+        />
+      )}
       {[
-        { kind: 'lock' as const, script: cell.lock, name: cell.lockName },
+        ...(lock.error === undefined
+          ? [{ kind: 'lock' as const, script: cell.lock, name: lock.value }]
+          : []),
         { kind: 'type' as const, script: cell.type, name: cell.typeName },
       ].map(
         ({ kind, script, name }) =>
           script && (
-            <details key={kind} className="text-meta min-w-0">
-              <summary className="cursor-pointer">
-                {kind} script · {name ?? 'Unregistered'}
-              </summary>
+            // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its
+            // content keeps the 12 px it took from the disclosure
+            <SectionDisclosure
+              key={kind}
+              form="inner"
+              summary={
+                <>
+                  {kind} script · {name ?? 'Unregistered'}
+                </>
+              }
+            >
               {/* Lane E (C6): the script as its occupied bytes, one row per part. */}
-              <div className="mt-3">
+              <div className="text-meta">
                 <ScriptByteMap
                   kind={kind}
                   script={script}
@@ -79,7 +106,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
                   })}
                 />
               </div>
-            </details>
+            </SectionDisclosure>
           )
       )}
       <ProtocolEvidence
@@ -124,7 +151,8 @@ export function ItemTransactionContext({
     <div
       data-acted-on={context.actedOn}
       className={cn(
-        'text-meta space-y-1 whitespace-normal',
+        // a row's values and links at 13 px (ink and size roles: it was 12)
+        'text-small space-y-1 whitespace-normal',
         // a neighbour's row is set back (R4): every word dim, nothing faded
         headline.neighbour && 'quiet'
       )}
@@ -140,20 +168,21 @@ export function ItemTransactionContext({
           {item.kind === 'object' && (
             <span className="text-text-dim block">
               to{' '}
-              <AppLink href={`/address/${context.createdCell.ownerAddress}`}>
+              <AppLink look="inline" href={`/address/${context.createdCell.ownerAddress}`}>
                 <ShortId value={context.createdCell.ownerAddress} kind="address" size="row" />
               </AppLink>{' '}
               (output {context.createdCell.outputIndex})
             </span>
           )}
           <AppLink
+            look="inline"
             className="block"
             href={`/cell/${context.createdCell.txHash}-${context.createdCell.outputIndex}`}
           >
             Output {context.createdCell.outputIndex} · cell after
           </AppLink>
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={BigInt(context.createdCell.capacity)}
             signed={false}
             tone="plain"
@@ -161,7 +190,7 @@ export function ItemTransactionContext({
           />
         </>
       ) : (
-        <span className="text-text-dim block">No resulting item cell</span>
+        <span className="text-text block">No resulting item cell</span>
       )}
     </div>
   );

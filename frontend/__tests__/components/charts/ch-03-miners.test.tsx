@@ -34,6 +34,8 @@ describe('Miners ranking (CH-03)', () => {
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner Distribution',
       totalBlocks: 61726,
+      // the blocks past the two listed, the route's (lane exactness, part A, A1)
+      restBlocks: 11308,
       windowDays: 7,
       fromDate: '2026-11-07',
       toDate: '2026-11-13',
@@ -64,7 +66,8 @@ describe('Miners ranking (CH-03)', () => {
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
     expect(first).toHaveTextContent(/^1\. ckb1…4s93hhsj41,870 blocks · 67\.83%$/);
-    expect(second).toHaveTextContent(/^2\. 0xbbbbbbbb…bbbbbb8,548 blocks · 13\.85%$/);
+    // re-pinned for the D1 hand-back, item 1: 8,548 of 61,726 blocks cut (was half up, 13.85%)
+    expect(second).toHaveTextContent(/^2\. 0xbbbbbbbb…bbbbbb8,548 blocks · 13\.84%$/);
     expect(document.body).not.toHaveTextContent(/\((Address|Lock hash)\)/);
     // The full address is in the link's title only, never printed.
     expect(screen.queryByText(address)).toBeNull();
@@ -72,12 +75,18 @@ describe('Miners ranking (CH-03)', () => {
     expect(screen.getAllByText(/lock hash/i)).toHaveLength(1);
   });
 
+  // Re-pinned for lane D1 (the chart-hero board): the leading miner is named, whole, in the
+  // figure's eyebrow over its window (was a "Leading miner" fact under the lede); the fact with its
+  // share stands in the evidence tier.
   it('keeps the leading miner whole and writes the window with an arrow', async () => {
     render(<ChartDetail slug="miner-address-distribution" />);
     await screen.findByRole('list', { name: 'Miners ranking' });
-    const leader = screen.getByText('Leading miner').nextElementSibling as HTMLElement;
-    const name = within(leader).getByText('ckb1…4s93hhsj');
-    expect(name).toHaveClass('whitespace-nowrap');
+    expect(screen.getByTestId('figure-eyebrow')).toHaveTextContent(
+      'ckb1…4s93hhsj, the largest miner · 2026-11-07 → 2026-11-13'
+    );
+    expect(screen.getByText(/^Leading miner:/)).toHaveTextContent(
+      'Leading miner: ckb1…4s93hhsj · 41,870 blocks · 67.83%'
+    );
     expect(document.body).toHaveTextContent('2026-11-07 → 2026-11-13');
     expect(document.body).not.toHaveTextContent(/2026-11-07[-–]2026-11-13/);
   });

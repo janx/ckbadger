@@ -5,6 +5,7 @@ import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -16,7 +17,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const mockScriptsResponse = {
+const mockScriptsResponse = pagedRead({
   data: [
     {
       codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
@@ -73,7 +74,7 @@ const mockScriptsResponse = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('ScriptsPage', () => {
   beforeEach(() => {
@@ -114,14 +115,16 @@ describe('ScriptsPage', () => {
           familyCount: 1,
         },
       ],
-      roleCounts: { all: 2, locks: 1, types: 1 },
+      roleCounts: { all: 2, locks: 1, types: 1, both: 0, neither: 0 },
     });
     render(<ScriptsPage />);
-    expect(await screen.findByRole('button', { name: 'Types 1' })).toBeInTheDocument();
+    // Re-pinned on purpose (controls lane C2): the role row is the controls board's tab row, a
+    // tablist whose names are lowercase (it was the aria-pressed button "Types 1").
+    expect(await screen.findByRole('tab', { name: 'types 1' })).toBeInTheDocument();
     expect(
       screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Types 1' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'types 1' }));
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({ role: 'type', cursor: undefined })
@@ -148,8 +151,11 @@ describe('ScriptsPage', () => {
       (await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' }))[0]
     ).toBeInTheDocument();
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
-    const sort = screen.getByRole('combobox', { name: 'Sort scripts' });
-    for (const option of ['CKB in their cells', 'Occupied CKB', 'Live cells', 'Cells ever', 'Name'])
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by "sorted by"
+    // (was the aria-label "Sort scripts"), its choices in the page's words, lowercase (they were
+    // "CKB in their cells", "Occupied CKB", "Live cells", "Cells ever", "Name").
+    const sort = screen.getByRole('combobox', { name: 'sorted by' });
+    for (const option of ['ckb in their cells', 'occupied ckb', 'live cells', 'cells ever', 'name'])
       expect(within(sort).getByRole('option', { name: option })).toBeInTheDocument();
     expect(screen.queryByText('Deployed')).toBeNull();
     expect(screen.queryByRole('link', { name: '#0' })).toBeNull();
@@ -185,7 +191,9 @@ describe('ScriptsPage', () => {
 
     render(<ScriptsPage />);
 
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    fireEvent.change(await screen.findByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'used' },
     });
 
@@ -198,7 +206,7 @@ describe('ScriptsPage', () => {
         })
       );
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Reverse order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }));
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({ sortKey: 'used', sortDirection: 'asc' })
@@ -212,36 +220,38 @@ describe('ScriptsPage', () => {
     // U-09 (re-pinned): the table's reference at the row size
     const unknownScriptRefDisplay = 'type · 0x010445a3…000001';
     const unknownScriptRefFull = `type ref:${unknownCodeHash}`;
-    vi.mocked(api.getScripts).mockResolvedValue({
-      data: [
-        {
-          codeHash: unknownCodeHash,
-          name: 'Unknown',
-          description: null,
-          scriptKind: 'type',
-          rfc: null,
-          website: null,
-          sourceUrl: null,
-          decoderType: null,
-          network: 'mainnet',
-          hashType: 'type',
-          dataHash: null,
-          typeHash: null,
-          tag: null,
-          deprecated: false,
-          isSystem: false,
-          codeCellTxHash: null,
-          codeCellOutputIndex: null,
-          ownedCapacitySum: '2000000000',
-          ownedKnowledgeSum: '1000000000',
-          firstDeployedAt: null,
-        } satisfies KnownScript,
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getScripts).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            codeHash: unknownCodeHash,
+            name: 'Unknown',
+            description: null,
+            scriptKind: 'type',
+            rfc: null,
+            website: null,
+            sourceUrl: null,
+            decoderType: null,
+            network: 'mainnet',
+            hashType: 'type',
+            dataHash: null,
+            typeHash: null,
+            tag: null,
+            deprecated: false,
+            isSystem: false,
+            codeCellTxHash: null,
+            codeCellOutputIndex: null,
+            ownedCapacitySum: '2000000000',
+            ownedKnowledgeSum: '1000000000',
+            firstDeployedAt: null,
+          } satisfies KnownScript,
+        ],
+        total: 1,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     render(<ScriptsPage />);
 
@@ -269,7 +279,9 @@ describe('ScriptsPage', () => {
   it('supports sorting by live cells', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
     render(<ScriptsPage />);
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    fireEvent.change(await screen.findByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'liveCells' },
     });
     await waitFor(() => {
@@ -349,5 +361,103 @@ describe('ScriptsPage while its read is paused', () => {
     resume();
     expect((await screen.findAllByText('SECP256K1_BLAKE160')).length).toBeGreaterThan(0);
     expect(screen.queryByText('Loading scripts…')).toBeNull();
+  });
+});
+
+// The controls lane (C2, c2-lists), written before the role tabs, the sort, the search and the
+// pager became the controls board's: what each asks for, and the step to the last page while it
+// loads (the list keeps the page it shows until the next one answers).
+describe('the scripts list’s pages (what the controls ask for)', () => {
+  const script = (n: number): KnownScript => ({
+    ...mockScriptsResponse.data[0],
+    codeHash: `0x${n.toString(16).padStart(64, '0')}`,
+    name: `Script ${n}`,
+  });
+  const firstPage = () =>
+    pagedRead({
+      data: Array.from({ length: 50 }, (_, i) => script(i + 1)),
+      total: 51,
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'n2',
+    });
+  const lastPage = () =>
+    pagedRead({
+      data: [script(51)],
+      total: 51,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+  const lastList = () =>
+    vi
+      .mocked(api.getScripts)
+      .mock.calls.filter(([p]) => p?.limit === 50)
+      .at(-1)?.[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getScripts).mockImplementation(async (params = {}) =>
+      params.cursor === 'n2' ? lastPage() : firstPage()
+    );
+  });
+
+  const toPageTwo = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() => expect(lastList()).toEqual(expect.objectContaining({ cursor: 'n2' })));
+    expect((await screen.findAllByText('Script 51')).length).toBeGreaterThan(0);
+  };
+
+  it('starts again from the first page when the sort, its direction or the search changes', async () => {
+    render(<ScriptsPage />);
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    fireEvent.change(screen.getByRole('combobox', { name: /sort/i }), {
+      target: { value: 'liveCells' },
+    });
+    await waitFor(() =>
+      expect(lastList()).toEqual(
+        expect.objectContaining({ sortKey: 'liveCells', cursor: undefined })
+      )
+    );
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }));
+    await waitFor(() =>
+      expect(lastList()).toEqual(
+        expect.objectContaining({ sortDirection: 'asc', cursor: undefined })
+      )
+    );
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    // re-pinned on purpose (lists lane P3): the search filters as typed (no Search button), and the
+    // sort direction is named as the inventory's ("Reverse sort direction"; it was "Reverse order")
+    fireEvent.change(screen.getByPlaceholderText('search by name or code hash'), {
+      target: { value: 'script' },
+    });
+    await waitFor(() =>
+      expect(lastList()).toEqual(expect.objectContaining({ search: 'script', cursor: undefined }))
+    );
+  });
+
+  it('keeps showing its page while the last one loads, then shows the last one', async () => {
+    let answer: (value: ReturnType<typeof lastPage>) => void = () => {};
+    vi.mocked(api.getScripts).mockImplementation((params = {}) =>
+      params.cursor === 'n2'
+        ? new Promise((resolve) => {
+            answer = resolve;
+          })
+        : Promise.resolve(firstPage())
+    );
+    render(<ScriptsPage />);
+    expect((await screen.findAllByText('Script 50')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() => expect(lastList()).toEqual(expect.objectContaining({ cursor: 'n2' })));
+    // the page shown until the next answers: its rows, and no error in their place
+    expect(screen.getAllByText('Script 50').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+    answer(lastPage());
+    expect((await screen.findAllByText('Script 51')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Script 50')).toBeNull();
   });
 });

@@ -105,20 +105,25 @@ describe('Code versions rows (table-rows L1-4)', () => {
     );
     expect(deployed).toHaveTextContent(/^2025-11-21$/);
     expect(block).toHaveTextContent(/^#17,894,900$/);
-    expect(within(block).getByRole('link')).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lane p-assets, the link-look gate): a link inside the row takes the
+    // inline look, the row's reading ink and its underline (it was the quiet ink by hand)
+    expect(within(block).getByRole('link')).toHaveClass('underline');
+    expect(within(block).getByRole('link')).not.toHaveClass('text-text-dim');
     // U-09 (re-pinned): the table's out point at the row size
     expect(cell).toHaveTextContent(/^0x673e1843…1355f9:0$/);
     expect(cell.firstElementChild).toHaveAttribute(
       'title',
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
-    // The out point opens the code cell too, in dim ink (T5: the version stays the bright thing).
+    // The out point opens the code cell too, inline (T5: the version stays the bright thing;
+    // re-pinned on purpose, lane p-assets: it was the quiet ink by hand).
     const outpoint = within(cell).getByRole('link', { name: '0x673e1843…1355f9:0' });
     expect(outpoint).toHaveAttribute(
       'href',
       '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
     );
-    expect(outpoint).toHaveClass('text-text-dim');
+    expect(outpoint).toHaveClass('underline');
+    expect(outpoint).not.toHaveClass('text-text-dim', 'text-text-bright');
     expect(held).toHaveTextContent(/^multisig 0x6598…d696$/);
     // T5: one bright thing a row — the version; the rest in body ink or dim.
     expect(rows[0]).toHaveClass('text-text');
@@ -129,12 +134,14 @@ describe('Code versions rows (table-rows L1-4)', () => {
     await waitFor(() => expect(live).toHaveTextContent('161,049'));
   });
 
-  it('marks a replaced version "replaced at #N" in dim ink, held by the holder of its code cell', async () => {
+  // re-pinned on purpose (lane P2's follow-up, item 4; renamed, it was "… in dim ink, …"): "replaced
+  // at #N" holds a value, the replacing block, in the reading ink
+  it('marks a replaced version "replaced at #N" in the reading ink, held by the holder of its code cell', async () => {
     const { rows } = await versions();
     const v4 = cells(rows[1]);
     expect(v4[4]).toHaveTextContent(/^multisig 0x07a2…68ca$/);
     expect(v4[5]).toHaveTextContent(/^replaced at #17,894,900$/);
-    expect(v4[5].firstElementChild).toHaveClass('text-text-dim');
+    expect(v4[5].firstElementChild).toHaveClass('text-text');
     // Lane L: the block that replaced it is a link.
     expect(within(v4[5]).getByRole('link', { name: '#17,894,900' })).toHaveAttribute(
       'href',

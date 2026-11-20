@@ -2,13 +2,13 @@
 import Link from '@/components/ui/link';
 import type { Cell, CellElfAnalysis } from '@/lib/api';
 import { BlockLink } from '@/components/ui/block-link';
-import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
+import { CELL_COLORS } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 
 const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
 /** A cell or script link in the lock blue; the global `a:hover` jade still wins over it. */
-const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
 
 function liveUsers(reference: { lockLiveCellsCount: number; typeLiveCellsCount: number }): number {
   return reference.lockLiveCellsCount + reference.typeLiveCellsCount;
@@ -49,7 +49,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         command="Code"
         args={names.length ? names.join(' · ') : undefined}
       />
-      <p className="text-body max-w-[860px] leading-relaxed">
+      <p className="text-body max-w-measure leading-relaxed">
         Its data is a RISC-V program. A script names it in one of two ways, and each way decides
         what happens when the code changes.
       </p>
@@ -104,7 +104,9 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </div>
       </div>
       {otherReferences.length > 0 && (
-        <ul className="text-text-dim text-meta space-y-1">
+        // the other names of this code and their live cells: values, the reading ink (R3), at
+        // 13 px (lane P1, the ink and size roles: a link and its count were 12)
+        <ul className="text-text text-small space-y-1">
           {otherReferences.map((reference) => (
             <li
               key={`${reference.referenceHash}-${reference.hashType}`}
@@ -113,8 +115,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               Also named as{' '}
               <Link
                 href={`/script/${reference.referenceHash}?hashType=${reference.hashType}`}
-                className="text-[color:var(--ink)]"
-                style={CELL_LINK}
+                look="inline"
               >
                 {reference.hashType} · {reference.referenceHash}
               </Link>{' '}
@@ -123,16 +124,15 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           ))}
         </ul>
       )}
-      <details className="text-small">
-        <summary className="text-text-dim hover:text-text cursor-pointer">
-          Type ID lineage of these bytes
-        </summary>
-        <div className="mt-2 space-y-1.5">
+      {/* the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its versions
+          keep the 13 px they took from the disclosure */}
+      <SectionDisclosure form="inner" summary="Type ID lineage of these bytes">
+        <div className="text-small space-y-1.5">
           {codeCell.typeIdVersions.length ? (
             codeCell.typeIdVersions.map((item) => (
               <p
                 key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
-                className="[overflow-wrap:anywhere]"
+                className="max-w-measure [overflow-wrap:anywhere]"
               >
                 <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
                   Version {item.ordinal}
@@ -141,37 +141,28 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                 </span>{' '}
                 <Link
                   href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
-                  className="text-[color:var(--ink)]"
-                  style={CELL_LINK}
+                  look="inline"
                 >
                   {item.codeCellTxHash}
                   <OutpointIndex index={item.codeCellOutputIndex} />
                 </Link>{' '}
-                · observed block <BlockLink number={item.observedAtBlock} />
+                · observed block <BlockLink look="inline" number={item.observedAtBlock} />
               </p>
             ))
           ) : (
-            <p className="text-text-dim">No registered Type ID version history for this binary.</p>
+            <p className="text-text">No registered Type ID version history for this binary.</p>
           )}
           {codeCell.upgradeCohort.map((item) => (
             <p
               key={`${item.currentTxHash}:${item.currentOutputIndex}`}
-              className="[overflow-wrap:anywhere]"
+              className="max-w-measure [overflow-wrap:anywhere]"
             >
-              <Link
-                href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}
-                className="text-[color:var(--ink)]"
-                style={CELL_LINK}
-              >
+              <Link href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`} look="inline">
                 Input {item.previousTxHash}
                 <OutpointIndex index={item.previousOutputIndex} />
               </Link>{' '}
               →{' '}
-              <Link
-                href={`/cell/${item.currentTxHash}-${item.currentOutputIndex}`}
-                className="text-[color:var(--ink)]"
-                style={CELL_LINK}
-              >
+              <Link href={`/cell/${item.currentTxHash}-${item.currentOutputIndex}`} look="inline">
                 output #{item.currentOutputIndex}
               </Link>{' '}
               ·{' '}
@@ -183,7 +174,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             </p>
           ))}
         </div>
-      </details>
+      </SectionDisclosure>
     </section>
   );
 }

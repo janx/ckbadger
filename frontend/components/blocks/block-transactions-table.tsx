@@ -1,49 +1,72 @@
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+} from '@/components/ui/aligned-bar';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import {
+  LARGEST_TX_BYTES,
+  MAX_TX_INPUTS,
+  TX_CYCLES_BOUND,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_TX_FEE,
+  WIDEST_TX_OUTPUT,
+  WIDEST_TX_OUTPUT_SUMMARY,
+  shortChars,
+} from '@/lib/list-bounds';
 
-const TRACK = 96;
+/**
+ * The bars' track (readability F3-e, the coordinator's ruling): the heads write their ticks in
+ * the tick form ("0 … 1.5M", "0 … 750M"), so each track is COUNT_TRACK_PX, 48 px; it was 96, under
+ * heads whose exact "0 … 600,000" its 12 px ticks overran.
+ */
+const TRACK = COUNT_TRACK_PX;
 
-/** Output capacity with its unit, for the phone row. */
-function capacity(tx: Transaction) {
+/** A cell's text measured at the small step, the table's. */
+const cell = (text: string) => textPx(text.length, fontPx('small'));
+
+/**
+ * The widest scales the bars' figures write: a transaction is no larger than its block, and the
+ * largest block is genesis's 1,236,271 bytes (LARGEST_TX_BYTES, the committed list's bound too: a
+ * 1,500,000 scale); a transaction's cycles under a billion, as the committed list's (a 750,000,000
+ * scale).
+ */
+const SIZE_SCALE = resourceScale([LARGEST_TX_BYTES]).toLocaleString('en-US');
+const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
+
+/** A CKB figure of the phone row in the summary form, after its name (`Labelled`). */
+function named(label: string, shannons: string, field: string, tx: Transaction) {
   return (
-    <span className="text-text-bright">
+    <Labelled label={label}>
       <CkbAmount
         form="summary"
-        shannons={parseShannons(tx.outputCapacity!, `transaction ${tx.hash} output capacity`)}
+        shannons={parseShannons(shannons, `transaction ${tx.hash} ${field}`)}
         signed={false}
         tone="plain"
       />
-    </span>
-  );
-}
-
-function fee(tx: Transaction) {
-  return (
-    <span className="whitespace-nowrap">
-      fee{' '}
-      <CkbAmount
-        form="summary"
-        shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
-        signed={false}
-        tone="plain"
-      />
-    </span>
+    </Labelled>
   );
 }
 
 function cells(tx: Transaction) {
   return (
     <span className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
+      {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')} →{' '}
+      {formatCount(tx.outputsCount, 'cell')}
     </span>
   );
 }
@@ -64,8 +87,25 @@ function resources(tx: Transaction) {
 }
 
 /**
+ * Line 1 of a block's transaction on a phone (the phone-rows board's head()): the tight hash at the
+ * key's 14 px (92.4; no stone, as the table's), the 12 px between the parts and its output named at
+ * 13 px, at its widest the CKB a transaction outputs, eleven whole digits in the summary form,
+ * "output 99,999,999,999" (WIDEST_TX_OUTPUT_SUMMARY; 21 characters, 163.8), and its unit, " CKB",
+ * at the meta step an amount's unit takes (28.8): 297 of a 360 px phone's 328 px line.
+ */
+const BLOCK_TX_PHONE_HEAD_PX = phoneHead(
+  'block transactions',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`output ${WIDEST_TX_OUTPUT_SUMMARY}`.length, fontPx('small')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
+
+/**
  * The BlockTxs board: one raw row per transaction of a block, cellbase first and set back
- * ("cellbase", 0 → 1, a grey size bar), size and cycles on the block's own round scales.
+ * ("cellbase", 0 → 1, a grey size bar), size and cycles on the block's own round scales. It is set
+ * back by those marks, not by its ink: a table cell's content reads in the reading ink, the
+ * cellbase's as every other's (lane P1, the ink and size roles; the whole row was quiet).
  */
 export function BlockTransactionsTable({
   transactions,
@@ -92,15 +132,15 @@ export function BlockTransactionsTable({
   );
   const proposedIn = (tx: Transaction) =>
     blockNumber === 0 ? (
-      <span className="text-text-dim">genesis</span>
+      <span className="text-text">genesis</span>
     ) : tx.isCellbase ? (
-      <span className="text-text-dim">cellbase</span>
+      <span className="text-text">cellbase</span>
     ) : (
       <span className="whitespace-nowrap">
-        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`}>
+        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`} look="inline">
           {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
         </Link>
-        <span className="text-text-dim">
+        <span className="text-text">
           {' '}
           +{tx.proposalOrigin!.distance}
           {tx.proposalOrigin!.uncle ? ' · uncle' : ''}
@@ -111,33 +151,52 @@ export function BlockTransactionsTable({
     {
       key: 'index',
       label: '#',
-      minWidth: 32,
-      render: (tx) => <span className="text-text-dim">{tx.index}</span>,
+      // A transaction's index in its block, four digits as written ("9999"), and the gap. It was
+      // 32, which held two digits.
+      minWidth: columnPx(cell(WIDEST_COUNT_DIGITS) + CELL_GAP_PX),
+      // a value, the reading ink (R3; lane P1 follow-up)
+      render: (tx) => <span className="text-text">{tx.index}</span>,
     },
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 140,
+      // The hash at the row size, 17 characters at 13 px (132.6), and the gap; alone in its cell,
+      // so not the tight size. It was 140.
+      minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
-        <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
+        <Link look="inline" href={`/tx/${tx.hash}`}>
+          <Hash hash={tx.hash} size="row" className="text-small" />
         </Link>
       ),
     },
     {
       key: 'proposal',
       label: 'Proposed in',
-      minWidth: 120,
+      // The proposing block and how far before it was, "#99,999,999 +10 · uncle" (a proposal is
+      // committed 2 to 10 blocks after it; 23 characters at 13 px, 179.4), and the gap. It was
+      // 120, which held the block alone.
+      minWidth: columnPx(cell(`${WIDEST_BLOCK_NUMBER} +10 · uncle`) + CELL_GAP_PX),
       render: proposedIn,
     },
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 70,
+      // The most inputs a transaction holds as written, grouped since c6f9ea20, "13,568" (review
+      // fb-tests 6: it counted four digits while 13,568 44-byte inputs fit a block; lane P1
+      // follow-up: it measured the ungrouped "13568"), the arrow between its 6 px margins, four
+      // digits of outputs, "9,999" (105.6 px), and the gap. It was 70.
+      minWidth: columnPx(
+        cell(MAX_TX_INPUTS.toLocaleString('en-US')) +
+          6 +
+          cell('→') +
+          6 +
+          cell(WIDEST_COUNT) +
+          CELL_GAP_PX
+      ),
       render: (tx) => (
         <span className="whitespace-nowrap">
           <span className={tx.isCellbase ? 'text-text-dim' : undefined}>
-            {tx.isCellbase ? 0 : tx.inputsCount}
+            {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')}
           </span>
           <span aria-hidden="true" className="text-text-dim mx-1.5">
             →
@@ -149,7 +208,10 @@ export function BlockTransactionsTable({
     {
       key: 'capacity',
       label: 'Output capacity',
-      minWidth: 140,
+      // The CKB a transaction outputs, every decimal: eleven whole digits, the genesis
+      // transactions' first issuance ("99,999,999,999.99999999", 23 characters at 13 px, 179.4),
+      // and the gap. It was 140.
+      minWidth: columnPx(cell(WIDEST_TX_OUTPUT) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
         <CkbAmount
@@ -164,7 +226,8 @@ export function BlockTransactionsTable({
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 104,
+      // A fee under 100 CKB, "99.99999999" (85.8), and the gap. It was 104.
+      minWidth: columnPx(cell(WIDEST_TX_FEE) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
         <CkbAmount
@@ -180,7 +243,9 @@ export function BlockTransactionsTable({
       key: 'size',
       label: 'Size, bytes',
       header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK} />,
-      minWidth: 160,
+      // The 48 px track, the bar's 10 px gap, the scale's figure ("1,500,000", 70.2) and the gap.
+      // It was 160.
+      minWidth: columnPx(TRACK + BAR_FIGURE_GAP + cell(SIZE_SCALE) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       render: (tx) => (
         <AlignedBar
@@ -202,11 +267,15 @@ export function BlockTransactionsTable({
       key: 'cycles',
       label: 'Cycles',
       header: <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK} />,
-      minWidth: 172,
+      // The 48 px track, the bar's 10 px gap and the scale's figure ("750,000,000", 85.8); the last
+      // column, no gap after it. It was 172.
+      minWidth: columnPx(TRACK + BAR_FIGURE_GAP + cell(CYCLES_SCALE)),
       className: 'whitespace-nowrap',
       render: (tx) =>
         tx.cycles === null ? (
-          <span className="text-text-dim">
+          // words, which may break between them in the column's nowrap (the cell rule: "Replay
+          // failed", 101.4 px at 13 px, holds the column's 143.8 on one line)
+          <span className="text-text whitespace-normal">
             {tx.cyclesStatus === 'failed' ? 'Replay failed' : 'Not yet run'}
           </span>
         ) : (
@@ -225,40 +294,50 @@ export function BlockTransactionsTable({
       rows={transactions}
       columns={columns}
       rowKey={(tx) => tx.hash}
-      rowClassName={(tx) => (tx.isCellbase ? 'text-text-dim' : '')}
       empty="No transactions."
+      // The phone-rows board's row: the hash and its output; where it was proposed; quiet, its
+      // index, its cells and its fee (the cards from 560 px keep its bytes and cycles there too).
       mobileRow={(tx, wide) => (
         <PhoneRow
           testId="block-tx-row-mobile"
+          head={BLOCK_TX_PHONE_HEAD_PX}
           lines={[
             {
               key: 'identity',
               tone: 'head',
               left: (
-                <>
-                  <span className="text-text-dim mr-2">{tx.index}</span>
-                  <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                    <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
-                  </Link>
-                </>
+                <Link href={`/tx/${tx.hash}`} look="key">
+                  <Hash hash={tx.hash} size="tight" className="text-body" />
+                </Link>
               ),
-              right: wide ? capacity(tx) : <>proposed in {proposedIn(tx)}</>,
+              right: named('output', tx.outputCapacity!, 'output capacity', tx),
             },
-            !wide && {
-              key: 'amounts',
+            {
+              key: 'proposal',
               tone: 'body',
-              left: capacity(tx),
-              right: fee(tx),
+              left:
+                blockNumber === 0 || tx.isCellbase ? (
+                  proposedIn(tx)
+                ) : (
+                  <Labelled label="proposed in">{proposedIn(tx)}</Labelled>
+                ),
             },
             {
               key: 'figures',
               tone: 'quiet',
-              left: wide ? (
-                <Dotted parts={[<>proposed in {proposedIn(tx)}</>, fee(tx)]} />
-              ) : (
-                cells(tx)
+              left: (
+                <Dotted
+                  parts={[
+                    <Labelled key="index" label="index">
+                      {tx.index}
+                    </Labelled>,
+                    cells(tx),
+                    // a cellbase pays no fee
+                    !tx.isCellbase && named('fee', tx.fee, 'fee', tx),
+                    ...(wide ? resources(tx) : []),
+                  ]}
+                />
               ),
-              right: <Dotted parts={[...(wide ? [cells(tx)] : []), ...resources(tx)]} />,
             },
           ]}
         />

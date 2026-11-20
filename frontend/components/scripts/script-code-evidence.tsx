@@ -1,6 +1,9 @@
 import { Fragment, useState } from 'react';
+import { sentField } from '@/lib/api-fields';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { AppLink } from '@/components/ui/app-link';
 import { Chart } from '@/components/ui/chart';
 import type {
@@ -24,7 +27,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -135,15 +138,23 @@ export function codeClassTotals(classes: readonly ScriptCodeClassTotalApi[]): {
  * The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side (the DAO
  * concentration bar's).
  */
-const SEGMENT_LABEL_PX = fontPx('small');
+export const SEGMENT_LABEL_PX = fontPx('small');
 const SEGMENT_LABEL_PAD = 10;
 
 /**
- * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
- * bar of the CKB under lock scripts by code class, each segment's name and share written inside it
- * where they fit (never an exact amount). Nothing is drawn while no lock script holds CKB.
+ * "Who can change the code" as a picture (hierarchy v3, C1, R12, R15): a bar of the CKB under lock
+ * scripts by code class. As a figure (`size="figure"`, 28 px), each segment's name and share are
+ * written inside it where they fit (never an exact amount); as a line (`size="line"`, 12 px: the
+ * Scripts list's first screen, readability P3), no words are inside, its legend row names every
+ * segment. Nothing is drawn while no lock script holds CKB.
  */
-export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeClassTotalApi[] }) {
+export function ScriptCodeClassBar({
+  classes,
+  size = 'figure',
+}: {
+  classes: readonly ScriptCodeClassTotalApi[];
+  size?: 'figure' | 'line';
+}) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { resolved: theme } = useTheme();
   const { held, total } = codeClassTotals(classes);
@@ -158,15 +169,19 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
   const words = (row: ScriptCodeClassTotalApi) =>
     `${scriptClassLabel(row.class)} ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`;
   const fits = (text: string, i: number) =>
+    size === 'figure' &&
     width !== null &&
-    (width * spans[i].width) / 100 >=
-      text.length * snappedAdvancePx(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
+    (width * spans[i].width) / 100 >= textPx(text.length, SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
   return (
     <div
       ref={ref}
       role="img"
       aria-label="CKB under lock scripts by who can change their code"
-      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden tabular-nums"
+      data-bar-size={size}
+      className={cn(
+        'text-small flex w-full min-w-0 gap-[2px] overflow-hidden tabular-nums',
+        size === 'figure' ? 'h-[28px]' : 'h-3'
+      )}
     >
       {held.map((row, i) => {
         const inside = fits(words(row), i) ? words(row) : '';
@@ -211,11 +226,14 @@ export function ScriptCodeClassLegend({
       aria-label="Who can change the code, in shares"
       className="text-text-dim text-small flex flex-wrap gap-x-6 gap-y-1"
     >
+      {/* Lane P2's fourth round (item 2): a row's label wraps and takes the room that is left, its
+          figure never leaves the line (at 320 the row "Immutable · code cell unspendable 96.47%",
+          334.2 px unbroken, ran 30 px past the window and cut the figure off) */}
       {held.map((row) => (
-        <li key={row.class} className="inline-flex items-center gap-2 whitespace-nowrap">
+        <li key={row.class} className="flex min-w-0 items-baseline gap-2">
           <CodeClassSwatch value={row.class} />
-          <span>{scriptClassLabel(row.class)}</span>{' '}
-          <span className="text-text tabular-nums">
+          <span className="min-w-0">{scriptClassLabel(row.class)}</span>{' '}
+          <span className="text-text shrink-0 whitespace-nowrap tabular-nums">
             {percentOf(BigInt(row.lockOwnedCapacitySum), total)}
           </span>
         </li>
@@ -262,7 +280,7 @@ export function ScriptCodeClassSummary({
       {total > BigInt(0) && (
         <Prose className="mb-3">
           <p data-testid="code-class-sentence">
-            Of the <CkbAmount form="column" shannons={total} signed={false} tone="plain" /> under
+            Of the <CkbAmount form="summary" shannons={total} signed={false} tone="plain" /> under
             these {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
               groups.map(
@@ -274,16 +292,17 @@ export function ScriptCodeClassSummary({
           </p>
         </Prose>
       )}
+      {/* a class's name, its capacity and its count, values: the reading ink at 13 px */}
       <ul
         aria-label="Code classes"
-        className="text-text-dim text-meta flex flex-wrap gap-x-7 gap-y-1.5"
+        className="text-text text-small flex flex-wrap gap-x-7 gap-y-1.5"
       >
         {ordered.map((row) => (
           <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
             <CkbAmount
-              form="column"
+              form="summary"
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
@@ -293,7 +312,7 @@ export function ScriptCodeClassSummary({
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p data-testid="unspendable-note" className="text-text-dim text-body mt-3 max-w-[640px]">
+        <p data-testid="unspendable-note" className="text-text text-body max-w-measure mt-3">
           Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
           secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
           immutable.
@@ -303,19 +322,44 @@ export function ScriptCodeClassSummary({
   );
 }
 
+/** A code cell the API names as `0x<tx hash>:<output index>`, read into its two parts. */
+function codeCellOutPoint(outpoint: string): { txHash: string; index: number } {
+  const at = outpoint.lastIndexOf(':');
+  const index = Number(outpoint.slice(at + 1));
+  if (at < 1 || at === outpoint.length - 1 || !Number.isSafeInteger(index))
+    throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
+  return { txHash: outpoint.slice(0, at), index };
+}
+
 /** A code cell the API names as `0x<tx hash>:<output index>`, opening its cell page. */
 function CodeCellLink({ outpoint }: { outpoint: string }) {
-  const at = outpoint.lastIndexOf(':');
-  if (at < 1 || at === outpoint.length - 1)
-    throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
+  const cell = codeCellOutPoint(outpoint);
   return (
-    <AppLink
-      href={`/cell/${outpoint.slice(0, at)}-${outpoint.slice(at + 1)}`}
-      className="text-emphasis hover:underline"
-    >
+    <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.index}`}>
       {outpoint}
     </AppLink>
   );
+}
+
+/**
+ * The transaction a holder signed to spend the code cell, opened at that cell (lane P2's third
+ * round, item 16: it linked the transaction bare, and its page folds a sheet after six cells). The
+ * route states the code cell with the transaction; one without the other is refused.
+ */
+function signedSpendHref(custody: ScriptCustodyApi): string | null {
+  const tx = custody.verifiedByTx;
+  // sent beside the transaction from this plan on; an older API sends no code cell (item 3)
+  const cell = sentField(
+    custody.verifiedCodeCell,
+    `custody ${custody.lockArgs}`,
+    'verifiedCodeCell'
+  );
+  if (tx === null && cell === null) return null;
+  if (tx === null || cell === null)
+    throw new Error(
+      `custody ${custody.lockArgs}: a verified spend states its transaction and its code cell (tx ${tx}, cell ${cell})`
+    );
+  return transactionAtCellHref(tx, codeCellOutPoint(cell));
 }
 
 /** A verified multisig's key count: the API states it for every one it verified. */
@@ -327,6 +371,7 @@ function verifiedKeyCount(custody: ScriptCustodyApi): number {
 
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
+  const signedSpend = signedSpendHref(custody);
   return (
     <div className="text-small min-w-0">
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
@@ -345,35 +390,36 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.lockArgs && (
-        <div
-          className="text-text-dim text-meta mt-1 font-mono [overflow-wrap:anywhere]"
-          title={custody.lockArgs}
-        >
-          Lock args {custody.lockArgs}
+        <div className="text-text mt-1 font-mono [overflow-wrap:anywhere]" title={custody.lockArgs}>
+          <span className="text-text-dim text-meta">Lock args</span> {custody.lockArgs}
         </div>
       )}
       {custody.keyHashes.length > 0 && (
-        <details className="text-text-dim mt-1">
-          <summary className="cursor-pointer">
-            {custody.keyHashes.length} committed key hashes
-          </summary>
-          <ul className="text-meta mt-1 space-y-1 break-all font-mono">
+        // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words
+        // in the ink of the tier it stands in; the hashes are values, the reading ink at 13 px (ink
+        // and size roles: they kept the quiet 12 px they took from the line around them)
+        <SectionDisclosure
+          form="inner"
+          className="mt-1"
+          summary={<>{custody.keyHashes.length} committed key hashes</>}
+        >
+          <ul className="text-text text-small space-y-1 break-all font-mono">
             {custody.keyHashes.map((hash) => (
               <li key={hash}>{hash}</li>
             ))}
           </ul>
-        </details>
+        </SectionDisclosure>
       )}
-      {signer && (
-        <div className="text-text-dim mt-1 [overflow-wrap:anywhere]">
+      {signer && signedSpend && (
+        <div className="text-text mt-1 [overflow-wrap:anywhere]">
           This holder signed to spend the code cell in{' '}
-          <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
+          <AppLink look="inline" href={signedSpend}>
             <ShortId value={signer} kind="hash" size="row" />
           </AppLink>
         </div>
       )}
       {custody.owners.length > 1 && (
-        <ul className="text-text-dim mt-2 space-y-1">
+        <ul className="text-text mt-2 space-y-1">
           {custody.owners.map((owner) => (
             <li
               key={`${owner.lockCodeHash}:${owner.lockHashType}:${owner.lockArgs}`}
@@ -429,11 +475,17 @@ export function ScriptCapacityEvidenceChart({
   const dateIndex = new Map(chart.data.map((point, index) => [point.date, index]));
   const displaySeries = chart.series.map((series) => ({
     ...series,
-    label: series.key === 'used' ? 'Occupied' : series.key === 'unused' ? 'Free' : series.label,
+    // the held bands by the routes' names (lane exactness, part B, S4: they were used and unused)
+    label:
+      series.key === 'occupiedCapacity'
+        ? 'Occupied'
+        : series.key === 'freeCapacity'
+          ? 'Free'
+          : series.label,
     color:
-      series.key === 'used'
+      series.key === 'occupiedCapacity'
         ? 'var(--c-data-framing)'
-        : series.key === 'unused'
+        : series.key === 'freeCapacity'
           ? 'var(--c-jade-dim)'
           : series.color,
   }));
@@ -532,7 +584,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
+                className="border-base-border text-text text-small inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"
@@ -544,8 +596,8 @@ export function ScriptCapacityEvidenceChart({
                 </button>
                 <span aria-hidden="true">·</span>
                 <AppLink
+                  look="inline"
                   href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
-                  className="hover:text-text-bright hover:underline"
                 >
                   <ShortId value={marker.codeCellTxHash} kind="hash" size="row" />
                   <OutpointIndex index={marker.codeCellOutputIndex} />
@@ -570,7 +622,7 @@ export function ScriptCapacityEvidenceChart({
                 </div>
               )}
               {consumedCandidates.length > 1 && (
-                <div className="text-text-dim sm:col-span-2">
+                <div className="text-text-dim max-w-measure sm:col-span-2">
                   Multiple previous code cells under this reference were consumed in the same
                   transaction; previous holder is ambiguous.
                 </div>

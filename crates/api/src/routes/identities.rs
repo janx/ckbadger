@@ -153,9 +153,11 @@ fn list_identity_holders_ranked_cached(
     mem_cache: &InMemoryCache,
     collection_id_bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    // keyed by the read view's tip, so the ranking and the total beside it are one view (lane exactness, part A, A3)
     let cache_key = format!(
-        "assets:identity_collection_holders_ranked:0x{}",
-        hex::encode(collection_id_bytes)
+        "assets:identity_collection_holders_ranked:0x{}:{}",
+        hex::encode(collection_id_bytes),
+        super::assets::view_tip_key(store)?
     );
     if let Some(cached) = mem_cache.get::<Vec<(Vec<u8>, i64)>>(&cache_key) {
         return Ok(cached);
@@ -195,7 +197,7 @@ async fn list_identity_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<IdentityCollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
+) -> ApiResult<crate::response::RankedPage<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
     let cursor = params
@@ -228,15 +230,8 @@ async fn list_identity_collection_holders(
     )?;
 
     let total = agg.holders_count;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        holders
-            .iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid identity collection holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this view's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&holders, cursor.as_ref());
 
     let page: Vec<_> = holders.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;
@@ -290,12 +285,11 @@ async fn list_identity_collection_holders(
         }
     }
 
-    ok(CursorPaginatedResponse::new(
-        rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(crate::response::RankedPage {
+        page: CursorPaginatedResponse::new(rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking read in this request's view, plus one (lane exactness, part A, A3)
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 // -- Activities endpoint --
@@ -866,7 +860,9 @@ pub struct PartyRef {
     pub hash_prefix: String,
     pub lock_hash: Option<String>,
     pub address: Option<String>,
-    pub script_name: Option<String>,
+    /// The registry's name for the party's lock code hash: `lockScriptName`, the one name every
+    /// route gives a lock's registry name (lane P2's third round, item 12; it was `scriptName`).
+    pub lock_script_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1062,7 +1058,7 @@ impl DotCellPartyResolver<'_> {
                     hash_prefix,
                     lock_hash: None,
                     address: None,
-                    script_name: None,
+                    lock_script_name: None,
                 },
                 None,
             ));
@@ -1085,7 +1081,7 @@ impl DotCellPartyResolver<'_> {
                 hash_prefix,
                 lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
                 address,
-                script_name,
+                lock_script_name: script_name,
             },
             Some(ResolvedLock {
                 lock_hash: lock_hash.to_vec(),
@@ -1112,7 +1108,7 @@ impl DotCellPartyResolver<'_> {
             hash_prefix: format!("0x{}", hex::encode(&lock_hash[..20])),
             lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
             address,
-            script_name,
+            lock_script_name: script_name,
         })
     }
 }

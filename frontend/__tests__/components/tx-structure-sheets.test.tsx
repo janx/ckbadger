@@ -23,7 +23,7 @@ const tile = (id: string, capacity = '20000000000'): CellTileData =>
     kind: 'ckb',
     content: 'CKB',
     capacity,
-    occupied: '6100000000',
+    occupiedBytes: '61',
     state: id.startsWith('in') ? 'consumed' : 'live',
   });
 
@@ -96,10 +96,15 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       expect(sheet).toHaveClass('glass', 'border', 'min-w-0');
     }
     expect(SHEETS.seam).toBe(4);
-    expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:gap-y-0');
+    // re-pinned on purpose (lane D3, the board's phone): below lg the stacked sheets are 4 px
+    // apart, the seam their row, as from lg (they were 12 px apart, `gap-y-3`, the seam hidden)
+    expect(root).toHaveClass('grid', 'grid-cols-1');
+    expect(root.className).not.toMatch(/(^|\s)(lg:)?gap-y-/);
     expect(root).toHaveClass('lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]');
-    // the seam: empty ground (round 3: with no continuity link, not even an overlay); none below lg
-    expect(seam).toHaveClass('relative', 'hidden', 'self-stretch', 'lg:block');
+    // the seam: empty ground (round 3: with no continuity link, not even an overlay); a 4 px row
+    // below lg (`h-1`), the column from lg
+    expect(seam).toHaveClass('relative', 'h-1', 'self-stretch', 'lg:h-auto');
+    expect(seam.className).not.toMatch(/(^|\s)hidden(\s|$)/);
     expect(seam).not.toHaveAttribute('data-instrument-frame');
     expect(seam.children).toHaveLength(0);
     // the cells on their sheets
@@ -175,6 +180,34 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
     expect(totals).toHaveLength(2);
     expect(totals[0]).toHaveTextContent(/^0\.00000001 CKB$/);
     expect(totals[1]).toHaveTextContent(/^0 CKB$/);
+  });
+
+  // Lane P1 (lane D3's note: the sheets' totals used the column form, padded zeros; the board
+  // writes them exact): a sheet's total, its fee and a capacity entering from no cell are each one
+  // amount of the thing itself, not a column of them, so each is exact, its trailing zeros dropped;
+  // the tiles' capacities stay a column.
+  it('writes the totals, the fee and the inflow exact, the tiles’ capacities a column (P1)', () => {
+    render(
+      <TxStructure
+        txHash={TX}
+        inputs={[tile('in:0')]}
+        outputs={[tile('out:0'), tile('out:1')]}
+        fee="1572400"
+        consumedCapacity="10000000000"
+        createdCapacity="9998427600"
+        inflow={{ tone: 'reward', label: 'block reward', amount: '55900000000' }}
+      />
+    );
+    const totals = Array.from(document.querySelectorAll<HTMLElement>('[data-sheet-total]'));
+    expect(totals.map((t) => t.textContent)).toEqual(['100 CKB', '99.984276 CKB']);
+    for (const t of totals)
+      expect(t.querySelector('[data-ckb-amount]')).toHaveAttribute('data-form', 'exact');
+    expect(screen.getByTestId('tx-fee')).toHaveTextContent(/^fee0\.015724 CKB$/);
+    expect(screen.getByTestId('tx-inflow')).toHaveTextContent(/^block reward559 CKB$/);
+    expect(document.querySelector('[data-cell-id="in:0"] [data-ckb-amount]')).toHaveAttribute(
+      'data-form',
+      'column'
+    );
   });
 
   it('refuses a total that is not an exact unsigned integer, naming the transaction and the sheet', () => {

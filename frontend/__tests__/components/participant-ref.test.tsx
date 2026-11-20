@@ -15,9 +15,15 @@ describe('ParticipantRefView', () => {
   const address =
     'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqt4z78ng4yutl5u6xsv27lt52eh9jvvtd9wj5clj';
 
+  // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): the full form is an
+  // Address, which states its look
   it('renders a linked address when the party resolved', () => {
     render(
-      <ParticipantRefView size="row" participant={makeRef({ address, lockHash: '0xabcd' })} />
+      <ParticipantRefView
+        size="row"
+        look="inline"
+        participant={makeRef({ address, lockHash: '0xabcd' })}
+      />
     );
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
@@ -131,5 +137,51 @@ describe('ParticipantRefView', () => {
     );
     expect(screen.getByText(/owner_to/)).toBeInTheDocument();
     expect(screen.getByText(/manager_to/)).toBeInTheDocument();
+  });
+
+  // Lane P1 follow-up (the link-look gate's participant-ref entry): a caller states the party's
+  // look (components/ui/link.tsx) as it does an Address's; the link then draws that look and no ink
+  // by hand. A caller that states none draws what it drew (the feeds, the lists lane's).
+  describe('the look its caller states', () => {
+    const LOCK = `0x${'57'.repeat(32)}`;
+    const INLINE_LINE = 'decoration-[color:var(--c-ink-muted)]';
+
+    it('draws a compact address in the inline look, with no hand ink', () => {
+      render(
+        <ParticipantRefView
+          size="row"
+          participant={makeRef({ address })}
+          compact
+          quiet
+          look="inline"
+        />
+      );
+      const link = screen.getByRole('link');
+      expect(link).toHaveClass('underline', INLINE_LINE);
+      for (const hand of ['text-text', 'text-jade-dim', 'hover:text-jade'])
+        expect(link).not.toHaveClass(hand);
+    });
+
+    it('draws a compact lock hash as a row key, and a standalone address too', () => {
+      const { unmount } = render(
+        <ParticipantRefView
+          size="row"
+          participant={makeRef({ lockHash: LOCK })}
+          compact
+          look="key"
+        />
+      );
+      expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+      expect(screen.getByRole('link')).not.toHaveClass('hover:text-jade');
+      unmount();
+      render(<ParticipantRefView size="row" participant={makeRef({ address })} look="key" />);
+      expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+      expect(screen.getByRole('link')).not.toHaveClass('underline');
+    });
+
+    it('draws what it drew where its caller states no look', () => {
+      render(<ParticipantRefView size="row" participant={makeRef({ lockHash: LOCK })} compact />);
+      expect(screen.getByRole('link')).toHaveClass('text-text', 'hover:text-jade');
+    });
   });
 });

@@ -3,9 +3,11 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { useDetailTier } from '@/components/ui/detail-layout';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
-import { fade } from '@/lib/palette';
+import { color, fade, inkOnFill, paletteKeyOf } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import type { Cell } from '@/lib/api';
 import {
   BOARD_INKS,
@@ -27,6 +29,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   hexRowBytes,
   MAP_PAD_PX,
+  OFFSET_PX,
   mapSegmentMinWidth,
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
@@ -53,6 +56,8 @@ const targetKey = (t: Target) => (t.kind === 'group' ? `group:${t.group}` : `${t
 
 /** A part's tone (a theme reference) at `alpha`, as a background. */
 const rgba = fade;
+/** An ELF region's fill: its tone at this alpha, its words in the ink that reads on it. */
+const REGION_FILL = 0.35;
 
 const alignDown = (n: number) => n - (n % ROW);
 const alignUp = (n: number, max: number) => Math.min(max, n % ROW ? n + ROW - (n % ROW) : n);
@@ -198,12 +203,7 @@ const HexRows = memo(function HexRows({
     }
     rows.push(
       <div key={`${block}:${r}`} className="flex h-[21px] items-center">
-        <span
-          className={cn(
-            'text-text-dim shrink-0 select-none',
-            width === 5 ? 'w-[74px]' : 'w-[62px]'
-          )}
-        >
+        <span className="text-text-dim shrink-0 select-none" style={{ width: OFFSET_PX[width] }}>
           0x{r.toString(16).padStart(width, '0')}
         </span>
         <span className="flex shrink-0 gap-1">{hex}</span>
@@ -230,8 +230,11 @@ export function highlightCss(ids: readonly string[] | null): string {
 
 export interface CellMicroscopeProps {
   cell: Cell;
-  /** Registry names of its lock and type scripts, for the map detail. */
-  lockName?: string | null;
+  /**
+   * The lock's name as the one decision gives it (`lockWords`), and the registry's name of its
+   * type, for the map detail.
+   */
+  lockLabel?: string | null;
   typeName?: string | null;
 }
 
@@ -241,7 +244,8 @@ export interface CellMicroscopeProps {
  * byte, field or map part is under the pointer. A tap pins it, with a readout line under the
  * bytes, until a second tap on it or Escape (R6).
  */
-export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
+export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProps) {
+  const { resolved: theme } = useTheme();
   const molecule = cell.cellOutputMolecule;
   const outBytes = useMemo(
     () => (molecule ? hexBytes(molecule.bytes, 'CellOutput') : []),
@@ -283,7 +287,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const outOccupied = outParts.filter((p) => p.occupied).reduce((n, p) => n + p.end - p.start, 0);
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
-      <p role="alert" className="text-rouge text-small">
+      <p role="alert" className="text-rouge text-small max-w-measure">
         Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied.toLocaleString('en-US')}{' '}
         occupied CellOutput + {dataBytes.length.toLocaleString('en-US')} data) disagree with its
         occupied size{' '}
@@ -373,10 +377,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       <div
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
-        className={cn(
-          'text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
-          digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
-        )}
+        className="text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed"
+        style={{ paddingLeft: OFFSET_PX[digits] }}
       >
         <span>
           ⋯ {unitNode(formatCount(to - from, 'byte'))} [{fmt(from)}..{fmt(to)}): {listed}
@@ -417,7 +419,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const line = (target: Target): string => {
     if (target.kind === 'group') {
       const g = target.group;
-      const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+      const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
       return `${g}${name ? ` · ${name}` : ''} · ${fmt(groupBytes[g])} B occupied`;
     }
     if (target.kind === 'region') {
@@ -437,7 +439,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={part.id}>
         <DetailHead name={part.label} figure={span(part.start, part.end)} />
-        <p className="text-small text-text mt-1.5 leading-relaxed">{part.meaning}</p>
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">{part.meaning}</p>
         <DetailRows
           rows={[
             [
@@ -472,14 +474,14 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     const range = g === 'lock' || g === 'type' ? groupRange(g) : null;
     const hash =
       g === 'lock' ? molecule?.lockScriptHash : g === 'type' ? molecule?.typeScriptHash : null;
-    const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+    const name = g === 'lock' ? lockLabel : g === 'type' ? typeName : null;
     detail = (
       <div data-detail={`group:${g}`}>
         <DetailHead
           name={`${g}${name ? ` · ${name}` : ''}`}
           figure={`${fmt(groupBytes[g])} B occupied`}
         />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           {g === 'capacity'
             ? 'The capacity field takes 8 bytes of the capacity it states.'
             : g === 'lock'
@@ -510,7 +512,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={activeRegion.id}>
         <DetailHead name={activeRegion.label} figure={span(activeRegion.start, activeRegion.end)} />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           {activeRegion.partIds.length > 1
             ? `${activeRegion.partIds.length} parts: ${activeRegion.partIds.map((id) => byId.get(id)!.label).join(' · ')}.`
             : byId.get(activeRegion.partIds[0])!.meaning}
@@ -525,7 +527,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           name="Where each byte belongs"
           figure={`${fmt(outBytes.length)} + ${fmt(dataBytes.length)} bytes`}
         />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           Each byte belongs to exactly one {elf ? 'part' : 'field'}. Colours follow the four parts
           of the cell; grey bytes are CellOutput framing that the cell does not pay for.
         </p>
@@ -557,22 +559,33 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     parts: parts.filter((p) => p.group === group && p.indexed),
   })).filter((g) => g.parts.length);
   const hidden = dataParts.filter((p) => !p.indexed).length;
+  const tier = useDetailTier();
+  const bytesArgs = (
+    <>
+      {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
+      <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span>
+    </>
+  );
+  const roomNote = `room for ${room.toLocaleString('en-US')} more`;
 
   return (
     <section aria-label="Cell byte microscope" className="min-w-0 space-y-3.5">
       <style>{highlightCss(litIds)}</style>
       {/* Rubbing × Song print, phase 5 (A7): the bytes, run on the sum the map draws (its
           occupied total in the data ink); the room left is the right-prompt note. */}
-      <PromptHeading
-        command="Bytes"
-        args={
-          <>
-            {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
-            <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span>
-          </>
-        }
-        note={`room for ${room.toLocaleString('en-US')} more`}
-      />
+      {/* In the developer tier (the cell page's, lane D3) the heading is a tier-2 section's, as
+          every section there is (lane P1, lane D3's note: it was a tier-1 command line there) */}
+      {tier === 2 ? (
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-body text-text font-medium">
+            Bytes
+            <span className="text-text-dim ml-2.5 font-normal">{bytesArgs}</span>
+          </h2>
+          <span className="text-text-dim text-meta">{roomNote}</span>
+        </div>
+      ) : (
+        <PromptHeading command="Bytes" args={bytesArgs} note={roomNote} />
+      )}
       {/* A flex row: basis 0, growth by bytes, each part's minimum holds its label. */}
       <div
         role="group"
@@ -624,12 +637,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta text-base-bg flex items-center justify-center overflow-hidden"
+                className="text-meta flex items-center justify-center overflow-hidden"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
-                  backgroundColor: rgba(region.tone, 0.35),
+                  backgroundColor: rgba(region.tone, REGION_FILL),
                   borderTop: `2px solid ${region.tone}`,
+                  // its words in the ink its fill reads in, the fill-ink rule's (lane P1: the page
+                  // ground's ink stood on it at 2.04 : 1 by night)
+                  color: color(inkOnFill(theme, paletteKeyOf(region.tone), REGION_FILL).ink),
                 }}
               >
                 {(region.end - region.start) * 5 > dataBytes.length
@@ -705,7 +721,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             ))}
             {hidden > 0 && (
-              <div className="text-text-dim text-meta sm:pl-20">
+              // a sentence, the reading ink at 13 px (lane P1, the ink and size roles: 12, quiet)
+              <div className="text-text text-small max-w-measure sm:pl-20">
                 + {hidden} more ELF header fields and program headers, named in the line under their
                 bytes
               </div>
@@ -722,8 +739,11 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
-              {/* The dump itself is a well inside the glass (material pass v2, move 2). */}
-              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-4 py-3">
+              {/* The dump itself is a well inside the glass (material pass v2, move 2). Its frame,
+                  the panel's border, m-2, the well's border and px-2.5, is the one hexRowBytes
+                  measures by (HEX_BOX_INSET_PX): a row is chosen whole inside it (lane P1
+                  follow-up; px-4 left the 8-byte row 23 px too wide at 390) */}
+              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-2.5 py-3">
                 {molecule && (
                   <div aria-label="CellOutput byte map">
                     <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
@@ -769,7 +789,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                   {dataBytes.length ? (
                     dataRows
                   ) : (
-                    <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
+                    <p className="text-text py-1">No data: the cell carries 0 bytes.</p>
                   )}
                 </div>
               </TerminalPanelContent>

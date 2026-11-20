@@ -1,14 +1,14 @@
 'use client';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useCopy } from '@/hooks/useCopy';
+import { IdCopyRow } from '@/components/ui/head-id';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
-import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellScriptGroups, CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -20,7 +20,7 @@ import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs } from '@/lib/utils';
 import { shortenOutpoint } from '@/lib/shorten';
-import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
+import { DATA_KEY } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -29,7 +29,9 @@ import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
 import { ShortId } from '@/components/ui/short-id';
 import { TitleId } from '@/components/ui/title-id';
-import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import type { StripFact } from '@/components/ui/status-strip';
+import { cellLockFacts, lockWords, type LockWords } from '@/components/ui/lock-kind';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
 const OUTPOINT_RULE =
@@ -85,7 +87,7 @@ function depGroupItems(cell: Cell): NonNullable<Cell['depGroupItems']> {
  * the state with every DAO cell, so any other value is a broken read.
  */
 function DaoCompensationAt({ cell, dao }: { cell: Cell; dao: NonNullable<Cell['daoInfo']> }) {
-  const block = <BlockLink number={dao.compensationAtBlock} />;
+  const block = <BlockLink look="inline" number={dao.compensationAtBlock} />;
   switch (dao.compensationState) {
     case 'accruing':
       return <>, at block {block}</>;
@@ -138,20 +140,21 @@ function ScriptFact({
   label,
   script,
   name,
-  color,
+  byHashType = null,
   owner,
 }: {
   label: string;
   script: Cell['lock'];
   name: string | null;
-  color: string;
+  /** "by <hash type>" after a lock the one decision writes by its code hash (`LockWords`). */
+  byHashType?: string | null;
   /** Lane L: the lock's address, the cell's owner, linked under the args (the Lock fact only). */
   owner?: string;
 }) {
   if (!script)
     return (
       <Fact label={label}>
-        <span className="text-text-dim">none</span>
+        <span className="text-text">none</span>
       </Fact>
     );
   const href =
@@ -173,9 +176,10 @@ function ScriptFact({
             )}
             {owner && (
               <Link
+                look="inline"
                 href={`/address/${owner}`}
                 title={owner}
-                className="hover:text-jade block [overflow-wrap:anywhere]"
+                className="block [overflow-wrap:anywhere]"
               >
                 <ShortId value={owner} kind="address" size="row" />
               </Link>
@@ -185,25 +189,25 @@ function ScriptFact({
       }
     >
       {href ? (
-        <Link href={href} title={`${script.hashType} ${script.codeHash}`} style={{ color }}>
+        <Link look="inline" href={href} title={`${script.hashType} ${script.codeHash}`}>
           {text}
         </Link>
       ) : (
-        <span style={{ color }} title={script.codeHash}>
-          {text}
-        </span>
+        <span title={script.codeHash}>{text}</span>
       )}
+      {byHashType && ` by ${byHashType}`}
     </Fact>
   );
 }
 
 function CellFacts({
   cell,
-  lockName,
+  lock,
   typeName,
 }: {
   cell: Cell;
-  lockName: string | null;
+  /** The lock's words, the one decision's in a fact (`lockWords`, as a column's: never empty). */
+  lock: LockWords | null;
   typeName: string | null;
 }) {
   let amounts: { capacity: bigint; occupied: bigint };
@@ -211,7 +215,11 @@ function CellFacts({
     amounts = checkedCapacity(cell);
   } catch (error) {
     return (
-      <p role="alert" data-testid="cell-capacity-error" className="text-rouge text-small">
+      <p
+        role="alert"
+        data-testid="cell-capacity-error"
+        className="text-rouge text-small max-w-measure"
+      >
         {String(error)}
       </p>
     );
@@ -223,29 +231,23 @@ function CellFacts({
       aria-label="Cell facts"
       className="border-base-border text-small flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5"
     >
-      <Fact label="Capacity">
-        <CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />
-      </Fact>
+      {/* The capacity, the time and the block it was created in are the status strip's (lane D2):
+          these are the cell's other facts, none deleted. */}
       <Fact label="Occupied">
-        <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
-        <span className="text-text-dim text-small">
-          ·{' '}
-          {capacity === occupied ? (
-            '0'
-          ) : (
-            <CkbAmount form="column" shannons={capacity - occupied} signed={false} tone="plain" />
-          )}{' '}
-          free
+        <span>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
+        <span className="text-text text-small">
+          · {/* no free CKB with its unit too (lane P1, third round; NOTE 5: it read "0 free") */}
+          <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" /> free
         </span>
       </Fact>
       <ScriptFact
         label="Lock"
         script={cell.lock}
-        name={lockName}
-        color={CELL_COLORS.lock}
+        name={lock && lock.form !== 'not-indexed' ? lock.name : null}
+        byHashType={lock?.form === 'lock' ? lock.byHashType : null}
         owner={cell.address}
       />
-      <ScriptFact label="Type" script={cell.type} name={typeName} color={CELL_COLORS.type} />
+      <ScriptFact label="Type" script={cell.type} name={typeName} />
       <Fact
         label="Data"
         sub={
@@ -256,30 +258,17 @@ function CellFacts({
               : undefined
         }
       >
-        <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
+        <span>{cell.dataSize.toLocaleString('en-US')} B</span>
       </Fact>
-      <Fact
-        label="Created"
-        sub={
-          <>
-            {cell.createdTimestamp && (
-              <Utc8DateTime timestamp={cell.createdTimestamp} dateTime={cell.createdTimestamp} />
-            )}
-            {cell.createdEpoch ? (
-              <span className="block">
-                {`epoch ${cell.createdEpoch.number.toLocaleString('en-US')} · ${cell.createdEpoch.index}/${cell.createdEpoch.length}`}
-              </span>
-            ) : (
-              <span role="alert" className="text-rouge block">
-                Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch
-              </span>
-            )}
-          </>
-        }
-      >
-        <Link href={`/blocks/${cell.createdAtBlock}`} className="text-text-bright">
-          {formatBlockNumber(cell.createdAtBlock)}
-        </Link>
+      {/* the epoch it was created in (the strip states its block and time) */}
+      <Fact label="Epoch">
+        {cell.createdEpoch ? (
+          `${cell.createdEpoch.number.toLocaleString('en-US')} · ${cell.createdEpoch.index}/${cell.createdEpoch.length}`
+        ) : (
+          <span role="alert" className="text-rouge">
+            Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch
+          </span>
+        )}
       </Fact>
       {cell.status === 'dead' ? (
         <Fact
@@ -295,11 +284,11 @@ function CellFacts({
           }
         >
           {cell.consumedAtBlock != null ? (
-            <Link href={`/blocks/${cell.consumedAtBlock}`} className="text-text-bright">
+            <Link look="key" href={`/blocks/${cell.consumedAtBlock}`}>
               {formatBlockNumber(cell.consumedAtBlock)}
             </Link>
           ) : (
-            <span className="text-text-dim">block unavailable</span>
+            <span className="text-text">block unavailable</span>
           )}
         </Fact>
       ) : (
@@ -309,7 +298,7 @@ function CellFacts({
             sub={
               cell.liveAgeAtBlock != null && (
                 <>
-                  as of <BlockLink number={cell.liveAgeAtBlock} />
+                  as of <BlockLink look="inline" number={cell.liveAgeAtBlock} />
                 </>
               )
             }
@@ -322,93 +311,73 @@ function CellFacts({
   );
 }
 
-function CopyOutpoint({ value }: { value: string }) {
-  // the one copy path (hooks/useCopy): "copied" for a moment after a copy that worked, nothing
-  // after one that cannot (no clipboard over plain HTTP on a LAN address)
-  const { copied, copy } = useCopy(value);
-  return (
-    <button
-      type="button"
-      aria-label="Copy out point"
-      onClick={copy}
-      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] border px-2"
-    >
-      {copied ? 'copied' : 'copy'}
-    </button>
-  );
-}
-
-/** "code cell of JoyID, v5": the scripts this cell is code for, and its Type ID version. */
-function CodeCellOf({ cell }: { cell: Cell }) {
-  if (!cell.codeCellOf?.length) return null;
-  const version = cell.codeCell?.typeIdVersions.find(
-    (item) => item.codeCellTxHash === cell.txHash && item.codeCellOutputIndex === cell.outputIndex
-  );
-  return (
-    <span data-testid="code-cell-of" className="text-text-dim text-small">
-      · code cell of{' '}
-      {cell.codeCellOf.map((script, i) => (
-        <span key={`${script.codeHash}:${script.hashType}`}>
-          {i > 0 && ', '}
-          <Link
-            href={`/script/${script.codeHash}?hashType=${script.hashType}`}
-            className="text-text-bright"
-          >
-            {script.name}
-          </Link>
-        </span>
-      ))}
-      {version && `, v${version.ordinal}`}
-    </span>
-  );
-}
-
 /**
- * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to
- * the transaction page and the block to its page; the line under the plate is the page's lede
- * (prose: the row form, R9).
+ * The cell's status strip (lane D2, PA-13; gate D0′'s strip with the cell's own four facts): its
+ * state, live (the data's celadon dot) or spent (the dead ink's), the time it was created on the
+ * site's clock with its age, the block that created it and its capacity, exact. A time the API did
+ * not send is not passed.
  */
-function CellOrigin({ cell }: { cell: Cell }) {
-  return (
-    <p data-testid="cell-origin">
-      output {cell.outputIndex} of transaction{' '}
-      <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <ShortId value={cell.txHash} kind="hash" size="row" />
-      </Link>{' '}
-      ·{' '}
-      {cell.status === 'dead' ? (
-        cell.consumedAtBlock != null ? (
-          <span className="whitespace-nowrap">
-            spent at{' '}
-            <Link
-              href={`/blocks/${cell.consumedAtBlock}`}
-              className="text-text hover:text-text-bright"
-            >
-              {formatBlockNumber(cell.consumedAtBlock)}
-            </Link>
-          </span>
-        ) : (
-          'spent, block unavailable'
-        )
-      ) : (
-        <span className="whitespace-nowrap">
-          live since{' '}
-          <Link
-            href={`/blocks/${cell.createdAtBlock}`}
-            className="text-text hover:text-text-bright"
-          >
-            {formatBlockNumber(cell.createdAtBlock)}
-          </Link>
-        </span>
-      )}
-    </p>
-  );
+function cellStripFacts(cell: Cell): StripFact[] {
+  return [
+    {
+      label: 'status',
+      value: cell.status === 'live' ? 'live' : 'spent',
+      dot: cell.status === 'live' ? DATA_KEY : 'text-dim',
+    },
+    ...(cell.createdTimestamp
+      ? [
+          {
+            label: 'created',
+            value: <Utc8DateTime timestamp={cell.createdTimestamp} />,
+            note: <Utc8Age timestamp={cell.createdTimestamp} />,
+          },
+        ]
+      : []),
+    {
+      label: 'block',
+      value: (
+        <Link look="inline" href={`/blocks/${cell.createdAtBlock}`}>
+          {formatBlockNumber(cell.createdAtBlock)}
+        </Link>
+      ),
+    },
+    {
+      label: 'capacity',
+      value: (
+        <CkbAmount
+          form="exact"
+          shannons={parseShannons(
+            cell.capacity,
+            `cell ${cell.txHash}:${cell.outputIndex} capacity`
+          )}
+          signed={false}
+          tone="inherit"
+        />
+      ),
+    },
+  ];
 }
 
 function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | null }) {
   const names = useScriptNames(cell);
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
+  // The lock's words, the one decision's (components/ui/lock-kind.tsx; lane P1 follow-up, the
+  // lock-words gate): its script and the registry's name for its code hash, the address the API
+  // spells checked against the script. The cell's facts name the default lock too (a column's
+  // form); a lock on the default lock's code hash by data is not the default lock, and the
+  // registry's name, which is the default lock's, is not written for it.
+  const lock = cell.lock
+    ? lockWords(
+        cellLockFacts(
+          { lock: cell.lock, name: names.lock, address: cell.address ?? null },
+          `cell ${outpoint}`
+        ),
+        'column'
+      )
+    : null;
+  if (cell.lock && lock === null)
+    throw new Error(`cell ${outpoint}: a column's lock words are never empty`);
+  const lockLabel = lock && lock.form !== 'not-indexed' ? lock.name : null;
   // The seals by kind (C3): the cell's own stone, classed by the transaction page's one
   // classifier from the class fields the API serves for it; spent, in the dead ink.
   const seal = cellPageSeal(cell, kindOf);
@@ -431,74 +400,84 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
         seal={{ ...seal, kind: 'Cell' }}
-        // on the kind line, after "Cell"
-        status={
-          <span className="flex flex-wrap items-center gap-3">
-            <span
-              className="text-small inline-flex items-center gap-1.5"
-              style={{ color: cell.status === 'live' ? DATA_COLOR : EXPIRED_COLOR }}
-            >
-              <span
-                aria-hidden="true"
-                className="inline-block h-[7px] w-[7px] rounded-full"
-                style={{ backgroundColor: cell.status === 'live' ? DATA_COLOR : EXPIRED_COLOR }}
-              />
-              {cell.status === 'live' ? 'live' : 'spent'}
-            </span>
-            <CodeCellOf cell={cell} />
-          </span>
-        }
+        // The status strip under the id line (lane D2, PA-13): its state, when it was created, the
+        // block that created it and its capacity; its other facts stay in "Cell facts" below.
+        strip={{ label: 'Cell status', facts: cellStripFacts(cell) }}
         // The id line: the full out point and its copy, in the plate's quiet voice (C10 round 2:
         // it was text-body in the bright ink, competing with the h1 above it), its colon in the
-        // same ink; it wraps anywhere, as the line does.
+        // same ink; it wraps anywhere, as the line does. The id line's one form (IdCopyRow, lane
+        // c2-finish rulings round 2): its copy 8 px after it at its first line, its answer under
+        // the whole out point; not a HeadId, whose kinds are a hash, an address and a did:ckb.
         identity={
-          <div className="flex flex-wrap items-center gap-2.5">
+          <IdCopyRow value={outpoint} copy="copy out point">
             <span className="min-w-0">{outpoint}</span>
-            <CopyOutpoint value={outpoint} />
-          </div>
+          </IdCopyRow>
         }
-        // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
-        // dim small voice: the inventory item this cell is (lane U, U6), the transaction it is an
-        // output of, and what its out point is.
+        // Under the stone and the plate, from the page's left edge (C10): one sentence of what the
+        // cell is (lane U, U6: the inventory item it is; lane P1: for every kind, by its scripts —
+        // the code it holds, which the kind line said, among them). Said once (lane P1): its
+        // state, its block and its capacity are the strip's, its transaction the Transactions
+        // section's link, and its out point is written whole on the id line and short in the h1
+        // (the origin line under them wrote the transaction's hash a third time); what an out
+        // point is, in general, is the developer tier's (lane D3).
         lede={
-          <div className="text-text-dim text-small space-y-1.5">
-            <CellInventoryLine cell={cell} />
-            <CellOrigin cell={cell} />
-            <p>
+          <CellInventoryLine
+            cell={cell}
+            typeName={
+              cell.type?.codeHash === TYPE_ID_CODE_HASH || names.lookup.isSuccess
+                ? names.type
+                : undefined
+            }
+          />
+        }
+        // The developer tier (lane D3, U-17): what an out point is, the cell's bytes, and the
+        // script groups of its transactions, in the transaction page's rows.
+        tier2={
+          <>
+            {/* a sentence that explains: the reading ink at the body step (R3, R4) */}
+            <p className="text-text text-body max-w-measure">
               The out point is the cell&apos;s only name: transaction hash and output index. No
               other cell has it, and this one{' '}
               {cell.status === 'dead' && cell.consumedAtBlock != null ? (
                 <>
-                  existed from block <BlockLink number={cell.createdAtBlock} /> until block{' '}
-                  <BlockLink number={cell.consumedAtBlock} /> spent it.
+                  existed from block <BlockLink look="inline" number={cell.createdAtBlock} /> until
+                  block <BlockLink look="inline" number={cell.consumedAtBlock} /> spent it.
                 </>
               ) : (
                 <>
-                  exists from block <BlockLink number={cell.createdAtBlock} /> until a transaction
-                  spends it.
+                  exists from block <BlockLink look="inline" number={cell.createdAtBlock} /> until a
+                  transaction spends it.
                 </>
               )}
             </p>
-          </div>
+            <CellMicroscope
+              key={outpoint}
+              cell={cell}
+              lockLabel={lockLabel}
+              typeName={names.type}
+            />
+            <CellScriptGroups cell={cell} />
+          </>
         }
       >
         {refreshError && (
-          <p role="alert">
+          <p className="max-w-measure" role="alert">
             Unable to refresh cell: {refreshError.message}. Showing previously loaded data.
           </p>
         )}
-        <CellFacts cell={cell} lockName={names.lock} typeName={names.type} />
+        <CellFacts cell={cell} lock={lock} typeName={names.type} />
         {cell.daoInfo && (
           // The command runs on the status the API gives (deposited, withdrawing, withdrawn); the
           // heading says it, so the line under it does not say it again.
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
                 and block; an answer without them is a broken read and fails here, by name. */}
-            <p className="text-text-dim text-small">
-              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} /> ·{' '}
+            {/* its deposit block and compensation: values, the reading ink (R3; P1 follow-up) */}
+            <p className="text-text text-small max-w-measure">
+              deposit block <BlockLink look="inline" number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={parseShannons(
                   cell.daoInfo.compensation,
                   `DAO cell ${cell.txHash}:${cell.outputIndex} compensation`
@@ -511,17 +490,12 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           </DetailSection>
         )}
         {cell.elf && <CodeCellBoard cell={cell} />}
-        <CellMicroscope key={outpoint} cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.isDepGroup && (
           <DetailSection title="Dep group" args={formatCount(depGroupItems(cell).length, 'item')}>
             <ul className="text-small space-y-2">
               {depGroupItems(cell).map((item) => (
                 <li key={`${item.txHash}:${item.outputIndex}`}>
-                  <Link
-                    href={`/cell/${item.txHash}-${item.outputIndex}`}
-                    className="text-[color:var(--ink)]"
-                    style={inkStyle(BOARD_INKS.cellLink)}
-                  >
+                  <Link href={`/cell/${item.txHash}-${item.outputIndex}`} look="inline">
                     {item.txHash}
                     <OutpointIndex index={item.outputIndex} />
                   </Link>
@@ -530,7 +504,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             </ul>
           </DetailSection>
         )}
-        <CellTransactions cell={cell} lockName={names.lock} typeName={names.type} />
+        <CellTransactions cell={cell} lockLabel={lockLabel} typeName={names.type} />
       </DetailLayout>
     </>
   );

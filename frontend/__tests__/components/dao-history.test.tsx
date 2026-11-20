@@ -15,6 +15,14 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import type { ChartResponse } from '@/lib/api';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { expectTicksInGutter } from '@/__tests__/utils/y-ticks';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
+import { factRows, factsOf } from '@/__tests__/utils/facts';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -90,7 +98,7 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('draws deposited large with its name and values inside the plot, the share and the weeks as two 72 px multiples under it', () => {
+  it('draws deposited large with its name and values inside the plot, the share and the weeks as two 73 px multiples under it', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
@@ -106,7 +114,10 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(MAIN_PLOT_H);
     expect(share).toHaveAttribute('height', String(MULTIPLE_H));
     expect(weekly).toHaveAttribute('height', String(MULTIPLE_H));
-    expect(MULTIPLE_H).toBe(72);
+    // re-pinned (readability F3): a multiple is its band and 54 px of data; the band is its top
+    // row, the 14 px end value's tight line (17) and 1 px over and under it: 19 + 54 = 73 (was
+    // 18 + 54 = 72, where the end value reached 0.2 px under the band)
+    expect(MULTIPLE_H).toBe(73);
     // Names inside the plots, no caption, no separate heading.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
       `CKB deposited · every complete day since ${date(0)}`
@@ -178,9 +189,18 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent(
-      `${date(154)} · deposited 101,190 · share 11.5400% · depositors 254 · week from ${date(148)} +10 · peak 101,190 on ${date(154)}tap or hover`
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    // re-pinned (lane P4): at rest the day is named for what it is, the last complete day's close
+    // ("last close" here: the real clock is past the series), not "day"
+    expect(factsOf(reading)).toEqual([
+      ['last close', date(154)],
+      ['deposited', '101,190'],
+      ['share', '11.5400%'],
+      ['depositors', '254'],
+      ['week from', `${date(148)} +10`],
+      ['peak', `101,190 on ${date(154)}`],
+    ]);
+    expect(reading).toHaveTextContent(/tap or hover$/);
     expect(reading).toHaveClass('border-t', 'text-small');
     // Evidence first: the reading follows every panel.
     for (const svg of Array.from(container.querySelectorAll('svg')))
@@ -191,7 +211,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
   // of the amount's sign, never the amount's ink at 70 %. Readability R5 (re-pinned and renamed on
   // purpose: "sets the reading’s fraction digits in the sign’s quieter ink, ..."): one ink per
   // amount, the summary form, a cut figure titled with its exact value; still no opacity.
-  it('sets each reading amount in one ink, cut and titled, never at an opacity', () => {
+  // Renamed (lane P4; it was "sets each reading amount in one ink, cut and titled, never at an
+  // opacity"): a chart's readout is exact (the ruling of 2026-11-19), so nothing is cut or titled
+  it('sets each reading amount in one ink, exact, never at an opacity', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const last = deposited.data.length - 1;
@@ -199,15 +221,14 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     deposited.peak = { date: date(last), value: '101190.25' };
     render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent('deposited 101,190 ·');
-    expect(reading).toHaveTextContent('+10.25 ·');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toContainEqual(['deposited', '101,190.25']);
+    expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
     const amounts = [...reading.querySelectorAll('[data-ckb-amount]')];
-    expect(amounts.map((a) => a.textContent)).toEqual(['101,190', '+10.25', '101,190']);
-    expect(amounts.map((a) => a.getAttribute('title'))).toEqual([
-      '101,190.25 CKB',
-      null,
-      '101,190.25 CKB',
-    ]);
+    expect(amounts.map((a) => a.textContent)).toEqual(['101,190.25', '+10.25', '101,190.25']);
+    // re-pinned (lane P4, the ruling of 2026-11-19: a chart's readout is exact): every amount is
+    // written whole, so none is titled (it was '101,190' titled '101,190.25 CKB')
+    expect(amounts.map((a) => a.getAttribute('title'))).toEqual([null, null, null]);
     // deposited and the peak take the reading line's ink, the week's net its sign's
     expect(amounts[1]).toHaveClass('text-positive');
     for (const a of amounts) {
@@ -215,6 +236,29 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
       expect(a.querySelector('.text-text-dim, .text-jade-dim')).toBeNull();
     }
     expect(reading.innerHTML).not.toMatch(/opacity-/);
+  });
+
+  // The rules branch's review, logic NOTE 6: hover never moves layout (ReadoutRow). Before the
+  // first whole week of a range the reading has no "week from" fact; its row keeps its place,
+  // unseen, so the reading is as tall as its fullest form below md and from md.
+  it('stands as tall with and without its week fact, below md and from md', () => {
+    stubChartWidth(1200);
+    stubSvgWidth(1200);
+    stubPointerEvents();
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const share = container.querySelector('svg[data-panel="share"]')!;
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    const full = factRows(reading);
+    expect(factsOf(reading).map(([label]) => label)).toContain('week from');
+    fireEvent.pointerMove(share, { clientX: 0 });
+    expect(factsOf(reading).map(([label]) => label)).not.toContain('week from');
+    expect(factRows(reading)).toEqual(full);
+    // the row that keeps the place says nothing and is not read out
+    const reserved = reading.querySelectorAll('dl > [aria-hidden="true"]');
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]).toHaveClass('invisible');
+    expect(reserved[0].textContent!.trim()).toBe('');
   });
 
   it('moves the one reading with the pointer across all panels; a tap pins the day, a second tap lets go (R6)', () => {
@@ -227,13 +271,18 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const reading = screen.getByRole('status', { name: 'History reading' });
     fireEvent.pointerMove(share, { clientX: 0 });
     // the summary form (R5, re-pinned on purpose: was "100,000.00000000")
-    expect(reading).toHaveTextContent(`${date(0)} · deposited 100,000 ·`);
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading).slice(0, 2)).toEqual([
+      ['day', date(0)],
+      ['deposited', '100,000'],
+    ]);
     // Before the first whole week there is no weekly figure to read.
     expect(reading).not.toHaveTextContent('week from');
     // One cursor in each of the three panels.
     expect(container.querySelectorAll('[data-cursor]')).toHaveLength(3);
     fireEvent.pointerLeave(share);
-    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
+    // re-pinned (lane P4) here and after the second tap: at rest, "last close" (it was "day")
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
     // A tap on the main plot pins the day it lands on; leaving keeps it.
     const main = container.querySelector('svg[data-panel="deposited"]')!;
     // Re-pinned with U-19: the plot starts after its 48 px value gutter, so its middle day (77 of
@@ -241,14 +290,14 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     fireEvent.pointerMove(main, { clientX: 624 });
     fireEvent.click(main, { clientX: 624 });
     fireEvent.pointerLeave(main);
-    expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
-    // "selected" opens the same row of items, so it shares their line.
-    // re-pinned (A4 round 2): the date is a unit inside its item, the item in the row
-    const row = within(reading).getByText(date(77)).closest('.flex-wrap') as HTMLElement;
-    expect(row).toHaveClass('flex', 'flex-wrap');
-    expect(row.firstElementChild).toHaveTextContent(/^selected$/);
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts; "selected" opens the
+    // day's value, in the quiet ink, so it shares the date's line (it opened the row of items)
+    expect(factsOf(reading)[0]).toEqual(['day', `selected ${date(77)}`]);
+    const day = within(reading).getByText(date(77)).closest('dd') as HTMLElement;
+    expect(day.firstElementChild).toHaveTextContent(/^selected$/);
+    expect(day.firstElementChild).toHaveClass('text-text-dim');
     fireEvent.click(main, { clientX: 624 });
-    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
   });
 
   it('colours falling weeks red and rising weeks jade (DAO-18)', () => {
@@ -296,9 +345,12 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(end).toHaveClass('fill-negative');
     expect(end.parentElement!.querySelector('title')).toHaveTextContent('−12.34567891 CKB');
     // the reading's summary form too (R5, re-pinned on purpose: was "−12.34567891")
-    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'week from 2024-05-28 −12.34 ·'
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(screen.getByRole('status', { name: 'History reading' }))).toContainEqual([
+      'week from',
+      // re-pinned (lane P4, the ruling of 2026-11-19: a chart's readout is exact; it was −12.34)
+      '2024-05-28 −12.34567891',
+    ]);
   });
 
   // Lane E2 (ruling R4) drew the end label's digits after the point in the sign's fraction ink as a
@@ -424,7 +476,9 @@ describe('DaoHistory at phone width (DAO-22)', () => {
     // the week of −12.34567891 moves p95, so the scale is ±20 (the note keeps its 21 characters)
     expect(note).toHaveTextContent('±20 scale, 1 week cut');
     expect(note).toHaveAttribute('x', '8');
-    expect(note).toHaveAttribute('dy', '12');
+    // re-pinned (readability F3): the note's line stands under the row's 17 px line, 1 + 17 +
+    // 11.4 = 29.4 under the top, 15.6 under the row's baseline at 13.8 (was 12, meeting the name)
+    expect(note).toHaveAttribute('dy', '15.6');
     const name = container.querySelector('[data-panel="deposited"] [data-role="chart-name"]')!;
     expect(name.querySelector('tspan')).toHaveTextContent(`every complete day since ${date(0)}`);
   });
@@ -443,6 +497,48 @@ describe('DaoHistory at phone width (DAO-22)', () => {
 
 // Responsive fix plan 2026-11-01 (A3, report A#14): at 390 the reading broke the week's date
 // ("2026-/10-25") and split an amount.
+// Readability plan 2026-11-18, P4 (the DAO page): "labels its readout 'yesterday's close'" (the
+// review: the reading opened on the last complete day, beside the hero's figure of now, and read
+// as a contradiction: 8,180,424,335.96 beside 8,184,071,455), and the ruling of 2026-11-19 (the
+// notes, P4): a chart's readout is exact on every page; the DAO "History reading" wrote the
+// summary form.
+describe('DaoHistory reading: yesterday’s close, exact (P4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('names the last complete day “yesterday’s close” while it is yesterday, and reads every amount exactly', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 10:00 UTC+8 on the day after the series' last day (date(154))
+    vi.setSystemTime(new Date(START + 155 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const last = deposited.data.length - 1;
+    deposited.data[last] = { ...deposited.data[last], value: '101190.25' };
+    deposited.peak = { date: date(last), value: '101190.25' };
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading).slice(0, 2)).toEqual([
+      ['yesterday’s close', date(154)],
+      ['deposited', '101,190.25'],
+    ]);
+    expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
+    expect(factsOf(reading)).toContainEqual(['peak', `101,190.25 on ${date(154)}`]);
+  });
+
+  it('names an older last day “last close”, never “yesterday’s”', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(START + 160 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
+  });
+});
+
 describe('DaoHistory reading units', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -491,5 +587,99 @@ describe('DaoHistory deposited values (U-19)', () => {
     expect(Number(name.getAttribute('x'))).toBeGreaterThan(
       Number(svg.querySelector('[data-role="y-tick"]')!.getAttribute('x'))
     );
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the three plots stands whole in its band — a name (and the weekly scale note, and a multiple's
+// end value) in the band over the data, a deposited value in the plot, a time label under it —
+// touches no other word, and stays inside its svg, measured by the type modules (0.6 em a glyph; a
+// tight line over its baseline, its descent under it). The band over the data is where the day
+// cursor starts (`data-cursor`). The real case is mainnet's: every day since 2019-05-24 to about
+// 8 billion CKB, a last week of −12,345,678.12345678 CKB (its end label "−12,345,678"). The
+// deposited plot is drawn across the column (1232 at 1280, 608 at 640, 358 on a phone); the two
+// multiples side by side from sm (604 and 292 px each) and across a phone (358).
+describe('DaoHistory: every word in its band (readability F3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function mainnet() {
+    const days = 2_000;
+    const day0 = Date.UTC(2019, 4, 24);
+    const at = (i: number) => new Date(day0 + i * DAY).toISOString().slice(0, 10);
+    // about 4 million CKB more each day, to about 8 billion
+    const values = Array.from(
+      { length: days },
+      (_, i) => BigInt(4_000_000 * i + (i % 7) * 1_000_000) * BigInt(1e8)
+    );
+    // the last whole week nets −12,345,678.12345678 CKB
+    values[days - 1] = values[days - 8] - BigInt('1234567812345678');
+    const ckb = (v: bigint) => `${v / BigInt(1e8)}.${String(v % BigInt(1e8)).padStart(8, '0')}`;
+    const data = values.map((v, i) => ({ date: at(i), value: ckb(v), value2: String(10_000 + i) }));
+    return {
+      deposited: {
+        data,
+        title: 'Total Deposit',
+        yAxisLabel: 'CKB',
+        y2AxisLabel: 'Current depositors',
+        peak: null,
+      },
+      ratio: {
+        data: data.map((d) => ({ date: d.date, value: '30.1234' })),
+        title: 'Ratio',
+        yAxisLabel: '%',
+      },
+    };
+  }
+
+  /** A panel's svg, its band over the data (where the pinned day's cursor starts) and its frame. */
+  function panel(container: HTMLElement, name: string) {
+    const svg = container.querySelector(`[data-panel="${name}"]`)!;
+    const cursor = svg.querySelector('[data-cursor]')!;
+    return { svg, band: Number(cursor.getAttribute('y1')), frame: viewBox(svg) };
+  }
+
+  // Review F-B (logic finding 1): at a 320 px window the column is 288 px, and the deposited
+  // plot and both multiples (stacked below sm) are drawn across it.
+  it.each([1232, 608, 604, 358, 292, 288])('at %i px', (width) => {
+    stubChartWidth(width);
+    stubSvgWidth(width);
+    const { deposited, ratio } = mainnet();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    // a tap pins a day: its cursor is drawn in every panel, from the top of the panel's data
+    fireEvent.click(container.querySelector('[data-panel="share"]')!, { clientX: 40 });
+    const multiples = [604, 292, 358, 288].includes(width);
+    const panels = [
+      ...([1232, 608, 358, 288].includes(width) ? ['deposited'] : []),
+      ...(multiples ? ['share', 'weekly'] : []),
+    ];
+    for (const name of panels) {
+      const { svg, band, frame } = panel(container, name);
+      const over = { ...frame, bottom: band };
+      for (const text of [
+        ...svg.querySelectorAll('[data-role="chart-name"], [data-role="end-label"]'),
+      ])
+        for (const line of textLines(text))
+          expectInside(line, over, `${name} at ${width}`, 'flush');
+      // the deposited plot's foot: its axis line, under its data
+      const axis = Number(
+        svg.querySelector('line.stroke-base-border')?.getAttribute('y1') ?? frame.bottom
+      );
+      for (const text of [...svg.querySelectorAll('[data-role="y-tick"]')])
+        for (const line of textLines(text))
+          expectInside(line, { ...frame, top: band, bottom: axis }, `${name} value`, 'flush');
+      for (const text of [...svg.querySelectorAll('[data-role="time-tick"]')])
+        for (const line of textLines(text)) {
+          expectInside(line, { ...frame, top: axis }, `${name} time`, 'flush');
+          expect(line.top, `"${line.text}" clears the axis`).toBeGreaterThan(axis);
+        }
+      expectApart(allTextLines(svg), `${name} at ${width}`);
+    }
+    if (multiples)
+      expect(
+        container.querySelector('[data-panel="weekly"] [data-role="end-label"]')
+      ).toHaveTextContent('−12,345,678');
   });
 });

@@ -17,7 +17,7 @@ use super::assets::{
     list_canonical_nft_collection_activities_page, normalize_activity_action_filter,
     MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard,
 };
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
@@ -512,34 +512,22 @@ fn build_capacity_history_chart_with_initial(
             used_delta,
             &format!("building spore capacity history chart at date {}", date),
         )?;
-        let unused = running_capacity - running_used;
-        let mut values = std::collections::HashMap::new();
-        values.insert("used".to_string(), running_used.to_string());
-        values.insert("unused".to_string(), unused.to_string());
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values,
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                running_capacity,
+                running_used,
+                "spore capacity history",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     Ok(StackedAreaChartResponse {
         data,
-        series: vec![
-            StackedAreaSeries {
-                id: None,
-                key: "used".to_string(),
-                label: "Used".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                id: None,
-                key: "unused".to_string(),
-                label: "Unused".to_string(),
-                color: "#06b6d4".to_string(),
-            },
-        ],
+        series: super::asset_calendar::held_series(),
         title,
+        bands: None,
     })
 }
 
@@ -861,7 +849,7 @@ async fn get_cluster_holders(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
+) -> ApiResult<crate::response::RankedPage<ClusterHolderResponse>> {
     let id = parse_cluster_id_param(&cluster_id)?;
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
@@ -892,14 +880,8 @@ async fn get_cluster_holders(
     let mut rows = owners;
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let total = rows.len() as i64;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        rows.iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid cluster holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this read's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&rows, cursor.as_ref());
 
     let page: Vec<_> = rows.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;
@@ -925,12 +907,11 @@ async fn get_cluster_holders(
         })
         .collect::<Result<_, crate::response::ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        response_rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(crate::response::RankedPage {
+        page: CursorPaginatedResponse::new(response_rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking this request read, plus one (lane exactness, part A, A3)
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 async fn get_cluster_activities(

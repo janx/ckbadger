@@ -131,6 +131,15 @@ export const ID_LINE_CLASS = 'text-text text-small min-w-0 [overflow-wrap:anywhe
 const VOICE_CLASS = /(^|\s)([a-z-]+:)*text-/;
 
 /**
+ * Whether `element` is part of an id line's copy control: its button, or the words the library's
+ * CopyButton answers in beside it (`copied`, a status in its own 12 px; lane c2-chain).
+ */
+const inCopyControl = (element: HTMLElement): boolean =>
+  element.closest('button') !== null ||
+  (element.getAttribute('role') === 'status' &&
+    element.parentElement?.querySelector(':scope > button[aria-label^="copy "]') != null);
+
+/**
  * `idLine` is a name plate's id line in its one voice (seals by kind, C10 round 2): exactly
  * `ID_LINE_CLASS` (text-small in the reading ink, R3), and nothing in it outside its copy control
  * sets a size or an ink of its own, so the hash, the out point or the address takes the line's
@@ -140,8 +149,7 @@ export function expectOneVoiceIdLine(idLine: HTMLElement): void {
   expect(idLine).toHaveAttribute('data-sealed-id');
   expect(idLine.className).toBe(ID_LINE_CLASS);
   const voiced = Array.from(idLine.querySelectorAll<HTMLElement>('[class]')).filter(
-    (element) =>
-      element.closest('button') === null && VOICE_CLASS.test(element.getAttribute('class')!)
+    (element) => !inCopyControl(element) && VOICE_CLASS.test(element.getAttribute('class')!)
   );
   const markup = voiced.map((element) => element.outerHTML).join(' ');
   expect(voiced, `the id line's pieces set a voice of their own: ${markup}`).toEqual([]);
@@ -208,10 +216,11 @@ export function expectNamePlate(root: ParentNode, kind: string): NamePlate {
 /**
  * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
  * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's
- * row height and drawn width, with the 8 px gap after it (none with `gap: false`, a stone standing
- * alone in a cell tile's mark column, the column's gap its gap); an image and not a link (the
- * row's own link stays the row's link). Owner stones before an address in the row (OwnerSeal) are
- * not the row's seal and are not counted. Returns the seal's holder.
+ * row height and drawn width, standing centred in a box one row line tall (`h-row`, readability
+ * R6: no stone is taller than the line, none overhangs it), with the 8 px gap after it (none with
+ * `gap: false`, a stone standing alone in a cell tile's mark column, the column's gap its gap); an
+ * image and not a link (the row's own link stays the row's link). Owner stones before an address
+ * in the row (OwnerSeal) are not the row's seal and are not counted. Returns the seal's holder.
  */
 export function expectOneRowSeal(
   row: Element,
@@ -236,7 +245,8 @@ export function expectOneRowSeal(
   expect(seal.innerHTML).toBe(
     parsed(drawSeal(id, { form: 'row', height, state, ...SEAL_INKS }).svg)
   );
-  expect(seal).toHaveClass('[&>svg]:block');
+  expect(seal).toHaveClass('flex', 'h-row', 'items-center');
+  expect(seal.className).not.toMatch(/(^|\s)-?m[ty]-/);
   if (gap) expect(seal).toHaveClass('mr-2');
   else expect(seal.className).not.toMatch(/(^|\s)m[rx]-/);
   expect(seal.closest('a')).toBeNull();
@@ -245,7 +255,7 @@ export function expectOneRowSeal(
 }
 
 /**
- * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 20 px script row
+ * `holder` (an address's line in a cell row) holds exactly one owner's stone, the 18 px script row
  * stone of `lockHash` (compared as markup with `drawSeal`'s), an image and not a link, with the
  * 5 px gap after it (none with `gap: false`, in a cell tile's mark column). Returns the stone's
  * holder (`[data-owner-seal]`).

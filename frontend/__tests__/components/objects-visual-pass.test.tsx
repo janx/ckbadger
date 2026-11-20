@@ -3,6 +3,7 @@
 // (OB-C6), a gel caption clipped at 16 lanes, tier-2 headings in tier-1 style, "bytes 32–32",
 // an m-NFT lock footnote saying "at minting", occupied changes wrapping in the lock-column grid,
 // and Newest rows five lines tall at 390.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AlleleGel } from '@/components/ui/allele-gel';
@@ -19,14 +20,15 @@ import {
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 it('reads the latest complete week by default instead of "No completed weekly total" (OB-C6)', () => {
   render(
     <AssetHistory
       assetClass="objects"
       daily={[
-        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60' },
-        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60' },
+        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
+        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
       ]}
       weekly={[{ weekStart: '2026-10-19', count: 5 }]}
       weeklyNoun="transfers"
@@ -80,12 +82,23 @@ it('styles tier-2 evidence headings as tier 2 and names one byte as "byte N"', (
 
 it('says "at issue" for an m-NFT token’s lock footnote', () => {
   const v = sporeCellVersionsProducer.data[0];
+  // re-pinned on purpose (lane P2's follow-up, item 6): the footnote reads each lock through the
+  // one decision, which refuses an owner address that spells another lock, so the second version's
+  // owner is the address of its own args (it kept the first version's)
+  const args = '0x' + '02'.repeat(20);
   const versions = [
     { ...v, lockName: 'UniPass', isLive: false },
-    { ...v, lockName: 'PW Lock', lock: { ...v.lock, args: '0x' + '02'.repeat(20) } },
+    {
+      ...v,
+      lockName: 'PW Lock',
+      lock: { ...v.lock, args },
+      ownerAddress: ckbAddress({ codeHash: v.lock.codeHash, args }),
+    },
   ];
+  // re-pinned on purpose (lane P2's third round, item 15): the footnote says where the lock
+  // changed, the day the cell went under it ("since", it is live), where it said "now"
   expect(lockFootnote(versions, 'token')).toBe(
-    'Lock: UniPass with 20-byte args at issue → PW Lock with 20-byte args now. Type and data never changed.'
+    'Lock: UniPass with 20-byte args at issue → PW Lock with 20-byte args since 2023-11-15. Type and data never changed.'
   );
   expect(lockFootnote(versions, 'object')).toContain('at minting');
 });
@@ -93,8 +106,7 @@ it('says "at issue" for an m-NFT token’s lock footnote', () => {
 it('keeps an occupied change on one line in the lock-column grid', () => {
   const { container } = render(
     <ActivityRow
-      lockColumn
-      activity={{
+      activity={activityRead({
         txHash: '0x' + 'cd'.repeat(32),
         blockNumber: 1,
         timestamp: '1700000000000',
@@ -102,6 +114,8 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             lockHash: '0x' + '01'.repeat(32),
@@ -115,7 +129,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
             itemDeltas: [],
           },
         ],
-      }}
+      })}
     />
   );
   expect(container.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');

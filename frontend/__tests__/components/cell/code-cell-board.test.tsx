@@ -4,6 +4,8 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { elfParts } from '@/lib/cell-parts';
 import type { Cell } from '@/lib/api';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const txA = `0x${'11'.repeat(32)}`;
 const txB = `0x${'22'.repeat(32)}`;
@@ -135,6 +137,13 @@ describe('CodeCellBoard', () => {
       `/mainnet/cell/${txB}-1`
     );
     expect(screen.getByText(/binary changed/)).toBeInTheDocument();
+    // the lineage folds in the library's inner disclosure (lane cd-fixes-controls, the disclosure
+    // sweep): shut, its words 13 px in tier 1's reading ink (they were quiet), where the cell page
+    // draws the board, its versions 13 px under them as before
+    const lineage = screen.getByText('Type ID lineage of these bytes');
+    expect(lineage).toHaveClass('text-small', 'text-text');
+    expect(lineage.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText(/Version 2 · these bytes/).closest('div')).toHaveClass('text-small');
   });
   it('reads wide ELF addresses exactly and names kinds instead of raw decimals', () => {
     // 64 header + 56 program header + 8 unassigned + 16 loaded: the bytes the layout covers.
@@ -189,6 +198,17 @@ describe('CodeCellBoard', () => {
       `/mainnet/script/${reference}?hashType=type`
     );
     expect(screen.getByText(/· 11 live cells/)).toBeInTheDocument();
+    // lane P1, the ink and size roles: the reference's link and its count at 13 px (they were 12)
+    expect(typeStepOf(screen.getByRole('link', { name: `type · ${reference}` }))).toBe('small');
+  });
+  // lane P1, the ink and size roles: an empty line is a sentence, the reading ink (it was quiet)
+  it('says a binary with no Type ID version history in the reading ink', () => {
+    render(
+      <CodeCellBoard cell={{ ...cell, codeCell: { ...cell.codeCell!, typeIdVersions: [] } }} />
+    );
+    expect(inkOf(screen.getByText('No registered Type ID version history for this binary.'))).toBe(
+      READING
+    );
   });
   it('does not label non-ELF payloads as code cells', () => {
     const { container } = render(<CodeCellBoard cell={{ ...cell, elf: undefined } as Cell} />);
@@ -220,17 +240,21 @@ describe('CodeCellBoard', () => {
 // variable that a class reads, so the global `a:hover` jade still wins over it (an inline colour
 // would not); no bracket-hex class is left.
 describe('CodeCellBoard inks (V11)', () => {
-  it('draws its cell and script links in the lock blue through --ink, never an inline colour', () => {
+  // Re-pinned on purpose, and renamed (lane P1, the link-look gate's p-chain entries: a link states
+  // its look and writes no ink by hand; it was 'draws its cell and script links in the lock blue
+  // through --ink, never an inline colour'): each is a link inside its line, the line's ink and the
+  // inline look's underline, no colour of its own.
+  it('draws its cell and script links as links inside their lines, no ink of their own', () => {
     render(<CodeCellBoard cell={cell} />);
     const links = [
       screen.getByRole('link', { name: `type · ${reference}` }),
       screen.getByRole('link', { name: `${txB}:1` }),
     ];
     for (const link of links) {
-      expect(link).toHaveClass('text-[color:var(--ink)]');
-      expect(link.style.getPropertyValue('--ink')).toBe('var(--c-cell-lock)');
+      expect(link).toHaveClass('underline', 'decoration-[color:var(--c-ink-muted)]');
+      expect(link.className).not.toMatch(/text-\[color|text-(text|jade|aqua)/);
+      expect(link.style.getPropertyValue('--ink')).toBe('');
       expect(link.style.color).toBe('');
-      expect(link.className).not.toMatch(/\[#/);
     }
     expect(screen.getByTestId('code-built-with')).toHaveClass('border-text-ghost');
   });

@@ -2,6 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
+import { NoBreak } from '@/components/ui/no-break';
 import { formatStandard } from '@/components/activity-event-row';
 import type { TransactionCellDisplay } from '@/lib/api';
 import { formatCompositionTier } from '@/lib/asset-utils';
@@ -56,31 +57,35 @@ export function TransactionCellContent({ display, cellHref, size }: TransactionC
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1 [overflow-wrap:anywhere]">
       <span className="shrink-0">{standard}</span>
       <Link
+        look="inline"
         href={href}
-        className="hover:text-jade min-w-0"
+        className="min-w-0"
         onClick={(event) => event.stopPropagation()}
       >
         {display.kind === 'token' ? (
           <span className="tabular-nums">
             {display.amount === null ? (
-              <span title={noAmountReason(display)} className="text-text-dim">
-                no readable amount of
-              </span>
+              // the words stand where the amount would, in the link's own ink (no ink by hand
+              // inside a link: the link-look gate; lane P1 follow-up)
+              <span title={noAmountReason(display)}>no readable amount of</span>
             ) : (
-              formatTokenBalanceWithRawMarker(
-                exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
-                display.decimals
-              )
+              // a figure: one unit the line's [overflow-wrap:anywhere] (for a long name) never cuts
+              <NoBreak>
+                {formatTokenBalanceWithRawMarker(
+                  exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
+                  display.decimals
+                )}
+              </NoBreak>
             )}{' '}
             {display.symbol ?? display.name ?? (
-              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
+              <Hash hash={display.id} size={size} className="text-small" />
             )}
           </span>
         ) : (
           <>
             {name && <span>{name} </span>}
             {display.kind !== 'file' || name === null ? (
-              <Hash hash={display.id} size={size} copyable={false} className="text-small" />
+              <Hash hash={display.id} size={size} className="text-small" />
             ) : null}
           </>
         )}

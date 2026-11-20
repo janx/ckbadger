@@ -216,9 +216,10 @@ pub struct DaoStatisticsResponse {
     pub total_deposited: String,
     pub total_deposited_ckb: String,
     pub total_depositors: i32,
-    pub active_deposits: i32,
     pub deposit_cells_count: i32,
     pub withdrawal_request_cells_count: i32,
+    /// The live DAO cells, deposits and withdrawal requests (lane exactness, part A, A5 ii; the page summed them).
+    pub live_cells_count: i64,
     pub dao_capacity: String,
     pub dao_free_capacity: String,
     /// Exact secondary-issuance weight for depositors:
@@ -241,6 +242,9 @@ pub struct DaoStatisticsResponse {
     pub deposit_compensation_ckb: String,
     pub burnt: String,
     pub burnt_ckb: String,
+    /// Secondary issuance since genesis, shannons: the miners' share, the depositors'
+    /// compensation and the burnt share, which make it (the DAO page's whole; it summed them).
+    pub secondary_issuance: String,
     pub pending_withdrawal_capacity: String,
     pub pending_withdrawal_capacity_ckb: String,
     pub deposit_change_24h: Option<String>,
@@ -675,7 +679,38 @@ fn dao_latest_to_response(
     deltas: DaoDeltas,
     genesis_baseline_burnt: i128,
     counts_24h: Option<(u64, u64)>,
-) -> DaoStatisticsResponse {
+) -> anyhow::Result<DaoStatisticsResponse> {
+    let block = latest.tip_block_number;
+    anyhow::ensure!(
+        latest.deposit_cells_count >= 0 && latest.withdrawal_request_cells_count >= 0,
+        "dao_latest_stats at block {block}: negative cell counts, deposits {} requests {}",
+        latest.deposit_cells_count,
+        latest.withdrawal_request_cells_count
+    );
+    let live_cells_count =
+        i64::from(latest.deposit_cells_count) + i64::from(latest.withdrawal_request_cells_count);
+    // the singleton's legacy `active_deposits` counts the same cells under an untrue name (a
+    // withdrawal request is no active deposit): it is their sum, or the row is wrong (lane exactness, part A2, S2);
+    // the route no longer sends it (lane exactness, part B5)
+    anyhow::ensure!(
+        i64::from(latest.active_deposits) == live_cells_count,
+        "dao_latest_stats at block {block}: active_deposits {} is not {} deposits + {} withdrawal requests",
+        latest.active_deposits,
+        latest.deposit_cells_count,
+        latest.withdrawal_request_cells_count
+    );
+    let secondary_issuance = latest
+        .mining_reward
+        .checked_add(latest.deposit_compensation)
+        .and_then(|sum| sum.checked_add(latest.burnt))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "dao_latest_stats at block {block}: secondary issuance overflows: mining {} compensation {} burnt {}",
+                latest.mining_reward,
+                latest.deposit_compensation,
+                latest.burnt
+            )
+        })?;
     let tip_block_number = latest.tip_block_number;
     let total_deposited = latest.total_deposited.to_string();
     let total_compensation_paid = latest.total_compensation_paid.to_string();
@@ -684,16 +719,16 @@ fn dao_latest_to_response(
     let deposit_compensation = latest.deposit_compensation.to_string();
     let burnt = latest.burnt.to_string();
 
-    DaoStatisticsResponse {
+    Ok(DaoStatisticsResponse {
         tip_block_number,
         anchor,
         genesis_baseline_burnt: genesis_baseline_burnt.to_string(),
         total_deposited: total_deposited.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
         total_depositors: latest.total_depositors,
-        active_deposits: latest.active_deposits,
         deposit_cells_count: latest.deposit_cells_count,
         withdrawal_request_cells_count: latest.withdrawal_request_cells_count,
+        live_cells_count,
         dao_capacity: latest.dao_capacity.to_string(),
         dao_free_capacity: latest.dao_free_capacity.to_string(),
         depositor_allocation_weight: latest.depositor_allocation_weight.to_string(),
@@ -719,6 +754,7 @@ fn dao_latest_to_response(
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
+        secondary_issuance: secondary_issuance.to_string(),
         pending_withdrawal_capacity: latest.pending_withdrawal_capacity.to_string(),
         pending_withdrawal_capacity_ckb: shannon_to_ckb(
             &latest.pending_withdrawal_capacity.to_string(),
@@ -730,7 +766,7 @@ fn dao_latest_to_response(
         tip_secondary_pool: latest.tip_secondary_pool.to_string(),
         deposits_24h: counts_24h.map(|(deposits, _)| deposits),
         withdrawal_requests_24h: counts_24h.map(|(_, requests)| requests),
-    }
+    })
 }
 
 #[instrument(skip(state), level = "debug")]
@@ -930,13 +966,10 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
 
     let deltas = compute_dao_24h_deltas(&latest);
     let genesis_baseline_burnt = state.genesis_baseline()?.burnt;
-    ok(dao_latest_to_response(
-        &latest,
-        anchor,
-        deltas,
-        genesis_baseline_burnt,
-        counts_24h,
-    ))
+    ok(
+        dao_latest_to_response(&latest, anchor, deltas, genesis_baseline_burnt, counts_24h)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?,
+    )
 }
 
 async fn get_top_depositors(
@@ -1183,7 +1216,8 @@ fn realized_apc(
     let denominator = free
         .checked_mul(duration_ms)
         .ok_or("DAO APC denominator overflow")?;
-    crate::utils::exact_ratio::format_percent(numerator, denominator, 2)
+    // cut at the two places the calculator shows, never rounded (lane exactness, part A2, S5)
+    crate::utils::exact_ratio::format_percent_cut(numerator, denominator, 2)
         .map(|value| Some(format!("{value}%")))
 }
 
@@ -1578,7 +1612,7 @@ async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:dao-circulation-ratio", chain)?;
+    let cache_key = complete_days_cache_key("chart:dao-circulation-ratio:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         return ok(cached);
@@ -1616,7 +1650,8 @@ async fn get_circulation_ratio_chart(
                 s.date, s.total_deposited
             )));
         }
-        let ratio = crate::utils::exact_ratio::format_ratio(
+        // cut at its four decimals, never rounded (lane D1's third round, S9)
+        let ratio = crate::utils::exact_ratio::format_ratio_cut(
             s.total_deposited.checked_mul(100).ok_or_else(|| {
                 ApiError::internal(format!("DAO deposited percentage overflows for {}", s.date))
             })?,
@@ -1651,6 +1686,15 @@ mod tests {
     use crate::cache::InMemoryCache;
     use ckbadger_store::types::CachedBlockHeader;
     use std::time::Duration;
+
+    #[test]
+    fn realized_apc_is_cut_at_two_places() {
+        // lane exactness, part A2, S5: 2 of 3 over a year is 66.666…%, "66.66%" (half up "66.67%")
+        assert_eq!(
+            realized_apc(2, 3, 31_557_600_000).unwrap().as_deref(),
+            Some("66.66%")
+        );
+    }
 
     #[test]
     fn realized_apc_uses_actual_chain_duration_and_marks_zero_span_undefined() {

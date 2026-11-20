@@ -4,10 +4,17 @@ import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
-import { HexCode } from '@/components/ui/hex-code';
+import { HeadId } from '@/components/ui/head-id';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_TX_VALUE_SUMMARY,
+  shortChars,
+} from '@/lib/list-bounds';
 import { useParams } from '@/src/navigation';
 import {
   api,
@@ -24,8 +31,9 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink, SentenceNodes, type SentencePart } from '@/components/ui/block-link';
@@ -40,7 +48,6 @@ import {
 import { MinerLink, minerName } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
 import { formatUtc8Date, formatUtc8Time } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
@@ -65,26 +72,37 @@ function minerAddressOf(block: MinerBlock): string {
 function Miner({ block, size }: { block: MinerBlock; size: ShortSize }) {
   if (block.minerLockHash === null && block.minerAddress === null)
     return <span className="text-text-dim">witness unavailable</span>;
-  return <MinerLink address={minerAddressOf(block)} pool={block.minerPool} size={size} />;
+  return (
+    <MinerLink address={minerAddressOf(block)} pool={block.minerPool} size={size} look="inline" />
+  );
 }
 
 /**
- * A full hash in tier 2 (U-16): one token, whole on its line where the line holds it, else one
- * line in its own box that scrolls sideways (HexCode's full form); never wrapped in the middle.
- * Tier 2 gives it its room (A4 Chrome F4): a fact row is its label column, as wide as its labels
- * ("first dropped", 13 characters at 12 px: 93.6 px), the 12 px gap and a whole hash, 66 × 7.2 =
- * 475.2 px: 580.8 px. The tier's columns are as many as hold such a row (auto-fill of 581 px): two
- * from a 1217.6 px tier (1280's 1232, each column 588, a hash's cell 482.4), one below (1024's 976,
- * a cell of 870.4; 640's 608, 502.4); below 581 px a phone's one column scrolls the hash in its box.
+ * A full hash in tier 2 (U-16; lane P4: one id is wrapped, never scrolled): set as a head's id is
+ * (HeadId), one line where its measured line holds it, else equal unbreakable lines — a hash's two
+ * halves, `0x` and 32 digits over 32 — never broken where the browser pleases and never a box that
+ * scrolls sideways. At the facts' 13 px a whole hash is 66 × 7.8 = 514.8 px and a half 34 × 7.8 =
+ * 265.2: the tier's columns (auto-fill of 581 px) give a hash's cell 474.6 px at 1280 (588 less the
+ * 101.4 px label column, "first dropped", and the 12 px gap: two halves), 862.6 at 1024 and 494.6
+ * at 640 (608 less the label and the gap: two halves), and on a phone the facts stand in one
+ * column, the hash under its label: 358 or 328 px, two halves.
  */
-const FullHash = ({ hash }: { hash: string }) => (
-  <HexCode value={hash} truncate={false} copyable={false} variant="inherit" />
-);
-const blockAt = (number: number) => (
-  <Link href={`/blocks/${number}`} className="hover:text-jade">
+const FullHash = ({ hash }: { hash: string }) => <HeadId value={hash} kind="hash" />;
+/** A canonical block's height, linked: a row's key, or a value inside a line or a cell. */
+const blockAt = (number: number, look: 'key' | 'inline') => (
+  <Link href={`/blocks/${number}`} look={look}>
     {formatBlockNumber(number)}
   </Link>
 );
+
+/**
+ * The two tables' columns, each budgeted from the widest value it holds (readability F3-e) at the
+ * cells' small step (13 px), a head or a unit at the meta step (12) and the gap after every column
+ * but the last.
+ */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+/** A dropped block's height and its prime, "#99,999,999′". */
+const DROPPED_HEIGHT = `${WIDEST_BLOCK_NUMBER}′`;
 
 /** What `parseForkRoute` accepts, as the not-an-id page says it. */
 const FORK_ROUTE_RULE =
@@ -122,7 +140,7 @@ export default function ForkDetailPage() {
         {isAwaited(query) && <p role="status">Loading fork evidence…</p>}
         {query.error && <ReadFailure what="fork" error={query.error} />}
         {mismatch && (
-          <p role="alert" className="text-rouge text-body [overflow-wrap:anywhere]">
+          <p role="alert" className="text-rouge text-body max-w-measure [overflow-wrap:anywhere]">
             {mismatch}
           </p>
         )}
@@ -186,8 +204,8 @@ function firstOrphanOf(event: ReorgEvent): string {
 function ForkHeading({ event }: { event: ReorgEvent }) {
   return (
     <>
-      <nav aria-label="Breadcrumb" className="text-text-dim text-small">
-        <Link href="/forks" className="hover:text-text">
+      <nav aria-label="Breadcrumb" className="text-small">
+        <Link href="/forks" look="inline">
           Forks
         </Link>
       </nav>
@@ -228,11 +246,11 @@ function StoredFork({ event }: { event: ReorgEvent }) {
       <ForkHeading event={event} />
       <p
         data-testid="fork-narrative"
-        className="text-text text-body mt-3 max-w-[900px] leading-relaxed"
+        className="text-text text-body max-w-measure mt-3 leading-relaxed"
       >
         {story}
       </p>
-      <p role="status" className="text-text-dim text-body mt-3 max-w-[900px] leading-relaxed">
+      <p role="status" className="text-text text-body max-w-measure mt-3 leading-relaxed">
         Branch evidence needs the node store: this API runs without the node reader, so the blocks
         of both branches, their miners and what became of them are not shown. Below is what this
         node recorded when it switched.
@@ -347,6 +365,20 @@ interface BlockRow {
   fate: ReactNode;
 }
 
+/**
+ * A block row's stone (lane D2; the UI review's U-03 and ruling R8): its hash and the transactions
+ * it held, the API's count; a block on the main chain pressed in the cinnabar, a dropped one (an
+ * uncle, an orphan, a branch adopted then dropped) in the dead ink, as a consumed cell's is.
+ */
+function BlockRowStone({ row }: { row: BlockRow }) {
+  return (
+    <RowSeal
+      id={{ kind: 'block', hash: row.hash, txs: row.transactionsCount }}
+      state={row.dropped ? 'ink' : 'pressed'}
+    />
+  );
+}
+
 function blockRows(data: ReorgDetail): BlockRow[] {
   const orphans = new Map(data.orphanedBlocks.map((block) => [block.hash, block]));
   const canonical = new Set(data.canonicalBranch.map((block) => block.hash));
@@ -371,10 +403,13 @@ function blockRows(data: ReorgDetail): BlockRow[] {
         minerPool: block.minerPool,
         transactionsCount: block.transactionsCount,
         dropped: true,
+        // a fate's label quiet, its block the value (R3): "uncle in #N", its words free to break
+        // in the table's Fate column as anywhere (ListTable: words may always break between them)
         fate: block.uncleIn ? (
-          <Link href={`/blocks/${block.uncleIn.blockNumber}`} className="text-jade hover:underline">
-            {`uncle in ${formatBlockNumber(block.uncleIn.blockNumber)}`}
-          </Link>
+          <span>
+            <span className="text-text-dim">uncle in</span>{' '}
+            {blockAt(block.uncleIn.blockNumber, 'inline')}
+          </span>
         ) : (
           orphanFateWords(block.fate)
         ),
@@ -397,7 +432,7 @@ function blockRows(data: ReorgDetail): BlockRow[] {
 function EventRef({ target, text }: { target: ForkEventRef; text: string }) {
   const href = forkRefHref(target);
   return href ? (
-    <Link href={href} className="hover:text-jade underline decoration-dotted">
+    <Link href={href} look="inline">
       {text}
     </Link>
   ) : (
@@ -422,7 +457,7 @@ function StoredEvent({
       <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[max-content_minmax(0,1fr)]">
         <span className="text-text-dim">fork point</span>
         <span className="min-w-0">
-          {blockAt(event.forkPointNumber)} <FullHash hash={event.forkPointHash} />
+          {blockAt(event.forkPointNumber, 'inline')} <FullHash hash={event.forkPointHash} />
         </span>
         <span className="text-text-dim">first dropped</span>
         <span className="min-w-0">
@@ -441,7 +476,7 @@ function StoredEvent({
         <span className="text-text-dim">new tip</span>
         <span className="min-w-0">
           {onMain?.(event.newTipHash) ? (
-            <BlockLink number={event.newTipNumber} />
+            <BlockLink number={event.newTipNumber} look="inline" />
           ) : (
             formatBlockNumber(event.newTipNumber)
           )}{' '}
@@ -506,7 +541,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
       <ForkHeading event={event} />
       <p
         data-testid="fork-narrative"
-        className="text-text text-body mt-3 max-w-[900px] leading-relaxed"
+        className="text-text text-body max-w-measure mt-3 leading-relaxed"
       >
         <SentenceNodes parts={narrative(data).flatMap((p, i) => (i ? [' ', ...p] : p))} />
       </p>
@@ -536,22 +571,21 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             <span className="text-text-dim">
               before {unitNode(formatUtc8Time(event.detectedAt))}
             </span>
+            {/* R3: the step's hash is a value, in the step's reading ink */}
             <span className="text-text col-span-2 sm:col-span-1">
               this node’s tip is {formatBlockNumber(event.oldTipNumber)}{' '}
-              <ShortId className="text-text-dim" value={event.oldTipHash} kind="hash" size="row" />{' '}
-              {where(event.oldTipHash)}
+              <ShortId value={event.oldTipHash} kind="hash" size="row" /> {where(event.oldTipHash)}
             </span>
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
             <span className="text-text-dim">{unitNode(formatUtc8Time(event.detectedAt))}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               the node switches to{' '}
               {onMain(event.newTipHash) ? (
-                <BlockLink number={event.newTipNumber} />
+                <BlockLink number={event.newTipNumber} look="inline" />
               ) : (
                 formatBlockNumber(event.newTipNumber)
               )}{' '}
-              <ShortId className="text-text-dim" value={event.newTipHash} kind="hash" size="row" />{' '}
-              and drops{' '}
+              <ShortId value={event.newTipHash} kind="hash" size="row" /> and drops{' '}
               {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}{' '}
               {/* the dot goes with its item to a new line (PA-25) */}
               <NoBreak className="text-text-dim">· depth {event.depth}</NoBreak>
@@ -563,12 +597,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 <span className="text-text col-span-2 sm:col-span-1">
                   <EventRef target={event.revertedByEvent} text="a later switch" /> moves this node
                   to {formatBlockNumber(event.revertedByEvent.newTip.number)}{' '}
-                  <ShortId
-                    className="text-text-dim"
-                    value={event.revertedByEvent.newTip.hash}
-                    kind="hash"
-                    size="row"
-                  />{' '}
+                  <ShortId value={event.revertedByEvent.newTip.hash} kind="hash" size="row" />{' '}
                   {where(event.revertedByEvent.newTip.hash)}
                 </span>
               </span>
@@ -585,50 +614,75 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               {
                 key: 'height',
                 label: 'Height',
-                minWidth: 120,
-                render: (row) =>
-                  row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number),
-              },
-              {
-                key: 'hash',
-                label: 'Hash',
-                minWidth: 170,
+                // the block's row stone and its gap (ROW_SEAL.block.footprint, 24; lane D2), a
+                // dropped height and its prime (12 characters, 93.6) and the gap: 134; it was 120,
+                // then 110 without the stone
+                minWidth: columnPx(
+                  ROW_SEAL.block.footprint + cell(DROPPED_HEIGHT.length) + CELL_GAP_PX
+                ),
                 render: (row) => (
-                  <span
-                    className="text-[color:var(--ink)]"
-                    style={inkStyle(BOARD_INKS.link)}
-                    title={row.hash}
-                  >
-                    <ShortId value={row.hash} kind="hash" size="row" />
+                  <span className="flex items-start">
+                    <BlockRowStone row={row} />
+                    {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number, 'key')}
                   </span>
                 ),
               },
               {
+                key: 'hash',
+                label: 'Hash',
+                // the hash at the row size (17 characters, 132.6) and the gap; it was 170. A value,
+                // not a link: the reading ink (it was the boards' link ink on a span that is no link)
+                minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
+                render: (row) => <ShortId value={row.hash} kind="hash" size="row" />,
+              },
+              {
                 key: 'time',
                 label: 'Time (UTC+8)',
-                minWidth: 120,
-                render: (row) => <span className="text-text-dim">{blockClock(row.timestamp)}</span>,
+                // the clock to the millisecond, "09:12:32.761" (12 characters, 93.6), wider than
+                // the head's "(UTC+8)", and the gap; it was 120
+                minWidth: columnPx(
+                  Math.max(
+                    cell(blockClock('1970-01-01T00:00:00Z').length),
+                    textPx('(UTC+8)'.length, fontPx('meta'))
+                  ) + CELL_GAP_PX
+                ),
+                // a time is a value: the reading ink (R3)
+                render: (row) => blockClock(row.timestamp),
               },
               {
                 key: 'miner',
                 label: 'Miner',
-                minWidth: 150,
+                // The flexible column (a pool name has no bound): an unnamed miner at the row size
+                // (13 characters, 101.4) and the gap at its minimum, the rest of the container
+                // beyond the sum. It was 150.
+                minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.address)) + CELL_GAP_PX),
+                width: 'auto',
                 render: (row) => <Miner block={row} size="row" />,
               },
               {
                 key: 'txs',
                 label: 'Txs',
-                minWidth: 60,
+                // a block's transactions, the consensus count WIDEST_COUNT states (at most 5,146
+                // in a block of 597,000 bytes): four digits, "9,999" (39), and the gap; it was 60
+                minWidth: columnPx(cell(WIDEST_COUNT.length) + CELL_GAP_PX),
                 numeric: true,
                 render: (row) => row.transactionsCount.toLocaleString('en-US'),
               },
-              { key: 'fate', label: 'Fate', minWidth: 200, render: (row) => row.fate },
+              {
+                key: 'fate',
+                label: 'Fate',
+                // the widest fate on its line, "uncle inclusion still possible" (30 characters,
+                // 234); the last column, no gap. It was 200.
+                minWidth: columnPx(cell('uncle inclusion still possible'.length)),
+                render: (row) => row.fate,
+              },
             ]}
             // No board for this list: board L1's rules — identity and time, who mined it and how
             // many transactions, then the fate in full.
             mobileRow={(row) => (
               <PhoneRow
                 testId="fork-block-row-mobile"
+                mark={<BlockRowStone row={row} />}
                 lines={[
                   {
                     key: 'identity',
@@ -636,18 +690,16 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     left: (
                       <>
                         <span className="font-medium">
-                          {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number)}
+                          {row.dropped
+                            ? `${formatBlockNumber(row.number)}′`
+                            : blockAt(row.number, 'key')}
                         </span>{' '}
-                        <span
-                          className="text-small text-[color:var(--ink)]"
-                          style={inkStyle(BOARD_INKS.link)}
-                          title={row.hash}
-                        >
+                        <span className="text-small text-text">
                           <ShortId value={row.hash} kind="hash" size={phoneSize} />
                         </span>
                       </>
                     ),
-                    right: <span className="text-text-dim">{blockClock(row.timestamp)}</span>,
+                    right: blockClock(row.timestamp),
                   },
                   {
                     key: 'miner',
@@ -665,7 +717,8 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               />
             )}
           />
-          <p className="text-text-dim text-small mt-2">
+          {/* a sentence that explains reads in the reading ink (R3) */}
+          <p className="text-text text-small max-w-measure mt-2">
             An uncle earns its miner nothing; it counts toward the uncle rate that sets the
             difficulty.
           </p>
@@ -684,13 +737,14 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 {
                   key: 'tx',
                   label: 'Transaction',
-                  minWidth: 300,
+                  // The flexible column: the full hash breaks anywhere, so at its minimum two lines
+                  // of 33 characters (257.4) and the gap; one line where the container gives the
+                  // hash's 66. It was 300.
+                  minWidth: columnPx(cell(66 / 2) + CELL_GAP_PX),
+                  width: 'auto',
                   render: (tx: OrphanedTransaction) =>
                     tx.committedAt ? (
-                      <Link
-                        href={`/tx/${tx.hash}`}
-                        className="text-emphasis break-all hover:underline"
-                      >
+                      <Link href={`/tx/${tx.hash}`} look="key" className="break-all">
                         {tx.hash}
                       </Link>
                     ) : (
@@ -700,33 +754,46 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 {
                   key: 'origin',
                   label: 'Dropped block',
-                  minWidth: 110,
+                  // a dropped height and its prime (93.6) and the gap
+                  minWidth: columnPx(cell(DROPPED_HEIGHT.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) => `${formatBlockNumber(tx.blockNumber)}′`,
                 },
                 {
                   key: 'fate',
                   label: 'Fate now',
-                  minWidth: 170,
+                  // the widest fate on its line, "committed on canonical branch" (29 characters,
+                  // 226.2), and the gap; it was 170
+                  minWidth: columnPx(cell('committed on canonical branch'.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) => tx.fate.replaceAll('_', ' '),
                 },
                 {
                   key: 'commit',
                   label: 'Committed in',
-                  minWidth: 130,
+                  // "#99,999,999" (85.8) and the gap; it was 130
+                  minWidth: columnPx(cell(WIDEST_BLOCK_NUMBER.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) =>
-                    tx.committedAt ? blockAt(tx.committedAt.blockNumber) : '—',
+                    tx.committedAt ? blockAt(tx.committedAt.blockNumber, 'inline') : '—',
                 },
                 {
                   key: 'capacity',
                   label: 'Output capacity',
-                  minWidth: 170,
+                  // A list column, so the summary form (R5; lane P4: it was the column form, every
+                  // decimal padded): an output under a billion CKB, whole from 1,000 up,
+                  // "999,999,999" (85.8), and its unit " CKB" at 12 px (28.8), wider than
+                  // "Unavailable"; the last column, no gap: 115 (it was 185, and 170 before)
+                  minWidth: columnPx(
+                    Math.max(
+                      cell(WIDEST_TX_VALUE_SUMMARY.length) + textPx(' CKB'.length, fontPx('meta')),
+                      cell('Unavailable'.length)
+                    )
+                  ),
                   numeric: true,
                   render: (tx: OrphanedTransaction) =>
                     tx.totalCapacity == null ? (
                       'Unavailable'
                     ) : (
                       <CkbAmount
-                        form="column"
+                        form="summary"
                         shannons={BigInt(tx.totalCapacity)}
                         signed={false}
                         tone="plain"
@@ -744,10 +811,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                       key: 'hash',
                       tone: 'head',
                       left: tx.committedAt ? (
-                        <Link
-                          href={`/tx/${tx.hash}`}
-                          className="text-emphasis text-small break-all hover:underline"
-                        >
+                        <Link href={`/tx/${tx.hash}`} look="key" className="text-small break-all">
                           {tx.hash}
                         </Link>
                       ) : (
@@ -782,8 +846,11 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     {
                       key: 'committed',
                       tone: 'quiet',
+                      // the label quiet, its block the value (R3)
                       left: tx.committedAt ? (
-                        <>committed in {blockAt(tx.committedAt.blockNumber)}</>
+                        <Labelled label="committed in">
+                          {blockAt(tx.committedAt.blockNumber, 'inline')}
+                        </Labelled>
                       ) : (
                         'not committed'
                       ),
@@ -807,7 +874,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 key={number}
                 title={
                   <>
-                    Uncles in <BlockLink number={number} />
+                    Uncles in <BlockLink number={number} look="inline" />
                   </>
                 }
               >
@@ -815,25 +882,20 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                   {uncles.map((block, i) => (
                     <span key={block.hash} className="contents">
                       <span className="text-text-dim">uncle {i}</span>
+                      {/* as the stored event's facts: the dropped height, then its hash in
+                          designed lines (lane P4) */}
                       <span className="min-w-0">
-                        <Dotted
-                          parts={[
-                            <FullHash key="h" hash={block.hash} />,
-                            formatBlockNumber(block.number),
-                          ]}
-                        />
+                        {formatBlockNumber(block.number)}′ <FullHash hash={block.hash} />
                       </span>
                     </span>
                   ))}
                   <span className="text-text-dim">included by</span>
-                  <span>
+                  <span className="min-w-0">
                     {includer && includer.minerLockHash !== null ? (
-                      // the address alone breaks anywhere; "not recorded" breaks between words
-                      <Link
-                        href={`/address/${minerAddressOf(includer)}`}
-                        className="hover:text-jade break-all"
-                      >
-                        {minerAddressOf(includer)}
+                      // the whole address in designed lines, as the hashes (lane P4); "not
+                      // recorded" breaks between words
+                      <Link href={`/address/${minerAddressOf(includer)}`} look="inline">
+                        <HeadId value={minerAddressOf(includer)} kind="address" />
                       </Link>
                     ) : (
                       // U-15: the miner's witness is not in the store; said as a fact, not a state

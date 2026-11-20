@@ -1,3 +1,5 @@
+import { ckbAddress, namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { AssetMetrics } from '@/components/asset/detail-shell';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import {
@@ -52,6 +54,30 @@ const facts = () => Array.from(document.querySelectorAll('[data-role="metrics"] 
 const fact = (label: string) =>
   facts().find((f) => f.querySelector('dt')?.textContent === label) ?? null;
 const factLabels = () => facts().map((f) => f.querySelector('dt')!.textContent);
+
+// Lane p-assets (the lock-words gate's known writer 5): the Owner fact's lock is the one
+// decision's (components/ui/lock-kind.tsx): nothing beside the address for the default lock, where
+// the note wrote the API's name, or "lock not named".
+it('names an owner’s lock by the one decision: nothing for the default lock', () => {
+  const protocol = valar();
+  const last = protocol.versions.at(-1)!.cell;
+  const args = `0x${'ab'.repeat(20)}`;
+  last.lock = { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args };
+  last.lockName = 'SECP256K1/blake160';
+  last.ownerAddress = ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args });
+  render(
+    <Facts
+      protocol={protocol}
+      term={identityTerm(protocol)}
+      now={NOW}
+      isLive
+      createdAtBlock={12260151}
+    />
+  );
+  expect(fact('Owner')).toHaveTextContent(/owner and manager are the same key$/);
+  expect(fact('Owner')).not.toHaveTextContent('SECP256K1');
+  expect(fact('Owner')).not.toHaveTextContent('lock not named');
+});
 
 describe('identity facts rail (ID-C6)', () => {
   it('gives .bit its domain facts: owner, expiry with the last renewal, registration, records', () => {
@@ -149,7 +175,10 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Manager')).toHaveTextContent(item.manager.hashPrefix);
     expect(fact('Expires')).toHaveTextContent('grace to');
     expect(fact('Records')).toHaveTextContent('0');
-    expect(fact('Sub-names · for sale')).toHaveTextContent('none · no');
+    // re-pinned on purpose (lane P2's follow-up, a standing cause): the sub-names and the sale are
+    // two facts (one metric said "none · no"), and a name not for sale draws no sale metric
+    expect(fact('Sub-names')).toHaveTextContent('none');
+    expect(screen.queryByText('For sale')).toBeNull();
   });
 
   // Readability review 2026-11-18 (lane A): on verification.cell at 1280 "CKB held in its cell"
@@ -175,6 +204,28 @@ describe('identity facts rail (ID-C6)', () => {
   });
 });
 
+// Lane P2's follow-up (a standing cause, empty identity metrics): a metric with nothing to say is
+// not drawn. A .bit version that stores no expiry drew "Expires · not recorded"; the page's
+// sentence says it once ("Version N of its cell records no expiry.").
+describe('identity facts draw no metric with nothing to say', () => {
+  it('draws no expiry for a version that stores none', () => {
+    const protocol = valar();
+    for (const v of protocol.versions) v.decoded.expiredAt = null;
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        createdAtBlock={12260151}
+      />
+    );
+    expect(factLabels()).not.toContain('Expires');
+    expect(document.body).not.toHaveTextContent('not recorded');
+    expect(factLabels()).toContain('Registered');
+  });
+});
+
 describe('identity summary (ID-C5)', () => {
   it('says how long a .bit is held, that its owner never changed, and its records', () => {
     const protocol = valar();
@@ -195,7 +246,8 @@ describe('identity summary (ID-C5)', () => {
     ).toHaveAttribute('title', '116\u00a0days from now');
   });
 
-  it('tells a did:ckb it has no expiry and names its server', () => {
+  // renamed (R8): it was "tells a did:ckb it has no expiry and names its server"
+  it('names a did:ckb’s server; that it has no expiry is the lede’s', () => {
     const protocol = structuredClone(didProtocolProducer) as IdentityProtocol;
     render(
       <IdentitySummary
@@ -206,8 +258,11 @@ describe('identity summary (ID-C5)', () => {
         subject="alice.test"
       />
     );
+    // Re-pinned on purpose (readability R8, lane p-assets): that it is live with no expiry is the
+    // page's lede now (IdentityPositioning), said once; "in words" keeps the rest (it ended "… It
+    // has no expiry date.")
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-      'A Web5 identity, created on 2023-11-15. It names a personal data server at pds.example. It has no expiry date.'
+      /^A Web5 identity, created on 2023-11-15\. It names a personal data server at pds\.example\.$/
     );
   });
 });
@@ -269,6 +324,45 @@ describe('.bit witness facts (ID-B1, ID-C6)', () => {
   });
 });
 
+// Lane P2's follow-up (item 6): the .bit Cell summary says the lock it was minted into and the one
+// that holds it now through the decision's sentence form (it said the API's name as "a <name>
+// wallet", "a wallet whose lock is not named" when there was none, and its own article rule)
+describe('.bit Cell summary names its locks through the decision', () => {
+  it('says a lock the registry does not name by its code hash, and the default lock by its name', () => {
+    const protocol = structuredClone(bitCellProtocolProducer) as Extract<
+      ItemProtocol,
+      { kind: 'bit_cell' }
+    >;
+    const summary = () =>
+      render(
+        <IdentitySummary
+          protocol={protocol}
+          term={identityTerm(protocol)}
+          now={NOW}
+          isLive
+          subject="888899.bit"
+        />
+      );
+    const { unmount } = summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /Minted on \S+ into a lock 0x41414141…414141 that still holds it\./
+    );
+    expect(screen.getByTestId('identity-summary')).not.toHaveTextContent('wallet');
+    unmount();
+    const args = `0x${'01'.repeat(20)}`;
+    for (const v of protocol.versions)
+      Object.assign(v.cell, {
+        lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args },
+        lockName: 'Default Lock',
+        ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+      });
+    summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /into a Default Lock that still holds it\./
+    );
+  });
+});
+
 describe('.bit Cell summary when the term has ended', () => {
   it('reads "The name\'s term ended on …"', () => {
     const protocol = structuredClone(bitCellProtocolProducer) as IdentityProtocol;
@@ -298,8 +392,9 @@ describe('.cell rail parties (visual pass)', () => {
     item.owner = {
       hashPrefix: '0x69',
       lockHash: '0x' + '69'.repeat(32),
-      address: 'ckb1qqcz6d',
-      scriptName: 'Quantum-Resistant Lock',
+      // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+      address: seededAddress('qqcz6d', namedLockCodeHash('Quantum-Resistant Lock')),
+      lockScriptName: 'Quantum-Resistant Lock',
     };
     const protocol = structuredClone(dotcellProtocolProducer) as IdentityProtocol;
     render(
@@ -314,11 +409,119 @@ describe('.cell rail parties (visual pass)', () => {
     );
     expect(fact('Owner')!.querySelector('a')).toHaveAttribute(
       'href',
-      '/mainnet/address/ckb1qqcz6d'
+      `/mainnet/address/${item.owner.address}`
     );
     expect(fact('Owner')).toHaveTextContent('Quantum-Resistant Lock');
     expect(fact('Owner')).not.toHaveTextContent("named in the name's data");
     expect(fact('Manager')).not.toHaveTextContent('edits its records');
-    expect(fact('Manager')).toHaveTextContent('prefix · no uniquely resolved lock');
+    // re-pinned on purpose (lane P2's fifth round, NOTE 7): one word for a prefix no lock answers
+    // uniquely, the fact's and the summary's (it was "prefix · no uniquely resolved lock" here and
+    // "a lock not indexed owns it" in the summary)
+    expect(fact('Manager')).toHaveTextContent('prefix · lock not uniquely resolved');
   });
+});
+
+// Lane P2's third round (item 12c, the test review's MUST-1): a .cell party's lock is said through
+// the one decision, off the party's address, which spells the lock: a lock on the default lock's
+// code hash by data is not the default lock, whose name the registry sends for that code hash, so
+// it reads "lock 0x9bd7e06f…a3cce8 by data", never "Default Lock"; the summary says it in the
+// decision's sentence form, the facts in its column words.
+describe('.cell parties name their locks through the decision', () => {
+  const byData = (seed: string) => {
+    const args = '0x' + seed.repeat(20);
+    return {
+      hashPrefix: '0x' + seed.repeat(20),
+      lockHash: '0x' + seed.repeat(32),
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+      lockScriptName: 'Default Lock',
+    };
+  };
+  it('writes a by-data lock on the default code hash by its code hash, in the facts and the summary', () => {
+    const item = dotcellItem();
+    const protocol = structuredClone(dotcellProtocolProducer) as Extract<
+      IdentityProtocol,
+      { kind: 'dotcell' }
+    >;
+    const first = protocol.versions[0];
+    const second = structuredClone(first);
+    second.cell.timestamp = String(Number(first.cell.timestamp) + 86_400_000);
+    second.cell.txHash = '0x' + '77'.repeat(32);
+    second.decoded.owner = byData('6a');
+    second.decoded.manager = byData('6b');
+    protocol.versions = [first, second];
+    const dotcell = { ...item, owner: byData('6a'), manager: byData('6b') };
+    render(
+      <>
+        <Facts
+          protocol={protocol}
+          term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+          now={NOW}
+          isLive
+          createdAtBlock={100}
+          dotcell={dotcell}
+        />
+        <IdentitySummary
+          protocol={protocol}
+          term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+          now={NOW}
+          isLive
+          subject="alice.cell"
+        />
+      </>
+    );
+    expect(fact('Owner')).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data');
+    expect(fact('Manager')).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data');
+    const summary = screen.getByTestId('identity-summary');
+    expect(summary).toHaveTextContent(
+      /a lock 0x9bd7e06f…a3cce8 by data owns it while a lock 0x9bd7e06f…a3cce8 by data manages its records/
+    );
+    expect(document.body).not.toHaveTextContent('Default Lock');
+  });
+});
+
+// Lane P2's fifth round (NOTE 7): a .cell owner whose prefix no lock answers uniquely is said in
+// one word on the page: the summary said "a lock not indexed owns it", the decision's answer for a
+// lock with no code hash and no name, beside the fact's "no uniquely resolved lock".
+it('says an unresolved .cell owner in one word, in the summary and the fact', () => {
+  const protocol = structuredClone(dotcellProtocolProducer) as Extract<
+    IdentityProtocol,
+    { kind: 'dotcell' }
+  >;
+  const first = protocol.versions[0];
+  const second = structuredClone(first);
+  second.cell.timestamp = String(Number(first.cell.timestamp) + 86_400_000);
+  second.cell.txHash = '0x' + '78'.repeat(32);
+  second.decoded.owner = {
+    hashPrefix: '0x' + '6c'.repeat(20),
+    lockHash: null,
+    address: null,
+    lockScriptName: null,
+  };
+  protocol.versions = [first, second];
+  const item = dotcellItem();
+  const dotcell = { ...item, owner: second.decoded.owner };
+  render(
+    <>
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+        now={NOW}
+        isLive
+        createdAtBlock={100}
+        dotcell={dotcell}
+      />
+      <IdentitySummary
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: dotcell.graceEndsAt })}
+        now={NOW}
+        isLive
+        subject="alice.cell"
+      />
+    </>
+  );
+  expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+    /a lock not uniquely resolved owns it/
+  );
+  expect(fact('Owner')).toHaveTextContent('prefix · lock not uniquely resolved');
+  expect(document.body).not.toHaveTextContent('not indexed');
 });

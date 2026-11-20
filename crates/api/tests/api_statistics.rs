@@ -1061,6 +1061,72 @@ async fn test_tx_stats_reads_from_derived_store() {
     assert!(!json["dailyData"].as_array().unwrap().is_empty());
 }
 
+/// An epoch-duration bucket's label is a stated figure, its minute in hours at two decimals, cut and
+/// never rounded (the D1 hand-back): 181 minutes is 3.0166… hours, "3.01" (half up it read "3.02").
+/// One minute is 1.67 hundredths of an hour, so no two minutes cut to one label.
+#[tokio::test]
+async fn test_epoch_time_distribution_labels_cut_never_round() {
+    let store = test_store();
+    for (minutes, epochs) in [(180, 1), (181, 2), (182, 3), (184, 4)] {
+        store.put_epoch_time_dist(minutes, epochs).unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/epoch-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let labels: Vec<(String, String)> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| {
+            (
+                point["date"].as_str().unwrap().to_string(),
+                point["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let pairs = |rows: &[(&str, &str)]| {
+        rows.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels,
+        pairs(&[("3.00", "1"), ("3.01", "2"), ("3.03", "3"), ("3.06", "4")])
+    );
+}
+
+/// An epoch's duration is sent as the whole ms it held, never rounded to hours (lane D1's third
+/// round, M1): 14,418,000 ms is 4.005 h, which half up at two decimals read "4.01"; the target is
+/// stated cut.
+#[tokio::test]
+async fn epoch_time_length_sends_each_duration_in_whole_ms() {
+    let store = test_store();
+    let start = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    store
+        .put_epoch_stats(
+            1,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(1800),
+                blocks_count: 1800,
+                length: 1800,
+                start_timestamp: start,
+                end_timestamp: Some(start + chrono::Duration::milliseconds(14_418_000)),
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/epoch-time-length").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "14418000", "{json}");
+    assert_eq!(json["target"]["seconds"], 14_400, "{json}");
+    assert_eq!(json["target"]["hours"], "4.00", "{json}");
+}
+
 #[tokio::test]
 async fn test_epoch_time_charts_read_from_derived_store() {
     let core_store = test_store();
@@ -1141,7 +1207,7 @@ async fn test_network_stats_reads_derived_statistics() {
     //  - avgBlockTime = windowed average with ms precision (two 8s gaps →
     //    "8.00s"), not a hardcoded 10.00s;
     //  - hashRate = the window's summed per-block work over its span in true
-    //    H/s ("165.01 PH/s"; equal to difficulty / avg seconds here because
+    //    H/s ("165.00 PH/s", cut; equal to difficulty / avg seconds here because
     //    the seeded window is uniform-difficulty), not the 1000×-understated
     //    per-millisecond figure;
     //  - transactionsPerDay = the rolling last-24h rate normalized to a day
@@ -1220,13 +1286,15 @@ async fn test_network_stats_reads_derived_statistics() {
     // (a raw or wider window would inflate this far beyond the expectation).
     let window_ms = now_ms - (now_hour - 3600) * 1000;
     let numerator = 200i128 * 86_400 * 1000;
-    let expected_per_day =
-        ((numerator + i128::from(window_ms) / 2) / i128::from(window_ms)).to_string();
+    // re-pinned for lane exactness, part A2 (S5): the rate is cut, never rounded (this was the
+    // half-up quotient)
+    let expected_per_day = (numerator / i128::from(window_ms)).to_string();
     assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
-    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165.01 PH/s.
-    assert_eq!(json["hashRate"], "165.01 PH/s");
+    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165,007,367,725,940,091.125 H/s, cut
+    // 165.00 PH/s (re-pinned for lane exactness, part B (the third read's S3): half up it read 165.01 PH/s)
+    assert_eq!(json["hashRate"], "165.00 PH/s");
 }
 
 #[tokio::test]
@@ -2244,6 +2312,289 @@ async fn test_hodl_wave_chart_with_data() {
     assert_eq!(json["series"].as_array().unwrap().len(), 8);
 }
 
+/// The chart page draws five bands (the chart-hero board, lane D1): the eight age bands with their
+/// young neighbours merged, oldest first. A merged band is a new figure, so it is computed here from
+/// the bands' exact capacities, never summed by the page from the rounded percentages: 1 to 6
+/// months is 400 + 500 of 3,600 (25.00), under 1 month 100 + 200 + 300 of 3,600 (16.666…, cut
+/// 16.66, as every percentage of this route since the D1 hand-back's item 1; it was half up, 16.67).
+/// Cut parts can miss a merged band by a hundredth (three thirds cut to 33.33 each, 99.99
+/// together, where the whole is 100.00).
+#[tokio::test]
+async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
+    let store = test_store();
+    store
+        .put_hodl_wave(
+            "20240115",
+            &ckbadger_store::types::DailyHodlWave {
+                band_24h: 100_00000000,
+                band_1d_1w: 200_00000000,
+                band_1w_1m: 300_00000000,
+                band_1m_3m: 400_00000000,
+                band_3m_6m: 500_00000000,
+                band_6m_1y: 600_00000000,
+                band_1y_3y: 700_00000000,
+                band_gt_3y: 800_00000000,
+                holder_count: 42_000,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/hodl-wave")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let bands = json["bands"].as_array().expect("bands");
+    let shape: Vec<(String, String, Vec<String>)> = bands
+        .iter()
+        .map(|band| {
+            (
+                band["key"].as_str().unwrap().to_string(),
+                band["label"].as_str().unwrap().to_string(),
+                band["members"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| m.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    let owned = |key: &str, label: &str, members: &[&str]| {
+        (
+            key.to_string(),
+            label.to_string(),
+            members.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        shape,
+        vec![
+            owned("gt3y", "3 years or more", &["gt3y"]),
+            owned("1y3y", "1 to 3 years", &["1y3y"]),
+            owned("6m1y", "6 to 12 months", &["6m1y"]),
+            owned("1m6m", "1 to 6 months", &["3m6m", "1m3m"]),
+            owned("lt1m", "under 1 month", &["1w1m", "1d1w", "24h"]),
+        ]
+    );
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["gt3y"], "22.22");
+    assert_eq!(values["1y3y"], "19.44");
+    // re-pinned for the D1 hand-back, item 1: cut, never rounded (were 16.67, 16.67, 2.78)
+    assert_eq!(values["6m1y"], "16.66");
+    assert_eq!(values["1m6m"], "25.00");
+    assert_eq!(values["lt1m"], "16.66");
+    assert_eq!(values["24h"], "2.77");
+    // the eight bands stay, for the table under the chart, named in the drawn bands' words (lane
+    // D1's third round, N5: one band, one spelling on the page)
+    let labels: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "3 years or more",
+            "1 to 3 years",
+            "6 to 12 months",
+            "3 to 6 months",
+            "1 to 3 months",
+            "1 week to 1 month",
+            "1 day to 1 week",
+            "under 1 day",
+        ]
+    );
+}
+
+/// A chart page states a percentage as the exact value cut, never rounded (the D1 hand-back,
+/// item 1): a rounded share can show a digit that is not on chain. Two of three CKB unmoved for
+/// three years is 66.666…%: half up 66.67, cut 66.66.
+#[tokio::test]
+async fn test_hodl_wave_chart_cuts_its_shares_never_rounds() {
+    let store = test_store();
+    store
+        .put_hodl_wave(
+            "20240115",
+            &ckbadger_store::types::DailyHodlWave {
+                band_gt_3y: 2,
+                band_24h: 1,
+                holder_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/hodl-wave").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["gt3y"], "66.66");
+    assert_eq!(values["24h"], "33.33");
+    assert_eq!(values["lt1m"], "33.33");
+    assert_eq!(values["1m6m"], "0.00");
+}
+
+/// The whole a chart page's sentence states is the route's (the D1 hand-back, item 2): knowledge by
+/// kind partitions the day's knowledge size, and the route sends that size beside its parts.
+#[tokio::test]
+async fn test_knowledge_composition_chart_states_its_whole() {
+    let store = test_store();
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let state = test_app_state(test_config(store));
+    // No typed scripts: the whole knowledge size is plain transfer cells.
+    state.mem_cache.set(
+        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
+        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
+        std::time::Duration::from_secs(60),
+    );
+    let app = router_from_state(state);
+    let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["knowledgeSize"], "1000", "{json}");
+    assert_eq!(values["knowledgeSize"], values["transfer"], "{json}");
+}
+
+/// The day's activity kinds can overlap (an action counts in each kind it is), so the page's
+/// sentence divides by the day's kind occurrences, which the route states: the eight kinds the
+/// charts read (not the coinbase, not the unknown fallback).
+#[tokio::test]
+async fn test_daily_activities_state_their_kind_occurrences() {
+    let store = test_store();
+    store
+        .put_daily_activity_stats(
+            "20240115",
+            &ckbadger_store::types::DailyActivityStats {
+                transfer_count: 30,
+                dao_deposit_count: 2,
+                dao_withdraw_request_count: 1,
+                dao_withdraw_complete_count: 1,
+                token_count: 3,
+                object_count: 4,
+                identity_count: 5,
+                script_call_count: 6,
+                coinbase_count: 7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // re-pinned on purpose (the P3 follow-up's 2b): the route reads the day's chain row too
+    store
+        .put_daily_stats("20240115", &transactions_day(7, 50))
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json[0]["kindOccurrences"], 52, "{json}");
+    // the merged DAO band, the route's (lane D1's third round, M2): 2 + 1 + 1
+    assert_eq!(json[0]["daoCount"], 4, "{json}");
+}
+
+/// A day's chain row: its blocks and its committed transactions, cellbases among them.
+fn transactions_day(blocks: i32, transactions: i32) -> DailyStats {
+    DailyStats {
+        blocks_count: blocks,
+        transactions_count: transactions,
+        ..Default::default()
+    }
+}
+
+/// The P3 follow-up's 2b: the Transactions and Activities pages stated the day's user transactions
+/// by subtracting its cellbases from its transactions in the page. The count is the route's: the
+/// day's committed transactions (its chain row) less its cellbases (its activity row), one path.
+#[tokio::test]
+async fn test_daily_activities_state_the_day_s_user_transactions() {
+    let store = test_store();
+    for (date, blocks, transactions) in [("20240114", 8_000, 31_000), ("20240115", 7_990, 30_100)] {
+        store
+            .put_daily_activity_stats(
+                date,
+                &ckbadger_store::types::DailyActivityStats {
+                    coinbase_count: u32::try_from(blocks).unwrap(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_daily_stats(date, &transactions_day(blocks, transactions))
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json[0]["userTransactionCount"], 23_000, "{json}");
+    assert_eq!(json[1]["userTransactionCount"], 22_110, "{json}");
+}
+
+/// A day with more cellbases than transactions, or with no chain row, is an indexer fault the
+/// route names by its date; it never states a count it cannot make.
+#[tokio::test]
+async fn test_daily_activities_refuse_a_day_whose_counts_disagree() {
+    for chain_row in [Some(transactions_day(9, 8)), None] {
+        let store = test_store();
+        store
+            .put_daily_activity_stats(
+                "20240115",
+                &ckbadger_store::types::DailyActivityStats {
+                    coinbase_count: 9,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if let Some(row) = &chain_row {
+            store.put_daily_stats("20240115", row).unwrap();
+        }
+        seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        assert!(json.to_string().contains("20240115"), "{json}");
+    }
+}
+
+/// Cell size states its wholes (the D1 hand-back, item 2): the page's "of live cells" and "of it"
+/// divide by the live cells and the occupied CKB the route counts from its own snapshot.
+#[tokio::test]
+async fn test_cell_size_chart_states_its_wholes() {
+    let store = test_store();
+    store
+        .put_cell_distribution(
+            "20240115",
+            &ckbadger_store::types::DailyCellDistribution {
+                size_bucket_counts: [10, 20, 30, 40, 50, 60],
+                size_bucket_capacities: [
+                    1_000_000_000,
+                    2_000_000_000,
+                    3_000_000_000,
+                    4_000_000_000,
+                    5_000_000_000,
+                    6_000_000_050,
+                ],
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/cell-size-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["liveCells"], "210", "{json}");
+    assert_eq!(json["occupiedCapacity"], "210.0000005", "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 6, "{json}");
+}
+
 #[tokio::test]
 async fn test_asset_ecosystem_returns_expected_structure() {
     let store = test_store();
@@ -2508,6 +2859,220 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
 // Exact activity summary: chain-time window and cross-hour address dedup
 // ============================================================
 
+/// The page-phase review's SHOULD 5 (the P3 follow-up): the home card's script shares divided by a
+/// total the page summed from scriptCounts, and its "others" row was summed in the page too. The
+/// route states them: the scripts ranked by calls (ties by code hash), every call counted
+/// (`scriptCalls`), and the scripts after the five largest with their calls (`scriptRest`).
+#[tokio::test]
+async fn test_activity_summary_24h_states_its_script_calls_and_the_rest() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions, TypeCallEntry};
+    use ckbadger_store::StoreBatch;
+
+    let store = test_store();
+    let tip_time = 1_700_000_000_000i64;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(
+        1,
+        &CachedBlockHeader {
+            hash: vec![1; 32],
+            timestamp: tip_time,
+            chain_time_ms: tip_time,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 9,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    // the calls each transaction makes, by code: 0x0a 4, 0x0b 3, 0x0c 3, 0x0d 2, 0x0e 2, 0x0f 1, 0x10 1
+    let calls: [&[u8]; 4] = [
+        &[0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10],
+        &[0x0a, 0x0c, 0x0b, 0x0e, 0x0d],
+        &[0x0b, 0x0c, 0x0a],
+        &[0x0a],
+    ];
+    for (n, codes) in calls.iter().enumerate() {
+        let tx_index = i32::try_from(n).unwrap() + 1;
+        let actions = TxActions {
+            tx_hash: vec![0x60 + n as u8; 32],
+            block_hash: vec![1; 32],
+            block_number: 1,
+            tx_index,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: codes
+                .iter()
+                .map(|code| TypeCallEntry {
+                    type_code_hash: vec![*code; 32],
+                    type_hash_type: 1,
+                    type_args: vec![],
+                })
+                .collect(),
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0x70 + n as u8; 32]),
+                ckb_delta: 10,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            }],
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let ranked: Vec<(String, u64)> = json["scriptCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["codeHash"].as_str().unwrap()[..4].to_string(),
+                e["count"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    let code = |b: &str, n: u64| (format!("0x{b}"), n);
+    assert_eq!(
+        ranked,
+        vec![
+            code("0a", 4),
+            code("0b", 3),
+            code("0c", 3),
+            code("0d", 2),
+            code("0e", 2),
+            code("0f", 1),
+            code("10", 1),
+        ],
+        "ranked by calls, ties by code hash: {json}"
+    );
+    assert_eq!(json["scriptCalls"], 16, "{json}");
+    assert_eq!(
+        json["scriptRest"],
+        serde_json::json!({ "scripts": 2, "calls": 2 }),
+        "{json}"
+    );
+}
+
+/// The tests review's SHOULD 3 (the P3 follow-up): the 24 h summary's kindOccurrences and daoCount
+/// were pinned only on a transfers-only seed, where kindOccurrences equals transferCount and
+/// daoCount is 0, so a route that stated either wrongly passed. Four transactions whose kinds
+/// overlap and one of which takes three DAO actions: every figure differs from the others.
+#[tokio::test]
+async fn test_activity_summary_24h_counts_overlapping_kinds_and_dao_actions() {
+    use ckbadger_store::types::{
+        ParticipantDelta, ParticipantId, ProtocolAction, TxActions, TypeCallEntry, TAG_IDENTITY,
+        TAG_OBJECT, TAG_TOKEN,
+    };
+    use ckbadger_store::StoreBatch;
+
+    let store = test_store();
+    let tip_time = 1_700_000_000_000i64;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(
+        1,
+        &CachedBlockHeader {
+            hash: vec![1; 32],
+            timestamp: tip_time,
+            chain_time_ms: tip_time,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 5,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let call = || TypeCallEntry {
+        type_code_hash: vec![0x3a; 32],
+        type_hash_type: 1,
+        type_args: vec![],
+    };
+    let dao = |action: &str| ProtocolAction::new("dao", action, serde_json::json!({}));
+    // (tx index, tags, protocol actions, type calls)
+    let rows: Vec<(i32, u16, Vec<ProtocolAction>, Vec<TypeCallEntry>)> = vec![
+        // two deposits and a withdraw request, a token moved, a script called
+        (
+            1,
+            TAG_TOKEN,
+            vec![dao("deposit"), dao("deposit"), dao("withdraw_request")],
+            vec![call()],
+        ),
+        // a token and an object
+        (2, TAG_TOKEN | TAG_OBJECT, vec![], vec![]),
+        // a plain transfer
+        (3, 0, vec![], vec![]),
+        // an identity and a script called
+        (4, TAG_IDENTITY, vec![], vec![call()]),
+    ];
+    for (tx_index, tags, protocol_actions, type_calls) in rows {
+        let actions = TxActions {
+            tx_hash: vec![0x40 + tx_index as u8; 32],
+            block_hash: vec![1; 32],
+            block_number: 1,
+            tx_index,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions,
+            type_calls,
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0x50 + tx_index as u8; 32]),
+                ckb_delta: 10,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags,
+                roles: 0,
+            }],
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let figure = |key: &str| {
+        json[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{key}: {json}"))
+    };
+    // the kinds as the rows count them
+    assert_eq!(
+        [
+            "activityCount",
+            "transferCount",
+            "daoDepositCount",
+            "daoWithdrawRequestCount",
+            "tokenCount",
+            "objectCount",
+            "identityCount",
+            "scriptCallCount",
+        ]
+        .map(figure),
+        [4, 1, 2, 1, 2, 1, 1, 2],
+        "{json}"
+    );
+    // the DAO's three actions (not the one transaction that took them), and the eight kinds
+    // summed: 1 transfer + 3 DAO actions + 2 tokens + 1 object + 1 identity + 2 script calls
+    assert_eq!(figure("daoCount"), 3, "{json}");
+    assert_eq!(figure("kindOccurrences"), 10, "{json}");
+}
+
 #[tokio::test]
 async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addresses() {
     use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions};
@@ -2642,6 +3207,9 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     assert_eq!(json["activityCount"], 522);
     assert_eq!(json["totalCkbMoved"], "645");
     assert_eq!(json["hoursCovered"], 2);
+    // the window's kinds and its DAO actions, counted by the route (lists lane P3)
+    assert_eq!(json["kindOccurrences"], 522);
+    assert_eq!(json["daoCount"], 0);
 
     // A shallow reorg can replace the same-number tip before the TTL expires.
     // Its new hash must force a fresh window scan and address set.
@@ -2744,8 +3312,9 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // round(1440 / 82800 * 86400) = round(1502.6) = 1503 — NOT the raw 1440.
-    assert_eq!(json["transactionsPerDay"], "1503");
+    // 1440 / 82800 * 86400 = 1502.6…, cut: 1502 — NOT the raw 1440 (re-pinned for lane exactness,
+    // part A2, S5: it was rounded, 1503).
+    assert_eq!(json["transactionsPerDay"], "1502");
 
     // Internal consistency: perDay ≈ perMinute × 1440 within perMinute's
     // one-decimal formatting granularity (0.05 × 1440 = 72) plus rounding.
@@ -2760,7 +3329,8 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
         .parse()
         .unwrap();
     assert!(
-        (per_day - per_minute * 1440.0).abs() <= 0.05 * 1440.0 + 0.5,
+        // cut, perMinute may be up to 0.1 under its value, perDay up to 1 (lane exactness, A2)
+        (per_day - per_minute * 1440.0).abs() <= 0.1 * 1440.0 + 1.0,
         "perDay ({}) must be consistent with perMinute ({}) × 1440",
         per_day,
         per_minute
@@ -3005,6 +3575,10 @@ async fn test_daily_activities_exclude_the_in_progress_tip_day() {
                     ..Default::default()
                 },
             )
+            .unwrap();
+        // re-pinned on purpose (the P3 follow-up's 2b): the route reads the day's chain row too
+        store
+            .put_daily_stats(date, &transactions_day(0, transfers as i32))
             .unwrap();
     }
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
@@ -4298,4 +4872,42 @@ async fn hardforks_counts_live_references_and_known_versions_per_hash_type() {
         ]),
         "{body}"
     );
+}
+
+/// lane exactness, part A, A1: the miners card's "Others" is the window's blocks found by every miner after the five
+/// largest, which the route states (`restBlocks`); the page subtracted the five from the total.
+/// Seven miners found 30, 20, 15, 10, 8, 5 and 2 blocks: the five largest 83 of 90, the rest 7.
+#[tokio::test]
+async fn miner_distribution_states_the_blocks_past_the_five_largest() {
+    let store = test_store();
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let day = chrono::Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    let key = day.format("%Y%m%d").to_string();
+    for (i, blocks) in [30, 20, 15, 10, 8, 5, 2].into_iter().enumerate() {
+        let hash = vec![0x10 + i as u8; 32];
+        store
+            .put_miner_stats(
+                &key,
+                &hash,
+                &MinerStats {
+                    miner_lock_hash: hash.clone(),
+                    blocks_count: blocks,
+                    last_block_number: 99,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(
+        &store,
+        50,
+        &(day + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string(),
+    );
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/miner-address-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["totalBlocks"], 90);
+    assert_eq!(json["data"].as_array().unwrap().len(), 7);
+    assert_eq!(json["restBlocks"], 7, "{json}");
 }

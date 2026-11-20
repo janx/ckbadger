@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The controls library's proof page (UI review 2026-11-14, phase C, lane C1). It mounts every
+         control of components/ui/ (tabs, filter chips, range, pager, text field, select, copy
+         button, help mark) in each state the controls board shows (gate D0′, passed 2026-11-19),
+         by night and by day, at the page's own gutters, with the app's stylesheet, so they can be
+         measured in a real browser before any page uses them. It is served by the development
+         server only (`pnpm exec vite` in frontend/, then /proof/controls.html): it is not an input
+         of `vite build` and nothing of it is in dist/. -->
+    <title>Controls · proof</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/proof/controls.tsx"></script>
+  </body>
+</html>

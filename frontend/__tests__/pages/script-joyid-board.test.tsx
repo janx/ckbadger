@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
@@ -12,6 +13,10 @@ import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { fullText } from '@/__tests__/utils/full-text';
+import { factsOf } from '@/__tests__/utils/facts';
+import { getCapacityRangeParams } from '@/lib/capacity-range';
+import { linkLookClass } from '@/components/ui/link';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -88,7 +93,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
     const summary = within(tier2).getByTestId('script-summary').textContent!;
     expect(summary).toContain(
-      'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
+      // re-pinned on purpose (lane P2's follow-up, item 5): the summary sentence writes the summary form
+      'JoyID decides who can spend 161,049 live cells holding 456,002,179 CKB'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
     // re-pinned (A4 round 2): a count is a unit of its own, its number and noun joined by a plain
@@ -99,7 +105,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
     const hero = screen.getByRole('region', { name: 'JoyID' });
     expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
-      /in 161,049 live cells · 4\.19% occupied$/
+      // lane exactness, part B2: 19,096,283 of 456,002,179.57 CKB occupied is 4.1877…%, 4.18% (half up 4.19%)
+      /in 161,049 live cells · 4\.18% occupied$/
     );
     const metrics = within(hero.parentElement!).getByLabelText('Script figures');
     expect(metrics).toHaveTextContent('2,707,778 cells');
@@ -109,11 +116,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
     // Lane L: the first deployment's transaction is named, and links to its page.
     const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
+    const DEPLOY_INDEX = 0; // the first deployment's code cell, output 0 of its transaction
     // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6); R9 (re-pinned): the
     // tile is under 200 px only on a phone, and from sm the note takes the row size
     expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6f0…f433f5');
     const deployer = within(metrics).getByRole('link', { name: '0xbac0f6f0…f433f5' });
-    expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
+    // re-pinned on purpose (lane P2's third round, item 16): the deploying transaction opens at
+    // the code cell it created (`transactionAtCellHref`), which its page then never folds away (it
+    // linked the transaction bare)
+    expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}#${DEPLOY}-${DEPLOY_INDEX}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
   });
 
@@ -172,8 +183,11 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     ).toEqual(['CKB held · occupied, free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
-    expect(reading).toHaveTextContent('CKB held 456,002,179.57');
-    expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading).find(([label]) => label === 'CKB held')![1]).toMatch(
+      /^456,002,179\.57/
+    );
+    expect(factsOf(reading)).toContainEqual(['code', 'v5 held by multisig 0x6598…d696']);
     // Table-rows L1-3 ruling (board ScriptDetail): no code track under the chart. The version days
     // are ghost labels inside the plot; the holders are the timeline's segments.
     expect(screen.queryByLabelText('Code track')).toBeNull();
@@ -294,6 +308,53 @@ describe('JoyID script page against the ScriptJoyid board', () => {
         scriptKind: 'lock',
       })
     );
+  });
+
+  // Lane c2-chain, written before the cells' pager became the library's Pager: what it does,
+  // whatever draws it — the next page asks for the family's cells after the last one shown, five
+  // a page, and the previous one comes back to the first. Re-pinned (lane c2-finish, 1c): the page
+  // was counted of the family's live cells (161,049 at five a page: "page 1 of 32,210"), a figure
+  // of another read at another tip; the merged page counts no rows, so it is "page 1", "page 2".
+  it('pages its cells forward from a cursor and back to the first page', async () => {
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), the fixture's three cells with more after them, then three newer and last
+    // (it served the same page at every cursor, so page 2's next cursor repeated the one it was
+    // asked with: an API fault the pager now refuses)
+    const first = fixture.cells.data;
+    const later = first.map((cell) => ({
+      ...cell,
+      outputIndex: cell.outputIndex + 100,
+      createdAtBlock: cell.createdAtBlock + 1_000_000,
+    }));
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(
+      byScript((p) =>
+        p.cursor
+          ? (pagedRead(
+              {
+                ...fixture.cells,
+                data: later,
+                limit: 3,
+                total: 6,
+                hasMore: false,
+                nextCursor: null,
+              },
+              3
+            ) as never)
+          : (pagedRead({ ...fixture.cells, limit: 3, total: 6 }) as never)
+      )
+    );
+    await renderJoyid();
+    const cells = document.getElementById('its-cells')!;
+    expect(within(cells).getByText(/^page 1$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getCellsByScriptRef).toHaveBeenLastCalledWith(
+        expect.objectContaining({ scriptKind: 'lock', limit: 5, cursor: expect.any(String) })
+      )
+    );
+    expect(await within(cells).findByText(/^page 2$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^(previous|← prev)$/i }));
+    expect(await within(cells).findByText(/^page 1$/i)).toBeInTheDocument();
   });
 
   // Table-rows L1-5: the registered references are "The script" facts, one list per reference.
@@ -426,7 +487,9 @@ describe('JoyID script page · visual pass', () => {
   it('states the peak of CKB held from the API (SC-S8, R2b-b totalPeak)', async () => {
     await renderJoyid();
     expect(screen.getByTestId('script-history-peak')).toHaveTextContent(
-      /CKB held peaked at 456,002,179\.570* CKB on 2026-10-29/
+      // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form (it was
+      // "456,002,179.57000000")
+      /CKB held peaked at 456,002,179 CKB on 2026-10-29/
     );
   });
 
@@ -469,7 +532,10 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   const follows = (a: Element, b: Element) =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-  it('opens with the title row — h1, its role and the range buttons — and the description as the lede (R13)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "opens with the title row
+  // — h1, its role and the range buttons — …"): the range went with the history to the History
+  // section's heading row; the title row is the h1 and its role.
+  it('opens with the title row — h1 and its role — and the description as the lede; the range heads the History', async () => {
     await renderJoyid();
     const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(tier1()).toContainElement(nav);
@@ -480,17 +546,33 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
-    const range = within(row).getByRole('group', { name: 'Range' });
-    const all = within(range).getByRole('button', { name: 'ALL' });
-    expect(all).toHaveAttribute('aria-pressed', 'true');
-    // A pressed range stays neutral (R11; D3 call 8): no jade text in tier 1.
-    expect(all).toHaveClass('text-text-bright');
-    expect(all.className).not.toMatch(/jade/);
+    expect(within(row).queryByRole('radiogroup', { name: 'range' })).toBeNull();
+    // Re-pinned on purpose (lane c2-chain, the controls board): the range is the library's
+    // RangeSelect, a radio group whose spans are written `30 d · 90 d · 1 y · all` (it was a group
+    // of pressed buttons, "30D 90D 1Y ALL"); the chosen span is the board's one selected state, the
+    // celadon line around the bright ink, so still no jade text in tier 1 (R11; D3 call 8).
+    const historyHead = within(screen.getByRole('region', { name: 'History' })).getByRole(
+      'heading',
+      { name: 'History' }
+    ).parentElement!;
+    const range = within(historyHead).getByRole('radiogroup', { name: 'range' });
+    expect(
+      within(range)
+        .getAllByRole('radio')
+        .map((r) => r.textContent)
+    ).toEqual(['30 d', '90 d', '1 y', 'all']);
+    const all = within(range).getByRole('radio', { name: 'all' });
+    expect(all).toHaveAttribute('aria-checked', 'true');
+    expect(all).toHaveClass('text-text-bright', 'border-jade');
+    expect(all.className).not.toMatch(/text-jade/);
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     expect(lede).toHaveTextContent(
       /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
     );
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
       'href',
       'https://joy.id'
@@ -498,27 +580,33 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   });
 
   // PA-18 (UI review 2026-11-14): on a phone "30D 90D 1Y ALL" sat between the kind line and the
-  // description, about 250 px above the chart it controls. Below md the one range group stands in
-  // the chart's caption row, right over the picture, after the figure; from md it keeps its place
-  // at the end of the title row (R13), as the test above pins.
-  it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
+  // description, about 250 px above the chart it controls. Re-pinned on purpose (readability R7,
+  // lane p-assets; renamed, it was "puts the range buttons in the chart’s caption row below md, not
+  // in the title row"): the one range group heads the History section at every width, right over
+  // the sentence and the picture it redraws, after the hero's figures.
+  it('puts the range buttons in the History heading row at every width, not in the title row (PA-18, R7)', async () => {
+    for (const fromMd of [false, true]) {
+      stubViewportFromMd(fromMd);
+      await renderJoyid();
+      // re-pinned (lane c2-chain): the range is the library's radio group
+      const groups = screen.getAllByRole('radiogroup', { name: 'range' });
+      expect(groups).toHaveLength(1);
+      const [range] = groups;
+      expect(hero()).not.toContainElement(range);
+      const section = screen.getByRole('region', { name: 'History' });
+      const head = within(section).getByRole('heading', { name: 'History' }).parentElement!;
+      expect(head).toContainElement(range);
+      expect(follows(head, within(section).getByTestId('history-sentence'))).toBe(true);
+      expect(follows(screen.getByLabelText('Script figures'), section)).toBe(true);
+      cleanup();
+    }
     stubViewportFromMd(false);
     await renderJoyid();
-    const groups = within(hero()).getAllByRole('group', { name: 'Range' });
-    expect(groups).toHaveLength(1);
-    const [range] = groups;
-    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
-    expect(h1.parentElement!.parentElement!).not.toContainElement(range);
-    const history = within(hero()).getByTestId('script-history');
-    const caption = range.parentElement!;
-    expect(caption.nextElementSibling).toBe(history);
-    expect(caption).toHaveClass('flex', 'justify-end');
-    expect(caption.children).toHaveLength(1);
-    expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
+    const range = screen.getByRole('radiogroup', { name: 'range' });
     // still the page's range: it draws the picture again
-    fireEvent.click(within(range).getByRole('button', { name: '90D' }));
-    expect(within(range).getByRole('button', { name: '90D' })).toHaveAttribute(
-      'aria-pressed',
+    fireEvent.click(within(range).getByRole('radio', { name: '90 d' }));
+    expect(within(range).getByRole('radio', { name: '90 d' })).toHaveAttribute(
+      'aria-checked',
       'true'
     );
   });
@@ -538,21 +626,31 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
     const row = amount.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
-    expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.19% occupied$/);
+    expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.18% occupied$/);
+    // lane P2's third round (item 10): the companion line states the figure's counts, a statement
+    // in the reading ink
+    expect(row.lastElementChild).toHaveClass('text-body', 'text-text');
     expect(within(row.lastElementChild as HTMLElement).getByRole('link')).toHaveAttribute(
       'href',
       '#its-cells'
     );
   });
 
-  it('draws its capacity history right under the figure: ≥ 280 px, named inside, no History heading (R13, tier 1 always)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "draws its capacity
+  // history right under the figure: ≥ 280 px, named inside, no History heading (R13, tier 1
+  // always)"): the history stays in tier 1, after the hero's figures, in a History section of its
+  // own, 160 px under one sentence its points give.
+  it('draws its capacity history after the figures: 160 px under its sentence, named inside (R7, tier 1 always)', async () => {
     await renderJoyid();
-    expect(within(tier1()).queryByRole('heading', { name: 'History' })).toBeNull();
+    const section = screen.getByRole('region', { name: 'History' });
+    expect(tier1()).toContainElement(section);
     expect(tier1().querySelector('figcaption')).toBeNull();
-    const history = within(hero()).getByTestId('script-history');
-    expect(follows(hero().querySelector('[data-role="figure"]')!, history)).toBe(true);
+    const history = within(section).getByTestId('script-history');
+    expect(within(hero()).queryByTestId('script-history')).toBeNull();
+    expect(follows(screen.getByLabelText('Script figures'), history)).toBe(true);
+    expect(within(section).getByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
     const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
-    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    expect(Number(main.getAttribute('height'))).toBe(160);
     // Re-pinned with the plot-name fit: the fixed name of every CKB-held history plot.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
       'CKB held · occupied, free'
@@ -569,16 +667,21 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   });
 
   // Table-rows L1-3 ruling: no code track between the picture and its reading any more.
-  it('reads the last full day in one row under the picture, then the remaining figures in one quiet row (R13)', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "reads the last full day
+  // in one row under the picture, then the remaining figures in one quiet row (R13)"): the figures
+  // come first, then the history and its reading.
+  it('reads the figures in one quiet row after the hero, then the last full day in one row under the picture (R7)', async () => {
     await renderJoyid();
     expect(screen.queryByLabelText('Code track')).toBeNull();
     const reading = screen.getByTestId('script-history-reading');
     const metrics = screen.getByLabelText('Script figures');
-    expect(follows(hero(), reading)).toBe(true);
-    expect(follows(reading, metrics)).toBe(true);
+    expect(follows(hero(), metrics)).toBe(true);
+    expect(follows(metrics, reading)).toBe(true);
+    expect(follows(screen.getByTestId('script-history'), reading)).toBe(true);
     expect(reading).toHaveClass('text-small', 'border-t');
     expect(reading).toHaveTextContent('2026-10-29');
-    expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toContainEqual(['code', 'v5 held by multisig 0x6598…d696']);
     // The swatches keep the series colours; the values are ink (R11).
     for (const el of reading.querySelectorAll<HTMLElement>('[style]'))
       if (el.textContent!.trim()) expect(el.style.color).toBe('');
@@ -601,20 +704,43 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   it('reads the hovered day across the picture, and lets it go when the range changes', async () => {
     await renderJoyid();
     const reading = screen.getByTestId('script-history-reading');
-    expect(reading).toHaveTextContent('2026-10-29 · last full day');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)[0]).toEqual(['day', '2026-10-29 · last full day']);
+    // re-pinned (readability R7): the history and its range are the History section's
+    const section = screen.getByRole('region', { name: 'History' });
     const [main] = [
-      ...within(hero()).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
+      ...within(section).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
     ];
     fireEvent.keyDown(main, { key: 'ArrowLeft' });
     expect(reading).not.toHaveTextContent('last full day');
     expect(reading).not.toHaveTextContent('2026-10-29');
-    fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
+    fireEvent.click(within(section).getByRole('radio', { name: '90 d' }));
     // The picture and its reading are drawn again for the new range.
     await waitFor(() =>
-      expect(screen.getByTestId('script-history-reading')).toHaveTextContent(
-        '2026-10-29 · last full day'
-      )
+      expect(factsOf(screen.getByTestId('script-history-reading'))[0]).toEqual([
+        'day',
+        '2026-10-29 · last full day',
+      ])
     );
+  });
+
+  // Lane c2-chain, written before the range became the library's RangeSelect: what the range does,
+  // whatever draws it — the page opens on every day, and a span asks the API for its days.
+  it('opens on every day and asks the API for the chosen span’s days', async () => {
+    await renderJoyid();
+    expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', undefined);
+    for (const [span, key] of [
+      [/^90 ?d$/i, '90d'],
+      [/^30 ?d$/i, '30d'],
+    ] as const) {
+      const days = getCapacityRangeParams(key);
+      expect(days).toBeDefined();
+      // re-pinned (readability R7): the range is the History section's
+      fireEvent.click(within(screen.getByRole('region', { name: 'History' })).getByText(span));
+      await waitFor(() =>
+        expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', days)
+      );
+    }
   });
 
   it('moves the summary sentence, the chart notes and the peak to tier 2 (C2)', async () => {
@@ -639,7 +765,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
       /^Whoever can spend the code cell can put new code in it; every JoyID cell runs the new code from the next block\.$/
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(timeline.lastElementChild).toBe(caption);
     expect(tier1()).not.toHaveTextContent('point at their code through one code cell');
     expect(tier2()).toHaveTextContent(
@@ -711,9 +838,20 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
     const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
     expect(accents.map((el) => el.textContent)).toEqual(['live · current']);
+    // re-pinned on purpose (lane c2-chain): the cells' pager is the library's, whose way to go is
+    // celadon on every page (the controls board; ui-color-guidelines' pager row), a control's
+    // part and not coloured text; it was a boxed button in the reading ink
+    const pager = screen.getByRole('navigation', { name: 'cells' });
+    expect(within(pager).getByRole('button', { name: 'next →' })).toHaveClass('text-jade');
+    // re-pinned on purpose (lane p-assets): a way onward is the link owner's onward look, celadon
+    // by the link rule (components/ui/link.tsx) as the pager's way to go is, not coloured text: the
+    // newest cells' "all N cells ↓" to its cells list (it was a raw anchor in the reading ink)
+    const onward = linkLookClass('onward')!;
     const coloured = [...tier1().querySelectorAll('[class]')].filter(
       (el) =>
         !el.matches('[data-row-tag="accent"]') &&
+        !pager.contains(el) &&
+        !(el.matches('a') && el.classList.contains(onward)) &&
         el
           .getAttribute('class')!
           .split(/\s+/)
@@ -794,5 +932,40 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     await waitFor(() => expect(cell).toHaveTextContent('96,760 B · first deployed into multisig'));
     expect(cell.lastElementChild!.textContent).toMatch(/^0x[0-9a-f]{64}$/);
     expect(first.querySelectorAll('td')[3]).toHaveTextContent('consumed by v2');
+  });
+});
+
+// Lane P2's fifth round (item 3): a day of the script's history states the whole its cells hold
+// (`capacity`) from this plan on; a day from an API older than this page sends none and is
+// refused by name (it read `undefined` as the held CKB, "expected a non-negative decimal integer").
+describe('the JoyID page on an API older than this page', () => {
+  beforeEach(() => {
+    stubLayoutWidths({ chart: 900, list: 1248 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    const chart = structuredClone(fixture.chart);
+    for (const point of chart.data) delete (point.values as Record<string, string>).capacity;
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('refuses a history day without its capacity by name', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(
+      <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+        <ScriptDetailPage name="JoyID" />
+      </ErrorBoundary>
+    );
+    expect(
+      await screen.findByText(/: the API sends no capacity: it is older than this page$/)
+    ).toBeInTheDocument();
+    log.mockRestore();
   });
 });

@@ -28,12 +28,13 @@ export const SCRIPT_ACTIVITY_FAMILIES: ReadonlyArray<readonly [string, ClassFilt
   ['utxoswap-proxy-lock', 'protocol'],
 ];
 
+/** The link's words; its arrow is the onward look's (components/ui/link.tsx), never typed here. */
 const LABEL: Record<ClassFilter, string> = {
-  dao: 'Activity: Nervos DAO →',
-  object: 'Activity: Objects →',
-  token: 'Activity: Tokens →',
-  identity: 'Activity: Identities →',
-  protocol: 'Protocol activity →',
+  dao: 'Activity: Nervos DAO',
+  object: 'Activity: Objects',
+  token: 'Activity: Tokens',
+  identity: 'Activity: Identities',
+  protocol: 'Protocol activity',
 };
 
 export interface ScriptActivityLink {

@@ -1,14 +1,16 @@
 'use client';
+import { sentField } from '@/lib/api-fields';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
-import { DetailSection } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { DetailFacts, DetailSection, type DetailFact } from '@/components/ui/detail-layout';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
@@ -18,11 +20,134 @@ import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { widestTokenAmount } from '@/components/asset/asset-feed';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT_DIGITS, shortChars } from '@/lib/list-bounds';
+import { PartReadBoundary } from '@/components/read-failure';
+import { RangeSelect, type RangeOption } from '@/components/ui/range-select';
+
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+
 const DAY = 86400000;
+/** The spans of the history, in the one spelling of a span (the controls board): key and words. */
+const HISTORY_RANGES: readonly RangeOption<'1W' | '1M' | '1Y' | 'All'>[] = [
+  { key: '1W', label: '1 w' },
+  { key: '1M', label: '1 m' },
+  { key: '1Y', label: '1 y' },
+  { key: 'All', label: 'all' },
+];
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
-/** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
-export const HISTORY_PLOT_HEIGHT = 280;
+/**
+ * The main history plot's height. Readability R7: 160 px, after the page's facts and its first
+ * list and under one sentence that says what the series did (it was 280, the hero's picture of
+ * R13, the largest and brightest thing of a first screen that never said its conclusion).
+ */
+export const HISTORY_PLOT_HEIGHT = 160;
+
+/** A day of a CKB-held series: its date and what its cells held, exact (shannons). */
+export interface HeldDay {
+  date: string;
+  held: bigint;
+}
+
+/**
+ * What a CKB-held series did (readability R7), read from its own exact points, never from a cut
+ * figure: one day; the same value every day (`flat`, since its first day); or where it started and
+ * ended, its greatest value where that is above both ends (`peak`, its first day), and the day its
+ * last value began when it has held it more than one day (`since`).
+ */
+export type HeldStory =
+  | { kind: 'one'; day: HeldDay }
+  | { kind: 'flat'; held: bigint; since: string }
+  | {
+      kind: 'moved';
+      first: HeldDay;
+      last: HeldDay;
+      peak: HeldDay | null;
+      since: string | null;
+    };
+
+export function heldStory(days: readonly HeldDay[]): HeldStory {
+  if (days.length === 0) throw new Error('a CKB-held history of no days');
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (days.length === 1) return { kind: 'one', day: first };
+  // the first day of the last run of one value
+  let start = days.length - 1;
+  while (start > 0 && days[start - 1].held === last.held) start--;
+  if (start === 0) return { kind: 'flat', held: last.held, since: first.date };
+  let peak = first;
+  for (const d of days) if (d.held > peak.held) peak = d;
+  const ends = first.held > last.held ? first.held : last.held;
+  return {
+    kind: 'moved',
+    first,
+    last,
+    peak: peak.held > ends ? peak : null,
+    since: start < days.length - 1 ? days[start].date : null,
+  };
+}
+
+/**
+ * The one sentence over a CKB-held history (R7): what its series did, in the summary form (cut,
+ * each figure's exact value in its title), its dates whole. The reading ink on the prose measure.
+ */
+export function HeldSentence({ days }: { days: readonly HeldDay[] }) {
+  const story = heldStory(days);
+  const ckb = (v: bigint) => <CkbAmount form="summary" shannons={v} signed={false} tone="plain" />;
+  const on = (date: string) => <> on {unitNode(date)}</>;
+  let said: ReactNode;
+  if (story.kind === 'one')
+    said = (
+      <>
+        {ckb(story.day.held)}
+        {on(story.day.date)}, the one complete day so far
+      </>
+    );
+  else if (story.kind === 'flat')
+    said = (
+      <>
+        unchanged at {ckb(story.held)} since {unitNode(story.since)}
+      </>
+    );
+  else {
+    const { first, last, peak, since } = story;
+    said = (
+      <>
+        {last.held > first.held ? (
+          <>
+            rose from {ckb(first.held)}
+            {on(first.date)} to {ckb(last.held)}
+          </>
+        ) : last.held < first.held ? (
+          <>
+            fell from {ckb(first.held)}
+            {on(first.date)} to {ckb(last.held)}
+          </>
+        ) : (
+          <>
+            back at {ckb(last.held)}, as{on(first.date)}
+          </>
+        )}
+        {peak && (
+          <>
+            , peaking at {ckb(peak.held)}
+            {on(peak.date)}
+          </>
+        )}
+        {since && <>; unchanged since {unitNode(since)}</>}
+      </>
+    );
+  }
+  return (
+    <p data-testid="history-sentence" className="text-text text-body max-w-measure">
+      CKB held: {said}.
+    </p>
+  );
+}
 /**
  * The name of every CKB-held history plot — a token's, a collection's, a script's — and its unit,
  * said once (the ticks are bare). A fixed form: SVG text does not wrap, so a name carries no free
@@ -30,7 +155,17 @@ export const HISTORY_PLOT_HEIGHT = 280;
  */
 export const HELD_PLOT_NAME = 'CKB held · occupied, free';
 export interface AssetHistoryProps {
-  daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
+  /**
+   * Each day's held capacity and its two parts, occupied and free, all three as the route states
+   * them (lane P2's third round, item 13: the page subtracts nothing; it derived free here).
+   */
+  daily: readonly {
+    date: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+    supply?: string;
+  }[];
   /** Completed weekly totals, or why this page has none to draw. */
   weekly: readonly { weekStart: string; count: number }[] | { unavailable: string };
   /** What the weekly totals count. */
@@ -70,6 +205,14 @@ function time(date: string) {
 function ckbDecimal(value: string) {
   return formatTokenBalance(value, 8).replace(/,/g, '');
 }
+/** The page of supply events a table draws, by its first and last event. */
+function eventsWhere(rows: readonly { txHash: string; transferSequence: number }[]): string {
+  if (rows.length === 0) return 'no events';
+  const at = (e: { txHash: string; transferSequence: number }) =>
+    `${e.txHash}:${e.transferSequence}`;
+  return `events ${at(rows[0])} to ${at(rows[rows.length - 1])}`;
+}
+
 export function AssetHistory({
   daily,
   weekly: weeklySource,
@@ -94,11 +237,19 @@ export function AssetHistory({
     const t = time(p.date);
     if (t <= previous || t > end) throw new Error(`History ${p.date}: unordered or incomplete day`);
     previous = t;
-    if (
-      exactUnsignedInteger(p.occupiedCapacity, `${p.date} occupied`) >
-      exactUnsignedInteger(p.capacity, `${p.date} capacity`)
-    )
-      throw new Error(`${p.date}: occupied exceeds held capacity`);
+    const capacity = exactUnsignedInteger(p.capacity, `${p.date} capacity`),
+      occupied = exactUnsignedInteger(p.occupiedCapacity, `${p.date} occupied`),
+      // a day from an API older than this page sends no free part: refused by name (item 3)
+      free = exactUnsignedInteger(
+        sentField(p.freeCapacity, p.date, 'freeCapacity'),
+        `${p.date} free`
+      );
+    if (occupied > capacity) throw new Error(`${p.date}: occupied exceeds held capacity`);
+    // the route's parts make its whole, or the day is refused (never repaired here)
+    if (occupied + free !== capacity)
+      throw new Error(
+        `${p.date}: occupied ${occupied} and free ${free} do not make the capacity ${capacity}`
+      );
     if (token && p.supply === undefined) throw new Error(`${p.date}: token supply history missing`);
   }
   const weeklyUnavailable = 'unavailable' in weeklySource ? weeklySource.unavailable : null;
@@ -141,7 +292,7 @@ export function AssetHistory({
     x: time(p.date),
     values: {
       occupied: ckbDecimal(p.occupiedCapacity),
-      free: ckbDecimal((BigInt(p.capacity) - BigInt(p.occupiedCapacity)).toString()),
+      free: ckbDecimal(p.freeCapacity),
     },
   }));
   // The three plots share one time axis, so one gutter: the one their longest tick needs.
@@ -171,8 +322,11 @@ export function AssetHistory({
         bareTicks: true,
       }
     : null;
+  // Lane P2's third round (item 7): a series of one complete week (or none) in the range is said
+  // in words, the readout's week line, and no chart is drawn of one bar: one mark says nothing a
+  // figure does not, and its axis invites a wrong reading
   const weeklyAxis: ChartValueAxisInput | null =
-    weeklyUnavailable === null
+    weeklyUnavailable === null && weeks.length > 1
       ? {
           title: `${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`,
           data: weeks.map((w) => ({
@@ -200,17 +354,26 @@ export function AssetHistory({
   const plotLeft = alignedPlotLeft(
     [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
   );
+  // Readability F3-e: every column budgeted from what it holds, the 13 px cells and 12 px notes at
+  // 0.6 em a glyph and the 16 px gap after every column but the last. The amounts hold one line
+  // under a billion whole units at the token's own decimals; a larger one breaks after a thousands
+  // separator (TokenAmount).
+  const eventAmount = token ? widestTokenAmount(token.decimals) : '';
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
       label: 'Date · UTC+8',
-      minWidth: 110,
+      // a date, "2024-01-02" (78 at 13 px), wider than the head's words, and the gap; it was 110
+      minWidth: columnPx(cell('2024-01-02'.length) + CELL_GAP_PX),
       render: (e) => formatUtc8Date(e.timestamp),
     },
     {
       key: 'kind',
       label: 'Change',
-      minWidth: 65,
+      // the head, "Change" (43.2 at 12 px), wider than "Mint" or "Burn", and the gap; it was 65
+      minWidth: columnPx(
+        Math.max(textPx('Change'.length, fontPx('meta')), cell('Burn'.length)) + CELL_GAP_PX
+      ),
       render: (e) => (
         <span className={e.kind === 'mint' ? 'text-positive' : 'text-negative'}>
           {e.kind === 'mint' ? 'Mint' : 'Burn'}
@@ -220,11 +383,24 @@ export function AssetHistory({
     {
       key: 'block',
       label: 'Block / transaction',
-      minWidth: 160,
+      // "#99,999,999" over "tx 9999 · sequence 9999", a link, at the cell's 13 px (a block's
+      // transactions and a transaction's transfers under 10,000; 23 glyphs × 7.8 = 179.4, the
+      // wider), and the gap (ink and size roles: the link stood at 12 px, 165.6)
+      minWidth: columnPx(
+        Math.max(
+          cell(WIDEST_BLOCK_NUMBER.length),
+          textPx(
+            `tx ${WIDEST_COUNT_DIGITS} · sequence ${WIDEST_COUNT_DIGITS}`.length,
+            fontPx('small')
+          )
+        ) + CELL_GAP_PX
+      ),
       render: (e) => (
         <>
-          <AppLink href={`/blocks/${e.blockNumber}`}>{formatBlockNumber(e.blockNumber)}</AppLink>
-          <AppLink className="text-text-dim text-meta block" href={`/tx/${e.txHash}`}>
+          <AppLink look="inline" href={`/blocks/${e.blockNumber}`}>
+            {formatBlockNumber(e.blockNumber)}
+          </AppLink>
+          <AppLink look="inline" className="text-small block" href={`/tx/${e.txHash}`}>
             tx {e.txIndex} · sequence {e.transferSequence}
           </AppLink>
         </>
@@ -233,7 +409,8 @@ export function AssetHistory({
     {
       key: 'amount',
       label: 'Amount',
-      minWidth: 160,
+      // its sign and the widest amount on one line, and the gap; it was 160
+      minWidth: columnPx(cell(`+${eventAmount}`.length) + CELL_GAP_PX),
       numeric: true,
       className: '!whitespace-normal',
       render: (e) => (
@@ -246,7 +423,8 @@ export function AssetHistory({
     {
       key: 'after',
       label: 'Supply after',
-      minWidth: 160,
+      // the widest amount on one line and the gap; it was 160
+      minWidth: columnPx(cell(eventAmount.length) + CELL_GAP_PX),
       numeric: true,
       className: '!whitespace-normal',
       render: (e) => (
@@ -256,15 +434,23 @@ export function AssetHistory({
     {
       key: 'party',
       label: 'To / from',
-      minWidth: 160,
+      // the party's lock hash at the row size (17 characters at 13 px; an address is 13) over its
+      // lock, "lock 0x43434343…434343": the word at 12 px and the code hash, an id, at 13 px (lane
+      // cd-fixes-controls, the ink and size round: the lock words' code hash reads at 13 px), 36 +
+      // 132.6 = 168.6, the wider; the last column, no gap after it. It was 158.4 at 12 px, and 160.
+      minWidth: columnPx(
+        Math.max(
+          cell(shortChars(SHORT_FORMS.row.hash)),
+          textPx('lock '.length, fontPx('meta')) + cell(shortChars(SHORT_FORMS.row.hash))
+        )
+      ),
       render: (e) => (
         <>
-          <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+          <AppLink look="inline" href={`/address/${e.address ?? e.lockHash}`}>
             <Hash
               hash={e.address ?? e.lockHash}
               kind={e.address ? 'address' : 'hash'}
               size="row"
-              copyable={false}
               className="text-small"
             />
           </AppLink>
@@ -272,6 +458,7 @@ export function AssetHistory({
           <LockKind
             lockKind={e.lockKind}
             lockCodeHash={e.lockCodeHash}
+            address={e.address}
             size="row"
             className="text-text-dim text-meta block"
           />
@@ -282,7 +469,7 @@ export function AssetHistory({
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
       peak{' '}
-      <CkbAmount form="column" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
+      <CkbAmount form="summary" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
       on {unitNode(peak.date)}
     </span>
   );
@@ -295,95 +482,136 @@ export function AssetHistory({
         selectedDate === null && weekly.length > 0
         ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${formatCount(weekly[weekly.length - 1].count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
         : 'No completed weekly total for this day');
-  const readoutItems: ReactNode[] = point
+  // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): up to seven
+  // facts joined by "·" ran 1,180 px on a collection's page. A series' swatch leads its value.
+  const readoutFacts: DetailFact[] = point
     ? [
-        // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
-        <span
-          key="date"
-          className="text-text-bright"
-          title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
-        >
-          {unitNode(point.date)}
-        </span>,
-        <>
-          held{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.capacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-        </>,
-        <>
-          <Swatch color={DATA_COLOR} />
-          <span title="Occupied pays for the state kept on CKB.">occupied</span>{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.occupiedCapacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-          {BigInt(point.capacity) > BigInt(0) && (
-            <span className="text-text-dim">
-              {' '}
-              {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
+        {
+          label: 'day',
+          // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
+          value: (
+            <span
+              className="text-text-bright"
+              title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+            >
+              {unitNode(point.date)}
             </span>
-          )}
-        </>,
-        <>
-          <Swatch color={CLASS_COLORS.ckb} />
-          <span title="Free is CKB held in the same cells beyond that byte cost.">free</span>{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-        </>,
+          ),
+        },
+        {
+          label: 'held',
+          value: (
+            <CkbAmount form="exact" shannons={BigInt(point.capacity)} signed={false} tone="plain" />
+          ),
+        },
+        {
+          label: 'occupied',
+          title: 'Occupied pays for the state kept on CKB.',
+          value: (
+            <>
+              <Swatch color={DATA_COLOR} />
+              <CkbAmount
+                form="exact"
+                shannons={BigInt(point.occupiedCapacity)}
+                signed={false}
+                tone="plain"
+              />
+              {BigInt(point.capacity) > BigInt(0) && (
+                <span className="text-text-dim">
+                  {' '}
+                  {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
+                </span>
+              )}
+            </>
+          ),
+        },
+        {
+          label: 'free',
+          title: 'Free is CKB held in the same cells beyond that byte cost.',
+          value: (
+            <>
+              <Swatch color={CLASS_COLORS.ckb} />
+              <CkbAmount
+                form="exact"
+                shannons={BigInt(point.freeCapacity)}
+                signed={false}
+                tone="plain"
+              />
+            </>
+          ),
+        },
         ...(token
           ? [
-              <>
-                <Swatch color={CLASS_COLORS.tokens} />
-                Supply{' '}
-                <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />{' '}
-                {token.symbol}
-              </>,
+              {
+                label: 'supply',
+                value: (
+                  <>
+                    <Swatch color={CLASS_COLORS.tokens} />
+                    <span className="text-text">
+                      <TokenAmount form="exact" amount={point.supply!} decimals={token.decimals} />
+                    </span>{' '}
+                    <span className="text-text-dim">{token.symbol}</span>
+                  </>
+                ),
+              },
             ]
           : []),
-        weekText,
-        ...(peakItem ? [peakItem] : []),
+        { label: 'week', value: <span className="text-text">{unitNode(weekText)}</span> },
+        ...(peak
+          ? [
+              {
+                label: 'peak',
+                value: (
+                  <span title="the most CKB its cells held on any complete day">
+                    <CkbAmount
+                      form="exact"
+                      shannons={BigInt(peak.capacity)}
+                      signed={false}
+                      tone="plain"
+                    />{' '}
+                    <span className="text-text-dim">on</span>{' '}
+                    <span className="text-text">{unitNode(peak.date)}</span>
+                  </span>
+                ),
+              },
+            ]
+          : []),
       ]
     : [];
   return (
     <DetailSection
       title="History"
       actions={
-        <div role="group" aria-label="History time range" className="flex gap-1">
-          {(['1W', '1M', '1Y', 'All'] as const).map((r) => (
-            <button
-              key={r}
-              aria-pressed={range === r}
-              className={`border-base-border text-small border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
-              onClick={() => {
-                setRange(r);
-                setSelectedDate(null);
-              }}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        // the controls board's range (gate D0′): the chips joined, one spelling of a span; another
+        // span drops the day the reader chose
+        <RangeSelect
+          label="History time range"
+          options={HISTORY_RANGES}
+          value={range}
+          onChange={(r) => {
+            setRange(r);
+            setSelectedDate(null);
+          }}
+        />
       }
     >
+      {/* R7: what the whole series did, in one sentence over its plots, from its own points */}
+      {daily.length > 0 && (
+        <div className="mb-3">
+          <HeldSentence
+            days={daily.map((p) => ({
+              date: p.date,
+              held: exactUnsignedInteger(p.capacity, `${p.date} capacity`),
+            }))}
+          />
+        </div>
+      )}
       {point ? (
         <>
           <Chart
             {...capacityAxis}
             subtitle="Occupied and free"
-            // The page's picture (R13): at least 280 px, its name inside it.
+            // R7: 160 px under its sentence, its name inside it
             height={HISTORY_PLOT_HEIGHT}
             // SVG text cannot wrap: the name fits beside the gutter on a 360 px phone (U-19).
             plotName={HELD_PLOT_NAME}
@@ -430,117 +658,142 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
-          {/* Lane P (Main.dc.html): the reading is one row under the plots — the day, held,
-              occupied with its share, free, the week, then the peak among complete days. */}
+          {/* Lane P (Main.dc.html): the reading under the plots — the day, held, occupied with
+              its share, free, the week, then the peak among complete days — as labelled facts. */}
           <div
             aria-live="polite"
             aria-label="History readout"
             className="border-row-rule text-small mt-2 border-t pt-2"
           >
-            {/* PB-23: one separated list, so a wrapped item never opens its line with a "·" */}
-            <Dotted className="gap-y-1" parts={readoutItems} />
+            <DetailFacts facts={readoutFacts} />
           </div>
         </>
       ) : (
         <>
           <p
-            className="text-text-dim text-small py-6"
+            className="text-text text-small py-6"
             title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
           >
             No complete daily history in this range.
           </p>
-          {peakItem && <p className="text-text-dim text-small">{peakItem}</p>}
+          {peakItem && <p className="text-text text-small max-w-measure">{peakItem}</p>}
         </>
       )}
-      {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
+      {/* the footnote's counts are figures: the reading ink (ink roles; it stood quiet) */}
+      {footnote && <div className="text-text text-small mt-3">{footnote}</div>}
       {supplyEvents && token && (
-        <details className="border-base-border mt-4 border-t pt-3">
-          <summary className="text-small cursor-pointer">
-            Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
-          </summary>
-          {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-            <p className="text-text-dim text-meta mt-2">
-              The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
+        // the library's section disclosure (lane cd-fixes-controls, the disclosure sweep): its words
+        // in tier 1's reading ink at 13 px, under the tier's rule
+        <SectionDisclosure
+          summary={<>Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})</>}
+          className="mt-4"
+        >
+          <div className="space-y-3">
+            {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
+              <p className="text-text text-small max-w-measure">
+                The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
+              </p>
+            )}
+            <p className="text-text text-small max-w-measure">
+              Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
+              which preserves time through backward block timestamps.
             </p>
-          )}
-          <p className="text-text-dim text-meta my-3">
-            Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
-            which preserves time through backward block timestamps.
-          </p>
-          <ListTable
-            label="Mints and burns"
-            columns={eventColumns}
-            rows={supplyEvents.rows}
-            rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
-            empty="No supply changes."
-            mobileRow={(e, wide) => {
-              const change = (
-                <span className="whitespace-nowrap">
-                  {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
-                  <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
-                </span>
-              );
-              const after = (
-                <span>
-                  supply after{' '}
-                  <TokenAmount form="summary" amount={e.supplyAfter} decimals={token.decimals} />
-                </span>
-              );
-              const where = [
-                <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
-                  {formatBlockNumber(e.blockNumber)}
-                </AppLink>,
-                <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
-                  tx {e.txIndex} · sequence {e.transferSequence}
-                </AppLink>,
-              ];
-              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
-              // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
-              // below sm (R9).
-              const party = (
-                <span>
-                  {e.kind === 'mint' ? 'to ' : 'from '}
-                  <AppLink href={`/address/${e.address ?? e.lockHash}`}>
-                    <Hash
-                      hash={e.address ?? e.lockHash}
-                      kind={e.address ? 'address' : 'hash'}
-                      size={phoneSize}
-                      copyable={false}
-                      className="text-meta"
-                    />
-                  </AppLink>{' '}
-                  <LockKind
-                    lockKind={e.lockKind}
-                    lockCodeHash={e.lockCodeHash}
-                    size={phoneSize}
-                    className="text-text-dim text-meta"
-                  />
-                </span>
-              );
-              return (
-                <PhoneRow
-                  testId="supply-event-row-mobile"
-                  lines={[
-                    {
-                      key: 'change',
-                      tone: 'head',
-                      left: change,
-                      right: formatUtc8Date(e.timestamp),
-                    },
-                    !wide && { key: 'after', tone: 'body', left: after },
-                    {
-                      key: 'evidence',
-                      tone: 'quiet',
-                      left: <Dotted parts={wide ? [after, ...where] : where} />,
-                      right: party,
-                    },
-                  ]}
+            {/* a refusal while the events are drawn fails this table in its place (D7); it starts
+              again on another page of events */}
+            <PartReadBoundary
+              what="the changes to the supply"
+              where={eventsWhere(supplyEvents.rows)}
+              render={() => (
+                <ListTable
+                  label="Mints and burns"
+                  columns={eventColumns}
+                  rows={supplyEvents.rows}
+                  rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
+                  empty="No supply changes."
+                  mobileRow={(e, wide) => {
+                    const change = (
+                      <span className="whitespace-nowrap">
+                        {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
+                        <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
+                      </span>
+                    );
+                    const after = (
+                      <span>
+                        supply after{' '}
+                        <TokenAmount
+                          form="summary"
+                          amount={e.supplyAfter}
+                          decimals={token.decimals}
+                        />
+                      </span>
+                    );
+                    const where = [
+                      <AppLink look="inline" key="b" href={`/blocks/${e.blockNumber}`}>
+                        {formatBlockNumber(e.blockNumber)}
+                      </AppLink>,
+                      <AppLink
+                        look="inline"
+                        key="t"
+                        href={`/tx/${e.txHash}`}
+                        className="whitespace-nowrap"
+                      >
+                        tx {e.txIndex} · sequence {e.transferSequence}
+                      </AppLink>,
+                    ];
+                    // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
+                    // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
+                    // below sm (R9).
+                    const party = (
+                      <span>
+                        {e.kind === 'mint' ? 'to ' : 'from '}
+                        <AppLink look="inline" href={`/address/${e.address ?? e.lockHash}`}>
+                          <Hash
+                            hash={e.address ?? e.lockHash}
+                            kind={e.address ? 'address' : 'hash'}
+                            size={phoneSize}
+                            className="text-small"
+                          />
+                        </AppLink>
+                        {/* no space and no part where the row names no lock (B4) */}
+                        {rowLock(e, 'inline') && (
+                          <>
+                            {' '}
+                            <LockWordsView
+                              words={rowLock(e, 'inline')!}
+                              size={phoneSize}
+                              className="text-text-dim text-meta"
+                            />
+                          </>
+                        )}
+                      </span>
+                    );
+                    return (
+                      <PhoneRow
+                        testId="supply-event-row-mobile"
+                        lines={[
+                          {
+                            key: 'change',
+                            tone: 'head',
+                            left: change,
+                            right: formatUtc8Date(e.timestamp),
+                          },
+                          !wide && { key: 'after', tone: 'body', left: after },
+                          {
+                            key: 'evidence',
+                            tone: 'quiet',
+                            left: <Dotted parts={wide ? [after, ...where] : where} />,
+                            right: party,
+                          },
+                        ]}
+                      />
+                    );
+                  }}
                 />
-              );
-            }}
-          />
+              )}
+            />
+          </div>
           {supplyPager}
-        </details>
+        </SectionDisclosure>
       )}
     </DetailSection>
   );

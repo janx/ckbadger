@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { BlockPosition } from '@/components/blocks/block-position';
+import { BLOCK_TILE_HEIGHT, BlockPosition } from '@/components/blocks/block-position';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { fullText } from '@/__tests__/utils/full-text';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 const parent = `0x${'a'.repeat(64)}`;
 const uncle = `0x${'b'.repeat(64)}`;
@@ -86,6 +94,23 @@ describe('BlockPosition', () => {
       screen.getByText(/Incoming relationships cover transaction page 2 only/)
     ).toBeInTheDocument();
   });
+  // lane P1, the ink and size roles: the line saying the origins are being read is a sentence,
+  // the reading ink (it was quiet); an uncle row's "Uncle parent → included uncle" names the two
+  // links under it, a label, quiet
+  it('says the proposal origins being read in the reading ink, the uncle row’s label quiet', () => {
+    render(
+      <BlockPosition
+        block={block}
+        transactions={undefined}
+        proposals={[outgoing]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    expect(inkOf(screen.getByText('Reading transaction proposal origins…'))).toBe(READING);
+    for (const label of screen.getAllByText('Uncle parent → included uncle'))
+      expect(inkOf(label)).toBe(QUIET);
+  });
   it('does not fabricate a next canonical block at the tip or an origin for cellbase', () => {
     render(
       <BlockPosition
@@ -128,11 +153,45 @@ describe('BlockPosition', () => {
       // U-16 (re-pinned): the uncle line is one separated list, its dot hidden from the name
       mobile.getByRole('link', { name: `Uncle #931 ${uncle}` })
     ).toHaveAttribute('href', '/mainnet/blocks/932/uncles/0');
+    // Lane P1 follow-up (item 4; principle 4 of docs/RESPONSIVE_LAYOUT.md): a full hash in tier 2
+    // is set as the head's id is (HeadId: one line where its measured line holds it, else two
+    // halves), never a box that scrolls sideways (it was HexCode's own-box scroller)
+    for (const name of [`Parent ${parent}`, `Uncle #931 ${uncle}`]) {
+      const link = mobile.getByRole('link', { name });
+      expect(link.querySelector('[data-head-id]')).not.toBeNull();
+      expect(link.querySelector('.overflow-x-auto')).toBeNull();
+    }
     expect(screen.getByRole('region', { name: 'Chain position diagram' })).toHaveClass(
       'hidden',
       'md:block'
     );
   });
+  // Lane P1 (the plan: "Position in the chain" gets the legend it lacks; review chain-a block-busy:
+  // the diagram's ◆ ▪ ● and its gold arcs have no key): one key line of the marks the diagram
+  // draws, each a swatch of the same mark beside its words, in the order a tile reads.
+  it('keys the marks the diagram draws in one legend (P1)', () => {
+    render(
+      <BlockPosition
+        block={block}
+        transactions={[incoming]}
+        proposals={[outgoing]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    const legend = screen.getByRole('list', { name: 'Chain position legend' });
+    const items = within(legend).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'the cellbase',
+      'a transaction, by its size',
+      'a proposal',
+      'proposed, then committed',
+      'an included uncle',
+    ]);
+    // each item leads with its mark, drawn, not typed
+    for (const item of items) expect(item.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  });
+
   it('rejects contradictory proposal distance rather than drawing a repaired relationship', () => {
     expect(() =>
       render(
@@ -193,5 +252,121 @@ describe('BlockPosition', () => {
         />
       )
     ).toThrow('Block 932: missing proposal origin for 0xmissing');
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): every word of the position
+// diagram stands whole inside its tile or box and clear of every other word, measured by the type
+// modules (0.6 em a glyph; a tight line over its baseline, its descent under it) at the 12 px
+// floor. The diagram is drawn at its own width from md up (below md the list above it reads the
+// same evidence), so one width is every width it is drawn at. The real case: an 8-digit height,
+// two uncles (one forked from the tile beside it, one whose parent is off the strip), proposals
+// from 2 and from 10 blocks back, one committed 2 blocks on, and 1,500 transactions in one arc.
+describe('BlockPosition: every word inside its tile (readability F3)', () => {
+  const at = 21_016_902;
+  const hex = (n: number) => `0x${n.toString(16).padStart(64, 'e')}`;
+  const neighbour = (number: number) => ({
+    number,
+    hash: hex(number),
+    timestamp: '2026-11-18T08:55:37Z',
+    transactionSizes: [635, 226, 1_200, 400],
+    proposalsCount: 3,
+    unclesCount: 0,
+  });
+  const many = Array.from({ length: 1_500 }, (_, i) => ({
+    hash: `0x${i.toString(16).padStart(64, '0')}`,
+    isCellbase: false,
+    proposalOrigin: { blockNumber: at - 2, distance: 2 },
+  }));
+  const real = {
+    ...blockEvidence,
+    number: at,
+    hash: hex(at),
+    parentHash: hex(at - 1),
+    timestamp: '2026-11-18T08:55:37Z',
+    parentTimestamp: '2026-11-18T08:55:26Z',
+    confirmations: 30,
+    proposalsCount: 1,
+    unclesCount: 2,
+    uncles: [
+      {
+        number: at - 1,
+        hash: `0x${'b'.repeat(64)}`,
+        parentHash: hex(at - 2),
+        timestamp: '2026-11-18T08:55:30Z',
+        proposalIds: [],
+      },
+      {
+        number: at - 1,
+        hash: `0x${'f'.repeat(64)}`,
+        parentHash: `0x${'1'.repeat(64)}`,
+        timestamp: '2026-11-18T08:55:31Z',
+        proposalIds: [],
+      },
+    ],
+  };
+  const svgOf = () => {
+    const { container } = render(
+      <BlockPosition
+        block={real}
+        transactions={[
+          ...many,
+          {
+            hash: '0xfar',
+            isCellbase: false,
+            proposalOrigin: { blockNumber: at - 10, distance: 10 },
+          },
+        ]}
+        proposals={[{ ...outgoing, committedBlockNumber: at + 2 }]}
+        neighbours={[at - 2, at - 1, at, at + 1, at + 2].map(neighbour)}
+        page={1}
+        hasMore={false}
+      />
+    );
+    return container.querySelector('[aria-label="Chain position diagram"] svg')!;
+  };
+
+  it('writes a block tile’s number, time and contents inside the tile, apart', () => {
+    const svg = svgOf();
+    const tiles = [...svg.querySelectorAll('g[transform]')];
+    expect(tiles.length).toBeGreaterThanOrEqual(6);
+    for (const tile of tiles) {
+      const box = rectBox(tile.querySelector('rect')!);
+      // a height no list row reached (a proposal 10 blocks back) has its number only
+      const lines = allTextLines(tile);
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const contents = tile.querySelector('foreignObject');
+      const glyph = contents && { ...rectBox(contents), text: 'the contents glyph', size: 0 };
+      const all = glyph ? [...lines, glyph] : lines;
+      for (const line of all) expectInside(line, box, `tile ${tile.getAttribute('transform')}`);
+      expectApart(all, `tile ${tile.getAttribute('transform')}`);
+    }
+    // the 8-digit height at the head size: "#21,016,902" is 11 × 7.8 = 85.8 px
+    expect(allTextLines(svg).some((l) => l.text === '#21,016,902')).toBe(true);
+    // re-pinned on purpose (F3): the tile is the sum of its bands, 10 + 16 (the number) + 4 + 15
+    // (the time) + 4 + 18 (the contents glyph) + 10 = 77 px; it was 88, a 40 px box for the glyph
+    expect(BLOCK_TILE_HEIGHT).toBe(77);
+  });
+
+  it('writes an uncle’s and its parent’s words inside their boxes', () => {
+    const svg = svgOf();
+    const uncles = [...svg.querySelectorAll('[data-uncle-hash]')];
+    expect(uncles).toHaveLength(2);
+    for (const uncle of uncles)
+      for (const link of [...uncle.querySelectorAll('a')]) {
+        const box = rectBox(link.querySelector('rect')!);
+        const lines = allTextLines(link);
+        expect(lines.length).toBeGreaterThanOrEqual(2);
+        for (const line of lines) expectInside(line, box, link.getAttribute('aria-label')!);
+        expectApart(lines, link.getAttribute('aria-label')!);
+      }
+  });
+
+  it('keeps every word inside the svg and clear of every other word', () => {
+    const svg = svgOf();
+    const lines = allTextLines(svg);
+    expect(lines.some((l) => l.text === '1500 proposed → committed +2')).toBe(true);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the diagram', 'flush');
+    expectApart(lines, 'the diagram');
   });
 });

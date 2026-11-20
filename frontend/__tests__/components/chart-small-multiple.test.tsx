@@ -31,7 +31,9 @@ describe('ChartSmallMultiple', () => {
     expect(screen.getByLabelText('Hash rate loading')).toBeInTheDocument();
     complete(result);
     expect(await screen.findByRole('img', { name: 'Hash rate, PH/s' })).toBeInTheDocument();
-    expect(screen.getByTitle('2024-01-01: 900.7199254740993 PH/s')).toBeInTheDocument();
+    // Re-pinned for lane D1 (rule 9): the figure's title is its exact value (the date stands in
+    // the head's second line, was in the title)
+    expect(screen.getByTitle('900.7199254740993 PH/s')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Hash rate' })).toHaveAttribute(
       'href',
       '/mainnet/charts/hash-rate'
@@ -41,26 +43,28 @@ describe('ChartSmallMultiple', () => {
     // the headline is the bare number (visual pass: units squeezed the titles to three lines).
     // Re-pinned for CH-14 (UI review 2026-11-14): every card figure carries its unit, bound to it
     // by a no-break space (was the bare number, the unit only in the subtitle).
+    // Re-pinned for lane D1: the page's own head figure, cut, never rounded (900.7199… is 900.71,
+    // was 900.72); the head's line is never cut, so it scrolls no more (was overflow-x-auto).
     const readout = screen.getByRole('group', { name: 'Hash rate current readout' });
-    expect(readout.textContent).toBe('900.72\u00a0PH/s');
-    expect(readout).toHaveClass('overflow-x-auto');
-    expect(screen.getByText('900.72')).toHaveClass('whitespace-nowrap');
-    expect(screen.getByText('daily, PH/s')).toBeInTheDocument();
+    expect(readout.textContent).toBe('900.71\u00a0PH/s');
+    expect(readout).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('daily estimate')).toBeInTheDocument();
+    expect(screen.getByText('2024-01-01')).toBeInTheDocument();
   });
 
   // Responsive review 2026-11-01: in a four-column "Related charts" grid at 1280 (and two columns
-  // at 640) the readout block could not shrink and its date was cut at the card's edge. The header
-  // wraps instead: the readout keeps the right edge and drops under the title when both do not fit.
-  it('lets the readout drop under the title in a narrow card instead of being cut', async () => {
+  // at 640) the readout block could not shrink and its date was cut at the card's edge. Re-pinned
+  // for lane D1 (the chart-hero board, rule 9, CH-16): the head no longer wraps (a readout that
+  // dropped under its title put the plots of one row on different lines); it is two fixed lines,
+  // each written to fit the narrowest card (chart-card-head.test.tsx), the figure at the right end.
+  it('keeps the head on two fixed lines, the figure at the right end, never cut', async () => {
     render(
       <ChartSmallMultiple definition={{ ...base, fetch: vi.fn().mockResolvedValue(result) }} />
     );
-    const readoutBlock = (await screen.findByTitle(
-      '2024-01-01: 900.7199254740993 PH/s'
-    )) as HTMLElement;
+    const readoutBlock = (await screen.findByTitle('900.7199254740993 PH/s')) as HTMLElement;
     const header = readoutBlock.parentElement as HTMLElement;
-    expect(header).toHaveClass('flex-wrap');
-    expect(readoutBlock).toHaveClass('ml-auto');
+    expect(header).not.toHaveClass('flex-wrap');
+    expect(readoutBlock).toHaveClass('ml-auto', 'whitespace-nowrap');
     expect(readoutBlock).not.toHaveClass('shrink-0');
     expect(screen.getByText('2024-01-01')).toHaveClass('whitespace-nowrap');
   });
@@ -93,8 +97,20 @@ describe('ChartSmallMultiple', () => {
       data: [
         {
           date: '2024-01-01',
-          values: Object.fromEntries(keys.map((key, i) => [key, String((7 - i) * 100_000_000)])),
+          values: {
+            ...Object.fromEntries(keys.map((key, i) => [key, String((7 - i) * 100_000_000)])),
+            // lane D1: the API's rest band, rank six and its remainder (2 + 1 CKB)
+            rest: '300000000',
+            // the five drawn, the route's (lane D1's third round, M2): 7 + 6 + 5 + 4 + 3 CKB
+            drawnTotal: '2500000000',
+            // the day's whole, the route's (the D1 hand-back, item 2): 7 + 6 + … + 1 CKB
+            total: '2800000000',
+          },
         },
+      ],
+      bands: [
+        ...keys.slice(0, 5).map((key) => ({ key, label: key, members: [key] })),
+        { key: 'rest', label: 'Others', members: ['top5', 'others'] },
       ],
     };
     render(
@@ -108,15 +124,14 @@ describe('ChartSmallMultiple', () => {
     const list = await screen.findByRole('list', { name: 'Scripts ranked preview' });
     expect(list.querySelectorAll('li')).toHaveLength(6);
     expect(list).toHaveTextContent('Others');
-    expect(screen.getByTitle('2024-01-01: 7 CKB')).toBeInTheDocument();
+    // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's own figure, the
+    // largest script's CKB (was its share, 25.00%, in a headline of the card's own); the shares
+    // stay on the rows.
+    expect(screen.getByTitle('7 CKB')).toBeInTheDocument();
     const readout = screen.getByRole('group', { name: 'Scripts current readout' });
-    // 7 of 28 CKB of knowledge: the leader's exact share, named above it.
-    expect(readout).toHaveTextContent('25.00%');
-    expect(readout.parentElement).toHaveTextContent(/^top0/);
-    // Re-pinned for CH-14: the sign against its figure, never wrapped away from it.
-    expect(screen.getByText('%')).toHaveClass('whitespace-pre');
-    expect(readout.textContent).toBe('25.00%');
-    expect(screen.getByText('share of knowledge, top 5')).toBeInTheDocument();
+    expect(readout.textContent).toBe('7\u00a0CKB');
+    expect(list).toHaveTextContent('top025.00%');
+    expect(screen.getByText('largest script')).toBeInTheDocument();
   });
 
   it('names the leading miner in the short head…tail form on the card (CH-04)', async () => {
@@ -129,7 +144,12 @@ describe('ChartSmallMultiple', () => {
           fetch: async () => ({
             title: 'Miners',
             windowDays: 7,
-            totalBlocks: 10,
+            // Re-pinned for lane D1's third round (S7): the route lists every miner of the window
+            // (to 100), so one row was one miner who found every block, not 6 of 10; the window's
+            // 100 blocks are found by six miners here, the sixth the card's "Others" (8 blocks)
+            totalBlocks: 100,
+            // the sixth miner's 8 blocks, the route's (lane exactness, part A, A1)
+            restBlocks: 8,
             fromDate: '2026-10-21',
             toDate: '2026-10-27',
             data: [
@@ -137,9 +157,16 @@ describe('ChartSmallMultiple', () => {
                 minerLockHash: `0x${'a'.repeat(64)}`,
                 address,
                 minerName: null,
-                blocksMined: 6,
+                blocksMined: 60,
                 percentage: '60.0000',
               },
+              ...['b', 'c', 'd', 'e', 'f'].map((id) => ({
+                minerLockHash: `0x${id.repeat(64)}`,
+                address: null,
+                minerName: `Pool ${id.toUpperCase()}`,
+                blocksMined: 8,
+                percentage: '8.0000',
+              })),
             ],
           }),
         }}
@@ -150,16 +177,18 @@ describe('ChartSmallMultiple', () => {
     // R9 (re-pinned): the short address is `ckb1…` and its last 8 characters.
     expect(list).toHaveTextContent('ckb1…xx93hhsj60.00%');
     expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
-    expect(list).toHaveTextContent('Others40.00%');
+    expect(list).toHaveTextContent('Others8.00%');
     // Lane L: the miner's short address links to its address page; "Others" is no entity.
     const miner = within(list).getByRole('link', { name: 'ckb1…xx93hhsj' });
     expect(miner).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(miner).toHaveAttribute('title', address);
     expect(within(list).queryByRole('link', { name: 'Others' })).toBeNull();
-    // The board's headline: the top miner's share under "top", grouped like any rate (CH-31).
+    // Re-pinned for lane D1 (rule 9, CH-07): the page's own figure, the largest miner's blocks
+    // under its title (was its share under "top"); the window is the head's date.
     const readout = screen.getByRole('group', { name: 'Miners current readout' });
-    expect(readout).toHaveTextContent('60.00%');
-    expect(readout.parentElement).toHaveTextContent(/^top/);
+    expect(readout.textContent).toBe('60');
+    expect(screen.getByText('largest miner')).toBeInTheDocument();
+    expect(screen.getByText('2026-10-21 → 2026-10-27')).toBeInTheDocument();
   });
 
   // F2 charts group (CH-06, CH-07): classed bands carry a legend; Assets rows carry class marks.
@@ -185,6 +214,8 @@ describe('ChartSmallMultiple', () => {
                   udt: '50',
                   nftSpore: '40',
                   otherContracts: '10',
+                  // the day's knowledge size, the route's (the D1 hand-back, item 2)
+                  knowledgeSize: '500',
                 },
               },
             ],
@@ -205,8 +236,11 @@ describe('ChartSmallMultiple', () => {
     expect(items[0].querySelector('span[aria-hidden]')).toHaveStyle({
       backgroundColor: 'var(--c-gold)',
     });
+    // Re-pinned for lane D1 (rule 9, CH-07): the page's figure, the largest kind's CKB, its
+    // caption the page's words (was its share under "nervos dao")
     const readout = screen.getByRole('group', { name: 'Knowledge by kind current readout' });
-    expect(readout.parentElement).toHaveTextContent(/^nervos dao/);
+    expect(readout.textContent).toBe('300\u00a0CKB');
+    expect(screen.getByText('largest kind')).toBeInTheDocument();
   });
 
   // Lane L: two assets that share a name are told apart by a short id; the link to each keeps
@@ -222,7 +256,16 @@ describe('ChartSmallMultiple', () => {
         { key: 'top1', label: 'MEMES (token)', color: '#000', id: `token:${b}` },
         { key: 'others', label: 'Others', color: '#000' },
       ],
-      data: [{ date: '2026-10-29', values: { top0: '300', top1: '200', others: '500' } }],
+      // the day's whole, the route's (the D1 hand-back, item 2)
+      data: [
+        // the route's whole and its two drawn ranks' total (lane D1's third round, M2)
+        {
+          date: '2026-10-29',
+          values: { top0: '300', top1: '200', others: '500', total: '1000', drawnTotal: '500' },
+        },
+      ],
+      // lane D1: two named ranks, each its own band
+      bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),
     };
     render(
       <ChartSmallMultiple
@@ -247,7 +290,16 @@ describe('ChartSmallMultiple', () => {
         { key: 'top1', label: '拯救民主 (object)', color: '#000' },
         { key: 'others', label: 'Others', color: '#000' },
       ],
-      data: [{ date: '2026-10-29', values: { top0: '300', top1: '200', others: '500' } }],
+      // the day's whole, the route's (the D1 hand-back, item 2)
+      data: [
+        // the route's whole and its two drawn ranks' total (lane D1's third round, M2)
+        {
+          date: '2026-10-29',
+          values: { top0: '300', top1: '200', others: '500', total: '1000', drawnTotal: '500' },
+        },
+      ],
+      // lane D1: two named ranks, each its own band
+      bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),
     };
     render(
       <ChartSmallMultiple

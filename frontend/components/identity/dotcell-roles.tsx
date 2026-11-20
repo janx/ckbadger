@@ -1,4 +1,5 @@
 import type { ItemProtocol, DotCellPartyRef } from '@/lib/api';
+import { PartyLockWords } from '@/components/ui/lock-kind';
 import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -119,9 +120,9 @@ export function DotcellRoles({
                 step === 'now' ? 'border-identity/60' : 'border-base-border border-dashed'
               )}
             >
-              <span className="text-text-dim text-meta">
+              <span className="text-text text-small">
                 <Utc8Date timestamp={run.since.cell.timestamp} />
-                {step ? ` · ${step}` : ''}
+                {step && <span className="text-text-dim text-meta"> · {step}</span>}
               </span>
               <span
                 className={cn(
@@ -130,11 +131,7 @@ export function DotcellRoles({
                 )}
               >
                 {party.address ? (
-                  <Link
-                    href={`/address/${party.address}`}
-                    title={party.address}
-                    className="hover:text-jade"
-                  >
+                  <Link look="inline" href={`/address/${party.address}`} title={party.address}>
                     {partyShort(party)}
                   </Link>
                 ) : (
@@ -142,7 +139,14 @@ export function DotcellRoles({
                 )}
               </span>
               <span className="text-text-dim text-meta">
-                {party.scriptName ?? 'lock not named'}
+                {/* the party's lock by the one decision (lane P2's third round, item 12), its
+                    refusal in its place (item 3 of the fifth round); a prefix no lock answers
+                    uniquely, in the words of its fact (NOTE 7) */}
+                {party.lockHash ? (
+                  <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+                ) : (
+                  'lock not uniquely resolved'
+                )}
               </span>
             </li>
           );

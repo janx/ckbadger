@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -14,9 +15,11 @@ import { DnaStrip } from '@/components/ui/dna-strip';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { Chart } from '@/components/ui/chart';
 import { TxStructure } from '@/components/transaction/tx-structure';
+import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CrashPage } from '@/components/crash-page';
 import { CELL_COLORS, CLASS_COLORS } from '@/lib/design-tokens';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/components/error-vessels', () => ({
   ErrorVessels: () => <div data-testid="error-vessels" />,
@@ -33,7 +36,7 @@ const cell: CellTileData = sealedTile(
     kind: 'tokens',
     content: 'USDI',
     capacity: '10000000000',
-    occupied: '6100000000',
+    occupiedBytes: '61',
     state: 'consumed',
   },
   'ink'
@@ -66,6 +69,8 @@ describe('detail and list foundations', () => {
       'border-base-border'
     );
     expect(container.querySelector('details')).not.toHaveAttribute('open');
+    // the raw data scrolls sideways itself, inside the disclosure (lane cd-fixes-controls)
+    expect(screen.getByText('0x0012').parentElement).toHaveClass('overflow-x-auto');
     expect(container.querySelector('dt')).toHaveTextContent('Block');
     expect(container.querySelector('dd')).toHaveTextContent('12');
     expect(screen.getByRole('heading', { name: 'Activity' })).toHaveClass('text-section');
@@ -185,8 +190,9 @@ describe('exact capacity and cell anatomy', () => {
     );
     expect(container.textContent).toContain('100.00000000 CKB');
     expect(screen.getByText('JoyID')).toBeInTheDocument();
-    expect(() => render(<CellTile cell={{ ...cell, occupied: '10000000001' }} />)).toThrow(
-      'in:0: occupied'
+    // B4 second fix round: a cell's occupied bytes, 101 of them, past its 100 CKB of capacity
+    expect(() => render(<CellTile cell={{ ...cell, occupiedBytes: '101' }} />)).toThrow(
+      'in:0: occupied 101 bytes (10100000000 shannons) exceed capacity 10000000000 shannons'
     );
   });
 });
@@ -345,93 +351,96 @@ describe('byte and DNA inspection', () => {
 });
 
 describe('transaction and activity foundations', () => {
+  // Re-pinned on purpose (lane D3, PA-24): the cell page's script groups were TxStructure's own
+  // list; they are the transaction page's rows (ScriptGroupMatrix) on both pages, and the three
+  // tests below read them there. A dep's out point is written short now (U-16), so the column's
+  // test holds a long code line in a shrinkable cell rather than a full out point.
+  const groupRow = (over: Partial<MatrixGroup> = {}): MatrixGroup => ({
+    id: 'lock:long',
+    kind: 'lock',
+    name: 'long dependency',
+    href: '/scripts/long',
+    sub: () => 'args 0x55c5…a0b9',
+    ran: true,
+    cellIds: [cell.id],
+    witness: null,
+    code: () => <span data-testid="code">{`0x${'ab'.repeat(32)}:4294967295 dep group`}</span>,
+    cycles: null,
+    ...over,
+  });
+  const column = { id: 'in:0', top: 'plain', label: 'in #0', cap: '61' };
   it('keeps a full dependency outpoint inside a shrinkable script-group column', () => {
-    const outpoint = `0x${'ab'.repeat(32)}:4294967295 (depGroup)`;
     const { container } = render(
-      <TxStructure
+      <ScriptGroupMatrix
         txHash="0xlong-dependency"
-        inputs={[cell]}
+        inputs={[column]}
         outputs={[]}
-        fee="0"
-        groups={[
-          {
-            id: 'lock:long',
-            kind: 'lock',
-            label: 'long dependency',
-            href: '/scripts/long',
-            cellIds: [cell.id],
-            executed: true,
-            witness: 'Witness 0',
-            dependency: outpoint,
-          },
-        ]}
+        groups={[groupRow()]}
       />
     );
-    const group = container.querySelector('[data-group-id="lock:long"]');
-    expect(group).toHaveClass('min-w-0');
-    const dependency = screen.getByText(outpoint);
-    // B3 round 4 (re-pinned on purpose): the column breaks the outpoint with
-    // [overflow-wrap:anywhere], so its cycles words beside it stay whole (it was break-all)
-    expect(dependency).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
-    expect(dependency).toHaveTextContent(outpoint);
+    const group = container.querySelector('[data-group-row="lock:long"]')!;
+    const code = screen.getByTestId('code');
+    // the code column shrinks with the row: its cell is min-w-0, and the line stays whole in it
+    expect(code.closest('[role="cell"]')).toHaveClass('min-w-0');
+    expect(group).toContainElement(code);
+    expect(code).toHaveTextContent(`0x${'ab'.repeat(32)}:4294967295 dep group`);
   });
   it('cross-highlights resolved script groups, cells and continuity using hover and keyboard focus', () => {
     const output = { ...cell, id: 'out:0', label: 'output 0', state: 'live' };
+    // the rows report a group's focus to the page, which owns the linking (TX-14)
+    const onHover = vi.fn();
+    const { container: rows } = render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={[column]}
+        outputs={[]}
+        groups={[groupRow({ id: 'lock:0', name: 'JoyID', cellIds: ['in:0'] })]}
+        onHover={onHover}
+      />
+    );
+    fireEvent.focus(rows.querySelector('[data-group-row="lock:0"]')!);
+    expect(onHover).toHaveBeenLastCalledWith({ t: 'group', id: 'lock:0' });
+    // the page lights the group's cells; the structure sets the others back in the dim ink (R4)
     const { container } = render(
       <TxStructure
         txHash="0xtx"
         inputs={[cell]}
         outputs={[output]}
         fee="100"
-        groups={[
-          {
-            id: 'lock:0',
-            kind: 'lock',
-            label: 'JoyID',
-            href: '/scripts/JoyID',
-            cellIds: ['in:0'],
-            executed: true,
-            witness: 'Witness 0',
-            dependency: 'dep 0',
-          },
-        ]}
         continuity={[{ from: 'in:0', to: 'out:0', label: 'USDI' }]}
+        linking="page"
+        focusedCellIds={['in:0']}
       />
     );
-    fireEvent.focus(container.querySelector('[data-group-id="lock:0"]')!);
     expect(container.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
       'data-highlighted',
       'true'
     );
-    // set back in the dim ink (R4, re-pinned on purpose: the tile was faded to 30 %)
     expect(container.querySelector('[data-cell-id="out:0"]')).toHaveClass('quiet');
-    fireEvent.mouseEnter(container.querySelector('[data-cell-id="in:0"]')!);
-    expect(container.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
+    // a hovered cell lights its continuity partner
+    const { container: linked } = render(
+      <TxStructure
+        txHash="0xtx"
+        inputs={[cell]}
+        outputs={[output]}
+        fee="100"
+        continuity={[{ from: 'in:0', to: 'out:0', label: 'USDI' }]}
+      />
+    );
+    fireEvent.mouseEnter(linked.querySelector('[data-cell-id="in:0"]')!);
+    expect(linked.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
       'data-highlighted',
       'true'
     );
-    expect(screen.getByText('Witness 0')).toBeInTheDocument();
   });
   it('rejects a dangling script membership with transaction context', () => {
     expect(() =>
       render(
-        <TxStructure
+        <ScriptGroupMatrix
           txHash="0xbroken"
-          inputs={[cell]}
+          inputs={[column]}
           outputs={[]}
-          fee="0"
-          groups={[
-            {
-              id: 'g',
-              kind: 'lock',
-              label: 'lock',
-              href: '/scripts/lock',
-              cellIds: ['missing'],
-              executed: true,
-              witness: null,
-              dependency: null,
-            },
-          ]}
+          groups={[groupRow({ id: 'g', cellIds: ['missing'] })]}
         />
       )
     ).toThrow('0xbroken: script group g references unknown cell missing');
@@ -440,17 +449,21 @@ describe('transaction and activity foundations', () => {
     const activity = latestActivities[0];
     const { container } = render(
       <ActivityRow
-        activity={{
+        // a pool row states no item types, null and null, as the route sends it (the third read's
+        // T SHOULD-1: it inherited the committed row's [])
+        activity={activityRead({
           ...activity,
           blockNumber: null,
           timestamp: null,
+          itemTypes: null,
+          itemTypesUnread: null,
           poolStatus: 'proposed',
           timeAddedToPool: new Date().toISOString(),
           interpretation: {
             status: 'partial',
             reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
           },
-        }}
+        })}
         mode="participant"
         participant={activity.participants[0]}
       />
@@ -476,7 +489,12 @@ describe('transaction and activity foundations', () => {
   });
   it('shares cross-user and participant activity grammar, including registered lock kind', () => {
     const activity = latestActivities[0];
-    const participant = { ...activity.participants[0], lockKind: 'JoyID' };
+    // B4 (re-pinned): a JoyID address, since a default-lock party's line names no lock (R9)
+    const participant = {
+      ...activity.participants[0],
+      address: seededAddress('joyid1', JOYID_CODE_HASH),
+      lockKind: 'JoyID',
+    };
     const { container } = render(
       <ActivityRow activity={activity} mode="participant" participant={participant} />
     );
@@ -488,7 +506,8 @@ describe('transaction and activity foundations', () => {
     render(<CrashPage message="block 12: invalid DAO field" />);
     expect(screen.getByRole('alert')).toHaveTextContent('block 12: invalid DAO field');
     expect(screen.getByRole('button', { name: '↻ try again' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    expect(screen.getByRole('link', { name: /^back to the explorer/ })).toHaveAttribute(
       'href',
       '/mainnet'
     );
@@ -525,6 +544,9 @@ describe('one chart grammar', () => {
     expect(screen.getByRole('link', { name: 'Mirana · Oct 24' })).toHaveAttribute(
       'href',
       '/mainnet/hardforks'
+    ); // the markers' legend: links, at 13 px (lane cd-fixes-controls, the ink and size round: 12)
+    expect(screen.getByRole('link', { name: 'Mirana · Oct 24' }).parentElement).toHaveClass(
+      'text-small'
     );
   });
   it('retains exact large decimal readouts independently of geometry precision', () => {

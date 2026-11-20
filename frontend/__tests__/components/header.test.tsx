@@ -24,8 +24,12 @@ vi.mock('@/components/search-bar', () => ({
   SearchBar: (props: { variant?: 'default' | 'compact' | 'home' }) => searchBarMock(props),
 }));
 
+const wordmarkProps = vi.hoisted(() => vi.fn());
 vi.mock('@/components/layout/wordmark', () => ({
-  Wordmark: () => <div data-testid="wordmark">Wordmark</div>,
+  Wordmark: (props: { heading?: boolean }) => {
+    wordmarkProps(props);
+    return <div data-testid="wordmark">Wordmark</div>;
+  },
 }));
 
 vi.mock('@/components/stats-bar', () => ({
@@ -115,6 +119,21 @@ describe('Header', () => {
     expect(screen.queryByTestId('vitals-logo-notch')).toBeNull();
   });
 
+  // Lane D2 (U-11): the home page's outline opens on an h1, the wordmark's own line (no new
+  // visible words); every other page's h1 is its own, so the wordmark heads only the home page.
+  it('makes the wordmark the h1 of the home page alone', () => {
+    usePathnameMock.mockReturnValue('/');
+    const { unmount } = render(<Header />);
+    expect(wordmarkProps.mock.lastCall?.[0]).toMatchObject({ heading: true });
+    unmount();
+    for (const path of ['/blocks', '/tx/0x01', '/dao']) {
+      usePathnameMock.mockReturnValue(path);
+      const view = render(<Header />);
+      expect(wordmarkProps.mock.lastCall?.[0]).toMatchObject({ heading: false });
+      view.unmount();
+    }
+  });
+
   // PA-04 / PB-26 (UI review 2026-11-14): the celadon section word stood between the menu button
   // and the search field on the pages the nav links to only, and its length set the field's
   // width. Kept at a fixed slot for every route, the longest word ("Transactions", 12 characters
@@ -134,7 +153,12 @@ describe('Header', () => {
       const { unmount } = render(<Header />);
       const span = screen.getByText(word, { selector: 'span' });
       expect(span, path).toHaveClass('hidden', 'sm:inline', 'text-jade');
-      expect(span.parentElement, path).toHaveClass('md:hidden');
+      // beside the menu button, in the row's menu form (below md, and from md where the row cannot
+      // hold the nav: readability F3-f); unmeasured at jsdom's 1024 px the row draws the nav
+      const group = span.parentElement as HTMLElement;
+      expect(group, path).toContainElement(screen.getByRole('button', { name: 'Toggle menu' }));
+      expect(group, path).toHaveClass('hidden');
+      expect(group.className, path).not.toMatch(/\bmd:/);
       unmount();
     }
   });
@@ -479,7 +503,10 @@ describe('Header · the theme control', () => {
     render(<Header />);
     const banner = screen.getByRole('banner');
     const switcher = within(banner).getByTestId('theme-switcher');
-    expect(switcher).toHaveClass('hidden', 'md:block');
+    // drawn in the row's nav form (from md where the row holds the nav: readability F3-f), which
+    // the row has unmeasured at jsdom's 1024 px; in the menu form the menu's row carries the choice
+    expect(switcher).toHaveClass('block');
+    expect(switcher).not.toHaveClass('hidden');
     expect(within(switcher).getByRole('button', { name: 'Theme: Dark' })).toHaveAttribute(
       'aria-haspopup',
       'menu'

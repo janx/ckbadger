@@ -485,6 +485,31 @@ fn rolling_24h_tx_window(
     Ok(Some((count, i128::from(span_ms))))
 }
 
+/// The status bar's block time: the window's span over its gaps, in seconds cut at two places
+/// (lane exactness, part A2, S5: the page shows the route's text, so the route cuts).
+fn format_avg_block_time(
+    span_ms: i128,
+    gaps: i128,
+    latest_block: i64,
+) -> Result<String, ApiRouteError> {
+    crate::utils::exact_ratio::format_ratio_cut(span_ms, gaps * 1_000, 2)
+        .map(|value| format!("{value}s"))
+        .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
+}
+
+/// An asset-ecosystem category's share of the live capacity, a percentage cut at two places
+/// (lane exactness, part A2, S5).
+fn category_percentage(value: i128, live_capacity: i128) -> Result<String, ApiRouteError> {
+    crate::utils::exact_ratio::format_ratio_cut(
+        value
+            .checked_mul(100)
+            .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
+        live_capacity,
+        2,
+    )
+    .map_err(ApiError::internal)
+}
+
 fn format_transaction_rates(
     window: Option<(i128, i128)>,
     latest_block: i64,
@@ -509,7 +534,8 @@ fn format_transaction_rates(
                     "transaction rate numerator overflow at block {latest_block}"
                 ))
             })?;
-        crate::utils::exact_ratio::format_ratio(numerator, span_ms, decimals).map_err(|e| {
+        // cut at the places the status bar shows (lane exactness, part A2, S5)
+        crate::utils::exact_ratio::format_ratio_cut(numerator, span_ms, decimals).map_err(|e| {
             ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
         })
     };
@@ -520,6 +546,8 @@ fn format_transaction_rates(
     ))
 }
 
+/// The status bar's hash rate in the unit its exact value reaches, cut at two places, never
+/// rounded (lane exactness, part B (the third read's S3): it chose the unit at a lowered threshold so a half-up carry landed in it).
 fn format_hash_rate(hash_rate: u128) -> String {
     let (scale, unit) = [
         (1_000_000_000_000_000_000u128, "EH/s"),
@@ -530,14 +558,11 @@ fn format_hash_rate(hash_rate: u128) -> String {
         (1_000, "KH/s"),
     ]
     .into_iter()
-    .find(|(scale, _)| hash_rate >= *scale - *scale / 200_000)
+    .find(|(scale, _)| hash_rate >= *scale)
     .unwrap_or((1, "H/s"));
     let whole = hash_rate / scale;
-    let remainder = hash_rate % scale;
-    let cents = ckbadger_common::work::rounded_ratio(remainder * 100, scale)
-        .expect("scale is nonzero and bounded");
-    let whole = whole + cents / 100;
-    format!("{whole}.{:02} {unit}", cents % 100)
+    let cents = (hash_rate % scale) * 100 / scale;
+    format!("{whole}.{cents:02} {unit}")
 }
 
 fn format_difficulty(difficulty: u64) -> String {
@@ -557,12 +582,12 @@ fn format_difficulty(difficulty: u64) -> String {
         (KILO, "K"),
     ]
     .into_iter()
-    .find(|(scale, _)| difficulty >= *scale - *scale / 200_000);
+    // the unit the exact value reaches, the figure cut in it (lane exactness, part B (the third read's S3))
+    .find(|(scale, _)| difficulty >= *scale);
     let Some((scale, unit)) = scale else {
         return difficulty.to_string();
     };
-    let hundredths = ckbadger_common::work::rounded_ratio(difficulty as u128 * 100, scale as u128)
-        .expect("u64 difficulty times 100 fits u128 and scale is nonzero");
+    let hundredths = difficulty as u128 * 100 / scale as u128;
     format!("{}.{:02} {unit}", hundredths / 100, hundredths % 100)
 }
 
@@ -722,14 +747,30 @@ pub struct StackedAreaSeries {
     pub id: Option<String>,
 }
 
+/// A band a chart page draws where the chart has more series than the page draws (the
+/// chart-hero board, lane D1: a stack shows at most five ordered bands, or a ranking's five largest
+/// and the rest). It names the series it merges, in stack order; every point of the chart carries
+/// the band's own value under `key`, computed by the route from the same exact integers as its
+/// members, never summed from their rounded percentages.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StackedAreaBand {
+    pub key: String,
+    pub label: String,
+    pub members: Vec<String>,
+}
+
 /// Serialized with `peaks`: each series' peak by series key, derived from
-/// `data` by the one [`series_peak`] (CH-21).
+/// `data` by the one [`series_peak`] (CH-21); and with `bands` where the
+/// route draws fewer bands than it has series.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StackedAreaChartResponse {
     pub data: Vec<StackedAreaDataPoint>,
     pub series: Vec<StackedAreaSeries>,
     pub title: String,
+    #[serde(default)]
+    pub bands: Option<Vec<StackedAreaBand>>,
 }
 
 impl Serialize for StackedAreaChartResponse {
@@ -750,11 +791,15 @@ impl Serialize for StackedAreaChartResponse {
                 peaks.insert(series.key.as_str(), peak);
             }
         }
-        let mut state = serializer.serialize_struct("StackedAreaChartResponse", 4)?;
+        let mut state = serializer.serialize_struct("StackedAreaChartResponse", 5)?;
         state.serialize_field("data", &self.data)?;
         state.serialize_field("series", &self.series)?;
         state.serialize_field("title", &self.title)?;
         state.serialize_field("peaks", &peaks)?;
+        match &self.bands {
+            Some(bands) => state.serialize_field("bands", bands)?,
+            None => state.skip_field("bands")?,
+        }
         state.end()
     }
 }
@@ -1054,6 +1099,8 @@ fn build_most_utilized_share_chart(
 
         let mut values: HashMap<String, String> = HashMap::new();
         let mut selected_sum: i128 = 0;
+        // the five largest, whose complement is the drawn `rest` band (`ranked_share_bands`)
+        let mut drawn_sum: i128 = 0;
         for (index, key) in top_keys.iter().enumerate() {
             let value = states
                 .get(key)
@@ -1066,6 +1113,9 @@ fn build_most_utilized_share_chart(
                 )));
             }
             selected_sum += value;
+            if index < RANKED_SHARE_DRAWN {
+                drawn_sum += value;
+            }
             values.insert(format!("top{index}"), value.to_string());
         }
 
@@ -1087,6 +1137,14 @@ fn build_most_utilized_share_chart(
         }
         let others = total - selected_sum;
         values.insert("others".to_string(), others.to_string());
+        if top_keys.len() > RANKED_SHARE_DRAWN {
+            values.insert("rest".to_string(), (total - drawn_sum).to_string());
+        }
+        // the whole the page's shares divide by
+        values.insert("total".to_string(), total.to_string());
+        // the ranks drawn as their own bands, their total: what "the five largest hold" states
+        // (lane D1's third round, M2)
+        values.insert("drawnTotal".to_string(), drawn_sum.to_string());
 
         data.push(StackedAreaDataPoint {
             date: format_chart_date(&format!("{date:08}"))?,
@@ -1094,18 +1152,55 @@ fn build_most_utilized_share_chart(
         });
     }
 
+    let bands = ranked_share_bands(&series);
     Ok(StackedAreaChartResponse {
         data,
         series,
         title: chart_title,
+        bands: Some(bands),
     })
+}
+
+/// How many ranks of a share history the chart page draws as bands of their own (the chart-hero
+/// board, lane D1: a ranked stack draws its five largest and one band for the rest).
+const RANKED_SHARE_DRAWN: usize = 5;
+
+/// The bands a ranked share history is drawn in: its five largest, each its own series, and the
+/// rest — every rank after them and the remainder past the named ranks — as `rest`, whose value
+/// [`build_most_utilized_share_chart`] writes per day as the day's total less the five largest.
+/// With five or fewer named ranks the remainder (`others`) is the last band as it is.
+fn ranked_share_bands(series: &[StackedAreaSeries]) -> Vec<StackedAreaBand> {
+    let (named, remainder): (Vec<&StackedAreaSeries>, Vec<&StackedAreaSeries>) =
+        series.iter().partition(|entry| entry.key != "others");
+    let own = |entry: &StackedAreaSeries| StackedAreaBand {
+        key: entry.key.clone(),
+        label: entry.label.clone(),
+        members: vec![entry.key.clone()],
+    };
+    if named.len() <= RANKED_SHARE_DRAWN {
+        return series.iter().map(own).collect();
+    }
+    let mut bands: Vec<StackedAreaBand> = named[..RANKED_SHARE_DRAWN]
+        .iter()
+        .map(|entry| own(entry))
+        .collect();
+    bands.push(StackedAreaBand {
+        key: "rest".to_string(),
+        label: "Others".to_string(),
+        members: named[RANKED_SHARE_DRAWN..]
+            .iter()
+            .chain(remainder.iter())
+            .map(|entry| entry.key.clone())
+            .collect(),
+    });
+    bands
 }
 
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v6", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v9", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(&cache_key)
@@ -1296,7 +1391,7 @@ async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v3", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v6", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedAssetsChartResponse>(&cache_key)
@@ -1568,6 +1663,7 @@ async fn get_cell_count_chart(
         data,
         series,
         title: "Cell Count".to_string(),
+        bands: None,
     })
 }
 
@@ -1897,7 +1993,7 @@ async fn get_common_knowledge_composition_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:common-knowledge-composition:v1", chain)?;
+    let cache_key = complete_days_cache_key("chart:common-knowledge-composition:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if stacked_chart_response_has_data(&cached) {
@@ -1937,6 +2033,7 @@ async fn get_common_knowledge_composition_chart(
             data: vec![],
             series: vec![],
             title: "Common Knowledge Bytes Composition".to_string(),
+            bands: None,
         });
     }
 
@@ -2049,6 +2146,11 @@ async fn get_common_knowledge_composition_chart(
                     "otherContracts".to_string(),
                     shannon_to_ckb_string(other_contracts),
                 ),
+                // the whole the five parts partition, which the page's shares divide by
+                (
+                    "knowledgeSize".to_string(),
+                    shannon_to_ckb_string(knowledge),
+                ),
             ]),
         });
     }
@@ -2088,6 +2190,7 @@ async fn get_common_knowledge_composition_chart(
             },
         ],
         title: "Common Knowledge Bytes Composition".to_string(),
+        bands: None,
     };
 
     if stacked_chart_response_has_data(&response) {
@@ -2098,7 +2201,26 @@ async fn get_common_knowledge_composition_chart(
 }
 
 /// Build the cell-size-distribution chart response from a materialized snapshot.
-pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> ChartResponse {
+/// The cell-size chart's cache key, the route's and the warmup's (v2: the two wholes).
+pub(crate) const CACHE_KEY_CELL_SIZE_DISTRIBUTION: &str = "chart:cell-size-distribution:v2";
+
+/// `/charts/cell-size-distribution`: the histogram and the two wholes its page's shares divide
+/// by, counted from the same snapshot (the D1 hand-back, item 2). Its own type, so no other chart
+/// grows a field only this one fills.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSizeDistributionChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    /// The live cells of every bucket.
+    pub live_cells: String,
+    /// The CKB those cells occupy.
+    pub occupied_capacity: String,
+}
+
+pub(crate) fn build_cell_size_response(
+    snapshot: &DailyCellDistribution,
+) -> CellSizeDistributionChartResponse {
     let bucket_labels = [
         "<100 CKB",
         "100-1k CKB",
@@ -2118,24 +2240,40 @@ pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> Char
         })
         .collect();
 
-    ChartResponse {
-        data,
-        title: "Cell Size Distribution".to_string(),
-        y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+    CellSizeDistributionChartResponse {
+        chart: ChartResponse {
+            data,
+            title: "Cell Size Distribution".to_string(),
+            y_axis_label: "Live Cells".to_string(),
+            y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+        },
+        live_cells: snapshot
+            .size_bucket_counts
+            .iter()
+            .map(|count| i128::from(*count))
+            .sum::<i128>()
+            .to_string(),
+        occupied_capacity: shannon_to_ckb_string(snapshot.size_bucket_capacities.iter().sum()),
     }
 }
 
-pub(crate) fn empty_cell_size_response() -> ChartResponse {
-    ChartResponse {
-        data: Vec::new(),
-        title: "Cell Size Distribution".to_string(),
-        y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+pub(crate) fn empty_cell_size_response() -> CellSizeDistributionChartResponse {
+    CellSizeDistributionChartResponse {
+        chart: ChartResponse {
+            data: Vec::new(),
+            title: "Cell Size Distribution".to_string(),
+            y_axis_label: "Live Cells".to_string(),
+            y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+        },
+        live_cells: "0".to_string(),
+        occupied_capacity: "0".to_string(),
     }
 }
 
 /// Build the address-cohort-retention chart response from a materialized snapshot.
+/// The cohort chart's cache key, the route's and the warmup's (v2: its shares cut).
+pub(crate) const CACHE_KEY_ADDRESS_COHORT_RETENTION: &str = "chart:address-cohort-retention:v2";
+
 pub(crate) fn build_address_cohort_response(
     cohort: &DailyAddressCohort,
 ) -> Result<ChartResponse, String> {
@@ -2151,8 +2289,9 @@ pub(crate) fn build_address_cohort_response(
                     entry.cohort_month
                 )
             })?;
+            // cut at its six decimals, never rounded (lane D1's third round, S9)
             let retention =
-                crate::utils::exact_ratio::format_ratio(retention, entry.total_balance, 6)
+                crate::utils::exact_ratio::format_ratio_cut(retention, entry.total_balance, 6)
                     .map_err(|e| format!("cohort {} retention: {e}", entry.cohort_month))?;
             Ok(ChartDataPoint {
                 date: entry.cohort_month.clone(),
@@ -2183,7 +2322,7 @@ async fn get_capacity_turnover_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:capacity-turnover-ratio:v1", chain)?;
+    let cache_key = complete_days_cache_key("chart:capacity-turnover-ratio:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2252,11 +2391,15 @@ async fn get_capacity_turnover_ratio_chart(
             }
         }
 
-        let daily_turnover = crate::utils::exact_ratio::format_percent(consumed, live, 6)
+        // cut at six decimals, never rounded (lane D1's third round, S9)
+        let daily_turnover = crate::utils::exact_ratio::format_percent_cut(consumed, live, 6)
             .map_err(|e| ApiError::internal(format!("daily turnover for {date}: {e}")))?;
-        let weekly_turnover =
-            crate::utils::exact_ratio::format_percent(rolling_consumed_sum, rolling_live_sum, 6)
-                .map_err(|e| ApiError::internal(format!("weekly turnover for {date}: {e}")))?;
+        let weekly_turnover = crate::utils::exact_ratio::format_percent_cut(
+            rolling_consumed_sum,
+            rolling_live_sum,
+            6,
+        )
+        .map_err(|e| ApiError::internal(format!("weekly turnover for {date}: {e}")))?;
 
         data.push(ChartDataPoint {
             date: format_chart_date(&date)?,
@@ -2278,9 +2421,13 @@ async fn get_capacity_turnover_ratio_chart(
 
 async fn get_cell_size_distribution_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:cell-size-distribution:v1";
-    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+) -> ApiResult<CellSizeDistributionChartResponse> {
+    let cache_key = CACHE_KEY_CELL_SIZE_DISTRIBUTION;
+    if let Some(cached) = state
+        .cache
+        .get::<CellSizeDistributionChartResponse>(cache_key)
+        .await
+    {
         return ok(cached);
     }
 
@@ -2300,7 +2447,7 @@ async fn get_cell_size_distribution_chart(
 async fn get_address_cohort_retention_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:address-cohort-retention:v1";
+    let cache_key = CACHE_KEY_ADDRESS_COHORT_RETENTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
@@ -2320,9 +2467,13 @@ async fn get_address_cohort_retention_chart(
 
 async fn get_block_time_distribution_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:block-time-distribution:v2";
-    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+) -> ApiResult<BlockTimeDistributionChartResponse> {
+    let cache_key = CACHE_KEY_BLOCK_TIME_DISTRIBUTION;
+    if let Some(cached) = state
+        .cache
+        .get::<BlockTimeDistributionChartResponse>(cache_key)
+        .await
+    {
         if block_time_dist_has_data(&cached) {
             return ok(cached);
         }
@@ -2338,6 +2489,33 @@ async fn get_block_time_distribution_chart(
 
     ok(response)
 }
+
+/// The block-intervals chart's cache key, the route's and the warmup's (v4: every interval of the
+/// window in the whole, the ones beyond the drawn range stated, and the window's epochs).
+pub(crate) const CACHE_KEY_BLOCK_TIME_DISTRIBUTION: &str = "chart:block-time-distribution:v5";
+
+/// `/charts/block-time-distribution`: the histogram and what its page states of the window (lane
+/// D1's third round, S4): a share is of every interval of the window, the ones longer than the
+/// drawn 50 s too, which are counted and said, not drawn; and the window's complete epochs, which
+/// the route clamps where the chain has fewer than 42.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockTimeDistributionChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    /// The complete epochs the window counts.
+    pub epochs: i64,
+    /// Every interval of the window (a block after its parent): the shares' whole.
+    pub intervals: u64,
+    /// The intervals longer than the drawn range (over 50 s): in the whole, in no bucket.
+    pub beyond_range: u64,
+    /// Each bucket's intervals, one per point of `data` in its order (lane exactness, part A2, N5): a page reads
+    /// a tie, or the most common interval, from these counts, not from the cut shares.
+    pub bucket_counts: Vec<u64>,
+}
+
+/// The epoch-durations chart's cache key (v2: its bucket labels cut).
+pub(crate) const CACHE_KEY_EPOCH_TIME_DISTRIBUTION: &str = "chart:epoch-time-distribution:v2";
 
 /// Number of complete epochs to include in the block-time distribution.
 /// ~1 week at ~4 h/epoch. CKB adjusts difficulty per epoch, so aligning
@@ -2357,6 +2535,7 @@ fn block_time_ms_to_bucket_index(diff_ms: i64) -> Option<usize> {
 
 fn build_block_time_distribution_data(
     bucket_counts: &[u64],
+    beyond_range: u64,
     total_blocks: u64,
 ) -> Result<Vec<ChartDataPoint>, String> {
     if bucket_counts.len() != BLOCK_TIME_DIST_BUCKET_COUNT {
@@ -2368,7 +2547,7 @@ fn build_block_time_distribution_data(
     }
     let actual_total = bucket_counts
         .iter()
-        .try_fold(0u64, |sum, count| sum.checked_add(*count))
+        .try_fold(beyond_range, |sum, count| sum.checked_add(*count))
         .ok_or("block time histogram count overflow")?;
     if actual_total != total_blocks {
         return Err(format!(
@@ -2380,7 +2559,8 @@ fn build_block_time_distribution_data(
     }
     (0..BLOCK_TIME_DIST_BUCKET_COUNT)
         .map(|idx| {
-            let ratio = crate::utils::exact_ratio::format_ratio(
+            // a share a chart page states, cut at its three decimals, never rounded
+            let ratio = crate::utils::exact_ratio::format_ratio_cut(
                 bucket_counts[idx] as i128 * 100,
                 total_blocks as i128,
                 3,
@@ -2394,11 +2574,8 @@ fn build_block_time_distribution_data(
         .collect()
 }
 
-fn block_time_dist_has_data(response: &ChartResponse) -> bool {
-    response
-        .data
-        .iter()
-        .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0))
+fn block_time_dist_has_data(response: &BlockTimeDistributionChartResponse) -> bool {
+    response.intervals > 0
 }
 
 /// Try to resolve a precise block range from EpochStats.
@@ -2418,18 +2595,24 @@ fn epoch_range_to_block_range(
 
 pub(crate) fn build_block_time_distribution_response(
     store: &ckbadger_store::CkbadgerStore,
-) -> Result<ChartResponse, String> {
+) -> Result<BlockTimeDistributionChartResponse, String> {
     let (_, tip_header) = store
         .get_sync_tip_block()
         .map_err(|e| e.to_string())?
         .ok_or("no synced blocks")?;
 
     if tip_header.epoch_number < 1 {
-        return Ok(ChartResponse {
-            data: Vec::new(),
-            title: "Block Time Distribution (Last 0 Epochs)".to_string(),
-            y_axis_label: "Block Ratio (%)".to_string(),
-            y2_axis_label: None,
+        return Ok(BlockTimeDistributionChartResponse {
+            chart: ChartResponse {
+                data: Vec::new(),
+                title: "Block Time Distribution (Last 0 Epochs)".to_string(),
+                y_axis_label: "Block Ratio (%)".to_string(),
+                y2_axis_label: None,
+            },
+            epochs: 0,
+            intervals: 0,
+            beyond_range: 0,
+            bucket_counts: Vec::new(),
         });
     }
 
@@ -2453,6 +2636,7 @@ pub(crate) fn build_block_time_distribution_response(
     headers.reverse();
 
     let mut bucket_counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
+    let mut beyond_range = 0u64;
     let mut total_blocks = 0u64;
 
     if headers.len() >= 2 {
@@ -2472,25 +2656,39 @@ pub(crate) fn build_block_time_distribution_response(
             if diff_ms < 0 {
                 return Err(format!("chain time regressed: previous_block={prev_number} current_block={curr_number}"));
             }
-            if let Some(bucket_index) = block_time_ms_to_bucket_index(diff_ms) {
-                bucket_counts[bucket_index] += 1;
-                total_blocks += 1;
+            // every interval of the window is in the whole; one past the drawn 50 s is counted
+            // and said, not drawn (the board's outlier rule)
+            match block_time_ms_to_bucket_index(diff_ms) {
+                Some(bucket_index) => bucket_counts[bucket_index] += 1,
+                None => beyond_range += 1,
             }
+            total_blocks += 1;
         }
     }
 
-    Ok(ChartResponse {
-        data: build_block_time_distribution_data(&bucket_counts, total_blocks)?,
-        title: format!("Block Time Distribution (Last {} Epochs)", actual_epochs),
-        y_axis_label: "Block Ratio (%)".to_string(),
-        y2_axis_label: None,
+    Ok(BlockTimeDistributionChartResponse {
+        chart: ChartResponse {
+            data: build_block_time_distribution_data(&bucket_counts, beyond_range, total_blocks)?,
+            title: format!("Block Time Distribution (Last {} Epochs)", actual_epochs),
+            y_axis_label: "Block Ratio (%)".to_string(),
+            y2_axis_label: None,
+        },
+        epochs: actual_epochs,
+        intervals: total_blocks,
+        beyond_range,
+        // one per point: none where the window holds no interval and the route draws no bucket
+        bucket_counts: if total_blocks == 0 {
+            Vec::new()
+        } else {
+            bucket_counts.clone()
+        },
     })
 }
 
 async fn get_epoch_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:epoch-time-distribution";
+    let cache_key = CACHE_KEY_EPOCH_TIME_DISTRIBUTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
@@ -2501,23 +2699,26 @@ async fn get_epoch_time_distribution_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> =
-        dist.into_iter()
-            .map(|(bucket_minutes, count)| {
-                let hours_decimal =
-                    crate::utils::exact_ratio::format_ratio(bucket_minutes as i128, 60, 2)
-                        .map_err(|e| {
-                            ApiError::internal(format!(
-                                "epoch time bucket {bucket_minutes} minutes: {e}"
-                            ))
-                        })?;
-                Ok(ChartDataPoint {
-                    date: hours_decimal,
-                    value: count.to_string(),
-                    value2: None,
-                })
+    let data: Vec<ChartDataPoint> = dist
+        .into_iter()
+        .map(|(bucket_minutes, count)| {
+            // A bucket is one minute, labelled in hours, the axis' unit, at two decimals cut and
+            // never rounded (181 minutes is 3.01): one minute is 1.67 hundredths of an hour, so
+            // no two minutes share a label and the page reads the minute back from it exactly.
+            let hours_decimal =
+                crate::utils::exact_ratio::format_ratio_cut(bucket_minutes as i128, 60, 2)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "epoch time bucket {bucket_minutes} minutes: {e}"
+                        ))
+                    })?;
+            Ok(ChartDataPoint {
+                date: hours_decimal,
+                value: count.to_string(),
+                value2: None,
             })
-            .collect::<Result<Vec<_>, ApiRouteError>>()?;
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -2553,7 +2754,8 @@ pub struct EpochTimeLengthChartResponse {
 async fn get_epoch_time_length_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<EpochTimeLengthChartResponse> {
-    let cache_key = "chart:epoch-time-length:v2";
+    // v3: each duration in whole ms, the target cut (lane D1's third round, M1)
+    let cache_key = "chart:epoch-time-length:v3";
     if let Some(cached) = state
         .cache
         .get::<EpochTimeLengthChartResponse>(cache_key)
@@ -2564,7 +2766,7 @@ async fn get_epoch_time_length_chart(
     let target_secs = state.consensus().await?.epoch_duration_target_secs;
     let target = EpochDurationTargetResponse {
         seconds: target_secs,
-        hours: crate::utils::exact_ratio::format_ratio(i128::from(target_secs), 3_600, 2)
+        hours: crate::utils::exact_ratio::format_ratio_cut(i128::from(target_secs), 3_600, 2)
             .map_err(|e| ApiError::internal(format!("epoch duration target: {e}")))?,
     };
 
@@ -2581,14 +2783,17 @@ async fn get_epoch_time_length_chart(
             let duration_ms = end
                 .signed_duration_since(e.start_timestamp)
                 .num_milliseconds();
-            let duration_hours =
-                crate::utils::exact_ratio::format_ratio(duration_ms as i128, 3_600_000, 2)
-                    .map_err(|error| {
-                        ApiError::internal(format!("epoch {} duration: {error}", e.epoch_number))
-                    })?;
+            if duration_ms < 0 {
+                return Err(ApiError::internal(format!(
+                    "epoch {} ends before it starts: duration_ms={duration_ms}",
+                    e.epoch_number
+                )));
+            }
+            // the epoch's duration in the whole ms the store holds, never a rounded hour: the
+            // page cuts it for display and compares it with the target exactly (lane D1, M1)
             Ok(ChartDataPoint {
                 date: e.epoch_number.to_string(),
-                value: duration_hours,
+                value: duration_ms.to_string(),
                 value2: Some(e.blocks_count.to_string()),
             })
         })
@@ -2598,7 +2803,7 @@ async fn get_epoch_time_length_chart(
         chart: ChartResponse {
             data,
             title: "Epoch Time Length".to_string(),
-            y_axis_label: "Hours".to_string(),
+            y_axis_label: "Milliseconds".to_string(),
             y2_axis_label: Some("Blocks".to_string()),
         },
         target,
@@ -2613,7 +2818,8 @@ async fn get_average_block_time_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:average-block-time", chain)?;
+    // v2: the day's average in whole ms (lane D1's third round, M1)
+    let cache_key = complete_days_cache_key("chart:average-block-time:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if chart_response_has_data(&cached) {
@@ -2636,11 +2842,11 @@ async fn get_average_block_time_chart(
         let Some(avg_time_ms) = stats.avg_block_time_ms() else {
             continue;
         };
+        // the day's average block interval in the whole ms the store derives (the sum over the
+        // count, floored), never a rounded second: the page cuts it (lane D1, M1)
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
-            value: crate::utils::exact_ratio::format_ratio(avg_time_ms as i128, 1_000, 2).map_err(
-                |e| ApiError::internal(format!("average block time for {date_str}: {e}")),
-            )?,
+            value: avg_time_ms.to_string(),
             value2: None,
         });
     }
@@ -2648,7 +2854,7 @@ async fn get_average_block_time_chart(
     let response = ChartResponse {
         data,
         title: "Average Block Time".to_string(),
-        y_axis_label: "Seconds".to_string(),
+        y_axis_label: "Milliseconds".to_string(),
         y2_axis_label: None,
     };
 
@@ -2844,11 +3050,7 @@ async fn fetch_network_stats_from_db(
     let remaining_blocks =
         epoch_blocks_left(latest_block, epoch_number, epoch_index, epoch_length)?;
     let avg_block_time = avg_block_span
-        .map(|(span_ms, gaps)| {
-            crate::utils::exact_ratio::format_ratio(span_ms as i128, gaps as i128 * 1_000, 2)
-                .map(|value| format!("{value}s"))
-                .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
-        })
+        .map(|(span_ms, gaps)| format_avg_block_time(span_ms as i128, gaps as i128, latest_block))
         .transpose()?;
     // No estimate without both: the genesis tip's header states no epoch length, and fewer than
     // two headers give no block time.
@@ -3232,13 +3434,25 @@ pub struct UncleRateChartResponse {
     #[serde(flatten)]
     pub chart: ChartResponse,
     pub orphan_rate_target: OrphanRateTargetResponse,
+    /// Each day's exact operands, one per point of `data` in its order (lane exactness, part A, A2): the share is
+    /// cut, so "over the target" is counted on these, `uncles × denominator > blocks × numerator`.
+    pub counts: Vec<UncleRateDayCounts>,
+}
+
+/// A day's uncles and canonical blocks, the uncle rate's operands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleRateDayCounts {
+    pub date: String,
+    pub uncles: u64,
+    pub blocks: u64,
 }
 
 async fn get_uncle_rate_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<UncleRateChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:uncle-rate", chain)?;
+    let cache_key = complete_days_cache_key("chart:uncle-rate:v3", chain)?;
     let cache_key = cache_key.as_str();
     // The cached value is the whole response, target included; the target is
     // a consensus constant of the chain this process serves.
@@ -3250,6 +3464,7 @@ async fn get_uncle_rate_chart(
     let daily_block_stats = load_daily_block_stats(&state).await?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
+    let mut counts: Vec<UncleRateDayCounts> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
         if !is_complete_day_key(chain, "daily block stats", &date_str)? {
             continue;
@@ -3266,14 +3481,23 @@ async fn get_uncle_rate_chart(
                 stats.total_uncles
             )));
         }
-        let uncle_rate = crate::utils::exact_ratio::format_ratio(
+        // cut at six decimals of a block, never rounded (lane D1's third round, S9)
+        let uncle_rate = crate::utils::exact_ratio::format_ratio_cut(
             stats.total_uncles as i128,
             stats.block_count as i128,
             6,
         )
         .map_err(|e| ApiError::internal(format!("uncle rate for {date_str}: {e}")))?;
+        let date = format_chart_date(&date_str)?;
+        counts.push(UncleRateDayCounts {
+            date: date.clone(),
+            uncles: u64::try_from(stats.total_uncles)
+                .map_err(|_| ApiError::internal(format!("uncles on {date_str} exceed u64")))?,
+            blocks: u64::try_from(stats.block_count)
+                .map_err(|_| ApiError::internal(format!("blocks on {date_str} exceed u64")))?,
+        });
         data.push(ChartDataPoint {
-            date: format_chart_date(&date_str)?,
+            date,
             value: uncle_rate,
             value2: None,
         });
@@ -3290,6 +3514,7 @@ async fn get_uncle_rate_chart(
             numerator: target.numerator(),
             denominator: target.denominator(),
         },
+        counts,
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -3313,12 +3538,17 @@ pub struct MinerDistributionResponse {
     pub data: Vec<MinerDistributionDataPoint>,
     pub title: String,
     pub total_blocks: i64,
+    /// The window's blocks found by every miner after the five largest: the ranking card's
+    /// "Others" (lane exactness, part A, A1; the page subtracted the five from the total).
+    pub rest_blocks: i64,
     pub window_days: i64,
     pub from_date: String,
     pub to_date: String,
 }
 
 const MINER_DISTRIBUTION_WINDOW_DAYS: i64 = 7;
+/// The miners a ranking card draws as rows of their own; the rest is one row, `rest_blocks`.
+const MINER_DISTRIBUTION_DRAWN: usize = 5;
 
 fn format_exact_percentage_4(
     numerator: i128,
@@ -3386,6 +3616,19 @@ fn build_miner_distribution_response(
 
     let mut sorted: Vec<(Vec<u8>, i64)> = aggregated.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let five_largest: i64 = sorted
+        .iter()
+        .take(MINER_DISTRIBUTION_DRAWN)
+        .map(|(_, blocks)| *blocks)
+        .sum();
+    let rest_blocks = total_blocks
+        .checked_sub(five_largest)
+        .filter(|rest| *rest >= 0)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "miner window: the five largest found {five_largest} blocks of {total_blocks}"
+            ))
+        })?;
     sorted.truncate(100);
 
     let data = if total_blocks == 0 {
@@ -3416,6 +3659,7 @@ fn build_miner_distribution_response(
             MINER_DISTRIBUTION_WINDOW_DAYS
         ),
         total_blocks,
+        rest_blocks,
         window_days: MINER_DISTRIBUTION_WINDOW_DAYS,
         from_date: from_date.format("%Y-%m-%d").to_string(),
         to_date: to_date.format("%Y-%m-%d").to_string(),
@@ -3440,7 +3684,7 @@ async fn get_miner_address_distribution_chart(
     let from_key = from_date.format("%Y%m%d").to_string();
     let to_key = to_date.format("%Y%m%d").to_string();
     let cache_key = format!(
-        "chart:miner-address-distribution:v2:{}:{}",
+        "chart:miner-address-distribution:v3:{}:{}",
         MINER_DISTRIBUTION_WINDOW_DAYS, to_key
     );
     if let Some(cached) = state
@@ -3502,8 +3746,8 @@ fn average_daily_difficulty(
             stats.block_count, stats.difficulty_sum
         )));
     }
-    ckbadger_common::work::rounded_ratio(stats.difficulty_sum, stats.block_count as u128)
-        .map_err(|e| ApiError::internal(format!("daily difficulty date={date_key}: {e}")))
+    // the day's average, cut to the integer the chart states, never rounded (lane exactness, part B (the third read's S3))
+    Ok(stats.difficulty_sum / stats.block_count as u128)
 }
 
 /// Exact daily network hash rate in hashes per second (H/s, the unit of
@@ -3609,11 +3853,90 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
+/// The keys of `/charts/total-supply`'s five bands, in the order they stack, each named for what it
+/// holds (lane exactness, part B1): `outsideDao`, the protocol circulation outside every DAO cell; `daoDeposited`, the
+/// deposits (status 0); `daoWithdrawing`, the principal of the withdrawal requests (phase 1), still
+/// in a DAO cell; `unclaimedCompensation`, the DAO compensation accrued and not yet claimed, still
+/// in S (the requests' frozen compensation among it); `burnt`.
+const TOTAL_SUPPLY_BAND_KEYS: [&str; 5] = [
+    "outsideDao",
+    "daoDeposited",
+    "daoWithdrawing",
+    "unclaimedCompensation",
+    "burnt",
+];
+
+/// One day's operands of `/charts/total-supply`, in shannons: the day's DAO field and the DAO cells
+/// the indexer counted (lane exactness, part B1).
+pub(crate) struct SupplyOperands {
+    /// C, the day's total issuance.
+    pub total_issuance: i128,
+    /// The protocol circulation, C − genesis burnt − S.
+    pub circulating: i128,
+    /// The capacity of every live DAO cell, deposits and withdrawal requests
+    /// (`DaoDailySnapshot.protocol_deposited`).
+    pub protocol_deposited: i128,
+    /// The capacity of the deposits (status 0) alone (`total_deposited`).
+    pub total_deposited: i128,
+    /// The DAO compensation not yet claimed, in S.
+    pub unclaimed_compensation: i128,
+    /// Genesis burnt and the treasury part of S.
+    pub burnt: i128,
+}
+
+/// The five bands of `/charts/total-supply`, in shannons, in the order they stack (lane exactness, part B1): outside
+/// the Nervos DAO (`circulating − protocol_deposited`), deposited (`total_deposited`), withdrawing
+/// (`protocol_deposited − total_deposited`), the unclaimed compensation and the burnt. They make C:
+/// `circulating + unclaimed + burnt == C` holds by construction (`treasury + unclaimed == S`). A
+/// band under zero, or bands that do not make C, are an error naming the date and every operand,
+/// never a repaired stack.
+pub(crate) fn total_supply_bands(date: &str, day: &SupplyOperands) -> Result<[i128; 5], String> {
+    let operands = format!(
+        "total_issuance={}, circulating={}, protocol_deposited={}, total_deposited={}, \
+         unclaimed_compensation={}, burnt={}",
+        day.total_issuance,
+        day.circulating,
+        day.protocol_deposited,
+        day.total_deposited,
+        day.unclaimed_compensation,
+        day.burnt
+    );
+    let less = |a: i128, b: i128, what: &str| {
+        a.checked_sub(b)
+            .ok_or_else(|| format!("total supply {what} overflows for {date}: {operands}"))
+    };
+    let bands = [
+        less(day.circulating, day.protocol_deposited, "outside the DAO")?,
+        day.total_deposited,
+        less(day.protocol_deposited, day.total_deposited, "withdrawing")?,
+        day.unclaimed_compensation,
+        day.burnt,
+    ];
+    for (key, band) in TOTAL_SUPPLY_BAND_KEYS.iter().zip(bands) {
+        if band < 0 {
+            return Err(format!(
+                "total supply band {key} is negative for {date}: {band}; {operands}"
+            ));
+        }
+    }
+    let sum = bands
+        .iter()
+        .try_fold(0i128, |sum, band| sum.checked_add(*band))
+        .ok_or_else(|| format!("total supply bands overflow for {date}: {operands}"))?;
+    if sum != day.total_issuance {
+        return Err(format!(
+            "total supply bands do not make C for {date}: they sum to {sum}; {operands}"
+        ));
+    }
+    Ok(bands)
+}
+
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:total-supply:v2", chain)?;
+    // v6: five bands that make C, the withdrawal requests' principal its own (lane exactness, part B1)
+    let cache_key = complete_days_cache_key("chart:total-supply:v6", chain)?;
     if let Some(cached) = state
         .cache
         .get::<StackedAreaChartResponse>(&cache_key)
@@ -3643,16 +3966,41 @@ async fn get_total_supply_chart(
             )));
         };
 
+        // the DAO cells' capacity, written by the indexer every day; a store older than its writer
+        // has days without it, and the five bands cannot be drawn from them (lane exactness, part B1)
+        let Some(protocol_deposited) = snapshot.protocol_deposited else {
+            return Err(ApiError::internal(format!(
+                "missing protocol_deposited in dao_daily_snapshots for {}. delete RocksDB and re-sync from genesis",
+                snapshot.date
+            )));
+        };
+        let bands = total_supply_bands(
+            &snapshot.date,
+            &SupplyOperands {
+                total_issuance: snapshot.total_issuance,
+                circulating: supply.circulating,
+                protocol_deposited,
+                total_deposited: supply.dao_locked,
+                unclaimed_compensation: snapshot.unclaimed_compensation,
+                burnt: supply.burnt,
+            },
+        )
+        .map_err(ApiError::internal)?;
         let mut values = std::collections::HashMap::new();
+        for (key, band) in TOTAL_SUPPLY_BAND_KEYS.iter().zip(bands) {
+            values.insert(key.to_string(), shannon_to_ckb_string(band));
+        }
+        // C, the day's total issuance, which the five bands make
+        values.insert(
+            "totalIssuance".to_string(),
+            shannon_to_ckb_string(snapshot.total_issuance),
+        );
+        // the protocol circulation, C − genesis burnt − S: what the site calls circulating (the
+        // bands outside the DAO, deposited and withdrawing), the page's head figure
         values.insert(
             "circulating".to_string(),
-            shannon_to_ckb_string(supply.liquid),
+            shannon_to_ckb_string(supply.circulating),
         );
-        values.insert(
-            "nervosdao".to_string(),
-            shannon_to_ckb_string(supply.dao_locked),
-        );
-        values.insert("burnt".to_string(), shannon_to_ckb_string(supply.burnt));
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
             values,
@@ -3671,31 +4019,28 @@ async fn get_total_supply_chart(
     )
     .await?;
 
-    let series = vec![
-        StackedAreaSeries {
+    let series = TOTAL_SUPPLY_BAND_KEYS
+        .iter()
+        .zip([
+            ("Outside the Nervos DAO", "#00c389"),
+            ("Deposited in the Nervos DAO", "#3b82f6"),
+            ("Withdrawing from the Nervos DAO", "#786540"),
+            ("Unclaimed DAO compensation", "#a68b57"),
+            ("Burnt", "#6b7280"),
+        ])
+        .map(|(key, (label, color))| StackedAreaSeries {
             id: None,
-            key: "circulating".to_string(),
-            label: "Circulating".to_string(),
-            color: "#00c389".to_string(),
-        },
-        StackedAreaSeries {
-            id: None,
-            key: "nervosdao".to_string(),
-            label: "Nervos DAO Locked".to_string(),
-            color: "#3b82f6".to_string(),
-        },
-        StackedAreaSeries {
-            id: None,
-            key: "burnt".to_string(),
-            label: "Burnt".to_string(),
-            color: "#6b7280".to_string(),
-        },
-    ];
+            key: key.to_string(),
+            label: label.to_string(),
+            color: color.to_string(),
+        })
+        .collect();
 
     let response = StackedAreaChartResponse {
         data,
         series,
         title: "Total Supply".to_string(),
+        bands: None,
     };
 
     // The complete-day boundary is part of the cache key, so a new canonical
@@ -3863,7 +4208,7 @@ async fn get_secondary_issuance_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<SecondaryIssuanceChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:secondary-issuance:v3", chain)?;
+    let cache_key = complete_days_cache_key("chart:secondary-issuance:v5", chain)?;
     if let Some(cached) = state
         .cache
         .get::<SecondaryIssuanceChartResponse>(&cache_key)
@@ -3995,6 +4340,33 @@ fn snapshot_total_secondary_issuance(
         })
 }
 
+/// The DAO partition of secondary issuance, checked per day (lane D1's third round, S1): the
+/// compensation (claimed and unclaimed), the miners' share and the treasury make the protocol
+/// total, `miner + S + claimed`, the one whole the chart sends. A day where they do not is an error
+/// naming the date and the operands, never a second whole.
+pub(crate) fn secondary_issuance_partition(
+    date: &str,
+    protocol_total: i128,
+    [compensation, mining, burnt]: [i128; 3],
+) -> Result<(), String> {
+    let operands = format!(
+        "compensation={compensation}, mining={mining}, burnt={burnt}, protocol_total={protocol_total}"
+    );
+    let sum = compensation
+        .checked_add(mining)
+        .and_then(|sum| sum.checked_add(burnt))
+        .ok_or_else(|| {
+            format!("secondary issuance destinations overflow for {date}: {operands}")
+        })?;
+    if sum != protocol_total {
+        return Err(format!(
+            "secondary issuance destinations do not make the protocol total for {date}: they sum \
+             to {sum}; {operands}"
+        ));
+    }
+    Ok(())
+}
+
 fn secondary_issuance_data_point(
     snapshot: &ckbadger_store::DaoDailySnapshot,
 ) -> Result<SecondaryIssuanceDataPoint, ApiRouteError> {
@@ -4020,6 +4392,12 @@ fn secondary_issuance_data_point(
         ("mining".to_string(), shannon_to_ckb_string(cum_miner)),
         ("burnt".to_string(), shannon_to_ckb_string(treasury)),
     ]);
+    secondary_issuance_partition(
+        &snapshot.date,
+        protocol_total,
+        [cum_dao, cum_miner, treasury],
+    )
+    .map_err(ApiError::internal)?;
 
     Ok(SecondaryIssuanceDataPoint {
         date: snapshot.date.clone(),
@@ -4280,10 +4658,32 @@ fn hodl_wave_cache_has_holder_count(response: &StackedAreaChartResponse) -> bool
     })
 }
 
+/// The five bands the HODL wave's page draws (the chart-hero board, lane D1), oldest first: an
+/// ordered scale merges its young neighbours. `1m6m` and `lt1m` are written into every point by
+/// [`get_hodl_wave_chart`]; the other three are series of their own.
+fn hodl_wave_bands() -> Vec<StackedAreaBand> {
+    [
+        ("gt3y", "3 years or more", &["gt3y"][..]),
+        ("1y3y", "1 to 3 years", &["1y3y"][..]),
+        ("6m1y", "6 to 12 months", &["6m1y"][..]),
+        ("1m6m", "1 to 6 months", &["3m6m", "1m3m"][..]),
+        ("lt1m", "under 1 month", &["1w1m", "1d1w", "24h"][..]),
+    ]
+    .into_iter()
+    .map(|(key, label, members)| StackedAreaBand {
+        key: key.to_string(),
+        label: label.to_string(),
+        members: members.iter().map(|m| m.to_string()).collect(),
+    })
+    .collect()
+}
+
 async fn get_hodl_wave_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:hodl-wave";
+    // v3: the drawn bands, `bands` and the merged `1m6m` and `lt1m` (lane D1); every share cut
+    // v4: the eight bands named in the drawn bands' words (lane D1's third round, N5)
+    let cache_key = "chart:hodl-wave:v4";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if hodl_wave_cache_has_holder_count(&cached) {
             return ok(cached);
@@ -4330,7 +4730,9 @@ async fn get_hodl_wave_chart(
                 let scaled = v.checked_mul(100).ok_or_else(|| {
                     ApiError::internal(format!("HODL percentage overflows for {date}"))
                 })?;
-                crate::utils::exact_ratio::format_ratio(scaled, total, 2)
+                // cut, never rounded: a share a page states shows no digit that is not the
+                // exact value's (the D1 hand-back, item 1)
+                crate::utils::exact_ratio::format_ratio_cut(scaled, total, 2)
                     .map_err(|e| ApiError::internal(format!("HODL percentage for {date}: {e}")))
             };
 
@@ -4343,6 +4745,22 @@ async fn get_hodl_wave_chart(
             values.insert("6m1y".to_string(), pct(w.band_6m_1y)?);
             values.insert("1y3y".to_string(), pct(w.band_1y_3y)?);
             values.insert("gt3y".to_string(), pct(w.band_gt_3y)?);
+            // The two bands the page draws by merging neighbours (`hodl_wave_bands`): each from
+            // the exact capacities of its members, never from their rounded percentages.
+            let merged = |parts: &[i128]| -> Result<String, ApiRouteError> {
+                let sum = parts
+                    .iter()
+                    .try_fold(0i128, |sum, part| sum.checked_add(*part))
+                    .ok_or_else(|| {
+                        ApiError::internal(format!("HODL band capacity overflows for {date}"))
+                    })?;
+                pct(sum)
+            };
+            values.insert("1m6m".to_string(), merged(&[w.band_3m_6m, w.band_1m_3m])?);
+            values.insert(
+                "lt1m".to_string(),
+                merged(&[w.band_1w_1m, w.band_1d_1w, w.band_24h])?,
+            );
             values.insert("holderCount".to_string(), w.holder_count.to_string());
 
             Ok(StackedAreaDataPoint {
@@ -4356,49 +4774,49 @@ async fn get_hodl_wave_chart(
         StackedAreaSeries {
             id: None,
             key: "gt3y".to_string(),
-            label: "> 3y".to_string(),
+            label: "3 years or more".to_string(),
             color: "#a78bfa".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "1y3y".to_string(),
-            label: "1y-3y".to_string(),
+            label: "1 to 3 years".to_string(),
             color: "#67e8f9".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "6m1y".to_string(),
-            label: "6m-1y".to_string(),
+            label: "6 to 12 months".to_string(),
             color: "#22c55e".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "3m6m".to_string(),
-            label: "3m-6m".to_string(),
+            label: "3 to 6 months".to_string(),
             color: "#d4e157".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "1m3m".to_string(),
-            label: "1m-3m".to_string(),
+            label: "1 to 3 months".to_string(),
             color: "#f59e0b".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "1w1m".to_string(),
-            label: "1w-1m".to_string(),
+            label: "1 week to 1 month".to_string(),
             color: "#f87171".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "1d1w".to_string(),
-            label: "1d-1w".to_string(),
+            label: "1 day to 1 week".to_string(),
             color: "#4ade80".to_string(),
         },
         StackedAreaSeries {
             id: None,
             key: "24h".to_string(),
-            label: "24h".to_string(),
+            label: "under 1 day".to_string(),
             color: "#6366f1".to_string(),
         },
     ];
@@ -4407,6 +4825,7 @@ async fn get_hodl_wave_chart(
         data,
         series,
         title: "CKB HODL Wave".to_string(),
+        bands: Some(hodl_wave_bands()),
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -4435,6 +4854,17 @@ pub struct DailyActivityStatsResponse {
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// The day's activity-kind occurrences: the eight kinds the charts read (transfers, the three
+    /// DAO actions, tokens, objects, identities, script calls), summed here. Kinds overlap — an
+    /// action counts in each kind it is — so this is not a count of distinct activities.
+    pub kind_occurrences: u64,
+    /// The day's Nervos DAO actions, the chart's one DAO band: deposits, withdraw requests and
+    /// completed withdraws summed here, never in the page (lane D1's third round, M2).
+    pub dao_count: u64,
+    /// The day's user transactions: its committed transactions (its chain row) less its cellbases,
+    /// counted here, never in a page (the P3 follow-up's 2b). The activity stream holds exactly
+    /// these, so the Transactions page's "all" and the Activities page's lede state this figure.
+    pub user_transaction_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4466,6 +4896,83 @@ pub struct ActivitySummary24hResponse {
     pub script_counts: Vec<ScriptCountEntry>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
+    /// The window's activity-kind occurrences, as the daily rows count them (`kind_occurrences`).
+    pub kind_occurrences: u64,
+    /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
+    pub dao_count: u64,
+    /// Every script call `script_counts` counts, summed here (the P3 follow-up, SHOULD 5): what the
+    /// home card's script shares are shares of. One transaction calling two scripts counts twice,
+    /// so this is not `script_call_count` (transactions with a script call).
+    pub script_calls: u64,
+    /// The scripts after the [`SCRIPT_TOP`] largest of `script_counts` (ranked by calls, ties by
+    /// code hash) and their calls, the home card's "others" row; `None` when there are none.
+    pub script_rest: Option<ScriptRest>,
+}
+
+/// How many of the window's scripts the home card ranks by name; the rest is one row.
+pub const SCRIPT_TOP: usize = 5;
+
+/// The scripts a ranking does not name, counted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptRest {
+    pub scripts: u64,
+    pub calls: u64,
+}
+
+/// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
+fn kind_occurrences(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.transfer_count,
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+        s.token_count,
+        s.object_count,
+        s.identity_count,
+        s.script_call_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
+}
+
+/// The three Nervos DAO actions, summed: the DAO kind's one count.
+fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
+}
+
+/// A day's user transactions: its committed transactions less its cellbases. A day without its
+/// chain row, or with more cellbases than transactions, is an indexer fault named by its date.
+fn user_transaction_count(
+    date: &str,
+    chain: Option<&ckbadger_store::types::DailyStats>,
+    activity: &ckbadger_store::types::DailyActivityStats,
+) -> anyhow::Result<u64> {
+    let chain = chain.ok_or_else(|| {
+        anyhow::anyhow!("day {date} has daily activity stats but no daily chain stats")
+    })?;
+    let transactions = u64::try_from(chain.transactions_count).map_err(|_| {
+        anyhow::anyhow!(
+            "day {date} has a negative transaction count {}",
+            chain.transactions_count
+        )
+    })?;
+    transactions
+        .checked_sub(u64::from(activity.coinbase_count))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "day {date} has {} cellbases but only {transactions} transactions",
+                activity.coinbase_count
+            )
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -4486,7 +4993,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v4:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4497,10 +5004,18 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (all_stats, chain_days) = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            store.list_daily_activity_stats()?,
+            store
+                .list_daily_stats_with_dates()?
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
@@ -4555,6 +5070,8 @@ async fn get_daily_activity_stats(
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
+            let user_transaction_count = user_transaction_count(&date, chain_days.get(&date), &s)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
             let mut script_counts: Vec<ScriptCountEntry> = s
                 .script_counts
                 .iter()
@@ -4566,7 +5083,7 @@ async fn get_daily_activity_stats(
                 .collect();
             script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
-            DailyActivityStatsResponse {
+            Ok(DailyActivityStatsResponse {
                 date,
                 transfer_count: s.transfer_count,
                 dao_deposit_count: s.dao_deposit_count,
@@ -4581,9 +5098,12 @@ async fn get_daily_activity_stats(
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
-            }
+                kind_occurrences: kind_occurrences(&s),
+                dao_count: dao_count(&s),
+                user_transaction_count,
+            })
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     // Don't cache empty results — the indexer may not have written data yet
     // and we don't want to serve stale empty responses for hours.
@@ -4612,7 +5132,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:tip:{}",
+            "stats:activity-summary-24h:v3:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -4659,7 +5179,18 @@ async fn get_activity_summary_24h(
             count,
         })
         .collect();
-    script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
+    // ranked by calls, ties by code hash, so the five named and the rest are one partition
+    script_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.code_hash.cmp(&b.code_hash))
+    });
+    let script_calls = script_counts.iter().map(|e| u64::from(e.count)).sum();
+    let rest = script_counts.get(SCRIPT_TOP..).unwrap_or_default();
+    let script_rest = (!rest.is_empty()).then(|| ScriptRest {
+        scripts: rest.len() as u64,
+        calls: rest.iter().map(|e| u64::from(e.count)).sum(),
+    });
 
     let result = ActivitySummary24hResponse {
         activity_count,
@@ -4677,6 +5208,10 @@ async fn get_activity_summary_24h(
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
         hours_covered,
+        kind_occurrences: kind_occurrences(&agg),
+        dao_count: dao_count(&agg),
+        script_calls,
+        script_rest,
     };
 
     if let Some(key) = cache_key {
@@ -4745,16 +5280,7 @@ fn build_capacity_breakdown(
             "categorized capacity exceeds total live capacity: live_capacity={live_capacity}, dao={dao_capacity}, tokens={token_capacity}, objects={object_capacity}"
         )));
     }
-    let pct = |value: i128| -> Result<String, ApiRouteError> {
-        crate::utils::exact_ratio::format_ratio(
-            value
-                .checked_mul(100)
-                .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
-            live_capacity,
-            2,
-        )
-        .map_err(ApiError::internal)
-    };
+    let pct = |value: i128| category_percentage(value, live_capacity);
     Ok(vec![
         CapacityCategory {
             category: "dao".to_string(),
@@ -4800,7 +5326,7 @@ fn parse_asset_owned_capacity(id: &str, value: Option<&str>) -> Result<i128, Api
 async fn get_asset_ecosystem(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<AssetEcosystemResponse> {
-    let cache_key = "statistics:asset-ecosystem";
+    let cache_key = "statistics:asset-ecosystem:v2";
     if let Some(cached) = state.cache.get::<AssetEcosystemResponse>(cache_key).await {
         return ok(cached);
     }
@@ -4908,8 +5434,11 @@ async fn get_asset_ecosystem(
 
 #[cfg(test)]
 mod tests {
+    // re-pinned for lane exactness, part B (the third read's S3): the unit is the one the exact value reaches, and the figure is cut in
+    // it: one under the unit is 999.99 of the unit below, the unit itself 1.00 (half up, the unit
+    // was chosen at scale − scale / 200,000 so a carry landed in it: 999,995 read 1.00 M)
     #[test]
-    fn compact_work_display_promotes_rounded_unit_boundaries() {
+    fn compact_work_display_takes_the_unit_the_value_reaches() {
         for (scale, previous, next) in [
             (1_000_000u128, "K", "M"),
             (1_000_000_000, "M", "G"),
@@ -4917,26 +5446,31 @@ mod tests {
             (1_000_000_000_000_000, "T", "P"),
             (1_000_000_000_000_000_000, "P", "E"),
         ] {
-            let boundary = scale - scale / 200_000;
+            let lowered = scale - scale / 200_000;
+            assert_eq!(format_hash_rate(scale - 1), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(lowered), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(scale), format!("1.00 {next}H/s"));
             assert_eq!(
-                format_hash_rate(boundary - 1),
-                format!("999.99 {previous}H/s")
-            );
-            assert_eq!(format_hash_rate(boundary), format!("1.00 {next}H/s"));
-            assert_eq!(
-                format_difficulty((boundary - 1) as u64),
+                format_difficulty((scale - 1) as u64),
                 format!("999.99 {previous}")
             );
-            assert_eq!(format_difficulty(boundary as u64), format!("1.00 {next}"));
+            assert_eq!(
+                format_difficulty(lowered as u64),
+                format!("999.99 {previous}")
+            );
+            assert_eq!(format_difficulty(scale as u64), format!("1.00 {next}"));
         }
     }
 
+    // re-pinned for lane exactness, part B (the third read's S3): cut, never rounded: 9.007… P is 9.00 P (was 9.01), 9.005… P 9.00 P (was
+    // 9.01), 1.005 P 1.00 P (was 1.01)
     #[test]
-    fn difficulty_display_rounds_exactly_above_f64_integer_precision() {
-        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.01 P");
-        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.01 P");
-        assert_eq!(super::format_difficulty(9_004_999_999_999_999), "9.00 P");
-        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.01 P");
+    fn difficulty_display_cuts_exactly_above_f64_integer_precision() {
+        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.00 P");
+        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.00 P");
+        assert_eq!(super::format_difficulty(9_009_999_999_999_999), "9.00 P");
+        assert_eq!(super::format_difficulty(9_010_000_000_000_000), "9.01 P");
+        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.00 P");
     }
     use super::*;
 
@@ -5014,6 +5548,35 @@ mod tests {
             format_transaction_rates(Some((1, 0)), 20).unwrap(),
             (None, None, None)
         );
+    }
+
+    /// lane exactness, part A2, S5: the rates are cut at the places the status bar shows: 2 transactions in 3 s is
+    /// 0.666… a second (0.66, half up 0.67), 39.98… a minute (39.9, half up 40.0) and 57,580.8…
+    /// a day (57580, half up 57581).
+    #[test]
+    fn transaction_rates_are_cut_never_rounded() {
+        assert_eq!(
+            format_transaction_rates(Some((2, 3_001)), 20).unwrap(),
+            (
+                Some("0.66".into()),
+                Some("39.9".into()),
+                Some("57580".into())
+            )
+        );
+    }
+
+    /// lane exactness, part A2, S5: the status bar's block time is the span over its gaps, cut at two places: 99,550
+    /// ms over 10 gaps is 9.955 s, "9.95s" (half up "9.96s").
+    #[test]
+    fn average_block_time_is_cut_at_two_places() {
+        assert_eq!(format_avg_block_time(99_550, 10, 20).unwrap(), "9.95s");
+    }
+
+    /// lane exactness, part A2, S5: an asset-ecosystem category's share of the live capacity is cut: 2 of 3 is 66.66 %
+    /// (half up 66.67).
+    #[test]
+    fn an_ecosystem_share_is_cut() {
+        assert_eq!(category_percentage(2, 3).unwrap(), "66.66");
     }
 
     #[test]
@@ -5138,6 +5701,9 @@ mod tests {
         let mut s = snapshot("2026-08-08", 100, 100_000_000_000, 350_000_003, 0);
         s.cum_miner_secondary = 150_000_001;
         s.cum_dao_compensation = 250_000_002;
+        // re-pinned for lane D1's third round (S1): the partition holds, the route now checks it
+        // (the compensation, all of it claimed, was missing from the protocol total)
+        s.compensation = 250_000_002;
         s.cum_treasury = 350_000_003;
         let point = secondary_issuance_data_point(&s).unwrap();
         assert_eq!(point.values["mining"], "1.50000001");
@@ -5440,8 +6006,9 @@ mod tests {
 
     #[test]
     fn test_network_hash_rate_formats_integer_without_float_rounding() {
-        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.91 PH/s");
-        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.01 PH/s");
+        // re-pinned for lane exactness, part B (the third read's S3): cut, 93.905 PH/s is 93.90 (was 93.91), 9.007… PH/s 9.00 (was 9.01)
+        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.90 PH/s");
+        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.00 PH/s");
         assert_eq!(format_hash_rate(999), "999.00 H/s");
     }
 
@@ -5452,11 +6019,14 @@ mod tests {
             block_count: 2,
             total_uncles: 0,
         };
+        // re-pinned for lane exactness, part B (the third read's S3): the day's average difficulty is cut to the integer, never rounded:
+        // (2 × 9,007,199,254,740,993 + 1) / 2 is 9,007,199,254,740,993.5, 9,007,199,254,740,993
+        // (half up …994)
         assert_eq!(
             average_daily_difficulty("20261024", &stats)
                 .unwrap()
                 .to_string(),
-            "9007199254740994"
+            "9007199254740993"
         );
         let corrupt = ckbadger_store::DailyBlockStats {
             difficulty_sum: 0,
@@ -6066,11 +6636,13 @@ mod tests {
     }
 
     #[test]
-    fn capacity_breakdown_rejects_zero_or_negative_denominator_and_rounds_half_up() {
+    // re-pinned for lane exactness, part A2 (S5): the share is cut, 1 of 201 is 0.4975…%, "0.49"
+    // (it was half up, "0.50", and named for it)
+    fn capacity_breakdown_rejects_zero_or_negative_denominator_and_cuts() {
         assert!(build_capacity_breakdown(0, 0, 0, 0).is_err());
         assert!(build_capacity_breakdown(100, -1, 0, 0).is_err());
         let categories = build_capacity_breakdown(201, 1, 0, 0).unwrap();
-        assert_eq!(categories[0].percentage, "0.50");
+        assert_eq!(categories[0].percentage, "0.49");
     }
 
     #[test]
@@ -6101,6 +6673,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(hodl_wave_cache_has_holder_count(&response));
     }
@@ -6116,6 +6689,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }
@@ -6132,6 +6706,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }
@@ -6148,6 +6723,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }
@@ -6173,7 +6749,7 @@ mod tests {
         let mut counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
         counts[10] = 1;
         counts[20] = 3;
-        let data = build_block_time_distribution_data(&counts, 4).unwrap();
+        let data = build_block_time_distribution_data(&counts, 0, 4).unwrap();
         assert_eq!(data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
         assert_eq!(data[0].date, "0.0");
         assert_eq!(data[10].date, "1.0");
@@ -6185,15 +6761,15 @@ mod tests {
     #[test]
     fn block_time_histogram_has_no_percentages_without_samples() {
         let empty = vec![0; BLOCK_TIME_DIST_BUCKET_COUNT];
-        assert!(build_block_time_distribution_data(&empty, 0)
+        assert!(build_block_time_distribution_data(&empty, 0, 0)
             .unwrap()
             .is_empty());
         let mut counts = empty;
         counts[1] = 9_007_199_254_740_993;
         counts[2] = 9_007_199_254_740_993;
-        let data = build_block_time_distribution_data(&counts, 18_014_398_509_481_986).unwrap();
+        let data = build_block_time_distribution_data(&counts, 0, 18_014_398_509_481_986).unwrap();
         assert_eq!(data[1].value, "50.000");
-        assert!(build_block_time_distribution_data(&counts, 1).is_err());
+        assert!(build_block_time_distribution_data(&counts, 0, 1).is_err());
     }
 
     #[test]
@@ -6231,6 +6807,8 @@ mod tests {
         batch.commit().unwrap();
 
         let response = build_block_time_distribution_response(&store).unwrap();
+        assert_eq!(response.epochs, 1);
+        let response = response.chart;
         assert_eq!(response.title, "Block Time Distribution (Last 1 Epochs)");
         assert_eq!(response.data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
 
@@ -6249,8 +6827,10 @@ mod tests {
         assert_eq!(at_2s.value, "50.000");
     }
 
+    // Re-pinned for lane D1's third round (S4): an interval past 50 s is in no bucket but in the
+    // whole, stated (it was in neither, so the 1 s bucket read 100.000)
     #[test]
-    fn test_build_block_time_distribution_response_excludes_overflow_from_50s_bucket() {
+    fn test_build_block_time_distribution_response_counts_overflow_in_the_whole_not_a_bucket() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
@@ -6284,6 +6864,8 @@ mod tests {
         batch.commit().unwrap();
 
         let response = build_block_time_distribution_response(&store).unwrap();
+        assert_eq!((response.intervals, response.beyond_range), (2, 1));
+        let response = response.chart;
         let at_1s = response
             .data
             .iter()
@@ -6294,7 +6876,7 @@ mod tests {
             .iter()
             .find(|point| point.date == "50.0")
             .unwrap();
-        assert_eq!(at_1s.value, "100.000");
+        assert_eq!(at_1s.value, "50.000");
         assert_eq!(at_50s.value, "0.000");
     }
 
@@ -6327,7 +6909,10 @@ mod tests {
         batch.commit().unwrap();
 
         let response = build_block_time_distribution_response(&store).unwrap();
-        assert_eq!(response.title, "Block Time Distribution (Last 0 Epochs)");
+        assert_eq!(
+            response.chart.title,
+            "Block Time Distribution (Last 0 Epochs)"
+        );
         assert!(!block_time_dist_has_data(&response));
     }
 
@@ -6407,6 +6992,63 @@ mod tests {
     }
 
     #[test]
+    fn secondary_issuance_destinations_must_make_the_protocol_total() {
+        assert!(secondary_issuance_partition("2026-11-18", 600, [150, 250, 200]).is_ok());
+        // compensation that misses claimed + unclaimed by one shannon: an error with the operands
+        let error = secondary_issuance_partition("2026-11-18", 600, [149, 250, 200]).unwrap_err();
+        assert!(error.contains("2026-11-18"), "{error}");
+        assert!(error.contains("they sum to 599"), "{error}");
+        assert!(
+            error.contains("compensation=149, mining=250, burnt=200, protocol_total=600"),
+            "{error}"
+        );
+    }
+
+    /// lane exactness, part B1: five bands from one day's operands; re-pinned from four (it took the bands made).
+    #[test]
+    fn total_supply_bands_must_make_c() {
+        let day = |circulating, protocol_deposited, total_deposited, burnt| SupplyOperands {
+            total_issuance: 1_000,
+            circulating,
+            protocol_deposited,
+            total_deposited,
+            unclaimed_compensation: 50,
+            burnt,
+        };
+        // 850 circulates: 300 in DAO cells, 250 of them deposits; 50 unclaimed; 100 burnt
+        assert_eq!(
+            total_supply_bands("2026-11-18", &day(850, 300, 250, 100)),
+            Ok([550, 250, 50, 50, 100])
+        );
+        // a row whose bands miss C by one shannon is an error naming the date and the operands
+        let error = total_supply_bands("2026-11-18", &day(850, 300, 250, 99)).unwrap_err();
+        assert!(error.contains("2026-11-18"), "{error}");
+        assert!(error.contains("they sum to 999"), "{error}");
+        assert!(
+            error.contains(
+                "total_issuance=1000, circulating=850, protocol_deposited=300, \
+                 total_deposited=250, unclaimed_compensation=50, burnt=99"
+            ),
+            "{error}"
+        );
+        // DAO cells under the deposits they hold: withdrawing would be negative
+        let error = total_supply_bands("2026-11-18", &day(850, 249, 250, 100)).unwrap_err();
+        assert!(
+            error.contains("band daoWithdrawing is negative for 2026-11-18: -1"),
+            "{error}"
+        );
+        // DAO cells over what circulates: outside the DAO would be negative
+        let error = total_supply_bands("2026-11-18", &day(850, 851, 250, 100)).unwrap_err();
+        assert!(
+            error.contains("band outsideDao is negative for 2026-11-18: -1"),
+            "{error}"
+        );
+        assert!(total_supply_bands("2026-11-18", &day(i128::MIN, 1, 0, 0))
+            .unwrap_err()
+            .contains("overflow"));
+    }
+
+    #[test]
     fn test_build_cell_size_response_from_snapshot() {
         let snapshot = DailyCellDistribution {
             size_bucket_counts: [10, 20, 30, 40, 50, 60],
@@ -6419,26 +7061,29 @@ mod tests {
                 600_00000000,
             ],
         };
+        // the chart in its own type, beside its two wholes (the D1 hand-back, item 2)
         let response = build_cell_size_response(&snapshot);
-        assert_eq!(response.title, "Cell Size Distribution");
-        assert_eq!(response.data.len(), 6);
-        assert_eq!(response.data[0].date, "<100 CKB");
-        assert_eq!(response.data[0].value, "10");
-        assert_eq!(response.data[0].value2.as_deref(), Some("100.5"));
-        assert_eq!(response.data[5].date, ">=1m CKB");
-        assert_eq!(response.data[5].value, "60");
+        assert_eq!(response.chart.title, "Cell Size Distribution");
+        assert_eq!(response.chart.data.len(), 6);
+        assert_eq!(response.chart.data[0].date, "<100 CKB");
+        assert_eq!(response.chart.data[0].value, "10");
+        assert_eq!(response.chart.data[0].value2.as_deref(), Some("100.5"));
+        assert_eq!(response.chart.data[5].date, ">=1m CKB");
+        assert_eq!(response.chart.data[5].value, "60");
+        assert_eq!(response.live_cells, "210");
+        assert_eq!(response.occupied_capacity, "2100.5");
     }
 
     #[test]
     fn test_empty_cell_size_response_has_metadata() {
         let response = empty_cell_size_response();
-        assert_eq!(response.title, "Cell Size Distribution");
-        assert_eq!(response.y_axis_label, "Live Cells");
+        assert_eq!(response.chart.title, "Cell Size Distribution");
+        assert_eq!(response.chart.y_axis_label, "Live Cells");
         assert_eq!(
-            response.y2_axis_label.as_deref(),
+            response.chart.y2_axis_label.as_deref(),
             Some("Common Knowledge Size (CKB)")
         );
-        assert!(response.data.is_empty());
+        assert!(response.chart.data.is_empty());
     }
 
     #[test]
@@ -6491,6 +7136,23 @@ mod tests {
         assert_eq!(
             build_address_cohort_response(&cohort).unwrap().data[0].value,
             "50.000000"
+        );
+    }
+
+    /// A cohort's share is cut at its six decimals, never rounded (lane D1's third round, S9):
+    /// 2 of 3 is 66.666666…%, cut 66.666666 (half up 66.666667).
+    #[test]
+    fn cohort_retention_cuts_its_share() {
+        let cohort = DailyAddressCohort {
+            cohorts: vec![ckbadger_store::AddressCohortEntry {
+                cohort_month: "2024-03".to_string(),
+                used_capacity: 2,
+                total_balance: 3,
+            }],
+        };
+        assert_eq!(
+            build_address_cohort_response(&cohort).unwrap().data[0].value,
+            "66.666666"
         );
     }
 

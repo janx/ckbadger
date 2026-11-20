@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { sentField } from '@/lib/api-fields';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
@@ -10,24 +11,21 @@ import { DaoSources } from '@/components/dao/dao-sources';
 import {
   DaoHistoryFigure,
   DaoHistoryReading,
-  HistoryRangeToggle,
+  HISTORY_RANGES,
   historySeries,
   type HistoryRange,
 } from '@/components/dao/dao-history';
+import { RangeSelect } from '@/components/ui/range-select';
 import { DaoGrows } from '@/components/dao/dao-grows';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs } from '@/lib/utils';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import {
-  IciclePartition,
-  icicleNodePaint,
-  type IcicleNode,
-} from '@/components/ui/icicle-partition';
+import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   CLASS_COLORS,
@@ -38,17 +36,21 @@ import {
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { WIDEST_DAO_DEPOSIT_SUMMARY, shortChars } from '@/lib/list-bounds';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { HeadId } from '@/components/ui/head-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -176,17 +178,39 @@ export function DaoHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 export function DaoLede() {
   return (
-    <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
+    <p className="text-text text-body max-w-measure mt-1.5">
       CKB locked in the DAO keeps its share of the supply.{' '}
-      <a href="#evidence" className="hover:text-text-bright hover:underline">
-        How it works<span className="whitespace-nowrap"> ↓</span>
-      </a>
+      {/* a way onward, to a place further down: the link writes its ↓ (lane P4) */}
+      <Link href="#evidence" look="onward">
+        How it works
+      </Link>
     </p>
   );
 }
 
 /**
- * The hero (hierarchy board v3, R13): the title row (h1, the DAO charts link, the range buttons),
+ * The two headline rates' keys, one line each in tier 1 (readability P4: "the DAO page keys its
+ * three rates in one line each"; the third, each year's compensation, is keyed under its bars):
+ * what each rate is, said where the reader meets it, and once (tier 2 no longer repeats it).
+ */
+function RateKeys() {
+  return (
+    // each key one line of the measure, 76 characters at most (R4): 70 and 72 here
+    <ul aria-label="What the rates are" className="text-small max-w-measure mt-3 space-y-1">
+      <li>
+        <span className="text-text-dim">Estimated APC:</span>{' '}
+        <span className="text-text">a year’s compensation, at today’s issuance and deposits</span>
+      </li>
+      <li>
+        <span className="text-text-dim">Compensation, last 365 days:</span>{' '}
+        <span className="text-text">what free capacity in the DAO grew, from AR</span>
+      </li>
+    </ul>
+  );
+}
+
+/**
+ * The hero (hierarchy board v3, R13): the title row (h1, the DAO charts link, the range),
  * one sentence, then deposited as the page's one gold figure with its 24 h change on its baseline
  * row, and the picture right under it. The picture's reading row and the four metrics in one row
  * follow the hero section. Deposited, deposits and depositors are the evidence anchor's phase-0
@@ -225,15 +249,15 @@ function Hero({
           <DaoHeading />
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             {/* The hero's former "Explore DAO charts →", beside the range of the charts it continues. */}
-            <Link
-              href="/charts/total-deposit"
-              className="text-text hover:text-text-bright text-small font-mono hover:underline"
-            >
-              Explore DAO charts →
+            <Link href="/charts/total-deposit" look="onward" className="text-small font-mono">
+              Explore DAO charts
             </Link>
+            {/* The controls board's range, `1 m · 1 y · all`: a new range lets a pinned day go. */}
             {series && (
-              <HistoryRangeToggle
-                range={range}
+              <RangeSelect
+                label="History range"
+                options={HISTORY_RANGES}
+                value={range}
                 onChange={(next) => {
                   setRange(next);
                   pin.clear();
@@ -247,7 +271,7 @@ function Hero({
           <div className="eyebrow text-text-dim text-meta mb-1.5">deposited</div>
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
             <DepositedFigure shannons={evidence.phase0.capacity} />
-            <p className="text-body">
+            <p className="text-body max-w-measure">
               {changeShannons === null ? (
                 <span className="text-text-dim">—</span>
               ) : (
@@ -313,6 +337,7 @@ function Hero({
           {evidence.phase0.count.toLocaleString('en-US')}
         </Metric>
       </dl>
+      <RateKeys />
     </div>
   );
 }
@@ -325,7 +350,6 @@ function exactSafeMs(value: string, context: string): number {
   return Number(ms);
 }
 
-const ICICLE_LABEL_MIN_PX = 1000;
 /** Hierarchy v3 (board): the icicle's rows — the whole, its three parts, compensation's two. */
 const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
 /** The claimable part of the requested withdrawals: the DAO gold at this alpha (R12). */
@@ -333,7 +357,18 @@ const CLAIMABLE_FILL = 0.45;
 /** The capacity-use bar's segments sit 3 px apart. */
 const BAR_GAP_PX = 3;
 
-/** The parts of secondary issuance since genesis, exact, checked to partition the whole. */
+/** A figure the DAO statistics route states for this page; an API older than it sends none. */
+function stated<K extends 'liveCellsCount' | 'secondaryIssuance'>(
+  statistics: DaoStatistics,
+  field: K
+): DaoStatistics[K] {
+  return sentField(statistics[field], 'DAO statistics', field);
+}
+
+/**
+ * The parts of secondary issuance since genesis, exact, and their whole and the live cells as the
+ * route states them (lane exactness, part A, A5 ii: the page summed both); the parts are checked to make the whole.
+ */
 function issuanceParts(statistics: DaoStatistics) {
   const mining = parseShannons(statistics.miningReward, 'miningReward');
   const compensation = parseShannons(statistics.depositCompensation, 'depositCompensation');
@@ -342,17 +377,20 @@ function issuanceParts(statistics: DaoStatistics) {
   const unclaimed = parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation');
   if (claimed + unclaimed !== compensation)
     throw new Error('DAO compensation parts do not equal total compensation');
-  const liveCells = (
-    statistics.depositCellsCount + statistics.withdrawalRequestCellsCount
-  ).toLocaleString('en-US');
+  const liveCellsCount = stated(statistics, 'liveCellsCount');
+  const total = parseShannons(stated(statistics, 'secondaryIssuance'), 'secondaryIssuance');
+  if (mining + compensation + burnt !== total)
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: secondary issuance ${total} is not miners ${mining} + compensation ${compensation} + burnt ${burnt}`
+    );
   return {
     mining,
     compensation,
     burnt,
     claimed,
     unclaimed,
-    total: mining + compensation + burnt,
-    liveCells,
+    total,
+    liveCells: formatCount(liveCellsCount, 'live cell'),
   };
 }
 
@@ -403,21 +441,23 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             opacity: 1,
             boxLabel: { name: 'depositors', share: share(compensation) },
             children: [
+              // claimed and unclaimed, the words the Supply and secondary-issuance charts use for
+              // these two amounts (lane exactness, part A, A7: they were "paid out" and "still owed")
               {
                 key: 'paid',
-                label: 'paid out',
+                label: 'claimed',
                 value: claimed,
                 tone: 'dao',
                 opacity: 1,
-                boxLabel: { name: 'paid out', share: ofCompensation(claimed) },
+                boxLabel: { name: 'claimed', share: ofCompensation(claimed) },
               },
               {
                 key: 'owed',
-                label: 'still owed',
+                label: 'unclaimed',
                 value: unclaimed,
                 tone: 'dao',
                 opacity: 0.4,
-                boxLabel: { name: 'still owed', share: ofCompensation(unclaimed) },
+                boxLabel: { name: 'unclaimed', share: ofCompensation(unclaimed) },
               },
             ],
           },
@@ -432,36 +472,28 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           },
         ],
       };
-  const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
-  /** PB-25: a legend row's swatch is its block's paint, so every row names one block. */
-  const swatchOf = (key: string) => {
-    const find = (node: IcicleNode): IcicleNode | undefined =>
-      node.key === key ? node : node.children?.map(find).find(Boolean);
-    const node = root && find(root);
-    if (!node) throw new Error(`DAO issuance: no icicle block ${key} for its legend row`);
-    const { color: paint, opacity } = icicleNodePaint(node);
-    return <Swatch color={fade(paint, opacity)} />;
-  };
   return (
     <Section
       title="Where secondary issuance goes"
       args={
         <>
-          at <BlockLink number={statistics.tipBlockNumber} />
+          at <BlockLink number={statistics.tipBlockNumber} look="inline" />
         </>
       }
     >
       <div ref={ref} className="min-w-0">
         {root === null ? (
-          <div className="text-text-dim text-small">
+          <div className="text-text text-small max-w-measure">
             No secondary issuance has accrued at this indexed block; allocation shares are
             undefined.
           </div>
         ) : (
           width !== null && (
+            // every part named in place at every width (lane P4): inside its box where its name
+            // and share fit, else on a line of its own under the icicle, at its box
             <IciclePartition
               root={root}
-              label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is paid out or still owed to live deposits"
+              label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is claimed, or unclaimed in live deposits"
               formatValue={(v) => ckbAmountText(v, 'summary')}
               width={width}
               rows={ICICLE_ROWS}
@@ -469,92 +501,34 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           )
         )}
       </div>
-      {root !== null && width !== null && narrow && (
-        <ul
-          aria-label="Secondary issuance parts"
-          className="text-small text-text-dim mt-3 space-y-1.5"
-        >
-          <li>
-            {swatchOf('total')}
-            secondary issuance since genesis{' '}
-            <span className="text-text">
-              <Amount form="column" value={total.toString()} />
-            </span>{' '}
-            CKB
-          </li>
-          <li>
-            {swatchOf('miners')}
-            miners {share(mining)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={mining.toString()} />
-            </span>
-          </li>
-          <li>
-            {swatchOf('compensation')}
-            depositors {share(compensation)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={compensation.toString()} />
-            </span>
-            <ul className="mt-1 space-y-1 pl-5">
-              <li>
-                {swatchOf('paid')}
-                paid out {ofCompensation(claimed)} ·{' '}
-                <span className="text-text">
-                  <Amount form="column" value={claimed.toString()} />
-                </span>
-              </li>
-              <li>
-                {swatchOf('owed')}
-                still owed {ofCompensation(unclaimed)} ·{' '}
-                <span className="text-text">
-                  <Amount form="column" value={unclaimed.toString()} />
-                </span>{' '}
-                to {liveCells} live cells
-              </li>
-            </ul>
-          </li>
-          <li>
-            {swatchOf('burnt')}
-            burnt {share(burnt)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={burnt.toString()} />
-            </span>{' '}
-            · no cell can ever claim it
-          </li>
-        </ul>
-      )}
-      {root !== null && width !== null && !narrow && (
-        // One line of three facts (each its own item, so a narrower column wraps between them).
-        <p
-          data-role="exact-amounts"
-          className="text-small text-text-dim mt-3 flex flex-wrap gap-x-[0.6em]"
-        >
+      {root !== null && width !== null && (
+        // The amounts under the icicle, one line of facts (each its own item, so a narrower column
+        // wraps between them), in the summary form, whole CKB, each titled with its exact value
+        // (R5, lane P4: they were every decimal, padded): the labels quiet, the amounts read.
+        <p data-role="amounts" className="text-small text-text mt-3 flex flex-wrap gap-x-[0.6em]">
           <span>
-            to miners{' '}
-            <span className="text-text">
-              <Amount form="column" value={mining.toString()} />
-            </span>
+            <span className="text-text-dim">to miners</span>{' '}
+            <Amount form="summary" value={mining.toString()} />
           </span>
           <span>
             {' '}
-            · for depositors{' '}
-            <span className="text-text">
-              <Amount form="column" value={compensation.toString()} />
-            </span>{' '}
-            (paid out <Amount form="column" value={claimed.toString()} /> · still owed{' '}
-            <Amount form="column" value={unclaimed.toString()} /> to {liveCells} live cells)
+            <span className="text-text-dim">· for depositors</span>{' '}
+            <Amount form="summary" value={compensation.toString()} />{' '}
+            <span className="text-text-dim">(claimed</span>{' '}
+            <Amount form="summary" value={claimed.toString()} />{' '}
+            <span className="text-text-dim">· unclaimed</span>{' '}
+            <Amount form="summary" value={unclaimed.toString()} />{' '}
+            <span className="text-text-dim">in {liveCells})</span>
           </span>
           <span>
             {' '}
-            · burnt{' '}
-            <span className="text-text">
-              <Amount form="column" value={burnt.toString()} />
-            </span>{' '}
-            CKB
+            <span className="text-text-dim">· burnt</span>{' '}
+            <Amount form="summary" value={burnt.toString()} />{' '}
+            <span className="text-text-dim">CKB</span>
           </span>
         </p>
       )}
-      <p className="text-text text-body mt-3.5 max-w-[640px]">
+      <p className="text-text text-body max-w-measure mt-3.5">
         1.344 billion CKB a year, split in every block by how CKB is used: a deposit keeps its
         share, free CKB outside the DAO has its share burnt.
       </p>
@@ -604,7 +578,7 @@ function IssuanceSplit() {
         </li>
         <li className="flex">
           <MechanismTile title="depositors">
-            the deposits&apos; share, compensation accrued via AR, paid out at withdrawal
+            the deposits&apos; share, compensation accrued via AR, claimed at withdrawal
           </MechanismTile>
         </li>
         <li className="flex">
@@ -686,13 +660,17 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
   ];
   return (
     <div ref={ref} className="mt-3.5 flex min-w-0 flex-col">
-      <div className="text-text-dim text-meta">
+      {/* the bar's caption, a sentence over the figure, on the measure (R4): the reading ink at
+          13 px, its block a link inside it (lane cd-fixes-controls, the ink and size round: it was
+          quiet at 12 px) */}
+      <div className="text-text text-small max-w-measure">
         How all{' '}
         <span className="text-text">
-          <Amount form="column" value={issued.toString()} />
+          <Amount form="summary" value={issued.toString()} />
         </span>{' '}
-        CKB issued so far is used at block <BlockLink number={statistics.tipBlockNumber} /> · every
-        block splits its issuance in these proportions
+        CKB issued so far is used at block{' '}
+        <BlockLink number={statistics.tipBlockNumber} look="inline" /> · every block splits its
+        issuance in these proportions
       </div>
       <div
         className="text-meta mt-1.5 flex h-[18px] w-full gap-[3px] overflow-hidden"
@@ -707,7 +685,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           // R9: a share is written inside its segment only where it fits (padding included).
           const segmentPx =
             width === null ? 0 : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
-          const fits = segmentPx >= label.length * snappedAdvancePx(fontPx('meta')) + 16;
+          const fits = segmentPx >= textPx(label.length, fontPx('meta')) + 16;
           return (
             <div
               key={part.key}
@@ -723,7 +701,12 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           );
         })}
       </div>
-      <div className="text-text-dim text-meta mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
+      {/* The bar's key: each part's name and its share read in the reading ink at 13 px, the swatch
+          as it was (the ink and size round's follow-up, the lead's ruling, as for a chart card's
+          key; it was quiet at 12). The widest part, the depositors', is 70 glyphs (546 px and the
+          swatch's 15): one line from a 561 px column, its words wrapping inside it below that, as
+          they did at 12 px (504 px and 15) */}
+      <div className="text-text text-small mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.miners} />
           occupied by cells <span className="text-text">{percentOf(occupied, issued)}</span> →
@@ -797,7 +780,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       <span className={onFill ? undefined : 'text-text-bright'}>
         <Amount form="exact" value={ready.capacity} /> CKB
       </span>{' '}
-      <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
+      <span>· {plural(ready.count, 'cell')}</span>
     </>
   );
   // R12: the claimable words sit inside their segment where they fit (text-small, 12 px padding),
@@ -808,17 +791,26 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       .length;
   const claimableInside =
     barWidth !== null &&
-    ((barWidth - 2) * Number(readyPercent)) / 100 >=
-      claimableChars * snappedAdvancePx(fontPx('small')) + 24;
+    ((barWidth - 2) * Number(readyPercent)) / 100 >= textPx(claimableChars, fontPx('small')) + 24;
   return (
     <Section
       title="When deposits can leave"
       args={`${ready.count.toLocaleString('en-US')} ready · ${waiting.count.toLocaleString('en-US')} waiting`}
     >
-      <div className="relative">
-        <span className="text-text-dim text-meta pointer-events-none absolute left-2 top-1">
-          CKB whose 180-epoch cycle ends in the next 30 days
+      {/* The plot's name and its scale (lane P4: a chart that shows amounts carries values): the
+          tallest bar reaches the rule over the bars, and its amount is written at the rule's
+          right end, in the summary form, titled exactly; on a narrow column the scale takes a
+          line of its own under the name. */}
+      <div className="text-meta mb-1 flex flex-wrap items-baseline justify-between gap-x-4">
+        <span className="text-text-dim">CKB whose 180-epoch cycle ends in the next 30 days</span>
+        <span className="whitespace-nowrap">
+          <span className="text-text-dim">top line </span>
+          <span data-role="window-scale" className="text-text">
+            <Amount form="summary" value={max.toString()} /> CKB
+          </span>
         </span>
+      </div>
+      <div className="border-row-rule relative border-t">
         <div
           className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
           role="list"
@@ -835,7 +827,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
                 onFocus={() => setSelectedDay(row.nominalDay)}
                 onMouseEnter={() => setSelectedDay(row.nominalDay)}
-                className="focus:outline-interactive group flex h-[200px] flex-col justify-end pt-6 focus:outline"
+                className="focus:outline-interactive group flex h-[200px] flex-col justify-end focus:outline"
                 title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
               >
                 <div
@@ -862,7 +854,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           idle={
             <>
               <span className="text-text-bright">
-                <Amount form="column" value={first.capacity} /> CKB
+                <Amount form="exact" value={first.capacity} /> CKB
               </span>{' '}
               in {plural(first.count, 'deposit')} ends its cycle within a day
             </>
@@ -875,7 +867,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 return (
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
-                    {row.throughEpochOffset} · <Amount form="column" value={row.capacity} /> CKB in{' '}
+                    {row.throughEpochOffset} · <Amount form="exact" value={row.capacity} /> CKB in{' '}
                     {unitNode(formatCount(row.count, 'deposit'))}
                   </span>
                 );
@@ -910,7 +902,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               />
             </div>
             <div
-              className={`text-text-dim text-meta mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
+              className={`text-text text-small mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
             >
               {!claimableInside && <span>{claimable(false)}</span>}
               <span>
@@ -924,7 +916,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           </div>
         )}
       </div>
-      <p className="text-text text-body mt-3.5 max-w-[640px]">
+      <p className="text-text text-body max-w-measure mt-3.5">
         A withdrawal completes only at the end of a 180-epoch cycle, about 30 days.
       </p>
     </Section>
@@ -979,22 +971,41 @@ function concentrationGroups(evidence: DaoEvidence) {
 /** A depositor's address at the form's size (U-09): row in the table, tight in the phone row. */
 function ownerLink(owner: Owner, size: ShortSize) {
   return (
-    <Link href={`/address/${owner.address}`} className="text-text-bright hover:underline">
+    <Link href={`/address/${owner.address}`} look="key">
       <ShortId value={owner.address} kind="address" size={size} />
     </Link>
   );
 }
 
-function lockLink(owner: Owner, size: ShortSize) {
-  return (
-    <Link
-      href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
-      className="text-text-dim hover:text-text-bright font-mono hover:underline"
-      title={`${owner.lockCodeHash} (${owner.lockHashType})`}
-    >
-      {owner.lockKind ?? <ShortId value={owner.lockCodeHash} kind="hash" size={size} />}
-    </Link>
+/**
+ * A depositor's lock by the one decision (B4 second fix round), read off its address and the hash
+ * type it sends (`lockHashType`, B4 third round: the decision's where it has no address, and the
+ * address must spell it): in the Lock column every row is named (the default lock by its name, or
+ * "lock 0x…" where the API names none); beside the party on a phone row the default lock is not,
+ * and the part is left out. A lock the decision refuses fails its cell in place (D7), said with
+ * the depositor.
+ */
+function ownerLock(owner: Owner, place: 'column' | 'inline', size: ShortSize): ReactNode {
+  const read = readPart(() =>
+    rowLock(
+      {
+        lockKind: owner.lockKind,
+        lockCodeHash: owner.lockCodeHash,
+        lockHashType: owner.lockHashType,
+        address: owner.address,
+      },
+      place
+    )
   );
+  if (read.error !== undefined)
+    return (
+      <PartReadError
+        what="the depositor’s lock"
+        where={`depositor ${owner.lockScriptHash}`}
+        error={read.error}
+      />
+    );
+  return read.value && <LockWordsView words={read.value} size={size} />;
 }
 
 /**
@@ -1006,20 +1017,35 @@ const OWNER_CELL = 'text-body py-1.5';
 /** Board v3: the column heads at meta (11 px), under which the rows read at body. */
 const ownerHead = (label: string) => <span className="text-meta">{label}</span>;
 
-const OWNER_COLUMNS: ListColumn<Owner>[] = [
+/**
+ * The largest depositors' columns, each budgeted from the widest value it holds (readability F3-e)
+ * at the rows' body step (14 px), a head at the meta step (12) and the gap after every column but
+ * the last.
+ */
+const ownerCell = (chars: number) => textPx(chars, fontPx('body'));
+
+/**
+ * The columns for the rows the topic page shows. A depositor's deposits are no consensus count (a
+ * lock may hold any number of DAO cells across blocks; PAGE-LANE-NOTES: WIDEST_COUNT, a block's or
+ * a transaction's count, was reused for them), and the topic page shows five known rows: the
+ * Deposits column is budgeted from the widest count those rows hold (lane P4).
+ */
+const ownerColumns = (rows: readonly Owner[]): ListColumn<Owner>[] => [
   {
     key: 'rank',
     className: OWNER_CELL,
     label: '#',
     header: ownerHead('#'),
-    minWidth: 40,
-    render: (o) => <span className="text-text-dim">{o.rank}</span>,
+    // a rank of the topic page's five (one digit, 8.4) and the gap; it was 40
+    minWidth: columnPx(ownerCell(String(TOPIC_ROWS).length) + CELL_GAP_PX),
+    render: (o) => o.rank,
   },
   {
     key: 'depositor',
     label: 'Depositor',
     header: ownerHead('Depositor'),
-    minWidth: 190,
+    // an address at the row size (13 characters, 109.2) and the gap; it was 190
+    minWidth: columnPx(ownerCell(shortChars(SHORT_FORMS.row.address)) + CELL_GAP_PX),
     className: OWNER_CELL,
     render: (o) => ownerLink(o, 'row'),
   },
@@ -1027,16 +1053,30 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     key: 'lock',
     label: 'Lock',
     header: ownerHead('Lock'),
-    minWidth: 170,
+    // The flexible column (a lock's name has no bound): at its minimum the words the decision
+    // writes for a lock the API names none of, "lock " and its code hash at the row size (22
+    // characters, 184.8) and the gap (B4 second fix round: it was the code hash alone), the rest of
+    // the container beyond the sum. A lock on the default code hash by another hash type adds
+    // " by data1" (9 more): words after the unit that a line may break before (`LockWordsView`),
+    // so where the column has no room for them they wrap under "lock 0x…", inside the column.
+    minWidth: columnPx(ownerCell('lock '.length + shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
+    width: 'auto',
     className: OWNER_CELL,
-    render: (o) => lockLink(o, 'row'),
+    render: (o) => ownerLock(o, 'column', 'row'),
   },
   {
     key: 'deposits',
     className: OWNER_CELL,
     label: 'Deposits',
     header: ownerHead('Deposits'),
-    minWidth: 80,
+    // the head's "Deposits" (57.6 at 12 px) or the widest count the rows hold, and the gap; it was
+    // the head against four digits, "9,999" (42), and 80 before that
+    minWidth: columnPx(
+      Math.max(
+        textPx('Deposits'.length, fontPx('meta')),
+        ...rows.map((o) => ownerCell(o.depositCount.toLocaleString('en-US').length))
+      ) + CELL_GAP_PX
+    ),
     numeric: true,
     render: (o) => o.depositCount.toLocaleString('en-US'),
   },
@@ -1045,18 +1085,22 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'CKB deposited',
     header: ownerHead('CKB deposited'),
-    minWidth: 210,
+    // A list column, so the summary form (R5, lane P4: it was every decimal, padded): one
+    // depositor's CKB under ten billion, whole, "9,999,999,999" (13 characters, 109.2), and the
+    // gap; it was 22 characters (184.8), and 210 before that
+    minWidth: columnPx(ownerCell(WIDEST_DAO_DEPOSIT_SUMMARY.length) + CELL_GAP_PX),
     numeric: true,
-    render: (o) => <Amount form="column" value={o.capacity} />,
+    render: (o) => <Amount form="summary" value={o.capacity} />,
   },
   {
     key: 'share',
     className: OWNER_CELL,
     label: 'Share',
     header: ownerHead('Share'),
-    minWidth: 70,
+    // "100.00%" (58.8); the last column, no gap. It was 70.
+    minWidth: columnPx(ownerCell('100.00%'.length)),
     numeric: true,
-    render: (o) => <span className="text-text-dim">{o.sharePercent}%</span>,
+    render: (o) => `${o.sharePercent}%`,
   },
 ];
 
@@ -1066,11 +1110,8 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
     <Section
       title="Who deposits"
       note={
-        <Link
-          href="/dao/depositors"
-          className="text-text hover:text-text-bright text-small hover:underline"
-        >
-          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors →
+        <Link href="/dao/depositors" look="onward" className="text-small">
+          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors
         </Link>
       }
     >
@@ -1090,22 +1131,22 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
       <ListTable
         label="Largest depositors"
         rows={evidence.concentration.owners.slice(0, TOPIC_ROWS)}
-        columns={OWNER_COLUMNS}
+        columns={ownerColumns(evidence.concentration.owners.slice(0, TOPIC_ROWS))}
         rowKey={(o) => o.lockScriptHash}
         empty="No live deposits at this indexed tip."
         mobileRow={(o) => (
           <div className="text-small space-y-1">
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
-                <span className="text-text-dim mr-2">{o.rank}</span>
+                <span className="mr-2">{o.rank}</span>
                 {ownerLink(o, 'tight')}
               </span>
-              <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
+              <span className="shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              {lockLink(o, 'tight')}
+              {ownerLock(o, 'inline', 'tight')}
               <span className="text-text-bright">
-                <Amount form="column" value={o.capacity} /> CKB
+                <Amount form="summary" value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
               </span>
             </div>
@@ -1132,7 +1173,7 @@ function statisticsAnchor(statistics: DaoStatistics): DaoStatistics['anchor'] {
 
 /**
  * Tier 2 (board V63): the header's DAO field read in CKB with AR as its exact rate, and the DAO
- * script's rules. S = still owed + burnt is stated only when the statistics and the header are the
+ * script's rules. S = unclaimed + burnt is stated only when the statistics and the header are the
  * same block; across two blocks it would compare two different states (DAO-16).
  */
 function RawEvidence({
@@ -1143,7 +1184,7 @@ function RawEvidence({
   statistics: DaoStatistics;
 }) {
   const header = evidence.header;
-  // DAO-16 (R2b-a 44): S, still owed and burnt from ONE statistics row at ONE block, so the
+  // DAO-16 (R2b-a 44): S, unclaimed and burnt from ONE statistics row at ONE block, so the
   // identity is stated whatever block the header table below comes from; contracts W5-3: that
   // block, number and hash, is the row's own `anchor`.
   const anchor = statisticsAnchor(statistics);
@@ -1152,7 +1193,7 @@ function RawEvidence({
   const burnt = parseShannons(statistics.burnt, 'burnt');
   if (owed + burnt !== statsS)
     throw new Error(
-      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: S ${statsS} is not still owed + burnt ${owed + burnt}`
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: S ${statsS} is not unclaimed + burnt ${owed + burnt}`
     );
   const fields = [
     {
@@ -1160,7 +1201,7 @@ function RawEvidence({
       bytes: '0..8',
       value: (
         <>
-          <Amount form="column" value={header.c} /> CKB issued in total
+          <Amount form="exact" value={header.c} /> CKB issued in total
         </>
       ),
     },
@@ -1174,8 +1215,8 @@ function RawEvidence({
       bytes: '16..24',
       value: (
         <>
-          <Amount form="column" value={header.s} /> CKB: compensation still owed to live deposits +
-          the burnt share, which no cell can ever claim
+          <Amount form="exact" value={header.s} /> CKB: the compensation live deposits have not
+          claimed + the burnt share, which no cell can ever claim
         </>
       ),
     },
@@ -1184,7 +1225,7 @@ function RawEvidence({
       bytes: '24..32',
       value: (
         <>
-          <Amount form="column" value={header.u} /> CKB occupied (incl. genesis virtual occupied)
+          <Amount form="exact" value={header.u} /> CKB occupied (incl. genesis virtual occupied)
         </>
       ),
     },
@@ -1193,35 +1234,48 @@ function RawEvidence({
     <DetailSection
       title={
         <>
-          The DAO field in every block header · <BlockLink number={header.blockNumber} />
+          The DAO field in every block header ·{' '}
+          <BlockLink number={header.blockNumber} look="inline" />
         </>
       }
     >
       <div className="text-small">
+        {/* lane exactness, part A (A6): an exact amount does not break and is never cut to fit, so below sm a
+            field's value stands under its label on the row's whole line (at 320 px the three
+            columns left it 124 px of 288, and C, 23 glyphs at 13 px, is 179.4); from sm it stands
+            beside its label */}
         {fields.map((field) => (
           <div
             key={field.key}
-            className="border-row-rule grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            data-dao-field={field.key}
+            className="border-row-rule grid grid-cols-[44px_96px] gap-x-3 gap-y-0.5 border-t py-1.5 sm:grid-cols-[44px_96px_minmax(0,1fr)]"
           >
             <span className="text-text-bright">{field.key}</span>
             <span className="text-text-dim">bytes {field.bytes}</span>
-            <span className="min-w-0">{field.value}</span>
+            <span data-role="field-value" className="col-span-2 min-w-0 sm:col-span-1">
+              {field.value}
+            </span>
           </div>
         ))}
       </div>
-      <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
-      {/* Board v3: the explanation reads at body (13 px), as tier 2's other prose. */}
-      <p className="text-text-dim text-body mt-3">
+      {/* The field's 32 bytes, a value: the reading ink at 13 px (the ink and size round's
+          follow-up; it was quiet at 12). 66 glyphs are 514.8 px, wider than the column at every
+          width the page has, so they break anywhere inside the box: 60 + 6 glyphs in the 470.4 px
+          column at 1280 (65 + 1 at 12 px), 45 + 21 at 390, 42 + 24 at 360, 36 + 30 at 320 */}
+      <div className="text-text text-small mt-3 break-all font-mono">{header.daoHex}</div>
+      {/* Board v3: the explanation reads at the body step, as tier 2's other prose: in the reading
+          ink, on the measure (readability R3, R4). */}
+      <p className="text-text text-body max-w-measure mt-3">
         AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
         {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
-        <BlockLink number={evidence.tipBlockNumber} />: free capacity deposited in block 0 would
-        have grown by +{evidence.ar.sinceGenesisGrowthPercent}
+        <BlockLink number={evidence.tipBlockNumber} look="inline" />: free capacity deposited in
+        block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
         %. A deposit grows on the capacity it does not occupy; the curve flattens as more CKB
         exists. The deposit reading under &ldquo;How a deposit grows&rdquo; is the API
         calculator&apos;s for 10,000 CKB in a standard deposit cell: compensation accrues on its
         free capacity, the CKB the cell does not occupy. Compensation freezes at the withdrawal
         request AR. At block{' '}
-        <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
+        <Link href={`/blocks/${anchor.blockNumber}`} look="inline">
           {formatBlockNumber(anchor.blockNumber)}
         </Link>{' '}
         (
@@ -1229,16 +1283,19 @@ function RawEvidence({
           <ShortId value={anchor.blockHash} kind="hash" size="row" />
         </span>
         ), S (
-        <Amount form="column" value={statsS.toString()} /> CKB) equals the compensation still owed (
-        <Amount form="column" value={owed.toString()} />) plus the burnt share (
-        <Amount form="column" value={burnt.toString()} />) to the shannon: S only counts the burnt
-        share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’
-        share.
+        <Amount form="exact" value={statsS.toString()} /> CKB) equals the unclaimed compensation (
+        <Amount form="exact" value={owed.toString()} />) plus the burnt share (
+        <Amount form="exact" value={burnt.toString()} />) to the shannon: S only counts the burnt
+        share, it does not hold it for anyone. Claimed + unclaimed compensation equals the
+        depositors’ share.
       </p>
       {evidence.ar.year365 && (
-        <div className="text-text-dim text-meta mt-2 font-mono">
-          365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
-          time <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
+        // the anchor's values and what they are, a sentence: the reading ink at 13 px (lane
+        // cd-fixes-controls, the ink and size round: it was quiet at 12 px)
+        <div className="text-text text-small max-w-measure mt-2 font-mono">
+          365-day anchor: block{' '}
+          <BlockLink number={evidence.ar.year365.anchorBlockNumber} look="inline" /> · chain time{' '}
+          <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
           {formatDurationMs(
             exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
@@ -1249,9 +1306,10 @@ function RawEvidence({
       )}
       <Link
         href={`/blocks/${header.blockNumber}`}
-        className="text-text hover:text-text-bright text-small mt-2 inline-block hover:underline"
+        look="onward"
+        className="text-small mt-2 inline-block"
       >
-        Open source block →
+        Open source block
       </Link>
     </DetailSection>
   );
@@ -1267,11 +1325,16 @@ function RawEvidence({
               <div>
                 <dt className="text-text-dim">Type script · type</dt>
                 <dd className="mt-0.5">
+                  {/* the whole code hash in designed lines, never broken where the browser
+                      pleases (lane P4) */}
                   <Link
                     href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
-                    className="text-text-bright break-all font-mono hover:underline"
+                    look="key"
                   >
-                    0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
+                    <HeadId
+                      value="0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+                      kind="hash"
+                    />
                   </Link>
                 </dd>
                 <dd className="text-text-dim mt-0.5">
@@ -1280,14 +1343,14 @@ function RawEvidence({
               </div>
               <div>
                 <dt className="text-text-dim">Cell data, 8 bytes</dt>
-                <dd className="mt-0.5">
+                <dd className="max-w-measure mt-0.5">
                   0 for a deposit · the deposit&apos;s block number (u64 LE) for a withdrawal
                   request
                 </dd>
               </div>
               <div>
                 <dt className="text-text-dim">Withdrawing</dt>
-                <dd className="mt-0.5 leading-relaxed">
+                <dd className="max-w-measure mt-0.5 leading-relaxed">
                   header deps: the deposit block and the request block · input since: the epoch
                   where the cycle ends · paid out: (capacity − occupied) × AR(request) ÷ AR(deposit)
                   + occupied
@@ -1325,7 +1388,7 @@ function HowItWorks({
       {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board).
           Material pass v2 (7): the former two paragraphs are four, one topic each, and the two
           mechanisms are drawn as tiles between them; every sentence is kept, in its order. Set in
-          the tier-2 Prose piece (material pass v2 leftovers): 14 px on a 1.7 line, 64 characters. */}
+          the tier-2 Prose piece (material pass v2 leftovers): 14 px on a 1.7 line, on the measure. */}
       <Prose className="flex flex-col">
         <p>
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
@@ -1353,22 +1416,23 @@ function HowItWorks({
           Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
           occupied size of live cells. The miners&apos; share is s × U ÷ C of each block&apos;s
           secondary issuance s, paid in cellbases; the depositors&apos; share accrues via AR and is
-          paid out at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
+          claimed at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
           future secondary issuance to use; what is burnt stays burnt.
         </p>
         <p>
-          Estimated APC is at today&apos;s issuance and deposits; &ldquo;Compensation, last 365
-          days&rdquo; is on free capacity, from the header&apos;s AR. Statistics are exact to the
-          shannon at block <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
+          {/* what the two headline rates are is said once, in their keys in tier 1 (lane P4) */}
+          Statistics are exact to the shannon at block{' '}
+          <BlockLink number={statistics.tipBlockNumber} look="inline" />; the indexed epoch is{' '}
           {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
           requests and withdrawals, newest first.
         </p>
       </Prose>
       <Link
         href={`/blocks/${statistics.tipBlockNumber}`}
-        className="text-text hover:text-text-bright text-small mt-2.5 inline-block hover:underline"
+        look="onward"
+        className="text-small mt-2.5 inline-block"
       >
-        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
+        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)}
       </Link>
     </DetailSection>
   );

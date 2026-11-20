@@ -2,24 +2,30 @@
 // F2 group `objects` (round 2): the pieces of the Object / m-NFT board heroes — one "Live" style
 // for both pages (OB-15), the composition badge with its one plain sentence (OB-6, OB-M4), the
 // readable traits linked to their genes (OB-5/6), and the life summary sentence (OB-6, OB-M5).
+import { columnPx, fontPx, foreignTextPx } from '@/lib/type-metrics';
 import type { ItemCellVersion } from '@/lib/api';
+import { cellLockSentence, cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
 import { GENE_COLORS } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
 import { useClockText } from '@/components/ui/utc8-date';
 
-/** One status pill for an item page: jade while live, grey once gone (OB-15). */
+/**
+ * One status pill for an item page: jade while live, the reading ink once gone (OB-15; readability
+ * R8: it was the quiet ink on a border near the ground, the head's weakest mark).
+ */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
   return (
     <span
       className={cn(
         'text-meta border px-1.5',
-        live ? 'text-jade border-jade/40' : 'text-text-dim border-base-border'
+        live ? 'text-jade border-jade/40' : 'text-text border-text-dim'
       )}
     >
       {live ? 'Live' : gone}
@@ -44,18 +50,21 @@ export function CompositionLine({
   lede = false,
 }: {
   tier: CompositionTier;
-  /** Hierarchy v3 (R13): set as the page's lede — dim, at most 560 px. */
+  /** Hierarchy v3 (R13): set as the page's lede — on the measure, in the reading ink (readability R3, R4). */
   lede?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier={tier} />
-      <span className={cn('text-body', lede ? 'text-text-dim max-w-[560px]' : 'text-text')}>
+      <span className={cn('text-body', lede ? 'text-text max-w-measure' : 'text-text')}>
         {COMPOSITION_SENTENCES[tier]}
       </span>
     </div>
   );
 }
+
+/** The trait label column's most: half of a 320 px window's 288 px row, less the 12 px gap. */
+const TRAIT_LABEL_CAP = (288 - 12) / 2;
 
 /**
  * The readable traits (OB-6): `prev.*` render hints and media values stay on the gel (OB-16).
@@ -74,6 +83,17 @@ export function ObjectTraits({
 }) {
   const shown = traits.filter((t) => isReadableTrait(t.name, t.value));
   if (!shown.length) return null;
+  // Lane P2's third round (item 4): a value follows its label at one gap (12 px), left-aligned,
+  // the label column as wide as the grid's longest label at the line's 14 px, with the swatch's
+  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280).
+  // Lane P2's fifth round (NOTE 5): a trait's name is the creator's text, measured by its bound
+  // (`foreignTextPx`: a CJK grapheme 1.25 em, not the Latin 0.6), and the column is capped at half
+  // of the narrowest row a window gives the traits (288 px at 320, less the 12 px gap: 138), where
+  // a longer name breaks and its value keeps the rest
+  const labelColumn = Math.min(
+    TRAIT_LABEL_CAP,
+    columnPx(Math.max(...shown.map((t) => foreignTextPx(t.name, fontPx('body')))) + 16)
+  );
   return (
     <div className="space-y-2">
       <dl aria-label="Traits" className="grid gap-x-7 sm:grid-cols-2">
@@ -92,11 +112,12 @@ export function ObjectTraits({
               onFocus={() => onActive(t.name)}
               onBlur={() => onActive(null)}
               className={cn(
-                'border-row-rule flex min-w-0 justify-between gap-3 border-b py-2 transition-colors',
+                'border-row-rule grid min-w-0 items-baseline gap-x-3 border-b py-2 transition-colors',
                 lit && 'bg-base-surface'
               )}
+              style={{ gridTemplateColumns: `${labelColumn}px minmax(0, 1fr)` }}
             >
-              <dt className="text-text-dim flex items-center">
+              <dt className="text-text-dim flex min-w-0 items-center [overflow-wrap:anywhere]">
                 <span
                   aria-hidden
                   className="mr-2 inline-block h-2 w-2 shrink-0"
@@ -106,7 +127,7 @@ export function ObjectTraits({
               </dt>
               <dd
                 className={cn(
-                  'min-w-0 text-right [overflow-wrap:anywhere]',
+                  'min-w-0 [overflow-wrap:anywhere]',
                   value === 'empty' ? 'text-text-dim' : 'text-text-bright'
                 )}
                 style={lit && value !== 'empty' ? { color } : undefined}
@@ -117,10 +138,10 @@ export function ObjectTraits({
           );
         })}
       </dl>
-      <p className="text-text-dim text-meta">
+      <p className="text-text text-small max-w-measure">
         Each trait is read from the object’s DNA, below
         {/* PB-23: the dot goes with the hint; when the page's one hint is elsewhere, no dot */}
-        <TapOrHoverHint what="one to find its gene" dotted />
+        <TapOrHoverHint what="one to find its gene" dotted className="text-meta" />
       </p>
     </div>
   );
@@ -145,13 +166,6 @@ export function spelledDuration(ms: number): string {
   return 'under a second';
 }
 
-export function lockPhrase(name: string | null): string {
-  if (!name) return 'an unregistered lock';
-  // "an Omnilock", "a UniPass lock": a leading U usually sounds like "you".
-  const article = /^[aeio]/i.test(name) ? 'an' : 'a';
-  return /lock$/i.test(name) ? `${article} ${name}` : `${article} ${name} lock`;
-}
-
 function timeOf(v: ItemCellVersion): number {
   if (!/^\d+$/.test(v.timestamp))
     throw new Error(`${v.txHash}:${v.outputIndex}: invalid cell timestamp ${v.timestamp}`);
@@ -160,32 +174,40 @@ function timeOf(v: ItemCellVersion): number {
 
 /**
  * Its life in one sentence, from its canonical cell versions (OB-6, OB-M5): minted when and under
- * which lock, how often its cell moved since, and where it sits now.
+ * which lock, how often its cell moved since, and where it sits now. As the page's lede
+ * (`lede`, readability R8: what the object is and whether it is live, said in the head) it names
+ * no figure, which the metrics row states (C7): no count of moves, no span, no block.
  */
 export function itemLifeSentence(
   versions: readonly ItemCellVersion[],
   verb: 'Minted' | 'Issued' = 'Minted',
-  by?: string
+  by?: string,
+  lede = false
 ): string {
   const first = versions[0];
   const last = versions.at(-1);
   if (!first || !last) throw new Error('item life sentence needs at least one cell version');
   // Lane P: the sentence tells the path, not the time — the dates are the page's Minted and Last
   // moved metrics (C7: the lede restates no metric), how long ago its hover (itemLifeAges).
-  const born = `${verb}${by ? ` by ${by}` : ''} to ${lockPhrase(first.lockName)}`;
+  // the lock a cell sits under, through the one decision's sentence form (lane P2's follow-up,
+  // item 6): never silent, a lock the registry does not name by its code hash
+  const born = `${verb}${by ? ` by ${by}` : ''} to ${cellLockSentence(first, 'row')}`;
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
+    if (lede)
+      return `${born}${moves ? ', then moved' : ''}; its last cell was consumed, so it is gone.`;
     return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
+  const now = cellLockSentence(last, 'row');
   // Two header times need not run forward (a block's timestamp only has to pass the median of the
   // 37 before it), so a move whose header time is earlier than the mint's is told without a span.
   const span = timeOf(last) - timeOf(first);
-  const later = span >= 0 ? ` ${spelledDuration(span)} later` : '';
+  const later = !lede && span >= 0 ? ` ${spelledDuration(span)} later` : '';
   return moves === 1
-    ? `${born}, then moved${later} to ${lockPhrase(last.lockName)}, where it sits now.`
-    : `${born}, then moved ${moves} times; the last move put it under ${lockPhrase(last.lockName)}, where it sits now.`;
+    ? `${born}, then moved${later} to ${now}, where it sits now.`
+    : `${born}, then moved${lede ? '' : ` ${moves} times`}; the last move put it under ${now}, where it sits now.`;
 }
 
 /**
@@ -220,13 +242,22 @@ export function ItemLife({
   versions,
   verb = 'Minted',
   by,
+  lede = false,
 }: {
   versions: readonly ItemCellVersion[];
   verb?: 'Minted' | 'Issued';
   by?: string;
+  /** The page's lede (R8): its path and its state, no figure (`itemLifeSentence`). */
+  lede?: boolean;
 }) {
   const ages = useClockText((now) => itemLifeAges(versions, now, verb));
-  return <span title={ages}>{itemLifeSentence(versions, verb, by)}</span>;
+  // a lock the decision refuses fails the sentence in its place, said with the refusal (ruling D7)
+  const read = readPart(() => itemLifeSentence(versions, verb, by, lede));
+  if (read.error !== undefined)
+    return (
+      <PartReadError what="the item’s life" where="the lock it sits under" error={read.error} />
+    );
+  return <span title={ages}>{read.value}</span>;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──
@@ -241,8 +272,13 @@ export function ckbText(shannons: bigint): string {
 }
 
 /**
- * OB-9: what the cell is worth over its life — now, at minting, and which part of its bytes
- * changed between them. Every number is read from the canonical cell versions.
+ * OB-9: what the cell held over its life, in the state it is in, every figure one the route sent
+ * (lane P2's fifth round, item 2). The last version first: a live cell "holds" its CKB; a consumed
+ * one "held" it "when it was consumed", and nothing is said in the present. With more than one
+ * version, what minting (or issue) held, the size of each part that differs between the first
+ * version and the last, both sizes as the versions state them, and over how many moves: no
+ * difference the page computes (it said "so the cell grew by 13 CKB when it moved", which over
+ * several moves named one move that did not happen alone).
  */
 export function cellLifeSentence(
   versions: readonly ItemCellVersion[],
@@ -252,42 +288,96 @@ export function cellLifeSentence(
     last = versions.at(-1)!;
   const cap = BigInt(last.capacity),
     occupied = BigInt(last.occupiedCapacity);
-  const now =
-    cap === occupied
-      ? `The ${noun}’s cell holds ${ckbText(cap)} CKB.`
-      : `The ${noun}’s cell holds ${ckbText(cap)} CKB, ${ckbText(occupied)} of it occupied by its bytes.`;
-  if (versions.length === 1) return now;
-  const was = BigInt(first.capacity);
-  const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
-    const key = `${part}Bytes` as const;
-    const d = last.anatomy[key] - first.anatomy[key];
-    return d === 0
-      ? []
-      : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${formatCount(Math.abs(d), 'byte')}`];
-  });
-  const dCap = cap - was,
-    dOcc = occupied - BigInt(first.occupiedCapacity);
-  const why =
-    changes.length && dCap === dOcc && dCap !== BigInt(0)
-      ? `; ${changes.join(', ')}, so the cell ${dCap > BigInt(0) ? 'grew' : 'shrank'} by ${ckbText(dCap > BigInt(0) ? dCap : -dCap)} CKB when it moved.`
-      : '.';
-  return `${now} It held ${ckbText(was)} ${noun === 'token' ? 'at issue' : 'at minting'}${why}`;
+  const live = last.isLive;
+  const whose = live || versions.length === 1 ? `The ${noun}’s cell` : `The ${noun}’s last cell`;
+  const occupiedPart = cap === occupied ? '' : `, ${ckbText(occupied)} of it occupied by its bytes`;
+  const state = live
+    ? `${whose} holds ${ckbText(cap)} CKB${occupiedPart}.`
+    : `${whose} held ${ckbText(cap)} CKB${occupiedPart}${occupiedPart ? ',' : ''} when it was consumed.`;
+  if (versions.length === 1) return state;
+  const at = noun === 'token' ? 'At issue' : 'At minting';
+  const moves = versions.length - 1;
+  const parts = (['lock', 'type', 'data'] as const).filter(
+    (part) => first.anatomy[`${part}Bytes`] !== last.anatomy[`${part}Bytes`]
+  );
+  const size = (v: ItemCellVersion, part: (typeof parts)[number]) =>
+    formatCount(v.anatomy[`${part}Bytes`], 'byte');
+  const then = parts.map((part) => `, its ${part} ${size(first, part)}`).join('');
+  const after = parts.length
+    ? `; after ${formatCount(moves, 'move')} ${parts
+        .map(
+          (part, k) =>
+            `${k === 0 ? 'its' : 'and its'} ${part} ${live ? 'is' : 'was'} ${size(last, part)}`
+        )
+        .join(' ')}.`
+    : live
+      ? `; it has moved ${formatCount(moves, 'time')} since.`
+      : `; it moved ${formatCount(moves, 'time')} before its last cell was consumed.`;
+  return `${state} ${at} it held ${ckbText(BigInt(first.capacity))} CKB${then}${after}`;
+}
+
+/**
+ * The lock footnote drawn (`lockFootnote`), nothing for one version; a lock the decision refuses
+ * fails the footnote in its place, said with the refusal (ruling D7), never the page.
+ */
+export function LockFootnote({
+  versions,
+  noun,
+  small = false,
+}: {
+  versions: readonly ItemCellVersion[];
+  noun: 'object' | 'token';
+  /** At the small step (an m-NFT's history), else at its prose's size. */
+  small?: boolean;
+}) {
+  const read = readPart(() => lockFootnote(versions, noun));
+  if (read.error !== undefined)
+    return <PartReadError what="the lock footnote" where="its cell versions" error={read.error} />;
+  // a statement of the lock (the reading ink, R3), running text inside the measure (R4)
+  return read.value === null ? null : (
+    <p className={small ? 'text-text text-small max-w-measure' : 'text-text max-w-measure'}>
+      {read.value}
+    </p>
+  );
 }
 
 export function lockFootnote(
   versions: readonly ItemCellVersion[],
   noun: 'object' | 'token'
 ): string | null {
-  const first = versions[0],
-    last = versions.at(-1)!;
+  const first = versions[0];
   if (versions.length < 2) return null;
   const args = (v: ItemCellVersion) => v.anatomy.lockBytes - 33;
   const sameType = versions.every(
     (v) => JSON.stringify(v.type) === JSON.stringify(first.type) && v.dataHash === first.dataHash
   );
+  // the decision's words in a sentence, without an article (lane P2's follow-up, item 6)
+  const words = (v: ItemCellVersion) => lockWordsText(cellLockWords(v), 'row');
+  // a lock is its code hash, hash type and args (lane P2's third round, item 15: "throughout"
+  // compared the first and the last version's code hash and args, so A → B → A read "throughout")
+  const sameLock = (a: ItemCellVersion, b: ItemCellVersion) =>
+    a.lock.codeHash === b.lock.codeHash &&
+    a.lock.hashType === b.lock.hashType &&
+    a.lock.args === b.lock.args;
+  // the versions where the cell went under another lock, the first among them
+  const runs = versions.filter((v, i) => i === 0 || !sameLock(v, versions[i - 1]));
+  const last = versions.at(-1)!;
   const lock =
-    first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
-      ? `Lock: ${first.lockName ?? 'unregistered lock'} throughout.`
-      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args ${noun === 'token' ? 'at issue' : 'at minting'} → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
+    runs.length === 1
+      ? `Lock: ${words(first)} throughout.`
+      : `Lock: ${runs
+          .map((v, i) => {
+            const named = `${words(v)} with ${
+              // the same words over other args: another holder under the same kind of lock
+              i > 0 && words(v) === words(runs[i - 1]) && v.lock.args !== runs[i - 1].lock.args
+                ? 'other '
+                : ''
+            }${args(v)}-byte args`;
+            if (i === 0) return `${named} ${noun === 'token' ? 'at issue' : 'at minting'}`;
+            const day = formatUtc8Date(v.timestamp);
+            if (i < runs.length - 1) return `${named} from ${day}`;
+            return last.isLive ? `${named} since ${day}` : `${named} from ${day}, last`;
+          })
+          .join(' → ')}.`;
   return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
 }

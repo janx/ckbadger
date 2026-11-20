@@ -50,15 +50,16 @@ export const U = CELL + GUT;
 /**
  * The canvas's small text, in px: every word the layout measures ("uncle", every "+N", the
  * window's label) is drawn in the `text-meta` step of the type scale (components/pipeline/
- * svg-text.ts), 11 px of JetBrains Mono, whose every glyph advances 0.6 em. `labelWidth` reads it.
+ * svg-text.ts), 12 px of JetBrains Mono, whose every glyph advances 0.6 em. `labelWidth` reads it.
  */
 export const SMALL_TEXT_PX = fontPx('meta');
 
 /**
- * A block's number on its plate, in px: the `text-small` step (svg-text.ts T12C, T12G, T12D),
- * 12 px of JetBrains Mono at 500, every glyph advancing 0.6 em as at every weight.
+ * A block's number on its plate, in px: the `text-meta` step (svg-text.ts T12C, T12D), 12 px of
+ * JetBrains Mono at 500, every glyph advancing 0.6 em as at every weight. It was the small step
+ * when that was 12 px; the canvas is drawn for a 12 px number and stays so (readability R4).
  */
-export const NUMBER_TEXT_PX = fontPx('small');
+export const NUMBER_TEXT_PX = fontPx('meta');
 
 /**
  * The width of `text` set at `px` in JetBrains Mono (lib/type-metrics.ts `textPx`: 0.6 em a glyph,
@@ -1733,6 +1734,30 @@ const lineKeeps = (b: PipelineBlock) =>
   side(1 + 4) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
 
 /**
+ * Where a column row's uncles break into lines when they take lines of their own under its tx
+ * line: as many to a line as fit `room`, `COL.endGap` apart, in order (readability R4: at 12 px
+ * two uncles of the widest kind, "+1500" each, need 156 px, and the narrowest column's line, 154,
+ * takes one; at 11 px they needed 144). The index of each line's first uncle. An uncle wider than
+ * a whole line is refused, `what` naming its block.
+ */
+export function columnUncleLines(widths: readonly number[], room: number, what: string): number[] {
+  const starts: number[] = [];
+  let used = Infinity;
+  widths.forEach((w, ui) => {
+    if (w > room)
+      throw new Error(
+        `pipeline: uncle ${ui} of ${what} needs ${w} px, more than a ${room} px line of its own`
+      );
+    const at = starts.length ? used + COL.endGap + w : Infinity;
+    if (at > room) {
+      starts.push(ui);
+      used = w;
+    } else used = at;
+  });
+  return starts;
+}
+
+/**
  * A block as a column row: its own proposal dots, then its tx line — the cellbase and the txs that
  * fit, then its "+N" — and its uncles. The uncles follow the tx line, `endGap` apart, when all of
  * them fit in what is left after `lineKeeps`; otherwise all of them take a line of their own under
@@ -1748,11 +1773,16 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
   const forms = f.byUncle.map((list) => columnUncle(list.length));
   const unclesW = forms.reduce((sum, un) => sum + COL.endGap + un.w, 0);
   const line: UncleLine = lineEnd - lineX - lineKeeps(b) >= unclesW ? 'tx' : 'own';
-  if (line === 'own' && unclesW - COL.endGap > lineEnd - lineX) {
-    throw new Error(
-      `pipeline: the ${forms.length} uncles of block #${b.number} need ${unclesW - COL.endGap} px, more than a ${lineEnd - lineX} px line of their own`
-    );
-  }
+  const uncleLines =
+    line === 'own'
+      ? columnUncleLines(
+          forms.map((un) => un.w),
+          lineEnd - lineX,
+          `block #${b.number}`
+        )
+      : [];
+  /** The line an uncle stands on, when they have lines of their own: 0 for the first. */
+  const lineOf = (ui: number) => uncleLines.filter((first) => first <= ui).length - 1;
   const txEnd = line === 'tx' ? lineEnd - unclesW : lineEnd;
   const fit = fitLine(
     f.order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
@@ -1763,9 +1793,12 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
   );
   const lineH = columnRowH(tallest(fit.pos));
   const wrapped = line === 'own' && forms.length > 0;
-  const h = lineH + (wrapped ? COL.uncleGap + UNC.head : 0);
-  // An uncle's word line: centred on the tx line, or under it.
-  const uncleY = wrapped ? lineH - COL.pad + COL.uncleGap : lineH / 2 - UNC.head / 2;
+  const h = lineH + (wrapped ? uncleLines.length * (COL.uncleGap + UNC.head) : 0);
+  // An uncle's word line: centred on the tx line, or under it, a line for each line of uncles.
+  const uncleY = (ui: number) =>
+    wrapped
+      ? lineH - COL.pad + COL.uncleGap + lineOf(ui) * (UNC.head + COL.uncleGap)
+      : lineH / 2 - UNC.head / 2;
   const txByHash = new Map(b.txs.map((t) => [t.hash, t]));
   const squares: SceneSquare[] = [
     square(
@@ -1800,12 +1833,13 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
   let x = line === 'tx' ? txEnd + COL.endGap : lineX;
   f.byUncle.forEach((list, ui) => {
     const un = forms[ui];
+    if (wrapped && ui > 0 && uncleLines.includes(ui)) x = lineX;
     uncles.push({
       index: ui,
       ref: b.uncles[ui],
       line,
       x,
-      y: uncleY,
+      y: uncleY(ui),
       w: un.w,
       h: UNC.head,
       label: 'uncle',
@@ -1816,7 +1850,7 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
         key: `${p.shortId}|${ui}`,
         proposal: p,
         x: x + u.labelW + COL.endGap + i * G.chipP,
-        y: uncleY + (UNC.head - G.chip) / 2,
+        y: uncleY(ui) + (UNC.head - G.chip) / 2,
       });
     });
     x += un.w + COL.endGap;

@@ -1,45 +1,61 @@
 'use client';
 
 import { TopicCharts } from '@/components/charts/topic-charts';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { AppLink } from '@/components/ui/app-link';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { Select } from '@/components/ui/select';
+import { Tabs } from '@/components/ui/tabs';
+import { TextField } from '@/components/ui/text-field';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { PhoneRow } from '@/components/ui/phone-row';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
+import { ShareBar } from '@/components/ui/share-bar';
+import { DATA_COLOR } from '@/lib/design-tokens';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
 import {
   ScriptCodeClassBar,
   ScriptCodeClassLegend,
   ScriptCodeClassSummary,
-  codeClassTotals,
   DEPRECATED_TITLE,
   immutableHow,
   isImmutableClass,
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
-import { HeroFigure } from '@/components/scripts/script-hero';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
+import { sentField } from '@/lib/api-fields';
 import { getScriptDetailHref } from '@/lib/detail-routes';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { shortenHash } from '@/lib/shorten';
+import { ShortId } from '@/components/ui/short-id';
 import { formatCount } from '@/lib/format-count';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { percentOf, withUnit } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
+type Role = 'all' | 'lock' | 'type';
+
+/** The sort select's choices, in the page's own words (the controls board's select, lowercase). */
+const SORTS: readonly { value: SortKey; label: string }[] = [
+  { value: 'capacity', label: 'ckb in their cells' },
+  { value: 'used', label: 'occupied ckb' },
+  { value: 'liveCells', label: 'live cells' },
+  { value: 'cells', label: 'cells ever' },
+  { value: 'name', label: 'name' },
+];
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 
 function hasName(script: KnownScript): boolean {
@@ -62,10 +78,20 @@ const GOVERNOR: Partial<Record<NonNullable<KnownScript['codeClasses']>[number]['
     one_key: 'one key',
   };
 
-/** The board's Code column as words: "Immutable" or "Upgradable · N versions", then by whom. */
-function scriptCodeClass(
-  script: KnownScript
-): { head: string; sub: string; replaceable: boolean } | null {
+/**
+ * The board's Code column as words: "Immutable" or "Upgradable · N versions", then by whom. `facts`
+ * are the code's own facts without the day it is known from (how immutable code is held; by whom
+ * upgradable code is changed, and whether some references are pinned): the phone row writes them,
+ * the day being the script page's and the row's title's.
+ */
+function scriptCodeClass(script: KnownScript): {
+  head: string;
+  sub: string;
+  facts: string[];
+  replaceable: boolean;
+  /** Who can replace the code, the Code column's words ("by a multisig"); none for immutable code. */
+  who: string | null;
+} | null {
   const classes = script.codeClasses ?? [];
   if (!classes.length) return null;
   const replaceable = classes.filter((row) => !isImmutableClass(row.class));
@@ -73,25 +99,31 @@ function scriptCodeClass(
   if (script.firstDeployedAt === undefined)
     throw new Error(`Script family ${script.name} row has no firstDeployedAt`);
   const first = script.firstDeployedAt;
-  if (!replaceable.length)
+  if (!replaceable.length) {
+    const facts = immutableHow(immutable.map((row) => row.class));
     return {
       head: 'Immutable',
       sub: [
         ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
-        ...immutableHow(immutable.map((row) => row.class)),
+        ...facts,
       ].join(' · '),
+      facts,
       replaceable: false,
+      who: null,
     };
+  }
   if (script.versionsCount === undefined)
     throw new Error(`Script family ${script.name} has replaceable code but no versionsCount`);
+  const by = `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`;
+  const pinned = immutable.length ? ['some references pinned'] : [];
   return {
     head: `Upgradable · ${formatCount(script.versionsCount, 'version')}`,
-    sub: [
-      `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`,
-      ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []),
-      ...(immutable.length ? ['some references pinned'] : []),
-    ].join(' · '),
+    sub: [by, ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []), ...pinned].join(
+      ' · '
+    ),
+    facts: [formatCount(script.versionsCount, 'version'), by, ...pinned],
     replaceable: true,
+    who: by,
   };
 }
 
@@ -112,10 +144,12 @@ function CodeClassPip({ replaceable }: { replaceable: boolean }) {
 }
 
 /**
- * The Code column on one line (table-rows L1-1, board Scripts): "upgradable · N versions" in dim
- * ink with its pip; immutable code — the rarer, stronger fact — is the cell's one accent, a jade
- * "immutable" row tag (lane F follow-up). By whom, since when and how it is pinned are its title
- * (and the row's).
+ * The Code column (table-rows L1-1, board Scripts): upgradable code says who can replace it,
+ * "upgradable by a multisig", in the reading ink with its pip (the readability plan's P3: the key
+ * fact of the row, it stood quiet as "upgradable · N versions" with the who in its title only);
+ * immutable code — the rarer, stronger fact — is the cell's one accent, a jade "immutable" row tag
+ * (lane F follow-up). The versions, since when and how it is pinned are its title (and the row's);
+ * a long "who" wraps between its words, never cut.
  */
 function ScriptCodeClass({ script }: { script: KnownScript }) {
   const code = scriptCodeClass(script);
@@ -123,15 +157,16 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
     <span
       data-testid="script-code-class"
       title={codeStatusText(script)}
-      className="text-text-dim flex min-w-0 items-center gap-2 whitespace-nowrap"
+      className="flex min-w-0 items-center gap-2"
     >
       {code && <CodeClassPip replaceable={code.replaceable} />}
       {code && !code.replaceable ? (
         <RowTag variant="accent">immutable</RowTag>
+      ) : code ? (
+        <span className="text-text min-w-0">upgradable {code.who}</span>
       ) : (
-        <span className="truncate">
-          {code ? code.head.toLowerCase() : 'code evidence unavailable'}
-        </span>
+        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+        <span className="min-w-0">code evidence unavailable</span>
       )}
     </span>
   );
@@ -144,82 +179,102 @@ function codeStatusText(script: KnownScript): string {
 }
 
 /**
- * A script family on a phone (board L6): name and the CKB its cells hold; role, code class and
- * cell counts with the occupied share; the description in full, never clamped. In a wide
- * container (640) two lines: role and code join the name, the counts share the description's line.
+ * Line 1 of a script family on a phone (the phone-rows board's head(): 311 of 328 px there for
+ * "Default Lock" and its tag beside "46,864,609,312 CKB"): a name of 20 characters at the key's
+ * 14 px (168), the 12 px between the parts and the widest CKB a row's cells hold at the key's step,
+ * "99,999,999,999" (WIDEST_CKB_HELD, 117.6) and " CKB" at the unit's 12 px (28.8): 326.4 of a 360 px
+ * phone's 328 px line, 356.4 at 390 leaving 23 characters. The role's tag stands on line 2, where
+ * the board drew it beside the name: beside the widest figure it left a name 7 characters. Ten of
+ * the 75 names the registry writes are longer than 20 (21 to 25 characters, "Godwoken ETH Account
+ * Lock" the longest): beside a figure that wide the figure drops under the name, whole and
+ * right-aligned (PhoneRow's rule).
  */
-function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolean }) {
+const SCRIPT_PHONE_HEAD_PX = phoneHead(
+  'scripts',
+  textPx(20, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(WIDEST_CKB_HELD.length, fontPx('body')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
+
+/**
+ * A script family on a phone (the phone-rows board, its scripts pane): the name and the CKB its
+ * cells hold, the figure the list sorts by; what it is, in words that wrap between their items (a
+ * deprecation, its role, the code's class and how it is held or who can change it; an unlabeled
+ * family's reference first); the list's one bar, the occupied share, with the two figures that
+ * name it. The description, the cells ever and the day the code is known from are the script
+ * page's and the row's title's. The cards from 560 px take the same three parts.
+ */
+function ScriptPhoneRow({ script: s }: { script: KnownScript }) {
   const code = scriptCodeClass(s);
-  const role = s.scriptKind ?? 'unregistered';
-  const kind = (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5">
-      {role}
-      <span className="text-text-dim">·</span>
-      {code ? (
-        <>
-          <CodeClassPip replaceable={code.replaceable} />
-          {/* Lane F follow-up: immutable is the accent tag; the name stays the one bright thing. */}
-          {code.replaceable ? (
-            <span>{code.head}</span>
-          ) : (
-            <RowTag variant="accent">immutable</RowTag>
-          )}
-          <span className="text-text-dim">· {code.sub}</span>
-        </>
-      ) : (
-        <span className="text-text-dim">code evidence unavailable</span>
-      )}
-    </span>
-  );
-  const cells = (
-    <span className="whitespace-nowrap">
-      {countText(s.liveCellsCount)} live · of {countText(s.cellsCount)} · {occupiedShare(s).share}{' '}
-      occupied
-    </span>
-  );
-  const name = (
-    <>
-      <AppLink
-        href={scriptHref(s)}
-        title={!hasName(s) ? `${s.hashType} ref:${s.codeHash}` : undefined}
-        className="text-text-bright hover:text-emphasis font-medium hover:underline"
-      >
-        {hasName(s) ? s.name!.trim() : 'Unlabeled'}
-      </AppLink>
-      {s.deprecated && (
-        <RowTag variant="warn" title={DEPRECATED_TITLE} className="ml-2">
-          deprecated
-        </RowTag>
-      )}
-    </>
-  );
-  const description = hasName(s)
-    ? s.description
-    : `${getScriptRefBadgeLabel(s.hashType)} · ${shortenHash(s.codeHash, 'tight')}`;
+  const what = [
+    s.deprecated && (
+      <RowTag key="deprecated" variant="warn" title={DEPRECATED_TITLE}>
+        deprecated
+      </RowTag>
+    ),
+    !hasName(s) && (
+      <span key="ref">
+        {getScriptRefBadgeLabel(s.hashType)} <ShortId value={s.codeHash} kind="hash" size="tight" />
+      </span>
+    ),
+    <RowTag key="role">{roleText(s)}</RowTag>,
+    ...(code
+      ? [
+          <span key="class" className="inline-flex items-center gap-1.5">
+            <CodeClassPip replaceable={code.replaceable} />
+            {/* Lane F follow-up: immutable is the accent tag; the name stays the one bright thing. */}
+            {code.replaceable ? 'upgradable' : <RowTag variant="accent">immutable</RowTag>}
+          </span>,
+          ...code.facts,
+        ]
+      : [
+          // the row's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span key="none">code evidence unavailable</span>,
+        ]),
+  ];
   return (
     <PhoneRow
       testId="script-row-mobile"
+      head={SCRIPT_PHONE_HEAD_PX}
       lines={[
         {
           key: 'identity',
           tone: 'head',
-          left: wide ? (
-            <>
-              {name}
-              <span className="text-text-dim text-small"> · </span>
-              <span className="text-text-dim text-small">{kind}</span>
-            </>
-          ) : (
-            name
+          left: (
+            <AppLink
+              href={scriptHref(s)}
+              look="key"
+              title={!hasName(s) ? `${s.hashType} ref:${s.codeHash}` : undefined}
+              className="font-medium"
+            >
+              {hasName(s) ? s.name!.trim() : 'Unlabeled'}
+            </AppLink>
           ),
-          right: <span className="text-text-bright">{capacityText(s.ownedCapacitySum!)}</span>,
+          right: (
+            <span className="text-body text-text-bright">{capacityText(s.ownedCapacitySum!)}</span>
+          ),
         },
-        !wide && { key: 'code', tone: 'body', left: kind, right: cells },
+        { key: 'code', tone: 'body', left: <Dotted parts={what} /> },
         {
-          key: 'description',
+          key: 'share',
           tone: 'quiet',
-          left: description,
-          right: wide ? cells : undefined,
+          grow: true,
+          left: (
+            <ShareBar value={occupiedPpm(s)} scale={SHARE_SCALE} color={DATA_COLOR} track="grow" />
+          ),
+          right: (
+            <Dotted
+              parts={[
+                <Labelled key="live" label="live" after>
+                  {countText(s.liveCellsCount)}
+                </Labelled>,
+                <Labelled key="occupied" label="occupied" after>
+                  {occupiedShare(s).share}
+                </Labelled>,
+              ]}
+            />
+          ),
         },
       ]}
     />
@@ -280,8 +335,9 @@ function ScriptName({ script }: { script: KnownScript }) {
     <span className="flex min-w-0 items-center gap-2">
       <AppLink
         href={scriptHref(script)}
+        look="key"
         title={!hasName(script) ? `${script.hashType} ref:${script.codeHash}` : undefined}
-        className="text-body text-text-bright hover:text-emphasis leading-row min-w-0 truncate hover:underline"
+        className="text-body leading-row min-w-0 truncate"
       >
         {name}
       </AppLink>
@@ -292,7 +348,9 @@ function ScriptName({ script }: { script: KnownScript }) {
         </RowTag>
       )}
       {!hasName(script) && (
-        <span className="text-text-dim text-meta truncate">{refText(script)}</span>
+        // an unnamed script's reference, an id in a cell: the reading ink at the cell's 13 px
+        // (BRIEF-ink-size-roles items 1 and 2: it was quiet at 12)
+        <span className="text-small truncate">{refText(script)}</span>
       )}
     </span>
   );
@@ -303,22 +361,17 @@ function Head({ label }: { label: string }) {
   return <span className="text-meta">{label}</span>;
 }
 
-/**
- * The printed amount: the board's 118 px plus the room "46,743,011,404.23" takes at 12 px with its
- * 11 px decimals, so the largest amount on the page never wraps.
- */
-const CKB_DISPLAY = 128;
+/** The occupied share's bar runs on parts per million of the CKB in the cells. */
+const SHARE_SCALE = 1_000_000;
 
 /**
  * The list's one bar, the occupied share (readability B5: the CKB bar left and with it the "bar:"
- * switch of ruling D2). Its track: the ticks "0 · 50 · 100%" (at most 4 characters at 11 px) fit
- * with room between them. Its figure: "100.00%", 7 characters at 12 px (50.4 px).
+ * switch of ruling D2). Its track: its head's ticks, "0", "50" and "100%", whole over it a glyph
+ * apart at 12 px (64.8; readability F3-e: it was 80). Its figure: "100.00%", 7 characters at 13 px
+ * (54.6).
  */
-const SHARE_TRACK = 80;
-const SHARE_FIGURE = columnPx(textPx(7, fontPx('small')));
-
-/** The occupied share's bar runs on parts per million of the CKB in the cells. */
-const SHARE_SCALE = 1_000_000;
+const SHARE_TRACK = trackPx(['0', shareTick(SHARE_SCALE / 2), shareTick(SHARE_SCALE)]);
+export const SHARE_FIGURE = columnPx(textPx('100.00%'.length, fontPx('small')));
 
 /**
  * Occupied ÷ CKB in the cells, in ppm, for the bar's geometry: rounded up, so a nonzero share is
@@ -362,28 +415,36 @@ const LEAD =
   'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.';
 
 /**
- * The hero's figure and picture (hierarchy v3, C0 / C1): the CKB under these scripts' locks with
- * the script counts on its baseline row, then "who can change the code" as a 28 px bar, its key in
- * one quiet row and one caption. From the role-less summary, so the table's tabs never move it.
+ * What the list's first screen says of all the scripts (the readability plan's P3: the aggregate
+ * becomes one sentence and a bar of 12 px, so rows stand in the first screen): the counts, as the
+ * API states them, and who can change the code under the locks as a 12 px bar, its key the legend
+ * row under it. From the role-less summary, so the table's tabs never move it. It states no CKB
+ * total: the classes' CKB summed would be a sum made in the page (tier 2 states each class's).
  */
-function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
-  // As before v3: without the class summary or the role counts the page states no total.
+function ScriptsSummary({ summary }: { summary: ScriptsListApi }) {
+  // As before: without the class summary or the role counts the page states no summary.
   if (!summary.classSummary || !summary.roleCounts) return null;
-  const { total } = codeClassTotals(summary.classSummary);
   const counts = summary.roleCounts;
+  // the overlap and the rest this plan added to the route, refused by name where an older API sends
+  // none (the third read's La N6: it threw a TypeError on counts.both)
+  const both = sentField(counts.both, 'Scripts', 'roleCounts.both');
+  const neither = sentField(counts.neither, 'Scripts', 'roleCounts.neither');
+  const n = (count: number) => count.toLocaleString('en-US');
   return (
     <>
-      <HeroFigure
-        label="CKB under these scripts"
-        shannons={total}
-        companion={[
-          `locked by ${formatCount(counts.locks, 'lock script')}`,
-          `${formatCount(counts.all, 'script')} in all`,
-          formatCount(counts.types, 'type'),
-        ]}
-      />
-      <p className="text-text-dim text-meta mb-1.5 mt-[18px]">who can change the code</p>
-      <ScriptCodeClassBar classes={summary.classSummary} />
+      {/* what each count is, the overlap the route's: "41 locks and 34 types" of 70 read as a
+          partition, and a family that is both is in both (the page-phase review's SHOULD 3). A
+          family's role is its use, or, with no cell yet, the registry's declaration, so the
+          sentence says what a family is, not what it was used as (the third read's La N5) */}
+      <p data-role="summary" className="text-text text-body max-w-measure mt-6">
+        {unitNode(formatCount(counts.all, 'script'))}; {n(counts.locks)} are locks,{' '}
+        {n(counts.types)} are types, {n(both)} are both
+        {neither > 0 && <>, {n(neither)} are neither</>}. Who can change the locks’ code, by the CKB
+        under them:
+      </p>
+      <div className="mt-2">
+        <ScriptCodeClassBar classes={summary.classSummary} size="line" />
+      </div>
     </>
   );
 }
@@ -392,26 +453,46 @@ const SCRIPTS_TITLE = ['Scripts'] as const;
 
 export default function ScriptsPage() {
   useDocumentTitle(SCRIPTS_TITLE);
-  const pagination = useCursorPagination();
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
+  // The search filters as typed (debounced), no button: the inventory's field's one behaviour (the
+  // placement lane's note: this list was the only one with a Search button and a "×")
+  useEffect(() => {
+    const next = searchInput.trim() || undefined;
+    if (next === search) return;
+    const timer = setTimeout(() => {
+      setSearch(next);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchInput, search]);
   const [role, setRole] = useState<'lock' | 'type' | undefined>();
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): its search,
+  // role and sort
+  const pagination = useCursorPagination(pageSize, {
+    list: [search, role, sortKey, sortDirection],
+  });
   // The table's page (declared first: its request goes first).
+  // The page a response was asked as travels with it: the table keeps the page it shows while the
+  // next one loads (keepPreviousData), and the pager writes that page's figures, not the next's.
+  // The walk's `ask` stamps it, the one owner of that rule (lane cd-fixes-controls, item 1: this
+  // page carried its own `page` field, a second owner).
+  const askScripts = pagination.ask((cursor) =>
+    api.getScripts({
+      limit: pageSize,
+      cursor,
+      decoderType: undefined,
+      search,
+      role,
+      sortKey,
+      sortDirection,
+    })
+  );
   const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
-    queryFn: () =>
-      api.getScripts({
-        limit: pageSize,
-        cursor: pagination.cursor,
-        decoderType: undefined,
-        search,
-        role,
-        sortKey,
-        sortDirection,
-      }),
+    queryFn: askScripts,
     placeholderData: keepPreviousData,
   });
   const { data, isError, error } = read;
@@ -426,16 +507,30 @@ export default function ScriptsPage() {
   function sortBy(next: SortKey, direction: SortDirection) {
     setSortKey(next);
     setSortDirection(direction);
-    pagination.reset();
   }
 
   const rows = data?.data ?? [];
+  // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page,
+  // an empty page past the end its place and a way back (lane c2-finish, 1b)
+  const scriptsAt = data ? rankedPageAt('scripts', data, pagination) : null;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
       label: 'Script',
       header: <Head label="Script" />,
-      minWidth: 220,
+      // The flexible column (readability F3-e): at its minimum the default lock's name whole,
+      // "Secp256k1 Blake160" (18 characters at 14 px, 151.2), its 8 px gap and the widest role tag,
+      // "unregistered" (86.4 and the tag's 12 px of sides and border), and the gap: 273.6; it takes
+      // what the container gives beyond the sum, a longer name ending in the one ellipsis (the
+      // row's title holds it). It was 220.
+      minWidth: columnPx(
+        textPx('Secp256k1 Blake160'.length, fontPx('body')) +
+          8 +
+          textPx('unregistered'.length, fontPx('meta')) +
+          2 * 5 +
+          2 * 1 +
+          CELL_GAP_PX
+      ),
       width: 'auto',
       render: (s) => <ScriptName script={s} />,
     },
@@ -443,14 +538,28 @@ export default function ScriptsPage() {
       key: 'code',
       label: 'Code',
       header: <Head label="Code" />,
-      minWidth: 220,
+      // The pip (10 px), its 8 px gap and "upgradable by a multisig" (24 characters at 13 px,
+      // 187.2) on one line, wider than "code evidence unavailable" (195, no pip) and the
+      // "immutable" tag, and the gap: 221.2. A longer who ("by one key or a multisig") wraps
+      // between its words under it.
+      minWidth: columnPx(
+        Math.max(
+          10 + 8 + textPx('upgradable by a multisig'.length, fontPx('small')),
+          textPx('code evidence unavailable'.length, fontPx('small'))
+        ) + CELL_GAP_PX
+      ),
       render: (s) => <ScriptCodeClass script={s} />,
     },
     {
       key: 'cells',
       label: 'Live cells',
       header: <Head label="Live cells" />,
-      minWidth: 110,
+      // Eight digits of live cells, or "unavailable" (11 characters at 13 px, 85.8, the wider),
+      // and the gap. It was 110.
+      minWidth: columnPx(
+        textPx(Math.max(WIDEST_ROW_COUNT.length, 'unavailable'.length), fontPx('small')) +
+          CELL_GAP_PX
+      ),
       numeric: true,
       render: (s) => <span title={cellsEverText(s)}>{countText(s.liveCellsCount)}</span>,
     },
@@ -458,9 +567,11 @@ export default function ScriptsPage() {
       key: 'capacity',
       label: 'CKB in its cells',
       // B5 (plan §7.6): the amount alone, right aligned under its head; its linear bar, scaled to
-      // the page's largest (50B), was a 1 px stub on most rows. The printed amount + the 16 px gap.
+      // the page's largest (50B), was a 1 px stub on most rows. The printed amount, whole CKB under
+      // 100 billion in the summary form ("99,999,999,999", 14 characters at 13 px, 109.2), and the
+      // gap (readability F3-e: it was 144 for a two-decimal form the list no longer writes).
       header: <Head label="CKB in its cells" />,
-      minWidth: CKB_DISPLAY + 16,
+      minWidth: columnPx(textPx(WIDEST_CKB_HELD.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (s) => (
         <CkbAmount
@@ -476,8 +587,8 @@ export default function ScriptsPage() {
       key: 'occupied',
       label: 'Occupied',
       // The occupied share beside its bar on 0 · 50 · 100 %, the name over the share (B5): the
-      // track, the bar's 10 px gap, the share and the 16 px gap.
-      minWidth: SHARE_TRACK + 10 + SHARE_FIGURE + 16,
+      // track, the bar's 10 px gap and the share; the last column, no gap after it (it counted 16).
+      minWidth: columnPx(SHARE_TRACK + BAR_FIGURE_GAP + SHARE_FIGURE),
       header: (
         <ScaleHeader
           label="Occupied"
@@ -495,51 +606,24 @@ export default function ScriptsPage() {
           trackWidth={SHARE_TRACK}
           minFill={2}
           segments={[{ key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }]}
-          display={<span className="text-text-dim">{occupiedShare(s).share}</span>}
+          // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1)
+          display={<span>{occupiedShare(s).share}</span>}
           displayWidth={SHARE_FIGURE}
         />
       ),
     },
   ];
 
+  // the field alone, on the title row: it filters as typed, as the inventory's does
   const searchForm = (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSearch(searchInput.trim() || undefined);
-        pagination.reset();
-      }}
-      // One inline group (as the DAO page's range buttons): one line on the title row.
-      className="min-w-0 whitespace-nowrap"
-    >
-      <input
-        value={searchInput}
-        onChange={(event) => setSearchInput(event.target.value)}
-        placeholder="search by name or code hash"
-        aria-label="Search scripts"
-        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 border px-3 align-middle sm:w-64"
-      />
-      {search && (
-        <button
-          type="button"
-          onClick={() => {
-            setSearchInput('');
-            setSearch(undefined);
-            pagination.reset();
-          }}
-          aria-label="Clear search"
-          className="text-text-dim ml-2 inline-flex h-7 items-center align-middle"
-        >
-          ×
-        </button>
-      )}
-      <button
-        type="submit"
-        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center border px-3 align-middle"
-      >
-        Search
-      </button>
-    </form>
+    <TextField
+      label="Search scripts"
+      search
+      value={searchInput}
+      onChange={setSearchInput}
+      placeholder="search by name or code hash"
+      className="w-48 sm:w-64"
+    />
   );
 
   return (
@@ -553,11 +637,11 @@ export default function ScriptsPage() {
                 <h1 className="text-text-bright text-index font-medium">Scripts</h1>
                 {searchForm}
               </div>
-              <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
+              <p data-role="lede" className="text-text text-body max-w-measure mt-1.5">
                 Locks decide who can spend a cell; types, what it is.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                <AppLink href="#evidence" look="onward">
+                  How it works
+                </AppLink>
               </p>
               {summary.isError ? (
                 <div role="alert" className="text-negative text-small mt-9">
@@ -565,120 +649,90 @@ export default function ScriptsPage() {
                   {summary.error instanceof Error ? summary.error.message : 'Unknown error'}
                 </div>
               ) : summary.data ? (
-                <ScriptsHeroFigure summary={summary.data} />
+                <ScriptsSummary summary={summary.data} />
               ) : (
-                <div className="text-text-dim text-small mt-9">Loading the script summary…</div>
+                <div className="text-text text-small mt-6">Loading the script summary…</div>
               )}
             </section>
             {summary.data?.classSummary && (
-              <>
-                <div className="mt-2.5">
-                  <ScriptCodeClassLegend classes={summary.data.classSummary} />
-                </div>
-                <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
-                  Code pinned by its data hash, or held in a code cell no one can spend, can never
-                  change; whoever can spend any other code cell can replace its code.
-                </p>
-              </>
+              <div className="mt-2.5">
+                <ScriptCodeClassLegend classes={summary.data.classSummary} />
+              </div>
             )}
-            <section aria-label="Script list" className="mt-16 min-w-0">
-              <div
-                role="group"
-                aria-label="Role"
-                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b max-md:gap-x-4"
+            {/* the list 40 px under the summary (it stood 64 under a figure and a caption) */}
+            <section aria-label="Script list" className="mt-10 min-w-0">
+              {/* The section's command line (the controls board's tab row): the role the table
+                  lists; the hero above never follows it. */}
+              <Tabs
+                label="Role"
+                command
+                tabs={[
+                  { key: 'all', label: 'all', count: data?.roleCounts?.all },
+                  { key: 'lock', label: 'locks', count: data?.roleCounts?.locks },
+                  { key: 'type', label: 'types', count: data?.roleCounts?.types },
+                ]}
+                value={role ?? 'all'}
+                onChange={(next: Role) => {
+                  setRole(next === 'all' ? undefined : next);
+                }}
               >
-                {(
-                  [
-                    [undefined, 'All', data?.roleCounts?.all],
-                    ['lock', 'Locks', data?.roleCounts?.locks],
-                    ['type', 'Types', data?.roleCounts?.types],
-                  ] as const
-                ).map(([value, label, count]) => (
-                  <button
-                    key={label}
-                    type="button"
-                    aria-pressed={role === value}
-                    onClick={() => {
-                      setRole(value);
-                      pagination.reset();
-                    }}
-                    className={`text-section max-md:text-body -mb-px flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
-                  >
-                    {label}{' '}
-                    {count !== undefined && (
-                      <span className="text-text-dim text-small max-md:text-meta font-normal">
-                        {count.toLocaleString('en-US')}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <div className="text-text-dim text-small mb-3 flex flex-wrap items-center gap-2">
-                <label htmlFor="scripts-sort">sorted by</label>
-                <select
-                  id="scripts-sort"
-                  aria-label="Sort scripts"
-                  value={sortKey}
-                  onChange={(event) => {
-                    const next = event.target.value as SortKey;
-                    sortBy(next, next === 'name' ? 'asc' : 'desc');
-                  }}
-                  className="border-base-border bg-base-surface text-text text-small border px-2 py-1"
-                >
-                  <option value="capacity">CKB in their cells</option>
-                  <option value="used">Occupied CKB</option>
-                  <option value="liveCells">Live cells</option>
-                  <option value="cells">Cells ever</option>
-                  <option value="name">Name</option>
-                </select>
-                <button
-                  type="button"
-                  aria-label="Reverse order"
-                  onClick={() => sortBy(sortKey, sortDirection === 'asc' ? 'desc' : 'asc')}
-                  className="hover:text-text-bright"
-                >
-                  {sortDirection === 'asc' ? '↑' : '↓'}
-                </button>
-                {data?.total !== undefined && data.total !== null && (
-                  <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
-                )}
-              </div>
-              {isAwaited(read) ? (
-                <div className="text-text-dim text-small py-8">Loading scripts…</div>
-              ) : isError ? (
-                <div role="alert" className="text-negative text-small py-8">
-                  <strong>Failed to load scripts</strong>:{' '}
-                  {error instanceof Error ? error.message : 'Unknown error'}
-                </div>
-              ) : (
-                <ListTable
-                  label="Scripts"
-                  columns={columns}
-                  rows={rows}
-                  rowKey={(s) => s.codeHash}
-                  empty="No scripts."
-                  density="row"
-                  rowTitle={scriptRowTitle}
-                  // T5: body ink for the row, the name alone bright.
-                  rowClassName={() => 'text-text'}
-                  mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
-                />
-              )}
-              {data && data.data.length > 0 && (
-                <div className="border-base-border mt-4 border-t pt-4">
-                  <CursorPagination
-                    total={data.total ?? undefined}
-                    totalLabel="scripts"
-                    pageSize={pageSize}
-                    page={pagination.page}
-                    currentCount={data.data.length}
-                    hasMore={data.hasMore}
-                    hasPrevious={pagination.hasPrevious}
-                    onNext={() => pagination.goToNext(data.nextCursor)}
-                    onPrevious={pagination.goToPrevious}
+                <div className="text-text-dim text-small mb-3 mt-[18px] flex flex-wrap items-center gap-2">
+                  <Select
+                    label="sorted by"
+                    value={sortKey}
+                    options={SORTS}
+                    onChange={(next) => sortBy(next, next === 'name' ? 'asc' : 'desc')}
                   />
+                  {/* the direction, the inventory's one form (the placement lane's note): an
+                      arrow and, from sm, its words */}
+                  <button
+                    type="button"
+                    aria-label="Reverse sort direction"
+                    onClick={() => sortBy(sortKey, sortDirection === 'asc' ? 'desc' : 'asc')}
+                    className="text-text hover:text-text-bright whitespace-nowrap"
+                  >
+                    {sortDirection === 'desc' ? '↓' : '↑'}
+                    <span className="hidden sm:inline">
+                      {sortKey === 'name'
+                        ? sortDirection === 'asc'
+                          ? ' a to z'
+                          : ' z to a'
+                        : sortDirection === 'desc'
+                          ? ' largest first'
+                          : ' smallest first'}
+                    </span>
+                  </button>
+                  {data?.total !== undefined && data.total !== null && (
+                    <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
+                  )}
                 </div>
-              )}
+                {isAwaited(read) ? (
+                  <div className="text-text text-small py-8">Loading scripts…</div>
+                ) : isError ? (
+                  <div role="alert" className="text-negative text-small py-8">
+                    <strong>Failed to load scripts</strong>:{' '}
+                    {error instanceof Error ? error.message : 'Unknown error'}
+                  </div>
+                ) : (
+                  <ListTable
+                    label="Scripts"
+                    columns={columns}
+                    rows={rows}
+                    rowKey={(s) => s.codeHash}
+                    empty="No scripts."
+                    density="row"
+                    rowTitle={scriptRowTitle}
+                    // T5: body ink for the row, the name alone bright.
+                    rowClassName={() => 'text-text'}
+                    mobileRow={(s) => <ScriptPhoneRow script={s} />}
+                  />
+                )}
+                {data && (data.data.length > 0 || scriptsAt) && (
+                  <div className="border-base-border mt-4 border-t pt-4">
+                    {scriptsAt && <Pager mode="pages" label="scripts" {...scriptsAt} />}
+                  </div>
+                )}
+              </Tabs>
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">
@@ -686,6 +740,11 @@ export default function ScriptsPage() {
               <DetailSection title="How scripts work">
                 <Prose>
                   <p>{LEAD}</p>
+                  {/* the bar's rule in words: it stood in tier 1, under the bar (readability P3) */}
+                  <p data-role="caption">
+                    Code pinned by its data hash, or held in a code cell no one can spend, can never
+                    change; whoever can spend any other code cell can replace its code.
+                  </p>
                 </Prose>
               </DetailSection>
               {summary.data?.classSummary && summary.data.roleCounts && (

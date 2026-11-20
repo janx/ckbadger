@@ -1,6 +1,9 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import { SealedHead, type SealedHeadOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { DetailTierContext, useDetailTier } from '@/components/ui/detail-tier';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
+import { StatusStrip, type StatusStripProps } from '@/components/ui/status-strip';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
@@ -9,13 +12,10 @@ import {
 } from '@/lib/use-document-title';
 import { unitNode } from '@/components/ui/units';
 
-/** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
-const DetailTierContext = createContext<1 | 2>(1);
-
-/** F2 identities (round 2): which tier a section renders in, for headings outside DetailSection. */
-export function useDetailTier(): 1 | 2 {
-  return useContext(DetailTierContext);
-}
+// The tier a section sits in lives in components/ui/detail-tier.ts (lane cd-fixes-controls, the
+// disclosure sweep: SectionDisclosure reads it, and this layout draws one); its hook is read here
+// too by the components that took it from this module.
+export { useDetailTier };
 
 /**
  * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
@@ -42,6 +42,63 @@ export function DetailTier2({ children, className }: { children: ReactNode; clas
 export interface DetailFact {
   label: string;
   value: ReactNode;
+  /** What the name means, on hover ("Occupied pays for the state kept on CKB."). */
+  title?: string;
+}
+
+/**
+ * A fact a reading shows at some points and not at this one (the DAO reading's week before a
+ * range's first whole week, a script's code before its first deployment): its row keeps its place,
+ * unseen and with no words, so the list stands as tall as its fullest form at every width and a
+ * hover moves no layout (ReadoutRow's rule). A reading passes every fact it can show; an empty
+ * labelled row is never drawn.
+ */
+export interface ReservedFact {
+  label: string;
+  reserved: true;
+}
+
+/** One row of a fact list: its name and its value side by side from sm, stacked below. */
+const FACT_ROW =
+  'grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]';
+/** A fact's name is a label: quiet (R3). */
+const FACT_NAME = 'text-text-dim text-small min-w-0 break-words';
+const FACT_VALUE = 'text-text-bright min-w-0 break-words tabular-nums';
+
+/**
+ * Facts as the detail pages draw them: a `dl` whose rows are a label (a fact's name: the quiet ink,
+ * R3) beside its value, the label over the value below sm, one column of rows until md (at 640 a
+ * two-column grid wrapped labels into three lines), two from md. A page's head draws its facts
+ * with it, and so does a reading of more than three facts (readability R4, lane B7: never a chain
+ * of facts joined by "·" across the page); `className` places the list.
+ */
+export function DetailFacts({
+  facts,
+  className,
+}: {
+  facts: readonly (DetailFact | ReservedFact)[];
+  className?: string;
+}) {
+  return (
+    <dl className={cn(className, 'grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2')}>
+      {facts.map((fact) =>
+        'reserved' in fact ? (
+          // a line of a name and a line of a value, as tall as a fact's, with nothing in them
+          <div key={fact.label} aria-hidden="true" className={cn(FACT_ROW, 'invisible')}>
+            <dt className={FACT_NAME}>{'\u00a0'}</dt>
+            <dd className={FACT_VALUE}>{'\u00a0'}</dd>
+          </div>
+        ) : (
+          <div key={fact.label} className={FACT_ROW}>
+            <dt title={fact.title} className={FACT_NAME}>
+              {fact.label}
+            </dt>
+            <dd className={FACT_VALUE}>{unitNode(fact.value)}</dd>
+          </div>
+        )
+      )}
+    </dl>
+  );
 }
 interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
@@ -49,9 +106,15 @@ interface DetailLayoutBaseProps {
   /**
    * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
    * of the head, after the identity. In a sealed head it is what is below the stone and the name
-   * plate, from the page's left edge (the seals by kind, C10).
+   * plate, from the page's left edge (the seals by kind, C10). Set on the measure
+   * (`max-w-measure`, readability R4): what the page gives carries no width of its own.
    */
   lede?: ReactNode;
+  /**
+   * An entity page's status strip (lane D2): the facts a reader checks first, under the id line
+   * and before the lede, in one placement on the five entity pages and at every width.
+   */
+  strip?: StatusStripProps;
   status?: ReactNode;
   facts?: readonly DetailFact[];
   children: ReactNode;
@@ -86,6 +149,7 @@ export function DetailLayout({
   identity,
   seal,
   lede,
+  strip,
   status,
   actions,
   facts,
@@ -115,8 +179,21 @@ export function DetailLayout({
   );
   const head = seal ? (
     // The name plate: the kind word and the status on the kind line, the h1 and the identity (the
-    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge.
-    <SealedHead {...seal} status={status} identity={identity} below={lede}>
+    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge,
+    // on the measure (readability R4, lane B7: 76 characters at the body step, 638.4 px).
+    <SealedHead
+      {...seal}
+      status={status}
+      identity={identity}
+      strip={strip}
+      below={
+        lede === undefined ? undefined : (
+          <div data-detail-lede="" className="max-w-measure min-w-0">
+            {lede}
+          </div>
+        )
+      }
+    >
       {h1}
     </SealedHead>
   ) : (
@@ -133,8 +210,15 @@ export function DetailLayout({
       {identity && (
         <div className="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">{identity}</div>
       )}
+      {/* the status strip under the id line, 20 px down (the transaction board), the lede 18 px
+          under its rule (lane D2) */}
+      {strip && <StatusStrip {...strip} className="mt-5" />}
+      {/* the page's opening sentences, on the measure (readability R4, lane B7) */}
       {lede && (
-        <div data-detail-lede="" className="mt-4 min-w-0">
+        <div
+          data-detail-lede=""
+          className={strip ? 'max-w-measure mt-[18px] min-w-0' : 'max-w-measure mt-4 min-w-0'}
+        >
           {lede}
         </div>
       )}
@@ -149,23 +233,7 @@ export function DetailLayout({
         {/* The seal is pressed beside the name plate, never in the content (the facts and the
             sections run the full width under the head). */}
         {head}
-        {facts && (
-          // One column until md: at 640 a two-column grid wrapped labels into three lines.
-          <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">
-            {facts.map(({ label, value }) => (
-              <div
-                key={label}
-                className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
-              >
-                {/* a fact's name is a label: quiet (R3) */}
-                <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
-                <dd className="text-text-bright min-w-0 break-words tabular-nums">
-                  {unitNode(value)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        {facts && <DetailFacts facts={facts} className="mt-6" />}
         {kind === 'index' && <div aria-hidden="true" className="hairline-tube mt-3.5" />}
       </header>
       <div data-tier="1" className="min-w-0 space-y-8">
@@ -175,12 +243,11 @@ export function DetailLayout({
         <DetailTier2>
           {tier2}
           {rawData && (
-            <details open={rawOpen} className="border-row-rule border-t pt-4">
-              <summary className="text-text-dim hover:text-text text-small cursor-pointer">
-                Raw data
-              </summary>
-              <div className="text-small mt-4 min-w-0 overflow-x-auto">{rawData}</div>
-            </details>
+            <SectionDisclosure summary="Raw data" open={rawOpen}>
+              {/* raw data scrolls sideways where it is wider than its line; the disclosure's own
+                  content does not (a table's sticky head in it would stick to it, not the page) */}
+              <div className="overflow-x-auto">{rawData}</div>
+            </SectionDisclosure>
           )}
         </DetailTier2>
       )}

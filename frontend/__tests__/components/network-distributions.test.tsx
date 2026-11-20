@@ -14,6 +14,7 @@ import {
 } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 const API_BASE = '/api/:network/v1';
 
@@ -22,24 +23,26 @@ describe('NetworkDistributions', () => {
   it('renders verified-peer versions, hosting organisations and protocols', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 7,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 2,
-          versions: [
-            { label: '0.114.0', count: 4 },
-            { label: '0.113.0', count: 1 },
-          ],
-          countries: [
-            { label: 'United States', count: 3 },
-            { label: 'Germany', count: 2 },
-          ],
-          asns: [
-            { label: 'AS24940 Hetzner', count: 2 },
-            { label: 'Unknown', count: 5 },
-          ],
-          protocols: [{ label: '/ckb/2', count: 5 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 7,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 2,
+            versions: [
+              { label: '0.114.0', count: 4 },
+              { label: '0.113.0', count: 1 },
+            ],
+            countries: [
+              { label: 'United States', count: 3 },
+              { label: 'Germany', count: 2 },
+            ],
+            asns: [
+              { label: 'AS24940 Hetzner', count: 2 },
+              { label: 'Unknown', count: 5 },
+            ],
+            protocols: [{ label: '/ckb/2', count: 5 }],
+          })
+        )
       )
     );
 
@@ -55,9 +58,60 @@ describe('NetworkDistributions', () => {
     expect(await screen.findByText('0.114.0')).toBeInTheDocument();
     // The ASN's organisation, with the one-sentence reading over the verified peers.
     expect(
-      screen.getByText('2 of the 7 verified nodes run on Hetzner, across 2 countries.')
+      // re-pinned for lane exactness, part A2 (the pages review's NOTE 3): the countries are
+      // counted once, on the map, of its located nodes (this said "across 2 countries" of every
+      // verified node, beside the map's own count)
+      screen.getByText('2 of the 7 verified nodes run on Hetzner.')
     ).toBeInTheDocument();
     expect(screen.getByText('/ckb/2')).toBeInTheDocument();
+  });
+
+  // Review F-B (logic finding 5): an organisation's name is the ASN registry's text, in any
+  // script, and a segment wrote it where it measured to fit at 0.6 em a UTF-16 unit; no face the
+  // site serves holds a CJK character, which draws from a fallback face. At 240 px each of two
+  // equal segments has 120 px: "中国电信 50.00%" is 4 CJK characters at the small step (13 px,
+  // 16.25 each at 1.25 em) and 7 Latin glyphs (7.8 each), 119.6 px, and 20 px of padding (it was
+  // counted 105.8, and drawn clipped by its segment); its share alone, 66.8 px, fits.
+  it('writes an organisation’s name in its segment only where its bound fits', async () => {
+    stubChartWidth(240);
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 10,
+            sameNetworkReachable: 10,
+            verifiedUnavailable: 0,
+            versions: [{ label: '0.114.0', count: 10 }],
+            countries: [{ label: 'China', count: 10 }],
+            asns: [
+              { label: 'AS4134 中国电信', count: 5 },
+              { label: 'AS24940 Hetzner', count: 5 },
+            ],
+            protocols: [{ label: '/ckb/2', count: 10 }],
+          })
+        )
+      )
+    );
+    const { container } = render(<HostingBar />);
+    const segment = await waitFor(() => {
+      const found = container.querySelector('[data-provider="中国电信"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part
+    // whose segment cannot hold its words (its name, share and count) writes none there and is
+    // named on its own line under the bar; it was '50.00%', the share alone, its name nowhere near
+    // it. Each segment is (240 − 2) / 2 = 119 px; "中国电信 50.00% · 5 nodes" counts 4 × 16.25 +
+    // 17 × 7.8 = 197.6 px and 20 of padding.
+    expect(segment.textContent).toBe('');
+    const line = container.querySelector('[data-provider-line="中国电信"]') as HTMLElement;
+    expect(line.textContent).toBe('中国电信 50.00% · 5 nodes');
+    // two parts of 5 rank by their names, Hetzner first: from its part's left edge, 121 px (119
+    // and the 2 px gap), its line, 9 + 6 + 197.6 = 212.6 px, would run past the bar's end, so it
+    // ends at its part's right edge, the bar's end: 240 − 212.6
+    expect(parseFloat(line.style.marginLeft)).toBeCloseTo(240 - 212.6, 6);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
@@ -66,15 +120,17 @@ describe('NetworkDistributions', () => {
   it('waits while its read is paused offline, then draws the distributions once back online', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 5,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 0,
-          versions: [{ label: '0.114.0', count: 5 }],
-          countries: [{ label: 'Germany', count: 5 }],
-          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
-          protocols: [{ label: '/ckb/2', count: 5 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 5,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 0,
+            versions: [{ label: '0.114.0', count: 5 }],
+            countries: [{ label: 'Germany', count: 5 }],
+            asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+            protocols: [{ label: '/ckb/2', count: 5 }],
+          })
+        )
       )
     );
     onlineManager.setOnline(false);
@@ -97,18 +153,93 @@ describe('NetworkDistributions', () => {
     }
   });
 
-  it('renders an empty-state note when a distribution has no data', async () => {
+  // Lane exactness, part A (A5 iii): the hosting bar draws the route's organisations and its
+  // rest (the page summed the ASNs by organisation and the rest), and the versions stand by the
+  // route's releases; an API older than the page sends neither and is refused by name. The ASN
+  // histogram here is empty on purpose: the bar reads `hosting`, not the ASNs.
+  it('draws the hosting bar from the route’s organisations and rest', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
         HttpResponse.json({
-          verifiedRetained: 0,
-          sameNetworkReachable: 0,
+          verifiedRetained: 6,
+          sameNetworkReachable: 6,
           verifiedUnavailable: 0,
-          versions: [],
-          countries: [],
+          versions: [{ label: '0.119.0', count: 6 }],
+          countries: [
+            { label: 'US', count: 4 },
+            { label: 'DE', count: 2 },
+          ],
           asns: [],
           protocols: [],
+          hosting: {
+            organisations: [
+              { label: 'Amazon.com', count: 3 },
+              { label: 'Hetzner Online GmbH', count: 2 },
+            ],
+            rest: 1,
+            restOrganisations: 1,
+          },
+          releases: [{ release: '0.119.0', count: 6, builds: [{ label: '0.119.0', count: 6 }] }],
         })
+      )
+    );
+    const { container } = render(<HostingBar />);
+    expect(
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      await screen.findByText('3 of the 6 verified nodes run on Amazon.com.')
+    ).toBeInTheDocument();
+    expect(
+      [...container.querySelectorAll('[data-provider]')].map((n) => n.getAttribute('data-provider'))
+    ).toEqual(['Amazon.com', 'Hetzner Online GmbH', 'other networks']);
+  });
+
+  it('refuses distributions without the route’s groupings, an older API', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 5,
+          sameNetworkReachable: 5,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 5 }],
+          countries: [{ label: 'Germany', count: 5 }],
+          asns: [{ label: 'AS24940 Hetzner', count: 5 }],
+          protocols: [{ label: '/ckb/2', count: 5 }],
+        })
+      )
+    );
+    render(
+      <>
+        <NetworkDistributions />
+        <HostingBar />
+      </>
+    );
+    expect(
+      await screen.findByText(
+        // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+        'Network distributions: the API sends no releases: it is older than this page'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Network distributions: the API sends no hosting: it is older than this page'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('renders an empty-state note when a distribution has no data', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 0,
+            sameNetworkReachable: 0,
+            verifiedUnavailable: 0,
+            versions: [],
+            countries: [],
+            asns: [],
+            protocols: [],
+          })
+        )
       )
     );
 
@@ -542,6 +673,87 @@ describe('NetworkTrends', () => {
     }
   });
 
+  // Readability F3-e: every column budgeted from the widest value it holds, at 0.6 em a glyph (the
+  // day's 14 px, the cells' 13, heads, ticks and the quiet sentence 12) and the 16 px gap after
+  // every column but the last. A day retains under 10,000 observations (the crawler sees a few
+  // thousand nodes), so the count bar's widest scale is 10,000 and its track holds "0 10,000".
+  // Most common is the flexible column: "No retained round observation" whole at its minimum.
+  it('budgets every daily column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('2025-07-01', 14) + 16),
+      // the 48 px track (re-pinned on purpose, the coordinator's ruling on F3-e: the head writes
+      // "0 … 10k" in the tick form; it held the exact "0 10,000", 57.6), the bar's 10 px gap and
+      // the scale's figure
+      ceil(48 + 10 + at('10,000', 13) + 16),
+      // three digits of labels, under the head's word
+      ceil(Math.max(at('999', 13), at('Labels', 12)) + 16),
+      // the quiet sentence whole, wider than 12 characters of a label and its count; the last
+      ceil(
+        Math.max(
+          at('No retained round observation', 12),
+          at('x'.repeat(12), 13) + 8 + at('9,999', 13)
+        )
+      ),
+    ];
+    expect(budgets).toEqual([100, 121, 60, 209]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(490);
+    const ts = 1751299200;
+    const serve = () =>
+      server.use(
+        http.get(`${API_BASE}/network/history`, ({ request }) =>
+          HttpResponse.json({
+            metric: new URL(request.url).searchParams.get('metric') ?? '',
+            granularity: 'day',
+            dailyCoverage: [{ ts, hasRetainedObservation: true, roundsPerDay: null }],
+            coverageFrom: ts,
+            coverageTo: ts,
+            roundCountAvailability: 'notRecorded',
+            points: [{ ts, scalar: 0, buckets: [{ label: '0.210.0', count: 3 }] }],
+          })
+        )
+      );
+    serve();
+    const { unmount } = render(<NetworkShareHistory />);
+    const table = await screen.findByRole('table', {
+      name: 'Client Version Share daily observations',
+    });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    expect(
+      Number.parseFloat((table.querySelector('tbody [data-track]') as HTMLElement).style.width)
+    ).toBe(48);
+    unmount();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [490, 'table'],
+      [489, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      serve();
+      const { unmount: drop } = render(<NetworkShareHistory />);
+      const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name:
+          form === 'table'
+            ? 'Client Version Share daily observations'
+            : 'Client Version Share daily observations, compact',
+      });
+      expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   // A title is no hover on a touch screen: the phone row also says every label, quietly, last.
   it('keeps every column of a day on its phone row, and every label in a quiet last line', async () => {
     const days = [1751299200, 1751385600];
@@ -585,6 +797,14 @@ describe('NetworkTrends', () => {
       ['leader', 'body', 'US 12', '2 labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);
+    // PAGE-LANE-NOTES (B1, network/trends:288): the quiet line draws in the reading ink, so its
+    // label words are set quiet by the page — each label in the quiet ink, each count a value in
+    // the line's reading ink
+    const labelsLine = rows[0].querySelector('[data-line="labels"]') as HTMLElement;
+    const named = [...labelsLine.querySelectorAll('[data-role="figure-label"]')];
+    expect(named.map((n) => n.textContent)).toEqual(['US', 'DE']);
+    for (const n of named) expect(n).toHaveClass('text-text-dim');
+    expect(labelsLine.querySelectorAll('[data-dotted-item]')).toHaveLength(2);
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['day', '2025-07-02', null],
       ['leader', 'No retained round observation', null],

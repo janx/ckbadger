@@ -1,13 +1,16 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { CellBar } from '@/components/ui/cell-bar';
-import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { RangeSelect } from '@/components/ui/range-select';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
+import { Pager } from '@/components/ui/pager';
+import { rankedPageAt, type Asked, type CursorPageRead, type CursorWalk } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
@@ -33,10 +36,23 @@ import {
   blockLink,
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
-import type { CapacityRangeKey } from '@/lib/capacity-range';
+import { CAPACITY_RANGE_OPTIONS, type CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { MIN_TRACK_PX } from '@/components/ui/aligned-bar';
+import {
+  UNAVAILABLE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_CELL_CAPACITY,
+  WIDEST_CELL_CAPACITY_SUMMARY,
+  WIDEST_CELL_OCCUPIED,
+  WIDEST_CODE_CELL_INDEX,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_ROW_COUNT,
+  WIDEST_SCRIPT_VERSION,
+  shortChars,
+} from '@/lib/list-bounds';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
@@ -51,9 +67,8 @@ import {
   versionNumbers,
 } from '@/lib/script-lineage';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { useFromMd } from '@/hooks/useFromMd';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
 
@@ -76,22 +91,21 @@ export interface ScriptFamilyPageProps {
   codeCells: ReadonlyMap<string, CodeCellState>;
   /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
   newest: NewestCellsState;
+  /**
+   * The family's cells, a page of them, merged from its references' pages, as the walk asked for
+   * it: the pager's figures and ways are lib/pagination.ts rankedPageAt's, from the page alone.
+   */
   cells: {
-    pageSize: number;
-    rows: readonly Cell[];
+    /** The merged page as its walk asked for it (lane cd-fixes-controls, item 1); none yet. */
+    read: Asked<CursorPageRead & { data: readonly Cell[] }> | null;
+    walk: CursorWalk;
     loading: boolean;
-    page: number;
-    hasMore: boolean;
-    hasPrevious: boolean;
-    currentCount: number;
-    onNext: () => void;
-    onPrevious: () => void;
   };
 }
 
 function CellOwner({ cell, size }: { cell: Cell; size: ShortSize }) {
   return cell.address ? (
-    <Link href={`/address/${cell.address}`} className="text-text hover:text-jade">
+    <Link href={`/address/${cell.address}`} look="inline">
       <ShortId value={cell.address} kind="address" size={size} />
     </Link>
   ) : (
@@ -116,10 +130,7 @@ function AlsoGuardedBy({ cell, size }: { cell: Cell; size: ShortSize }) {
   if (cell.typeScriptName === undefined)
     throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} row has no typeScriptName (R6)`);
   return (
-    <Link
-      href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
-      className="hover:text-jade text-text"
-    >
+    <Link href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`} look="inline">
       {cell.typeScriptName ?? <ShortId value={cell.typeCodeHash} kind="hash" size={size} />}
     </Link>
   );
@@ -157,7 +168,7 @@ function OccupiedBytes({ cell }: { cell: Cell }) {
   return <span className="text-text">{toBytes(cell.commonKnowledgeSize)}</span>;
 }
 
-function CellAnatomy({ cell }: { cell: Cell }) {
+function CellAnatomy({ cell, className }: { cell: Cell; className?: string }) {
   const bytes = cell.commonKnowledgeSizeBreakdown;
   if (!bytes)
     return (
@@ -169,6 +180,7 @@ function CellAnatomy({ cell }: { cell: Cell }) {
     <CellBar
       subject={`${cell.txHash}:${cell.outputIndex}`}
       capacity={cell.capacity}
+      className={className}
       hideLegend
       anatomy={{
         lock: String(bytes.lockScriptBytes),
@@ -221,7 +233,7 @@ function ReferenceFacts({
       {reference.hashType === 'type' && version && (
         <>
           <dt className={term}>pin instead</dt>
-          <dd className={cn(value, 'text-text-dim')}>
+          <dd className={cn(value, 'text-text-dim', 'max-w-measure')}>
             its data hash with hash type data1 or data2 pins this exact binary; an upgrade will not
             reach cells that pin it
           </dd>
@@ -237,7 +249,7 @@ function ReferenceFacts({
             >
               <Link
                 href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                className="text-text hover:text-jade"
+                look="inline"
               >
                 {deployment.codeCellTxHash}
                 <OutpointIndex index={deployment.codeCellOutputIndex} />
@@ -273,9 +285,42 @@ function ReferenceFacts({
  * overran its column, read "hash typecode hash"): the head on one line at the meta step, 0.6 em a
  * character in the mono face, and the cell's 16 px right padding (`pr-4`) before the next column.
  */
-function headBudget(label: string): number {
+export function headBudget(label: string): number {
   return Math.ceil(textPx(label.length, fontPx('meta'))) + 16;
 }
+
+/**
+ * What the family's tables hold (readability F3-e): each column's widest value, measured at its
+ * step through columnPx, with the 16 px gap after every column but the last.
+ */
+const small = (text: string) => textPx(text.length, fontPx('small'));
+const meta = (text: string) => textPx(text.length, fontPx('meta'));
+/** A hash at the row size, as a run of its characters ("0x12345678…abcdef"). */
+const ROW_HASH = 'x'.repeat(shortChars(SHORT_FORMS.row.hash));
+/** A code cell's out point: a deployment transaction writes a few cells (WIDEST_CODE_CELL_INDEX). */
+const CODE_CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_CODE_CELL_INDEX}`;
+/** A live cell's out point: a transaction's outputs are under 10,000 (four digits). */
+const CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_COUNT_DIGITS}`;
+/** A version's number: two digits (WIDEST_SCRIPT_VERSION). */
+const VERSION_NUMBER = WIDEST_SCRIPT_VERSION;
+// a cell's capacity and occupied bytes: lib/list-bounds.ts's WIDEST_CELL_CAPACITY and
+// WIDEST_CELL_OCCUPIED (lane P2's follow-up, item 7: they were kept here)
+const WIDEST_OCCUPIED = WIDEST_CELL_OCCUPIED;
+
+/**
+ * Line 1 of a script's cell on a phone (the phone-rows board's head()): the out point at its tight
+ * size with an index of four digits at the key's 14 px ("0x1234…abcd:9999", 16 characters, 134.4;
+ * no stone, as the table's), the 12 px between the parts and the cell's capacity in the summary
+ * form at its widest, "9,999,999,999" (WIDEST_CELL_CAPACITY cut to whole CKB, 13 characters at
+ * 13 px, 101.4) and " CKB" at the unit's 12 px (28.8): 276.6 of a 360 px phone's 328 px line.
+ */
+const SCRIPT_CELL_PHONE_HEAD_PX = phoneHead(
+  'script cells',
+  textPx(shortChars(SHORT_FORMS.tight.hash) + `:${WIDEST_COUNT_DIGITS}`.length, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(WIDEST_CELL_CAPACITY_SUMMARY.length, fontPx('small')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
 
 /**
  * Tier 2's "The script" (consistency C6, board ScriptDetail): its cells in one line, the script's
@@ -297,17 +342,16 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
         </span>
       );
     const [first] = live;
+    // the out point and how many more live code cells there are: one figure, on one line; "no
+    // live code cell" above is words and breaks between them (a list table's rule)
     return (
-      <>
-        <Link
-          href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
-          className="text-text hover:text-jade"
-        >
+      <span className="whitespace-nowrap">
+        <Link href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`} look="inline">
           <ShortId value={first.codeCellTxHash} kind="hash" size={size} />
           <OutpointIndex index={first.codeCellOutputIndex} />
         </Link>
         {live.length > 1 && <span className="text-text-dim"> +{live.length - 1}</span>}
-      </>
+      </span>
     );
   };
   const holder = (reference: ReferenceRow) =>
@@ -336,14 +380,16 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'codeHash',
       label: 'code hash',
-      // the row size, 17 characters at 12 px (122.4 px), and the padding
-      minWidth: 140,
+      // the row size, 17 characters at 13 px (132.6), and the gap (readability F3-e: it was 140,
+      // the hash at 12 px)
+      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
       render: (r) => <ShortId value={r.referenceHash} kind="hash" size="row" />,
     },
     {
       key: 'cells',
       label: 'live cells',
-      // the head, and with it a count of up to 9 characters at 12 px ("1,234,567", 64.8 px)
+      // the head, wider than a reference's live cells, seven digits at 13 px ("9,999,999", 70.2:
+      // the default lock's family, the largest, holds under two million)
       minWidth: headBudget('live cells'),
       numeric: true,
       render: (r) => r.liveCellsCount.toLocaleString('en-US'),
@@ -351,24 +397,28 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'dep',
       label: 'cell dep',
-      // the out point at the row size, 19 characters at 12 px (136.8 px), and the padding
-      minWidth: 154,
-      render: (r) => <span className="whitespace-nowrap">{depOf(r, 'row')}</span>,
+      // The code cell's out point at the row size, an index of two digits, and " +9" more live
+      // cells (23 characters at 13 px, 179.4), and the gap (readability F3-e: it was 154, the out
+      // point at 12 px without its count).
+      minWidth: columnPx(small(`${CODE_CELL_OUTPOINT} +9`) + CELL_GAP_PX),
+      render: (r) => depOf(r, 'row'),
     },
     {
       key: 'holder',
       label: 'held by',
-      // The table keeps the 576 px it had, so it stays a table in the 588 px of tier 2's right
-      // column at 1280: this column gives the two heads the 26 px they lacked (150 → 124; the
-      // others hold 76 + 140 + 82 + 154 at the meta step of 11 px). Its words end in an ellipsis
-      // and stand whole in the row's title and in "Each reference in full".
-      minWidth: 124,
+      // The table's flexible column, the last (readability F3-e): its head and nine characters of
+      // the holder's words at 13 px (70.2) at its minimum, the rest of the container beyond the
+      // sum, so the table, 585 px, stays a table in the 588 px of tier 2's right column at 1280.
+      // Its words end in an ellipsis and stand whole in the row's title and in "Each reference in
+      // full". It was 124.
+      minWidth: columnPx(Math.max(meta('held by'), small('x'.repeat(9)))),
+      width: 'auto',
       render: (r) => <span className="block truncate">{holder(r)}</span>,
     },
   ];
   return (
     <div className="text-small min-w-0 space-y-4">
-      <p className="m-0 min-w-0 [overflow-wrap:anywhere]">
+      <p className="max-w-measure m-0 min-w-0 [overflow-wrap:anywhere]">
         <ScriptCellsSummary family={family} />
       </p>
       <ScriptByteMap kind={kind} script={null} />
@@ -403,14 +453,14 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
             )}
           />
           {references.some((r) => r.hashType === 'type') && (
-            <p className="text-text-dim m-0">
+            <p className="text-text max-w-measure m-0">
               A type reference follows every upgrade; its data hash with hash type data1 or data2
               pins this exact binary; an upgrade will not reach cells that pin it.
             </p>
           )}
-          <details className="min-w-0">
-            <summary className="text-text-dim cursor-pointer">Each reference in full</summary>
-            <div className="mt-3 space-y-3">
+          {/* the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep) */}
+          <SectionDisclosure form="inner" summary="Each reference in full">
+            <div className="space-y-3">
               {references.map((reference) => (
                 <ReferenceFacts
                   key={`${reference.hashType}:${reference.referenceHash}`}
@@ -419,7 +469,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
                 />
               ))}
             </div>
-          </details>
+          </SectionDisclosure>
         </>
       )}
     </div>
@@ -484,23 +534,29 @@ export function ScriptFamilyPage({
   useDocumentTitle([family.name, 'script']);
   // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
-  // PA-18: one range control, drawn at the end of the title row from md (R13) and in the chart's
-  // caption row, right over the picture it redraws, below md.
-  const fromMd = useFromMd();
+  // PA-18: one range control, right over the picture it redraws: since R7, at every width, in the
+  // History section's heading row.
   const range = (
-    <CapacityRangeSelector
+    <RangeSelect
+      label="range"
+      options={CAPACITY_RANGE_OPTIONS}
       value={capacityRange}
       onChange={(next) => {
         // Another range draws other days: a hovered day of the old one lets go.
         setActive(null);
         onCapacityRange(next);
       }}
-      quiet
     />
   );
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
+  // The family's cells, oldest first: the pager's pages mode, null for one page, an empty page
+  // past the end its place and a way back. Its pages merge its references' reads, which count no
+  // rows of their own: no count (the family's live cells is another read, at another tip, and its
+  // head states it: lane c2-finish, 1c).
+  const cellsAt = cells.read && rankedPageAt('cells', cells.read, cells.walk);
+  const cellRows = cells.read?.data ?? [];
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
@@ -528,10 +584,7 @@ export function ScriptFamilyPage({
   const outpointKey = (d: Deployment) => `${d.codeCellTxHash}:${d.codeCellOutputIndex}`;
   // a code cell's out point, at the form's size (U-09): row in the table, tight in the phone row
   const outpointLink = (d: Deployment, size: ShortSize) => (
-    <Link
-      href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
-      className="text-text hover:text-jade hover:underline"
-    >
+    <Link href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`} look="inline">
       <ShortId value={d.codeCellTxHash} kind="hash" size={size} />
       <OutpointIndex index={d.codeCellOutputIndex} />
     </Link>
@@ -599,7 +652,8 @@ export function ScriptFamilyPage({
   const versionCell = (row: Row) => (
     <span className="text-text-bright">
       v{row.number}
-      {row.current && <span className="text-text text-meta block">current</span>}
+      {/* the version's state, a value of its cell at the cell's 13 px (BRIEF-ink-size-roles item 2) */}
+      {row.current && <span className="text-text text-small block">current</span>}
     </span>
   );
   /** The deployment a one-line version row writes: its first; the others are its title's. */
@@ -661,7 +715,10 @@ export function ScriptFamilyPage({
       key: 'version',
       label: 'Version',
       header: <Head label="Version" />,
-      minWidth: 64,
+      // its head (7 characters at 12 px, 50.4), wider than "v99" at 14 px, and the gap (F3-e)
+      minWidth: columnPx(
+        Math.max(meta('Version'), textPx(VERSION_NUMBER.length, fontPx('body'))) + CELL_GAP_PX
+      ),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
@@ -669,7 +726,8 @@ export function ScriptFamilyPage({
         return lead ? (
           <Link
             href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-            className="text-body text-text-bright leading-row hover:underline"
+            look="key"
+            className="text-body leading-row"
           >
             {label}
           </Link>
@@ -682,7 +740,8 @@ export function ScriptFamilyPage({
       key: 'deployed',
       label: 'Deployed',
       header: <Head label="Deployed" />,
-      minWidth: 110,
+      // the date (10 characters at 13 px, 78) and the gap (F3-e: it was 110)
+      minWidth: columnPx(small(formatUtc8Date(0)) + CELL_GAP_PX),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
@@ -691,7 +750,8 @@ export function ScriptFamilyPage({
             <Utc8Date timestamp={lead.deployedAt} />
           </span>
         ) : (
-          <span className="text-text-dim">—</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>—</span>
         );
       },
     },
@@ -699,17 +759,19 @@ export function ScriptFamilyPage({
       key: 'block',
       label: 'Block',
       header: <Head label="Block" />,
-      minWidth: 120,
+      // "#99,999,999" (11 characters at 13 px, 85.8) and the gap (F3-e: it was 120)
+      minWidth: columnPx(small(WIDEST_BLOCK_NUMBER) + CELL_GAP_PX),
       numeric: true,
       className: ROW,
       render: (row) => {
         const block = leadOf(row)?.createdAtBlock;
         return block !== undefined ? (
-          <Link href={`/blocks/${block}`} className="text-text-dim hover:text-jade">
+          <Link href={`/blocks/${block}`} look="inline">
             {formatBlockNumber(block)}
           </Link>
         ) : (
-          <span className="text-text-dim">—</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>—</span>
         );
       },
     },
@@ -717,18 +779,22 @@ export function ScriptFamilyPage({
       key: 'cell',
       label: 'Code cell',
       header: <Head label="Code cell" />,
-      minWidth: 160,
-      width: '22%',
+      // The out point at the row size (20 characters at 13 px, 156), its 8 px gap and a "+9" tag
+      // (its words at 12 px and the tag's 12 px of sides and border), and the gap (F3-e: it was 160
+      // and 22 % of the table).
+      minWidth: columnPx(small(CODE_CELL_OUTPOINT) + 8 + meta('+9') + 12 + CELL_GAP_PX),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
-        if (!lead) return <span className="text-text-dim">No deployment observed</span>;
+        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+        if (!lead) return <span>No deployment observed</span>;
         const more = row.version.deployments.filter((d) => d !== lead);
         return (
           <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
             <Link
               href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-              className="text-text-dim hover:text-jade truncate"
+              look="inline"
+              className="truncate"
             >
               <ShortId value={lead.codeCellTxHash} kind="hash" size="row" />
               <OutpointIndex index={lead.codeCellOutputIndex} />
@@ -744,8 +810,13 @@ export function ScriptFamilyPage({
       key: 'held',
       label: 'Held by',
       header: <Head label="Held by" />,
-      minWidth: 190,
-      // The column that takes the free width.
+      // The column that takes the free width (F3-e): at its minimum a holder by its kind and its
+      // tight id, "multisig 0x1234…abcd" (20 characters at 13 px, 156), and the gap; a longer one
+      // ("no one (pinned by data hash)") ends in the one ellipsis, the row's title holding it.
+      // It was 190.
+      minWidth: columnPx(
+        small(`multisig ${'x'.repeat(shortChars(SHORT_FORMS.tight.hash))}`) + CELL_GAP_PX
+      ),
       width: 'auto',
       className: `${ROW} truncate`,
       render: (row) => {
@@ -755,7 +826,8 @@ export function ScriptFamilyPage({
         return custody ? (
           <span>{holderName(custody, 'tight')}</span>
         ) : (
-          <span className="text-text-dim">custody unavailable</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>custody unavailable</span>
         );
       },
     },
@@ -763,14 +835,16 @@ export function ScriptFamilyPage({
       key: 'status',
       label: 'Status',
       header: <Head label="Status" />,
-      minWidth: 200,
-      width: '18%',
+      // "consumed in" and the replacing transaction at the row size (29 characters at 13 px,
+      // 226.2), wider than "replaced at #99,999,999" and the "live · current" tag, and the
+      // gap (F3-e: it was 200 and 18 % of the table).
+      minWidth: columnPx(small(`consumed in ${ROW_HASH}`) + CELL_GAP_PX),
       className: `${ROW} truncate`,
       render: (row) =>
         row.current ? (
           <RowTag variant="accent">live · current</RowTag>
         ) : (
-          <span className="text-text-dim">
+          <span className="text-text">
             {/* Lane L: the replacing block is a link. */}
             <SentenceNodes parts={replacedParts(leadOf(row))} />
           </span>
@@ -780,7 +854,9 @@ export function ScriptFamilyPage({
       key: 'usage',
       label: 'Live cells',
       header: <Head label="Live cells" />,
-      minWidth: 100,
+      // eight digits of live cells, or "unavailable" (11 characters at 13 px, 85.8, the wider); the
+      // last column, no gap after it (F3-e: it was 100)
+      minWidth: columnPx(Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE))),
       numeric: true,
       className: ROW,
       render: (row) => versionUsage(row.version.versionHash),
@@ -790,11 +866,23 @@ export function ScriptFamilyPage({
   const NARROW = 'py-3 align-top';
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
   const narrowColumns: ListColumn<Row>[] = [
-    { key: 'version', label: 'v', minWidth: 64, className: NARROW, render: versionCell },
+    {
+      key: 'version',
+      label: 'v',
+      // "v99", and "current" under it at the cell's 13 px (54.6, the wider), and the gap: 70.6
+      // (F3-e: it was 64; 66.4 with "current" at 12 px, BRIEF-ink-size-roles item 2)
+      minWidth: columnPx(Math.max(small(VERSION_NUMBER), small('current')) + CELL_GAP_PX),
+      className: NARROW,
+      render: versionCell,
+    },
     {
       key: 'deployed',
       label: 'Deployed',
-      minWidth: 96,
+      // the date, and the block under it, a link, at 13 px (85.8, the wider; it was 79.2 at 12
+      // px), and the gap
+      minWidth: columnPx(
+        Math.max(small(formatUtc8Date(0)), small(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
+      ),
       className: NARROW,
       render: (row) =>
         row.version.deployments.length ? (
@@ -802,32 +890,37 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               <Utc8Date timestamp={d.deployedAt} />
               {d.createdAtBlock !== undefined && (
-                <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
+                <span className="block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
         ) : (
-          <span className="text-text-dim">No deployment observed</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>No deployment observed</span>
         ),
     },
     {
       key: 'cell',
       label: 'Code cell · version hash',
-      minWidth: 228,
+      // The column that takes the free width (the board's 1fr). At its minimum the out point at
+      // the row size (20 characters at 13 px, 156) and the gap; its notes break between their words
+      // and the version hash anywhere under it (F3-e: it was 228).
+      minWidth: columnPx(small(CODE_CELL_OUTPOINT) + CELL_GAP_PX),
       className: NARROW,
-      // The column that takes the free width (the board's 1fr).
       width: 'auto',
       render: (row) => (
         <>
           {row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
               {outpointLink(d, 'row')}
-              <span className="text-text-dim text-meta block">
+              {/* values of the cell, the reading ink at its 13 px (BRIEF-ink-size-roles items 1 and 2) */}
+              <span className="text-small block">
                 {binarySize(d)} · {signedText(d, 'row')}
               </span>
             </span>
           ))}
-          <span className="text-text-dim text-meta block [overflow-wrap:anywhere]">
+          {/* the version hash the column's head names, a value: the reading ink at 13 px */}
+          <span className="text-text block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>
@@ -836,8 +929,10 @@ export function ScriptFamilyPage({
     {
       key: 'status',
       label: 'Status',
-      minWidth: 112,
-      className: `text-text-dim ${NARROW}`,
+      // A status breaks before the transaction it names; that hash at the row size is one unit (17
+      // characters at 13 px, 132.6), and the gap (F3-e: it was 112).
+      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
+      className: `text-text ${NARROW}`,
       render: (row) =>
         row.version.deployments.map((d) => (
           <span key={outpointKey(d)} className="block">
@@ -848,7 +943,8 @@ export function ScriptFamilyPage({
     {
       key: 'usage',
       label: 'Live cells',
-      minWidth: 80,
+      // as in the wide table, the last column (F3-e: it was 80)
+      minWidth: columnPx(Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE))),
       className: NARROW,
       numeric: true,
       render: (row) => versionUsage(row.version.versionHash),
@@ -948,8 +1044,10 @@ export function ScriptFamilyPage({
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): the hero, its reading and figures; sections 64 / 72 px apart. */}
           <div data-tier="1" className="min-w-0">
-            <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
-              <Link href="/scripts" className="hover:text-text-bright">
+            {/* the chart pages' breadcrumb (lane D1): its links inline in the reading ink, the
+                separator quiet */}
+            <nav aria-label="Breadcrumb" className="text-small mb-2">
+              <Link href="/scripts" look="inline">
                 Scripts
               </Link>
               {roleCrumb && (
@@ -974,61 +1072,64 @@ export function ScriptFamilyPage({
                     </RowTag>
                   )}
                 </div>
-                {fromMd && range}
               </div>
               {(family.description || family.website) && (
                 <p
                   data-role="lede"
-                  className="text-text-dim text-body mt-1.5 max-w-[560px] [overflow-wrap:anywhere]"
+                  className="text-text text-body max-w-measure mt-1.5 [overflow-wrap:anywhere]"
                 >
                   {family.description}
                   {family.website && (
                     <>
                       {family.description ? ' · ' : ''}
-                      <a
+                      <ExternalLink
                         href={family.website}
-                        className="hover:text-text-bright whitespace-nowrap hover:underline"
+                        look="inline"
+                        className="whitespace-nowrap"
                       >
-                        {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗
-                      </a>
+                        {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                      </ExternalLink>
                     </>
                   )}
                 </p>
               )}
               <ScriptHeroFigure family={family} />
-              {!fromMd && (
-                <div data-role="chart-controls" className="mt-[18px] flex justify-end">
-                  {range}
-                </div>
-              )}
-              {chartLoading ? (
-                <p className="text-text-dim text-small mt-[18px] py-6">Loading capacity history…</p>
-              ) : chartError ? (
-                <p role="alert" className="text-negative text-small mt-[18px]">
-                  Capacity history unavailable: {chartError.message}
-                </p>
-              ) : chart?.data.length ? (
-                <ScriptHistoryFigure
-                  family={family}
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  active={active}
-                  onActive={setActive}
-                />
-              ) : (
-                <p className="text-text-dim text-small mt-[18px] py-6">No capacity history.</p>
-              )}
             </section>
-            {!chartLoading && !chartError && chart?.data.length ? (
-              <ScriptHistoryReading
-                chart={chart}
-                lineage={lineage}
-                numbers={numbers}
-                active={active}
-              />
-            ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
+            {/* Readability R7: the history after the hero's figures, 160 px under one sentence its
+                points give, its range in its own heading row at every width (it was the hero's
+                300 px picture, the range at the end of the title row from md) */}
+            <div role="region" aria-label="History" className="mt-[72px] min-w-0">
+              <DetailSection title="History" actions={range}>
+                {chartLoading ? (
+                  <p className="text-text text-small py-6">Loading capacity history…</p>
+                ) : chartError ? (
+                  <p role="alert" className="text-negative text-small max-w-measure">
+                    Capacity history unavailable: {chartError.message}
+                  </p>
+                ) : chart?.data.length ? (
+                  <>
+                    <ScriptHistoryFigure
+                      family={family}
+                      chart={chart}
+                      lineage={lineage}
+                      numbers={numbers}
+                      active={active}
+                      onActive={setActive}
+                    />
+                    <ScriptHistoryReading
+                      chart={chart}
+                      lineage={lineage}
+                      numbers={numbers}
+                      active={active}
+                    />
+                  </>
+                ) : (
+                  // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+                  <p className="text-small max-w-measure py-6">No capacity history.</p>
+                )}
+              </DetailSection>
+            </div>
             {/* Lane S: what the script holds now, before how its code can change. */}
             <ScriptNewestCells family={family} newest={newest} className="mt-16" />
             {/* A17: the holders the timeline draws (each run of the lineage's code cell, a
@@ -1105,11 +1206,11 @@ export function ScriptFamilyPage({
                 ))}
               </div>
               {cells.loading ? (
-                <p className="text-text-dim text-small py-6">Loading cells…</p>
+                <p className="text-text text-small py-6">Loading cells…</p>
               ) : (
                 <ListTable
                   label="Its cells"
-                  rows={cells.rows}
+                  rows={cellRows}
                   rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                   empty={`No live cells use ${family.name}`}
                   // T5: body ink for the row, the cell alone bright.
@@ -1119,14 +1220,17 @@ export function ScriptFamilyPage({
                       key: 'cell',
                       label: 'Cell',
                       header: <Head label="Cell" />,
-                      // the out point at the row size, 20 characters at 13 px (156 px), and
-                      // the padding
-                      minWidth: 176,
-                      width: '15%',
+                      // The out point at the row size and an index of four digits (22
+                      // characters at the key's 14 px, 184.8), and the gap (readability F3-e: it
+                      // was 176, the out point at 13 px with a one-digit index, and 15 %).
+                      minWidth: columnPx(
+                        textPx(CELL_OUTPOINT.length, fontPx('body')) + CELL_GAP_PX
+                      ),
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-body text-text-bright hover:text-jade leading-row hover:underline"
+                          look="key"
+                          className="text-body leading-row"
                         >
                           <ShortId value={cell.txHash} kind="hash" size="row" />
                           <OutpointIndex index={cell.outputIndex} />
@@ -1137,32 +1241,43 @@ export function ScriptFamilyPage({
                       key: 'owner',
                       label: 'Owner',
                       header: <Head label="Owner" />,
-                      minWidth: 170,
-                      width: '16%',
+                      // the address at the row size (13 characters at 13 px, 101.4) and the gap
+                      // (F3-e: it was 170 and 16 %)
+                      minWidth: columnPx(
+                        textPx(shortChars(SHORT_FORMS.row.address), fontPx('small')) + CELL_GAP_PX
+                      ),
                       render: (cell) => <CellOwner cell={cell} size="row" />,
                     },
                     {
                       key: 'type',
                       label: 'Also guarded by',
                       header: <Head label="Also guarded by" />,
-                      minWidth: 140,
-                      width: '13%',
+                      // The table's flexible column (F3-e): a type's code hash at the row size
+                      // (17 characters at 13 px, 132.6) and the gap at its minimum; a registry
+                      // name takes the rest of the container, breaking between its words. It
+                      // was 140 and 13 %.
+                      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
+                      width: 'auto',
                       render: (cell) => <AlsoGuardedBy cell={cell} size="row" />,
                     },
                     {
                       key: 'anatomy',
                       label: 'What it holds',
                       header: <Head label="What it holds" />,
-                      minWidth: 150,
-                      width: '14%',
+                      // The bar, no shorter than a bar's track (48), or "Cell anatomy
+                      // unavailable" breaking between its words ("unavailable", 85.8, the wider),
+                      // and the gap (F3-e: it was 150 and 14 %).
+                      minWidth: columnPx(Math.max(MIN_TRACK_PX, small(UNAVAILABLE)) + CELL_GAP_PX),
                       render: (cell) => <CellAnatomy cell={cell} />,
                     },
                     {
                       key: 'capacity',
                       label: 'Capacity',
                       header: <Head label="Capacity" />,
-                      minWidth: 180,
-                      width: '17%',
+                      // A cell's capacity under ten billion CKB, every decimal (22 characters at
+                      // 13 px, 171.6), its unit " CKB" at 12 px (28.8) and the gap (F3-e: it was
+                      // 180 and 17 %).
+                      minWidth: columnPx(small(WIDEST_CELL_CAPACITY) + meta(' CKB') + CELL_GAP_PX),
                       numeric: true,
                       render: (cell) => (
                         <CkbAmount
@@ -1177,8 +1292,11 @@ export function ScriptFamilyPage({
                       key: 'occupied',
                       label: 'Occupied',
                       header: <Head label="Occupied" />,
-                      minWidth: 90,
-                      width: '9%',
+                      // occupied bytes under ten million, "9,999,999 B", or "unavailable" (85.8
+                      // each), and the gap (F3-e: it was 90 and 9 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_OCCUPIED), small(UNAVAILABLE)) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (cell) => <OccupiedBytes cell={cell} />,
                     },
@@ -1186,11 +1304,12 @@ export function ScriptFamilyPage({
                       key: 'created',
                       label: 'Created',
                       header: <Head label="Created" />,
-                      minWidth: 170,
-                      width: '16%',
+                      // "#99,999,999 · 2026-11-02" (24 characters at 13 px, 187.2), the last
+                      // column, no gap after it (F3-e: it was 170 and 16 %)
+                      minWidth: columnPx(small(`${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`)),
                       numeric: true,
                       render: (cell) => (
-                        <span className="text-text-dim">
+                        <span className="text-text">
                           {blockLink(cell.createdAtBlock)}
                           {unitNode(
                             cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`
@@ -1199,55 +1318,16 @@ export function ScriptFamilyPage({
                       ),
                     },
                   ]}
-                  mobileRow={(cell) => (
-                    <div className="text-small min-w-0 space-y-1.5">
-                      <Link
-                        href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                        className="text-text hover:text-jade"
-                      >
-                        <ShortId value={cell.txHash} kind="hash" size="tight" />
-                        <OutpointIndex index={cell.outputIndex} />
-                      </Link>
-                      <div>
-                        <CellOwner cell={cell} size="tight" /> ·{' '}
-                        <AlsoGuardedBy cell={cell} size="tight" />
-                      </div>
-                      <CellAnatomy cell={cell} />
-                      <div className="flex flex-wrap justify-between gap-2">
-                        <CkbAmount
-                          form="summary"
-                          shannons={BigInt(cell.capacity)}
-                          signed={false}
-                          tone="plain"
-                        />
-                        <span>
-                          <OccupiedBytes cell={cell} /> occupied
-                        </span>
-                      </div>
-                      <div className="text-text-dim">Created {blockLink(cell.createdAtBlock)}</div>
-                    </div>
-                  )}
+                  mobileRow={(cell) => <ScriptCellPhoneRow cell={cell} />}
                 />
               )}
-              {cells.rows.length > 0 && (
-                <p className="text-text-dim text-small mt-2">
-                  Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
+              {cellRows.length > 0 && (
+                <p className="text-text text-small max-w-measure mt-2">
+                  Oldest first, as the cell index keeps them · {cellRows.length} of{' '}
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>
               )}
-              {cells.rows.length > 0 && (
-                <CursorPagination
-                  total={family.liveCellsCount}
-                  totalLabel="cells"
-                  pageSize={cells.pageSize}
-                  page={cells.page}
-                  currentCount={cells.currentCount}
-                  hasMore={cells.hasMore}
-                  hasPrevious={cells.hasPrevious}
-                  onNext={cells.onNext}
-                  onPrevious={cells.onPrevious}
-                />
-              )}
+              {cellsAt && <Pager mode="pages" label="cells" {...cellsAt} />}
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">
@@ -1275,5 +1355,71 @@ export function ScriptFamilyPage({
         </div>
       </main>
     </div>
+  );
+}
+
+/**
+ * A script's cell on a phone (the phone-rows board): the out point and its capacity; who owns it,
+ * the type script that also guards it (none said where it has none) and where it was made, each
+ * after its name; the list's one bar, what the cell holds, beside the bytes it occupies.
+ */
+function ScriptCellPhoneRow({ cell }: { cell: Cell }) {
+  return (
+    <PhoneRow
+      testId="script-cell-row-mobile"
+      head={SCRIPT_CELL_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'cell',
+          tone: 'head',
+          left: (
+            <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`} look="key">
+              <ShortId value={cell.txHash} kind="hash" size="tight" />
+              <OutpointIndex index={cell.outputIndex} />
+            </Link>
+          ),
+          right: (
+            <CkbAmount
+              form="summary"
+              shannons={BigInt(cell.capacity)}
+              signed={false}
+              tone="plain"
+            />
+          ),
+        },
+        {
+          key: 'held',
+          tone: 'body',
+          left: (
+            <Dotted
+              parts={[
+                <Labelled key="owner" label="owner">
+                  <CellOwner cell={cell} size="tight" />
+                </Labelled>,
+                cell.typeScriptHash && (
+                  <Labelled key="type" label="type">
+                    <AlsoGuardedBy cell={cell} size="tight" />
+                  </Labelled>
+                ),
+                <Labelled key="created" label="created">
+                  {blockLink(cell.createdAtBlock)}
+                </Labelled>,
+              ]}
+            />
+          ),
+        },
+        {
+          key: 'anatomy',
+          tone: 'quiet',
+          grow: true,
+          left: <CellAnatomy cell={cell} className="w-full min-w-12" />,
+          right: (
+            <Labelled label="occupied" after>
+              <OccupiedBytes cell={cell} />
+            </Labelled>
+          ),
+        },
+      ]}
+    />
   );
 }

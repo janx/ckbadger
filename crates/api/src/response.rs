@@ -159,6 +159,31 @@ pub struct CursorPaginatedResponse<T> {
     pub pool: Option<crate::pool::PoolSummaryResponse>,
 }
 
+/// Where a page of a holders ranking starts: after the place of its cursor `(count, owner)` in the
+/// ranking's order (count desc, owner asc), whether or not that holder still stands there (lane exactness, part A2,
+/// S1: a cursor whose holder moved or left was a 400). `ranking` is in that order; a page without
+/// a cursor starts at the top. The page's first rank is this index plus one.
+pub fn ranked_page_start(ranking: &[(Vec<u8>, i64)], cursor: Option<&(i64, Vec<u8>)>) -> usize {
+    match cursor {
+        None => 0,
+        Some((count, owner)) => ranking.partition_point(|(lock, held)| {
+            *held > *count || (*held == *count && lock.as_slice() <= owner.as_slice())
+        }),
+    }
+}
+
+/// A page of a ranked list with the rank of its first row (lane exactness, part A, A3): the 1-based position, in
+/// the request's read view, of the row the page starts at, counted with its rows and its total.
+/// A page computed the rank from the rows it had read before, which is wrong once the list moves
+/// between two reads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RankedPage<T> {
+    #[serde(flatten)]
+    pub page: CursorPaginatedResponse<T>,
+    pub first_rank: u64,
+}
+
 impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
     pub fn new(data: Vec<T>, total: i64, limit: i64, next_cursor: Option<String>) -> Self {
         let has_more = next_cursor.is_some();
@@ -338,8 +363,14 @@ pub struct ScriptFamiliesListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ScriptRoleCountsResponse {
     pub all: i64,
+    /// Families used as a lock (a lock-and-type one too).
     pub locks: i64,
+    /// Families used as a type (a lock-and-type one too).
     pub types: i64,
+    /// Families used as both, in `locks` and in `types` alike (the P3 follow-up, SHOULD 3).
+    pub both: i64,
+    /// Families with neither role (no cell and no registry role), in neither count.
+    pub neither: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,6 +388,9 @@ pub struct ScriptCustodyResponse {
     pub key_hashes: Vec<String>,
     /// The exact spending transaction that supplied verified multisig config.
     pub verified_by_tx: Option<String>,
+    /// The code cell that transaction spent, `0x<tx hash>:<output index>` (with
+    /// `verified_by_tx`, or neither): a page opens the transaction at it.
+    pub verified_code_cell: Option<String>,
     /// `never_signed`, `verified`, `unavailable`, or `not_applicable`.
     pub witness_state: String,
     /// Every distinct current custodian for a type reference. Multiple

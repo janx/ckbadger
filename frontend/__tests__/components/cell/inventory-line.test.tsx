@@ -26,11 +26,15 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 const SPORE_ID = '0x7e3bc1bce9aa1f5d085911dee7673fe54ece2d205f6a796a773d9e6f15216539';
 const CLUSTER_ID = '0x95a56c18700cbc3f4e98895fe7063094f592fd89964d49ba5a5c1da1f66b7169';
 
-function view(cell: unknown) {
+/** The line for a cell; `typeName` is the registry's name for its type, `undefined` while read. */
+function view(
+  cell: unknown,
+  { typeName }: { typeName: string | null | undefined } = { typeName: null }
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <CellInventoryLine cell={cell as Cell} />
+      <CellInventoryLine cell={cell as Cell} typeName={typeName} />
     </QueryClientProvider>
   );
 }
@@ -187,10 +191,14 @@ describe('CellInventoryLine (lane U, U6)', () => {
     expectPartBox(nameOf(line, LP_UNIT), LP_UNIT);
   });
 
-  it('names a DAO deposit and a withdrawal request with their exact CKB', () => {
+  // Re-pinned on purpose, and renamed (lane P1, said once; it was "… with their exact CKB"): the
+  // cell's capacity is the status strip's fact, exact, so the line names what the cell is and no
+  // amount (it read "This cell is a Nervos DAO deposit of 12,500.00000000 CKB", the column form).
+  it('names a DAO deposit and a withdrawal request, the capacity left to the strip', () => {
     const deposit = view(dao);
     const line = screen.getByTestId('cell-inventory');
-    expect(line).toHaveTextContent(/^This cell is a Nervos DAO deposit of 12,500(\.0+)? CKB$/);
+    expect(line).toHaveTextContent(/^This cell is a Nervos DAO deposit$/);
+    expect(line.querySelector('[data-ckb-amount]')).toBeNull();
     expect(within(line).getByRole('link', { name: 'Nervos DAO deposit' })).toHaveAttribute(
       'href',
       '/mainnet/dao'
@@ -199,7 +207,7 @@ describe('CellInventoryLine (lane U, U6)', () => {
     deposit.unmount();
     view(daoWithdraw);
     expect(screen.getByTestId('cell-inventory')).toHaveTextContent(
-      /^This cell is a Nervos DAO withdrawal request for 9,200(\.0+)? CKB$/
+      /^This cell is a Nervos DAO withdrawal request$/
     );
   });
 
@@ -250,12 +258,91 @@ describe('CellInventoryLine (lane U, U6)', () => {
     ).not.toBeNull();
   });
 
-  it('renders no line for a plain cell or an unhandled protocol', () => {
-    const { container } = view({ ...spore, protocolScript: { lock: null, type: null } });
-    expect(container).toBeEmptyDOMElement();
-    const other = view({ ...spore, protocolScript: { lock: null, type: 'ckbfs' } });
-    expect(other.container).toBeEmptyDOMElement();
+  // Re-pinned on purpose, and renamed (lane P1, the plan: "one sentence of what the cell is for
+  // every kind"; review chain-b cell-plain: no sentence said what the cell is): a cell that is no
+  // inventory item is said by what its scripts and its data are, from the registry's names the
+  // page already reads. It was "renders no line for a plain cell or an unhandled protocol".
+  it('says what a cell that is no inventory item is, by its scripts (P1)', () => {
+    // Re-pinned on purpose (lane P1, third round; review p-logic-chain NOTE 3): a cell with no type
+    // script that holds data says so (it read "holds plain CKB" for 233 bytes of data, a contract
+    // binary no registered script references among them); one that holds none is plain CKB
+    const withData = view({
+      ...spore,
+      type: null,
+      typeScriptHash: null,
+      protocolScript: { lock: null, type: null },
+    });
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell holds 233 bytes of data, with no type script$/
+    );
+    withData.unmount();
+    const plain = view({
+      ...spore,
+      type: null,
+      typeScriptHash: null,
+      dataSize: 0,
+      protocolScript: { lock: null, type: null },
+    });
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell holds plain CKB, with no type script$/
+    );
+    expect(screen.getByTestId('cell-kind').querySelector('[data-class="ckb"]')).not.toBeNull();
+    plain.unmount();
+    // a type the registry names, the protocol not an inventory item's (CKBFS)
+    const named = view(
+      { ...spore, protocolScript: { lock: null, type: 'ckbfs' } },
+      { typeName: 'CKBFS' }
+    );
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell carries the type script CKBFS$/
+    );
+    named.unmount();
+    // a type the registry does not name, said only once the registry has answered
+    const unnamed = view(
+      { ...spore, protocolScript: { lock: null, type: null } },
+      { typeName: null }
+    );
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell carries a type script the registry does not name$/
+    );
+    unnamed.unmount();
+    view({ ...spore, protocolScript: { lock: null, type: null } }, { typeName: undefined });
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(/^This cell carries a type script$/);
+    expect(screen.queryByTestId('cell-inventory')).toBeNull();
     expect(api.getSporeObject).not.toHaveBeenCalled();
+  });
+
+  it('says a code cell is the code of its scripts, with its version, and a dep group its members (P1)', () => {
+    const code = view({
+      ...spore,
+      protocolScript: { lock: null, type: null },
+      codeCellOf: [{ name: 'JoyID', codeHash: `0x${'d2'.repeat(32)}`, hashType: 'type' }],
+      codeCell: {
+        typeIdVersions: [
+          { ordinal: 5, codeCellTxHash: spore.txHash, codeCellOutputIndex: spore.outputIndex },
+        ],
+      },
+    });
+    const line = screen.getByTestId('cell-kind');
+    expect(line).toHaveTextContent(/^This cell holds the code of JoyID, v5$/);
+    expect(within(line).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+      'href',
+      `/mainnet/script/0x${'d2'.repeat(32)}?hashType=type`
+    );
+    code.unmount();
+    view({
+      ...spore,
+      type: null,
+      protocolScript: { lock: null, type: null },
+      isDepGroup: true,
+      depGroupItems: [
+        { txHash: `0x${'71'.repeat(32)}`, outputIndex: 0 },
+        { txHash: `0x${'71'.repeat(32)}`, outputIndex: 1 },
+      ],
+    });
+    expect(screen.getByTestId('cell-kind')).toHaveTextContent(
+      /^This cell is a dep group of 2 cells$/
+    );
   });
 
   it('says in place, never a guess, when a handled cell does not name its item', () => {

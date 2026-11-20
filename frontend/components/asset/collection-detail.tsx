@@ -55,8 +55,8 @@ import { IdentityPositioning, type IdentityStandard } from '@/components/identit
 import { retryTransientOnly } from '@/lib/query-client';
 import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
-import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -89,7 +89,7 @@ function CollectionLede({
     : undefined;
   const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
-    <p className="text-text-dim text-body max-w-[640px]">
+    <p className="text-text text-body max-w-measure">
       {/* PB-23: the kind and the sentence are one separated list, so the dot goes with the
           sentence to a new line; the kind is one unit (responsive B#21). */}
       <Dotted
@@ -129,6 +129,14 @@ function CollectionLede({
     </p>
   );
 }
+/**
+ * The composition every live object of a collection shares, from its counts (the lede's "every
+ * object is …"); null where they do not share one or none is live: then no row can say its own.
+ */
+function sharedTier(counts: CompositionCounts | null, live: number): CompositionTier | null {
+  if (!counts || live === 0) return null;
+  return (Object.keys(counts) as CompositionTier[]).find((t) => counts[t] === live) ?? null;
+}
 /** The dim sentence after "N of M fully on-chain": how long the on-chain parts last. */
 function permanence(counts: CompositionCounts): string | null {
   if (counts.btc_ckb > 0 && counts.pure_ckb === 0)
@@ -138,23 +146,41 @@ function permanence(counts: CompositionCounts): string | null {
   if (counts.pure_ckb > 0) return 'permanent and verifiable, as long as CKB (and Bitcoin) exist';
   return null;
 }
-/** The page's one figure (R13): the live objects, with the CKB their cells hold beside it. */
+/**
+ * The words of a collection's figure by what it collects: an object collection's are the feed's
+ * (C12: "burned" for every kind, Spore's own word in the title); an identity collection's are the
+ * ones its metrics row wrote (a name may be created as well as minted, and inactive as well as
+ * burned).
+ */
+const FIGURE_WORDS = {
+  objects: { live: 'objects live', minted: 'minted', gone: 'burned' },
+  identities: { live: 'identities live', minted: 'minted / created', gone: 'inactive / burned' },
+} as const;
+
+/**
+ * The page's one figure (R13): the live objects or identities, with the CKB their cells hold
+ * beside it. An identity collection is headed by it too (lane D2, PB-13), as a cluster or a class
+ * is.
+ */
 function CollectionFigure({
   live,
   total,
   held,
   spore,
+  collects,
 }: {
   live: number;
   total: number;
   held: bigint | null;
   spore: boolean;
+  collects: keyof typeof FIGURE_WORDS;
 }) {
   const burned = total - live;
+  const words = FIGURE_WORDS[collects];
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
       <div data-role="figure" className="min-w-0">
-        <div className="eyebrow text-text-dim text-meta mb-1.5">objects live</div>
+        <div className="eyebrow text-text-dim text-meta mb-1.5">{words.live}</div>
         <div className="text-index sm:text-display text-text-bright tabular-nums">
           {live.toLocaleString('en-US')}{' '}
           {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
@@ -163,8 +189,8 @@ function CollectionFigure({
             title={spore ? 'melted, in Spore’s words' : undefined}
           >
             {burned === 0
-              ? 'all live · none burned'
-              : `of ${total.toLocaleString('en-US')} minted · ${burned.toLocaleString('en-US')} burned`}
+              ? `all live · none ${words.gone}`
+              : `of ${total.toLocaleString('en-US')} ${words.minted} · ${burned.toLocaleString('en-US')} ${words.gone}`}
           </span>
         </div>
       </div>
@@ -347,7 +373,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               cluster.data.createdAtBlock === null ? (
                 'Not recorded'
               ) : (
-                <AppLink href={`/blocks/${cluster.data.createdAtBlock}`}>
+                <AppLink look="key" href={`/blocks/${cluster.data.createdAtBlock}`}>
                   {formatBlockNumber(cluster.data.createdAtBlock)}
                 </AppLink>
               ),
@@ -358,6 +384,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             value: protocol.data ? (
               protocol.data.current ? (
                 <Address
+                  look="key"
                   address={protocol.data.current.cell.ownerAddress}
                   size="row"
                   className="text-body"
@@ -368,37 +395,25 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             ) : (
               'Current cell evidence unavailable'
             ),
-            note: protocol.data?.current ? (
-              <RowTag>{protocol.data.current.cell.lockName ?? 'Unregistered lock'}</RowTag>
-            ) : undefined,
+            // the holder's lock by the one decision (B4): nothing for the default lock
+            note: protocol.data?.current
+              ? (() => {
+                  const part = cellOwnerLockPart(protocol.data.current.cell, '');
+                  return part ? <RowTag>{part}</RowTag> : undefined;
+                })()
+              : undefined,
           },
         ]
       : []),
   ];
+  // Lane D2 (PB-13): the live count and the CKB held are the head's figure and bar, said once; the
+  // metrics row keeps the standard, the holders and the activities.
   const identityMetrics: AssetMetric[] = [
     { label: 'Standard', size: 'body', value: formatStandard(data.standard) },
-    {
-      label: 'Live',
-      value: data.liveCount.toLocaleString('en-US'),
-      note: `of ${data.totalCount.toLocaleString('en-US')} minted / created · ${(data.totalCount - data.liveCount).toLocaleString('en-US')} inactive / burned`,
-    },
     { label: 'Holders', value: data.holdersCount.toLocaleString('en-US') },
     ...(data.activitiesCount === null
       ? []
       : [{ label: 'Activities', value: data.activitiesCount.toLocaleString('en-US') }]),
-    {
-      label: 'CKB held',
-      value:
-        held !== null ? (
-          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
-        ) : (
-          'Not recorded'
-        ),
-      note:
-        held !== null && occupied !== null && held > BigInt(0)
-          ? `${percentOf(occupied, held)} occupied`
-          : undefined,
-    },
   ];
   const counts = object?.composition ? compositionCountsFromCollection(object.composition) : null;
   const description =
@@ -429,7 +444,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         <AssetReadState label="capacity history" error={chart.error} read={chart} />
       )}
       {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
-        <div className="text-text-dim text-small">
+        // counts with their nouns, figures: the reading ink (ink roles; it stood quiet)
+        <div className="text-text text-small">
           {/* PA-25: one separated list, each count with its noun */}
           <Dotted
             parts={[
@@ -479,9 +495,22 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
       // has no description to record; it opens with what the standard is instead. A cluster or
       // class is named by its id under the title; its kind leads the lede.
-      identity={kind === 'identity' ? undefined : <HeadId value={id} kind="hash" copyable />}
-      lede={
+      identity={
         kind === 'identity' ? undefined : (
+          <HeadId
+            value={id}
+            kind="hash"
+            copy={kind === 'spore' ? 'copy cluster id' : 'copy class id'}
+          />
+        )
+      }
+      // Lane D2 (PB-13): an identity collection's opening, what the standard is, is the lede its
+      // hero follows, as a cluster's or a class's lede is (it was the shell's intro, after a head
+      // with no figure)
+      lede={
+        kind === 'identity' ? (
+          <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
+        ) : (
           <div className="space-y-2.5">
             <CollectionLede
               kind={kind}
@@ -494,7 +523,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             />
             {description ? (
               <blockquote
-                className="border-base-border text-text text-body max-w-[640px] border-l pl-3"
+                className="border-base-border text-text text-body max-w-measure border-l pl-3"
                 title={
                   kind === 'spore'
                     ? 'the cluster’s description, on chain'
@@ -504,7 +533,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 {description}
               </blockquote>
             ) : (
-              <p className="text-text-dim text-small">No collection description recorded.</p>
+              <p className="text-text text-small">No collection description recorded.</p>
             )}
           </div>
         )
@@ -517,20 +546,39 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               total={data.totalCount}
               held={held}
               spore={kind === 'spore'}
+              collects="objects"
             />
             {counts && (
               <CompositionSet counts={counts} total={data.liveCount} caption={permanence(counts)} />
             )}
-            {history}
           </div>
-        ) : undefined
+        ) : (
+          // Lane D2 (PB-13): an identity collection is headed as a cluster or a class is — the
+          // eyebrow and the figure with the CKB its cells hold, then the bar of what that CKB is,
+          // occupied and free (its partition, which states no total: the figure said it)
+          <div className="space-y-[22px]">
+            <CollectionFigure
+              live={data.liveCount}
+              total={data.totalCount}
+              held={held}
+              spore={false}
+              collects="identities"
+            />
+            {held !== null && occupied !== null ? (
+              <CapacityPartition
+                subject={title}
+                total={held.toString()}
+                occupied={occupied.toString()}
+                free={(held - occupied).toString()}
+                showTotal={false}
+              />
+            ) : (
+              <p className="text-text text-small">Collection capacity is not recorded.</p>
+            )}
+          </div>
+        )
       }
       metrics={<AssetMetrics items={objectsKind ? objectMetrics : identityMetrics} />}
-      intro={
-        kind === 'identity' ? (
-          <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
-        ) : undefined
-      }
       // Main.dc.html screen 3: who holds it beside the recent activity — the shell's feed slot,
       // after the tier-1 body (lists of rows follow the domain, as on every asset page).
       feed={
@@ -568,6 +616,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             scope="This collection"
             collection
             plain={false}
+            // PB-28: a collection page's feed takes one form, the cluster's and the class's — the
+            // last five and the ways onward to the whole feed, opened in place
+            recent={{ rows: 5, transactions: data.activitiesCount }}
             loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
             loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
             context={{
@@ -603,7 +654,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
                   ) : (
                     protocol.data && (
-                      <p className="text-text-dim text-meta">
+                      <p className="text-text text-small">
                         No current cell carries this cluster type.
                       </p>
                     )
@@ -645,17 +696,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           read={cluster}
         />
       )}
-      {kind === 'identity' &&
-        (held !== null && occupied !== null ? (
-          <CapacityPartition
-            subject={title}
-            total={held.toString()}
-            occupied={occupied.toString()}
-            free={(held - occupied).toString()}
-          />
-        ) : (
-          <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
-        ))}
+      {/* Readability R7: a cluster's or a class's history out of the hero, after the metrics, 160 px
+          under its sentence; an identity collection's after its names */}
+      {objectsKind && history}
       {/* Main.dc.html: Objects (the genes that vary and the objects), then who holds it beside the
           recent activity. */}
       {kind === 'spore' &&
@@ -672,8 +715,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ) : (
           <AssetReadState label="collection insights" error={insights.error} read={insights} />
         ))}
-      {kind === 'object' && <CollectionItems id={id} kind={kind} />}
-      {kind === 'identity' && history}
+      {kind === 'object' && (
+        <CollectionItems id={id} kind={kind} tier={sharedTier(counts, data.liveCount)} />
+      )}
       {kind !== 'spore' && (
         <AssetReadState
           label="collection insights"
@@ -683,13 +727,14 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         />
       )}
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
+      {kind === 'identity' && history}
       {kind === 'identity' && isDidCkbCollectionAlias(id) && (
         <section aria-label="PDS distribution" className="space-y-4">
           <PromptHeading command="Personal data servers" />
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
-              <p className="text-text-dim text-meta">
+              <p className="text-text text-small max-w-measure">
                 {unitNode(
                   formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
                 )}{' '}

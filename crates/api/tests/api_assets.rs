@@ -778,10 +778,10 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Test NFT Collection Capacity History");
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
-    assert_eq!(json["data"][1]["values"]["used"], "60");
-    assert_eq!(json["data"][1]["values"]["unused"], "40");
-    assert_eq!(json["data"][2]["values"]["used"], "50");
-    assert_eq!(json["data"][2]["values"]["unused"], "30");
+    assert_eq!(json["data"][1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][1]["values"]["freeCapacity"], "40");
+    assert_eq!(json["data"][2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(json["data"][2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -796,8 +796,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["date"], "2024-01-16");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/objects/{}", collection_id_hex))
@@ -856,8 +856,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], ".bit Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/dotbit")
@@ -1098,8 +1098,8 @@ async fn test_spore_collection_detail_reads_cluster_daily_history() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "90");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "90");
 }
 
 #[tokio::test]
@@ -1386,8 +1386,8 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "did:ckb Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "70");
-    assert_eq!(json["data"][0]["values"]["unused"], "50");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "70");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "50");
 }
 
 fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block: i64) {
@@ -2691,6 +2691,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_a))
     );
     assert_eq!(json["data"][0]["itemCount"], 2);
+    // lane exactness, part A, A3: the rank of the page's first row, the route's
+    assert_eq!(json["firstRank"], 1, "{json}");
     let next_cursor = json["nextCursor"].as_str().expect("next cursor");
 
     let request = Request::builder()
@@ -2709,6 +2711,167 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_b))
     );
     assert_eq!(json["data"][0]["itemCount"], 1);
+    assert_eq!(json["firstRank"], 2, "{json}");
+}
+
+/// lane exactness, part A2 (S1 and the test review's SHOULD-2): an object collection's and an identity
+/// collection's holders pages start after the cursor's place, and read the ranking of the view's
+/// own tip. Page one ends at owner_a (2 items) at tip 1; a new holder of 5 arrives and the tip
+/// moves to 2: page two starts at owner_a's place in the new ranking (owner_b), its firstRank 3,
+/// where a ranking cached across tips would start at rank 2; then owner_a leaves, and the page
+/// after its place still starts at owner_b, rank 2.
+#[tokio::test]
+async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s_place() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let nft_a = [0x81u8; 20];
+    let nft_b = [0x82u8; 20];
+    let nft_c = [0x83u8; 20];
+    let nft_d = [0x84u8; 20];
+    let owner_a = vec![0x11u8; 32];
+    let owner_b = vec![0x22u8; 32];
+    let owner_c = vec![0x33u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &collection_id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: IdentityStandard::DotBit,
+            total_count: 4,
+            live_count: 3,
+            holders_count: 2,
+            activities_count: 0,
+        },
+    );
+    batch.put_identity(
+        &nft_a,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("alpha.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_b,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("beta.bit".to_string()),
+            is_live: true,
+            created_at_block: 101,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_001),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_c,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_b.clone()),
+            name: Some("gamma.bit".to_string()),
+            is_live: true,
+            created_at_block: 102,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_002),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_d,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_c),
+            name: Some("dead.bit".to_string()),
+            is_live: false,
+            created_at_block: 103,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_003),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity_by_collection(&collection_id, &nft_a);
+    batch.put_identity_by_collection(&collection_id, &nft_b);
+    batch.put_identity_by_collection(&collection_id, &nft_c);
+    batch.put_identity_by_collection(&collection_id, &nft_d);
+    batch.put_identity_owner_count(&collection_id, &owner_a, 2);
+    batch.put_identity_owner_count(&collection_id, &owner_b, 1);
+    batch.commit().unwrap();
+
+    let owner_new = vec![0x99u8; 32];
+    // the tests reader's NOTE-8: a holder with the cursor's count and a lock below the cursor's
+    // arrives before the cursor's place (count 2, lock 0x05 < 0x11): the page starts after it too
+    let owner_low = vec![0x05u8; 32];
+    let mut tip = 1i64;
+    seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
+    let app = create_router(test_config(store.clone())).await;
+    for path in [
+        "/assets/objects/dotbit/holders",
+        "/assets/identities/dotbit/holders",
+    ] {
+        let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {first}");
+        assert_eq!(first["firstRank"], 1, "{path}: {first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_string();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_new, 5);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 2);
+        batch.commit().unwrap();
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
+        let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {second}");
+        assert_eq!(
+            second["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(&owner_b)),
+            "{path}: {second}"
+        );
+        // owner_new (5), owner_low (2, 0x05), owner_a (2, 0x11, the cursor's place), owner_b:
+        // the page starts at owner_b, fourth (it was third before owner_low arrived)
+        assert_eq!(second["firstRank"], 4, "{path}: {second}");
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_a, 0);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 0);
+        batch.commit().unwrap();
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
+        let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {third}");
+        assert_eq!(
+            third["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(&owner_b)),
+            "{path}: {third}"
+        );
+        assert_eq!(third["firstRank"], 2, "{path}: {third}");
+
+        // the next path starts from page one's state again
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_a, 2);
+        batch.put_identity_owner_count(&collection_id, &owner_new, 0);
+        batch.commit().unwrap();
+        tip += 1;
+        seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
+    }
 }
 
 #[tokio::test]
@@ -4334,6 +4497,14 @@ async fn test_assets_dotcell_item_detail_by_id_and_by_name() {
         "{item}"
     );
     assert_eq!(item["manager"]["hashPrefix"], SUPPORT_OWNER20);
+    // lane P2's third round (item 12): a party's lock name has the one name the other routes give
+    // a lock's registry name, `lockScriptName` (it was `scriptName`, the word a type call and a code
+    // cell keep)
+    for party in ["owner", "manager"] {
+        let fields = item[party].as_object().unwrap();
+        assert!(fields.contains_key("lockScriptName"), "{party}: {item}");
+        assert!(!fields.contains_key("scriptName"), "{party}: {item}");
+    }
     assert_eq!(item["records"].as_array().unwrap().len(), 0);
     assert_eq!(item["parent"], serde_json::Value::Null);
     assert_eq!(item["children"].as_array().unwrap().len(), 0);
@@ -4378,6 +4549,8 @@ async fn dotcell_detail_counts_the_names_its_owner_holds() {
     let (status, holders) = dotcell_get(app, "/api/v1/assets/identities/dotcell/holders").await;
     assert_eq!(status, StatusCode::OK, "{holders}");
     assert_eq!(holders["data"][0]["itemCount"], item["ownerNameCount"]);
+    // lane exactness, part A (A3): an identity collection's page states its first row's rank
+    assert_eq!(holders["firstRank"], 1, "{holders}");
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_identity_owner20_count(
@@ -4476,6 +4649,15 @@ async fn test_assets_dotcell_item_sale_state_resolves_through_sale_lock() {
     let sale = &body["sale"];
     assert_eq!(sale["priceShannons"], "10000000000");
     assert_eq!(sale["seller"]["lockHash"], SUPPORT_OWNER_LOCK_HASH);
+    // lane P2's third round (item 12): the seller's lock name is `lockScriptName`
+    assert!(sale["seller"]
+        .as_object()
+        .unwrap()
+        .contains_key("lockScriptName"));
+    assert!(!sale["seller"]
+        .as_object()
+        .unwrap()
+        .contains_key("scriptName"));
     assert!(sale["seller"]["address"]
         .as_str()
         .unwrap()
@@ -5052,8 +5234,14 @@ async fn dotcell_capacity_history_chart_resolves_the_alias() {
         assert_eq!(status, StatusCode::OK, "{alias}: {body}");
         assert_eq!(body["title"], ".cell Capacity History", "{alias}");
         assert_eq!(body["data"][0]["date"], "2024-01-15", "{alias}");
-        assert_eq!(body["data"][0]["values"]["used"], "20000000000", "{alias}");
-        assert_eq!(body["data"][0]["values"]["unused"], "4000000000", "{alias}");
+        assert_eq!(
+            body["data"][0]["values"]["occupiedCapacity"], "20000000000",
+            "{alias}"
+        );
+        assert_eq!(
+            body["data"][0]["values"]["freeCapacity"], "4000000000",
+            "{alias}"
+        );
     }
 }
 
@@ -5467,7 +5655,12 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     // The cluster's items each canonical row touched: tx 0x21 mints spore A
     // and burns spore B, tx 0x22 transfers spore A.
     let (spore_a, spore_b) = ([0xa1; 32], [0xa2; 32]);
-    for spore in [spore_a, spore_b] {
+    // their creating transactions (`itemTypes`): spore B's before, spore A's 0x21
+    seed_creating_tx(&mut batch, 0, 0, [0x20; 32], [0x4a; 32], &[&spore_b]);
+    batch
+        .put_cell_payload_by_outpoint(&[0x21; 32], 0, &typed_cell([0x4a; 32], &spore_a))
+        .unwrap();
+    for (spore, made_by) in [(spore_a, 0x21u8), (spore_b, 0x20)] {
         batch.put_spore(
             &spore,
             &ObjectEntry {
@@ -5479,7 +5672,7 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
                 description: None,
                 is_live: false,
                 created_at_block: 0,
-                created_at_tx: vec![0x21; 32],
+                created_at_tx: vec![made_by; 32],
                 extra: ObjectExtra::Spore {
                     content_type: "image/png".to_string(),
                     content_length: 1,

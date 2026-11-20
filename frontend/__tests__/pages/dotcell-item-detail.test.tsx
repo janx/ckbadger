@@ -1,13 +1,64 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import Page from '@/app/identities/dotcell/[identityId]/client-page';
-import { api, ApiRequestError, type ItemProtocol, type ItemCellVersions } from '@/lib/api';
+import {
+  api,
+  ApiRequestError,
+  type ItemProtocol,
+  type ItemCellVersion,
+  type ItemCellVersions,
+} from '@/lib/api';
 import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { itemActivityFeedProducer } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
+// Lane D2 (PB-22): the four identity pages take one section order — the term, then the records,
+// then the roles, then the CKB the cell holds — as the .bit page already did (the .cell page read
+// records, roles, then the term).
+it('reads its term, then its records, then its roles (lane D2, PB-22)', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  const tier1 = (await screen.findByRole('heading', { name: /^Term/ })).closest(
+    '[data-tier="1"]'
+  ) as HTMLElement;
+  const term = within(tier1).getByRole('heading', { name: /^Term/ });
+  const records = within(tier1).getByRole('heading', { name: /^Records/ });
+  const roles = within(tier1).getByRole('heading', { name: /^Roles/ });
+  const follows = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(follows(term, records)).toBe(true);
+  expect(follows(records, roles)).toBe(true);
+});
+// Lane D2b (PB-22, the owner line D2 left untested): a .cell party's Owner fact is drawn as every
+// identity page's owner line is — the address at the row size through `Address`, in the key look
+// (the .bit, .bit Cell and did:ckb Owner facts draw it so; a .cell party drew a Hash in an AppLink).
+it('draws its Owner fact as every identity page’s owner line: an Address at the row size, in the key look (lane D2b)', async () => {
+  const address = seededAddress('dotcell-owner');
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+    ...dotcellItem(),
+    owner: {
+      hashPrefix: '0x' + 'ab'.repeat(20),
+      lockHash: '0x' + 'cd'.repeat(32),
+      address,
+      lockScriptName: 'Default Lock',
+    },
+  });
+  render(<Page identityId={evidence.itemId} />);
+  const facts = await screen.findByRole('region', { name: 'Metrics' });
+  const owner = within(facts).getByText('Owner', { selector: 'dt' }).parentElement!;
+  const link = within(owner).getByRole('link');
+  expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+  expect(link).toHaveTextContent(new RegExp(`^ckb1…${address.slice(-8)}$`));
+  // the key look, through the Address renderer: the bright ink, the body step, the mono face
+  expect(link).toHaveClass('text-text-bright', 'text-body', 'font-mono');
+});
 it('routes only an actual name 404 to exact endpoint evidence', async () => {
   vi.mocked(api.getDotCellItemDetail).mockRejectedValue(
     new ApiRequestError(404, 'not_found', 'name absent')
@@ -41,25 +92,29 @@ it('shows current name state, exact protocol, physical cell history and both fee
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
     'Name cell data · layout v3 · 103 bytes'
   );
-  expect(screen.getByRole('tab', { name: 'Activities' })).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: 'Transactions' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'activities' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'transactions' })).toBeInTheDocument();
   // The API's name state is the status beside the title (ID-C10).
   expect(screen.getByText('Active')).toHaveAttribute('data-identity-state', 'active');
 });
 it('links a uniquely resolved protocol owner and retains unresolved manager bytes', async () => {
   const protocol: ItemProtocol = structuredClone(evidence);
+  // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address
+  // by the one decision, so the owner's address is a real one on JoyID's code hash (it was
+  // 'ckb1owner', a made-up string)
+  const owner = seededAddress('owner', JOYID_CODE_HASH);
   protocol.versions[0].decoded.owner = {
     ...protocol.versions[0].decoded.owner,
     lockHash: '0x' + '22'.repeat(32),
-    address: 'ckb1owner',
-    scriptName: 'JoyID',
+    address: owner,
+    lockScriptName: 'JoyID',
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);
   const rights = await screen.findByRole('region', { name: 'Owner and manager' });
   expect(
     within(within(rights).getByLabelText('Owner · holds the name')).getByRole('link')
-  ).toHaveAttribute('href', '/mainnet/address/ckb1owner');
+  ).toHaveAttribute('href', `/mainnet/address/${owner}`);
   expect(rights).toHaveTextContent(evidence.versions[0].decoded.manager.hashPrefix);
   expect(rights.querySelector('a[href*="626262"]')).toBeNull();
 });
@@ -163,6 +218,8 @@ it('names the ring successor and links it by its id (ID-DC6)', async () => {
     `/mainnet/identities/dotcell/${next}`
   );
 });
+// re-pinned (lane c2-assets): the way on to more sub-names is the controls board's "next 20 ↓"
+// (was the boxed "Show more sub-names"), in this test and the failure's below
 it('appends every sub-name page and only reports the full child count after completion', async () => {
   const item = dotcellItem();
   item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];
@@ -170,25 +227,50 @@ it('appends every sub-name page and only reports the full child count after comp
   item.childrenNextCursor = 'first';
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren)
-    .mockResolvedValueOnce({
-      ...emptyPage([{ identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' }]),
-      hasMore: true,
-      nextCursor: 'second',
-    })
+    .mockResolvedValueOnce(
+      pagedRead({
+        ...emptyPage([
+          { identityId: '0x' + '82'.repeat(20), name: 'two.alice.cell', label: 'two' },
+        ]),
+        // a full page of one with more after it (lane cd-fixes-controls, SHOULD-5: one sub-name on
+        // a page of fifty that said more followed)
+        limit: 1,
+        hasMore: true,
+        nextCursor: 'second',
+      })
+    )
     .mockResolvedValueOnce(
       emptyPage([{ identityId: '0x' + '83'.repeat(20), name: 'three.alice.cell', label: 'three' }])
     );
   render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
   await screen.findByRole('link', { name: 'two.alice.cell' });
-  fireEvent.click(screen.getByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(screen.getByRole('button', { name: 'next 20 ↓' }));
   await screen.findByRole('link', { name: 'three.alice.cell' });
   expect(api.getDotCellItemChildren).toHaveBeenLastCalledWith(item.identityId, {
     limit: 20,
     cursor: 'second',
   });
   expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Show more sub-names' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'next 20 ↓' })).not.toBeInTheDocument();
+});
+// Pinned before the controls lane (C2) replaced the boxed button: a load of sub-names in flight
+// cannot be asked for a second time (the button was disabled while it loaded). Re-pinned (lane
+// c2-assets): the way on is the controls board's short-list form, "next 20 ↓" (was the boxed
+// "Show more sub-names"), drawn only while no load is in flight.
+it('asks for the next sub-names once while they load', async () => {
+  const item = dotcellItem();
+  item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];
+  item.childrenHasMore = true;
+  item.childrenNextCursor = 'first';
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
+  vi.mocked(api.getDotCellItemChildren).mockReturnValue(new Promise(() => {}));
+  render(<Page identityId="alice" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
+  await waitFor(() => expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1));
+  const again = screen.queryByRole('button', { name: 'next 20 ↓' });
+  if (again) fireEvent.click(again);
+  expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1);
 });
 // C16: a name with no sub-names says so in a line, not under a heading of its own.
 it('states "Sub-names · none" as a line, not a heading', async () => {
@@ -205,7 +287,7 @@ it('retains loaded child names when a later page fails and exposes the error', a
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren).mockRejectedValue(new Error('secondary failed'));
   render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
   expect(await screen.findByText('Failed to load more sub-names')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'one.alice.cell' })).toBeInTheDocument();
 });
@@ -233,14 +315,18 @@ it('retains recycled name protocol history without a live cell or sale', async (
   expect(await screen.findByLabelText('Raw item evidence')).toBeInTheDocument();
 });
 it('resets item paging on name navigation and reports an unknown name', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender, unmount } = render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotcell', evidence.itemId, {
       limit: 20,
@@ -292,7 +378,9 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
     'Expires',
     'Registered',
     'Records',
-    'Sub-names · for sale',
+    // re-pinned on purpose (lane P2's follow-up, a standing cause): its own metric, the sale's
+    // drawn only for a name for sale (it was "Sub-names · for sale")
+    'Sub-names',
     'CKB held in its cell',
   ]);
   expect(facts).not.toHaveTextContent(/Namespace args|Physical cell owner|Name state/);
@@ -303,4 +391,107 @@ it("names a .cell version's physical lock as a lock, not its owner (visual pass)
   const versions = await screen.findByLabelText('alice.cell cell versions');
   expect(versions).toHaveTextContent('Lock ckb1');
   expect(versions).not.toHaveTextContent('Owner ckb1');
+});
+
+/**
+ * Versions of one cell, oldest first, the last live: the same capacity, byte counts and lock
+ * address throughout, each given its own data hash (and its own type, where `types` says so), as a
+ * name's cell is recreated under one lock by a transfer, a renewal or an edit of the same length.
+ */
+function sameShapeVersions(
+  base: ItemCellVersion,
+  dataHashes: readonly string[],
+  types: readonly (ItemCellVersion['type'] | undefined)[] = []
+): ItemCellVersions {
+  const data = dataHashes.map((dataHash, i): ItemCellVersion => {
+    const last = i === dataHashes.length - 1;
+    return {
+      ...base,
+      txHash: `0x${String(i + 1)
+        .padStart(2, '0')
+        .repeat(32)}`,
+      outputIndex: 0,
+      blockNumber: 100 + i,
+      txIndex: 0,
+      dataHash,
+      type: types[i] ?? base.type,
+      isLive: last,
+      consumedByTx: last
+        ? null
+        : `0x${String(i + 2)
+            .padStart(2, '0')
+            .repeat(32)}`,
+      consumedAtBlock: last ? null : 101 + i,
+    };
+  });
+  return { data, total: data.length };
+}
+const hashOf = (b: string) => `0x${b.repeat(32)}`;
+
+// Lane P2's fifth round (item 1, MUST): a .cell name's Transfer, Renew, RingLink and Touch recreate
+// its cell under the one shared account lock with a fixed-length header: the same capacity, byte
+// counts and address; the owner is in data bytes 58..78. The fold compared capacity, bytes and the
+// address only, so "mint by A, relink, transfer to B, renewal" folded the transfer into "2 more
+// versions alike: … the same bytes and owner". It compares the data and the type too, and on a
+// .cell page, whose rows name the shared Lock, its words never call that lock an owner.
+describe('a .cell name’s versions fold only where nothing changed', () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  it('never folds a transfer, a relink or a renewal: each changes the data under the one lock', async () => {
+    vi.mocked(api.getItemCellVersions).mockResolvedValue(
+      sameShapeVersions(base, [hashOf('a1'), hashOf('a2'), hashOf('a3'), hashOf('a4')])
+    );
+    render(<Page identityId="alice" />);
+    const list = await screen.findByLabelText(/cell versions$/);
+    expect(within(list).getAllByRole('article')).toHaveLength(4);
+    expect(list.querySelector('[data-versions-fold]')).toBeNull();
+  });
+
+  it('folds versions alike in everything, and calls the shared lock a lock', async () => {
+    vi.mocked(api.getItemCellVersions).mockResolvedValue(
+      sameShapeVersions(base, [
+        hashOf('a1'),
+        hashOf('a2'),
+        hashOf('a2'),
+        hashOf('a2'),
+        hashOf('a2'),
+      ])
+    );
+    render(<Page identityId="alice" />);
+    const list = await screen.findByLabelText(/cell versions$/);
+    const fold = list.querySelector<HTMLElement>('[data-versions-fold]')!;
+    expect(fold).toHaveTextContent(
+      /^2\smore versions alike: 1,000\sCKB held, the same lock, type and data/
+    );
+    expect(fold).not.toHaveTextContent('owner');
+  });
+});
+
+// Lane P2's fifth round (item 3): on an API one version older the .cell page's parties send
+// `scriptName`; the page refuses them by name instead of writing "an undefined lock".
+it('refuses by name a party an API older than this page sends', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const item = dotcellItem();
+  const older = <T extends { lockScriptName: string | null }>(party: T) => {
+    const { lockScriptName, ...rest } = party;
+    return { ...rest, scriptName: lockScriptName } as unknown as T;
+  };
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+    ...item,
+    owner: older({
+      ...item.owner,
+      lockHash: `0x${'22'.repeat(32)}`,
+      address: seededAddress('older'),
+    }),
+    manager: older(item.manager),
+  });
+  render(<Page identityId="alice" />);
+  // each place that says the party's lock says the refusal in its place; the page stands
+  const refusals = await screen.findAllByText(
+    /a \.cell party: the API sends no lockScriptName: it is older than this page/
+  );
+  expect(refusals.length).toBeGreaterThan(0);
+  for (const r of refusals) expect(r).toHaveAttribute('role', 'alert');
+  expect(screen.getAllByRole('heading', { name: /alice/ }).length).toBeGreaterThan(0);
+  expect(document.body).not.toHaveTextContent('undefined');
+  log.mockRestore();
 });

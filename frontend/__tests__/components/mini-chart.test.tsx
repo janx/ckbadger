@@ -9,7 +9,8 @@ import {
   SparkChart,
   type Bar,
 } from '@/components/home/mini-chart';
-import { MINUS } from '@/lib/chart-ticks';
+import { MINUS, formatCompactSigned } from '@/lib/chart-ticks';
+import { expectInside, textLines, viewBox } from '@/__tests__/utils/svg-text-boxes';
 
 const texts = (root: Element, axis: 'x' | 'y') =>
   [...root.querySelectorAll(`[data-axis="${axis}"] text`)].map((t) => ({
@@ -25,20 +26,31 @@ describe('mini charts', () => {
     vi.restoreAllMocks();
   });
 
+  // each point with its exact display, the figure the route sent (lane exactness, part B3: a line's
+  // one path; the chart wrote a value through formatValue where a point had none)
   const blockTimes = [9.1, 8.6, 8.8, 10.9, 9.57].map((value, i) => ({
     label: `10/${19 + i}`,
     value,
+    display: `${value} s`,
   }));
 
+  it('writes each point of a line from its exact display, and refuses a point without one', () => {
+    expect(() =>
+      render(<LineChart points={[{ label: 'd0', value: 1 } as never]} ariaLabel="Block time" />)
+    ).toThrow('LineChart: the point d0 has no exact display');
+  });
+
   it('draws a line with round ticks, first/middle/last date labels anchored inside the plot', () => {
-    render(<LineChart points={blockTimes} ariaLabel="Block time" formatValue={(v) => `${v} s`} />);
+    render(<LineChart points={blockTimes} ariaLabel="Block time" />);
     const svg = screen.getByRole('img', { name: 'Block time' });
-    expect(svg).toHaveAttribute('viewBox', '0 0 280 104');
+    // re-pinned (readability R4): the axis text is the 12 px tick (was 10), so the chart ends 3 px
+    // lower, under the x labels' descent (104 → 107)
+    expect(svg).toHaveAttribute('viewBox', '0 0 280 107');
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['8', '9', '10', '11']);
     expect(texts(svg, 'x')).toEqual([
-      { text: '10/19', anchor: 'start', size: '10' },
-      { text: '10/21', anchor: 'middle', size: '10' },
-      { text: '10/23', anchor: 'end', size: '10' },
+      { text: '10/19', anchor: 'start', size: '12' },
+      { text: '10/21', anchor: 'middle', size: '12' },
+      { text: '10/23', anchor: 'end', size: '12' },
     ]);
     const last = svg.querySelector('[data-role="last"]') as SVGCircleElement;
     expect(last.getAttribute('cx')).toBe('272.0');
@@ -47,10 +59,12 @@ describe('mini charts', () => {
   });
 
   it('puts a reference value on a tick, emphasised, with a dashed line', () => {
-    const rates = [2.42, 2.84, 2.64].map((value, i) => ({ label: `d${i}`, value }));
-    render(
-      <LineChart points={rates} ariaLabel="Uncle rate" reference={2.5} formatValue={String} />
-    );
+    const rates = [2.42, 2.84, 2.64].map((value, i) => ({
+      label: `d${i}`,
+      value,
+      display: String(value),
+    }));
+    render(<LineChart points={rates} ariaLabel="Uncle rate" reference={2.5} />);
     const svg = screen.getByRole('img', { name: 'Uncle rate' });
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['2.3', '2.5', '2.7', '2.9']);
     const emphasised = [...svg.querySelectorAll('[data-axis="y"] text')].find(
@@ -151,6 +165,8 @@ describe('mini charts', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     render(<SignedBarChart points={changes} ariaLabel="Knowledge size change" />);
     const svg = screen.getByRole('img', {
@@ -190,11 +206,13 @@ describe('mini charts', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     const { container } = render(
       <>
         <SignedBarChart points={changes} ariaLabel="Signed" />
-        <LineChart points={blockTimes} ariaLabel="Line" reference={9} formatValue={String} />
+        <LineChart points={blockTimes} ariaLabel="Line" reference={9} />
         <BarChart
           bars={[{ label: '09:00', value: 610, state: 'highlight' }]}
           ariaLabel="Bars"
@@ -235,6 +253,8 @@ describe('ChartFigure', () => {
     expect(screen.getByText('daily average, s')).toHaveClass('text-text-dim');
     expect(screen.getByTestId('fig-headline')).toHaveTextContent('9.57');
     expect(screen.getByText('No data yet')).toBeInTheDocument();
+    // BRIEF-ink-size-roles item 3: an empty-state line, the reading ink (it was quiet)
+    expect(screen.getByText('No data yet')).not.toHaveClass('text-text-dim');
   });
 
   it('keeps the title on one line, so a wide readout never makes the caption taller', () => {
@@ -274,7 +294,9 @@ describe('mini chart hover', () => {
     vi.restoreAllMocks();
   });
 
-  // Plot x runs 34..272; three bars have centres at about 73.7, 153 and 232.3.
+  // Plot x runs 32..272 (re-pinned, readability R4: the 12 px ticks widen the gutter from 34 to
+  // 39; re-pinned again, F3-d: a chart's gutter holds the ticks it writes, here "500" and "1k",
+  // 22 + 4 + 6 = 32); three bars have centres at 72, 152 and 232 (were about 77.8, 155.5, 233.2).
   const bars: Bar[] = [
     { label: '09:00', value: 610, state: 'complete' },
     { label: '10:00', value: 731, state: 'highlight' },
@@ -303,7 +325,7 @@ describe('mini chart hover', () => {
 
   it('snaps the pointer to the nearest bar, dims the rest and reads it out in the caption', () => {
     const svg = renderBars();
-    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 73.7 than 153
+    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 72 than 152
     expect(headline()).toHaveTextContent('610');
     expect(subtitle()).toHaveTextContent('09:00');
     const groups = svg.querySelectorAll('[data-bucket]');
@@ -312,10 +334,10 @@ describe('mini chart hover', () => {
     expect(groups[1]).toHaveAttribute('opacity', '0.35');
     expect(svg.querySelector('[data-bar="complete"]')).toHaveAttribute('fill-opacity', '1');
     const guide = svg.querySelector('[data-role="guide"]') as SVGLineElement;
-    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(73.7, 0);
+    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(72, 0);
     expect(guide).toHaveAttribute('stroke', 'var(--c-text-dim)');
 
-    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 153
+    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 152
     expect(headline()).toHaveTextContent('731');
     expect(subtitle()).toHaveTextContent('10:00');
   });
@@ -399,6 +421,7 @@ describe('mini chart hover', () => {
     const points = [9.1, 8.6, 8.8, 10.9, 9.57].map((value, i) => ({
       label: `10/${19 + i}`,
       value,
+      display: value.toFixed(2),
     }));
     render(
       <ChartFigure
@@ -408,18 +431,18 @@ describe('mini chart hover', () => {
         headline="9.57"
         body={{
           state: 'ready',
-          chart: (
-            <LineChart points={points} formatValue={(v) => v.toFixed(2)} ariaLabel="Block time" />
-          ),
+          chart: <LineChart points={points} ariaLabel="Block time" />,
         }}
       />
     );
     const svg = screen.getByRole('img', { name: 'Block time' });
-    fireEvent.pointerMove(svg, { clientX: 215 }); // point 3 at x 212.5
+    // point 3 at x 210.3 (re-pinned from 212.5, then 213.8 with the plot at 39; F3-d: the gutter
+    // holds this chart's ticks, "10" and "11", 15 + 4 + 6 = 25, so 25 + 3 × 247 / 4 = 210.25)
+    fireEvent.pointerMove(svg, { clientX: 215 });
     expect(headline()).toHaveTextContent('10.90');
     expect(subtitle()).toHaveTextContent('10/22');
     const dot = svg.querySelector('[data-role="hover-dot"]') as SVGCircleElement;
-    expect(dot.getAttribute('cx')).toBe('212.5');
+    expect(dot.getAttribute('cx')).toBe('210.3');
     expect(Number(dot.getAttribute('r'))).toBeGreaterThan(2.6);
   });
 
@@ -428,6 +451,8 @@ describe('mini chart hover', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} exact`, text: `${value} exact` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     render(
       <ChartFigure
@@ -451,4 +476,97 @@ describe('mini chart hover', () => {
     fireEvent.pointerMove(svg, { clientX: 100 });
     expect(svg.querySelector('[data-role="guide"]')).not.toBeNull();
   });
+});
+
+// Readability plan 2026-11-18, lane F3-d (measured in Chrome on the merged build, 1280 and 390):
+// "Daily change of knowledge size" wrote its ticks "1.5M", "0", "−1.5M" in a gutter sized for four
+// glyphs, so "−1.5M" (five glyphs, 36 px at 12 px) stood at −3…33 of the svg, its minus sign on
+// the svg's edge. A chart's gutter holds the widest tick it writes, sign included, and its plot
+// starts after it: every y tick's box inside the svg and left of the plot, for each mini chart
+// with the ticks it really writes (a signed axis of ±1.5M and of ±10k, a line of three-digit
+// values, a percentage around its target, bars to 1,234 on a scale to 2k), at the home columns' widths.
+describe('mini chart y ticks inside the svg (readability F3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const day = (i: number) => `11/${String(10 + i)}`;
+  const signed = (values: number[]) =>
+    values.map((value, i) => ({
+      label: day(i),
+      value,
+      readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
+    }));
+  const line = (values: number[]) =>
+    values.map((value, i) => ({ label: day(i), value, display: String(value) }));
+  const charts = [
+    [
+      'the signed axis of ±1.5M',
+      <SignedBarChart
+        key="m"
+        points={signed([0.4e6, -1.1e6, 0.8e6, -0.6e6, 1.05e6, -0.2e6])}
+        ariaLabel="chart"
+      />,
+      `${MINUS}1.5M`,
+    ],
+    [
+      'the signed axis of ±10k',
+      <SignedBarChart
+        key="k"
+        points={signed([4_000, -8_000, 2_000, -1_000, 7_500, 300])}
+        ariaLabel="chart"
+      />,
+      `${MINUS}10k`,
+    ],
+    [
+      'a line of three-digit values',
+      <LineChart key="l" points={line([152.4, 180.25, 210.5, 199.75, 236.1])} ariaLabel="chart" />,
+      '250',
+    ],
+    [
+      'a percentage around its target',
+      <LineChart
+        key="p"
+        points={line([2.13, 2.41, 3.08, 2.66, 1.97])}
+        reference={2.5}
+        ariaLabel="chart"
+      />,
+      '3.5',
+    ],
+    [
+      'bars to 1,234',
+      <BarChart
+        key="b"
+        bars={[120, 840, 1_234, 560].map((value, i) => ({
+          label: day(i),
+          value,
+          state: 'complete' as const,
+        }))}
+        formatValue={(v) => `${v}`}
+        ariaLabel="chart"
+      />,
+      '2k',
+    ],
+  ] as const;
+
+  it.each([280, 358].flatMap((w) => charts.map(([name, chart, tick]) => [w, name, chart, tick])))(
+    'at %i px, %s',
+    (width, _name, chart, widest) => {
+      stubChartWidth(width as number);
+      render(chart as React.ReactElement);
+      const svg = screen.getByRole('img', { name: /^chart/ });
+      const ticks = [...svg.querySelectorAll('[data-axis="y"] text')].flatMap(textLines);
+      expect(ticks.map((t) => t.text)).toContain(widest);
+      // the plot starts where its grid does
+      const plot = Number(
+        /^M([\d.]+)/.exec(svg.querySelector('[data-role="grid"]')!.getAttribute('d')!)![1]
+      );
+      for (const tick of ticks) {
+        expectInside(tick, viewBox(svg), 'the chart', 'flush');
+        expect(tick.right, `"${tick.text}" ends before the plot`).toBeLessThan(plot);
+      }
+    }
+  );
 });

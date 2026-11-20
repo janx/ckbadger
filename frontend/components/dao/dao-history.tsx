@@ -5,18 +5,21 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import { CkbAmount } from '@/components/ui/ckb-amount';
+import type { RangeOption } from '@/components/ui/range-select';
 import { ckbAmountText, ckbShortenedTitle } from '@/lib/amount-form';
 import { formatSignedCkbInteger, parseCkbDecimal } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
+import { useClockText } from '@/components/ui/utc8-date';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
-import { SVG_TEXT, centreShift } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift, lineAscentPx, wrapPhrases } from '@/lib/chart-type';
+import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -28,25 +31,54 @@ import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
  */
 
 const DAY_MS = 86_400_000;
-/** R13: the page's main picture is at least 280 px tall. */
-export const MAIN_PLOT_H = 300;
-/** The band at the top of a plot that holds its name; the data stays under it. */
-const MAIN_NAME_BAND = 30;
-/** Height of the year (or month / day) labels under the main plot. */
-const AXIS_H = 18;
-/** The small multiples: 72 px each (board). */
-export const MULTIPLE_H = 72;
-const MULTIPLE_NAME_BAND = 18;
 const TICK_GAP_PX = 56;
-/**
- * The plots' names and time ticks at the label size, their end values at the reading size
- * (lib/chart-type.ts), measured at the advance Chromium was observed to draw them at (0.64 em).
+/** The plots' names and time ticks at the label size, their end values at the reading size (lib/chart-type.ts). */
+export const NAME_PX = SVG_TEXT.label;
+export const END_PX = SVG_TEXT.reading;
+/*
+ * The bands follow from the text set in them (readability plan 2026-11-18, lane F3): each line is
+ * a tight line of its role, a band is its lines and its stated padding, and a plot grows by a line
+ * where its name takes two.
  */
-const NAME_PX = SVG_TEXT.label;
-const END_PX = SVG_TEXT.reading;
+const LINE = tightLinePx(NAME_PX);
+/** The band at the top of the main plot that holds its name, 5 px under the top and 10 px over the data. */
+const mainNameBand = (lines: number) => 5 + lines * LINE + 10;
+const MAIN_NAME_Y = 5 + lineAscentPx(NAME_PX);
+/** R13: the page's main picture is at least 280 px tall: 270 px of data under its name band. */
+const MAIN_DATA_H = 270;
+/** The main plot's foot under a one-line name (300 px). */
+export const MAIN_PLOT_H = mainNameBand(1) + MAIN_DATA_H;
+/** Under the main plot, the year (or month / day) labels: 3 px, their line and 1 px: 19 px. */
+const AXIS_GAP = 3;
+const AXIS_H = AXIS_GAP + LINE + 1;
+/**
+ * A small multiple's top row: its name and its end value on one baseline, the row the value's
+ * tight line (17 px at 14), 1 px over and under it: 19 px; a scale note that takes a line of its
+ * own adds a label line under it.
+ */
+const ROW_LINE = tightLinePx(END_PX);
+const ROW_Y = 1 + lineAscentPx(END_PX);
+const multipleBand = (lines: number) => 1 + ROW_LINE + (lines - 1) * LINE + 1;
+/**
+ * The note's line under the row: its baseline's step from the row's, the row's descent and the
+ * note line's ascent (15.6 px), to the hundredth of a pixel the attribute is written in.
+ */
+const NOTE_DY = Math.round((descentPx(END_PX) + lineAscentPx(NAME_PX)) * 100) / 100;
+/** A small multiple's data: 54 px (board) under its band. */
+export const MULTIPLE_DATA_H = 54;
+/** A small multiple with a one-line band: 73 px (was 72, its band 18). */
+export const MULTIPLE_H = multipleBand(1) + MULTIPLE_DATA_H;
 
 export type HistoryRange = '1M' | '1Y' | 'All';
-export const HISTORY_RANGES: readonly HistoryRange[] = ['1M', '1Y', 'All'];
+/**
+ * The picture's ranges in the one spelling of a span (the controls board's `1 m · 1 y · all`):
+ * the last 30 complete days, the last 365, every one (`historySeries`).
+ */
+export const HISTORY_RANGES: readonly RangeOption<HistoryRange>[] = [
+  { key: '1M', label: '1 m' },
+  { key: '1Y', label: '1 y' },
+  { key: 'All', label: 'all' },
+];
 
 interface Day {
   date: string;
@@ -128,11 +160,14 @@ export function cutShare(ratio: string): string {
   return m[2] === undefined ? m[1] : `${m[1]}.${m[2].slice(0, 2)}`;
 }
 
-/** A reading's CKB, in its summary form (R5): its line names the unit; a cut figure is titled. */
+/**
+ * A reading's CKB, exact (the ruling of 2026-11-19: a chart's readout is exact on every page; it
+ * was the summary form): its line names the unit.
+ */
 function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   return (
     <CkbAmount
-      form="summary"
+      form="exact"
       shannons={shannons}
       signed={signed}
       tone={signed ? 'sign' : 'inherit'}
@@ -141,7 +176,12 @@ function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: b
   );
 }
 
-const textWidth = (chars: number, px: number) => chars * px * OBSERVED_ADVANCE_EM;
+/** The UTC+8 day before the one a time falls on, as the series names its days: `2026-11-17`. */
+function utc8Yesterday(now: number): string {
+  return formatUtc8Date(now - DAY_MS);
+}
+
+const textWidth = textPx;
 
 /** Ticks on the time axis, thinned so labels keep `TICK_GAP_PX` apart. */
 function timeTicks(days: readonly Day[], x: (i: number) => number) {
@@ -186,37 +226,6 @@ function plotHandlers(pin: PinnedReadout<number>, last: number, left = 0) {
   };
 }
 
-/** The range buttons: one inline group, so the three sit on one line as one control. */
-export function HistoryRangeToggle({
-  range,
-  onChange,
-}: {
-  range: HistoryRange;
-  onChange: (range: HistoryRange) => void;
-}) {
-  return (
-    <div role="group" aria-label="History range" className="whitespace-nowrap">
-      {HISTORY_RANGES.map((choice, i) => (
-        <button
-          key={choice}
-          type="button"
-          aria-pressed={range === choice}
-          onClick={() => onChange(choice)}
-          className={cn(
-            'text-small inline-flex h-7 items-center border px-2.5 font-mono',
-            i > 0 && 'ml-1',
-            range === choice
-              ? 'border-base-border bg-base-border-subtle text-text-bright'
-              : 'border-base-border-subtle text-text hover:text-text-bright'
-          )}
-        >
-          {choice}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /**
  * The picture: the deposited area chart (≥ 280 px) with its name and round values inside the plot
  * and its time labels under it, then the share line and the weekly bars side by side (stacked
@@ -232,7 +241,7 @@ export function DaoHistoryFigure({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { days } = series;
   if (days.length < 2)
-    return <p className="text-text-dim text-small mt-[18px]">Not enough complete days to draw.</p>;
+    return <p className="text-text text-small mt-[18px]">Not enough complete days to draw.</p>;
   return (
     <div className="mt-[18px] min-w-0">
       <div ref={ref} className="min-w-0">
@@ -261,16 +270,28 @@ function DepositedPlot({
   const ckb = (v: bigint) => Number(v) / 1e8;
   const ticks = niceTicks(0, Math.max(...days.map((d) => ckb(d.shannons))), 4);
   const top = ticks.values[ticks.values.length - 1];
-  const y = (v: number) => MAIN_PLOT_H - (v / top) * (MAIN_PLOT_H - MAIN_NAME_BAND);
+  // The values' gutter is measured before the band (it is as wide as the widest of the round
+  // values the plot can write); the name, 8 px in from the plot's sides, takes one line where it
+  // fits, else breaks after "CKB deposited" (390 px) and then between words (a 320 px window: its
+  // date on a third line; review F-B, logic finding 1), and the plot grows a line at a time.
+  const left = tickGutter(ticks.values.filter((v) => v > 0).map((v) => formatTick(v, ticks.step)));
+  const nameLines = wrapPhrases(
+    ['CKB deposited', `every complete day since ${days[0].date}`],
+    NAME_PX,
+    width - left - 16
+  );
+  const band = mainNameBand(nameLines.length);
+  // the foot of a plot whose name takes one line, and a line lower where it takes two
+  const bottom = MAIN_PLOT_H + (band - mainNameBand(1));
+  const y = (v: number) => bottom - (v / top) * MAIN_DATA_H;
   // U-19: the round values sit in a gutter left of the plot, in the dim ink (as every chart's),
-  // never inside it, where the line and its fill cross them.
-  const shown = ticks.values.filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12);
-  const left = tickGutter(shown.map((v) => formatTick(v, ticks.step)));
+  // never inside it, where the line and its fill cross them; a value whose line would reach into
+  // the name's band is not written.
+  const shown = ticks.values.filter(
+    (v) => v > 0 && y(v) + centreShift(SVG_TEXT.tick) - lineAscentPx(SVG_TEXT.tick) >= band
+  );
   const x = (i: number) => left + (i / last) * (width - left);
   const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(ckb(d.shannons))}`).join(' ');
-  const name = `CKB deposited · every complete day since ${days[0].date}`;
-  // The name wraps after "CKB deposited" when one line does not fit the plot (390 px).
-  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width - left;
   const active = pin.active !== null && pin.active <= last ? pin.active : null;
   return (
     <svg
@@ -278,8 +299,8 @@ function DepositedPlot({
       aria-label={`CKB deposited in the Nervos DAO on every complete day from ${days[0].date} to ${days[last].date}`}
       data-panel="deposited"
       width={width}
-      height={MAIN_PLOT_H + AXIS_H}
-      viewBox={`0 0 ${width} ${MAIN_PLOT_H + AXIS_H}`}
+      height={bottom + AXIS_H}
+      viewBox={`0 0 ${width} ${bottom + AXIS_H}`}
       className="block cursor-crosshair overflow-visible font-mono"
       {...plotHandlers(pin, last, left)}
     >
@@ -307,23 +328,22 @@ function DepositedPlot({
           <stop offset="1" stopColor={CLASS_COLORS.dao} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path
-        d={`${path} L${x(last)},${MAIN_PLOT_H} L${x(0)},${MAIN_PLOT_H} Z`}
-        fill={`url(#${fillId})`}
-      />
+      <path d={`${path} L${x(last)},${bottom} L${x(0)},${bottom} Z`} fill={`url(#${fillId})`} />
       <path d={path} fill="none" className="stroke-gold" strokeWidth={1.5} />
-      <line x1={left} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
-      <text data-role="chart-name" x={left + 8} y={16} fontSize={NAME_PX} className="fill-text-dim">
-        {oneLine ? (
-          name
-        ) : (
-          <>
-            CKB deposited
-            <tspan x={left + 8} dy={14}>
-              every complete day since {days[0].date}
-            </tspan>
-          </>
-        )}
+      <line x1={left} x2={width} y1={bottom} y2={bottom} className="stroke-base-border" />
+      <text
+        data-role="chart-name"
+        x={left + 8}
+        y={MAIN_NAME_Y}
+        fontSize={NAME_PX}
+        className="fill-text-dim"
+      >
+        {nameLines[0]}
+        {nameLines.slice(1).map((line, i) => (
+          <tspan key={`${i}:${line}`} x={left + 8} dy={LINE}>
+            {line}
+          </tspan>
+        ))}
       </text>
       {timeTicks(days, x).map((t) => {
         // A label that would run past the plot's right edge ends at its tick instead.
@@ -333,14 +353,14 @@ function DepositedPlot({
             <line
               x1={x(t.i)}
               x2={x(t.i)}
-              y1={MAIN_PLOT_H}
-              y2={MAIN_PLOT_H + 4}
+              y1={bottom}
+              y2={bottom + 4}
               className="stroke-text-ghost"
             />
             <text
               data-role="time-tick"
               x={atEnd ? x(t.i) - 3 : x(t.i) + 3}
-              y={MAIN_PLOT_H + 14}
+              y={bottom + AXIS_GAP + lineAscentPx(NAME_PX)}
               textAnchor={atEnd ? 'end' : undefined}
               fontSize={NAME_PX}
               className="fill-text-dim"
@@ -355,8 +375,8 @@ function DepositedPlot({
           data-cursor
           x1={x(active)}
           x2={x(active)}
-          y1={MAIN_NAME_BAND}
-          y2={MAIN_PLOT_H}
+          y1={band}
+          y2={bottom}
           className="stroke-text-bright"
           strokeOpacity={0.45}
         />
@@ -382,7 +402,7 @@ function EndLabel({
     <text
       data-role="end-label"
       x={width}
-      y={END_PX}
+      y={ROW_Y}
       textAnchor="end"
       fontSize={END_PX}
       className={cn('stroke-base-bg', className)}
@@ -414,8 +434,9 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
       {width !== null &&
         (() => {
           const x = (i: number) => (i / last) * width;
-          const y = (v: number) =>
-            MULTIPLE_H - 2 - (v / top) * (MULTIPLE_H - 2 - MULTIPLE_NAME_BAND);
+          const band = multipleBand(1);
+          const height = MULTIPLE_H;
+          const y = (v: number) => height - 2 - (v / top) * (MULTIPLE_DATA_H - 2);
           const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(shares[i])}`).join(' ');
           return (
             <svg
@@ -423,8 +444,8 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               aria-label={`Share of circulating CKB locked in the Nervos DAO on every complete day from ${days[0].date} to ${days[last].date}`}
               data-panel="share"
               width={width}
-              height={MULTIPLE_H}
-              viewBox={`0 0 ${width} ${MULTIPLE_H}`}
+              height={height}
+              viewBox={`0 0 ${width} ${height}`}
               className="block cursor-crosshair overflow-visible font-mono"
               {...plotHandlers(pin, last)}
             >
@@ -434,7 +455,7 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               <text
                 data-role="chart-name"
                 x={8}
-                y={12}
+                y={ROW_Y}
                 fontSize={NAME_PX}
                 className="fill-text-dim"
               >
@@ -448,8 +469,8 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
                   data-cursor
                   x1={x(active)}
                   x2={x(active)}
-                  y1={MULTIPLE_NAME_BAND}
-                  y2={MULTIPLE_H}
+                  y1={band}
+                  y2={height}
                   className="stroke-text-bright"
                   strokeOpacity={0.45}
                 />
@@ -488,10 +509,11 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
           const inline =
             textWidth(name.length + 3 + note.length, NAME_PX) + textWidth(endChars, END_PX) + 24 <=
             width;
-          const band = inline ? MULTIPLE_NAME_BAND : MULTIPLE_NAME_BAND + 12;
+          const band = multipleBand(inline ? 1 : 2);
+          const height = band + MULTIPLE_DATA_H;
           const x = (i: number) => (i / last) * width;
-          const mid = band + (MULTIPLE_H - band) / 2;
-          const half = (MULTIPLE_H - band) / 2 - 1;
+          const mid = band + MULTIPLE_DATA_H / 2;
+          const half = MULTIPLE_DATA_H / 2 - 1;
           // A week's bar spans its first to its last day (six day steps), 1 px apart.
           const bw = Math.max(1.2, (6 / last) * width - 1);
           return (
@@ -500,8 +522,8 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
               aria-label={`Net change in deposited CKB in each whole week from ${days[0].date} to ${days[last].date}${biggest ? `; the largest was ${formatSignedCkbInteger(biggest.net)} CKB in the week of ${days[biggest.start].date}` : ''}`}
               data-panel="weekly"
               width={width}
-              height={MULTIPLE_H}
-              viewBox={`0 0 ${width} ${MULTIPLE_H}`}
+              height={height}
+              viewBox={`0 0 ${width} ${height}`}
               className="block cursor-crosshair overflow-visible font-mono"
               {...plotHandlers(pin, last)}
             >
@@ -537,7 +559,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
               <text
                 data-role="chart-name"
                 x={8}
-                y={12}
+                y={ROW_Y}
                 fontSize={NAME_PX}
                 className="fill-text-dim"
               >
@@ -545,7 +567,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
                 {inline ? (
                   <tspan data-role="scale-note">{`\u00a0·\u00a0${note}`}</tspan>
                 ) : (
-                  <tspan data-role="scale-note" x={8} dy={12}>
+                  <tspan data-role="scale-note" x={8} dy={NOTE_DY}>
                     {note}
                   </tspan>
                 )}
@@ -571,7 +593,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
                   x1={x(active)}
                   x2={x(active)}
                   y1={band}
-                  y2={MULTIPLE_H}
+                  y2={height}
                   className="stroke-text-bright"
                   strokeOpacity={0.45}
                 />
@@ -586,8 +608,10 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
 /**
  * The one reading of the picture (board v3): the hovered or tapped day — else the last complete
  * day — deposited, its share, its depositors, the whole week it falls in, and the all-time peak.
- * Its amounts are in the summary form (R5), a cut one titled with its exact value, as the
- * line end's label is.
+ * Its amounts are exact (a chart's readout, the ruling of 2026-11-19). At rest it reads the last
+ * complete day, named for what it is beside the hero's figure of now (lane P4): "yesterday's
+ * close" while that day is yesterday on the UTC+8 clock (the page's one clock), else "last close";
+ * a day pointed at or pinned is "day".
  */
 export function DaoHistoryReading({
   series,
@@ -601,62 +625,88 @@ export function DaoHistoryReading({
   const pinWord = usePinWord();
   const { days, weeks } = series;
   const last = days.length - 1;
+  const lastDate = last < 0 ? null : days[last].date;
+  const closeLabel = useClockText((now) =>
+    lastDate === utc8Yesterday(now) ? 'yesterday’s close' : 'last close'
+  );
   if (last < 0) return null;
   const index = pin.active === null || pin.active > last ? last : pin.active;
   const day = days[index];
   const week = weeks.find((w) => w.start <= index && index <= w.end);
   return (
-    // ReadoutRow's own "selected " prefix would stand on a line of its own before this row of
-    // items, so the row opens with it itself (same word, same ink: `usePinWord`, C11).
+    // ReadoutRow's own "selected " prefix would stand on a line of its own before the facts, so
+    // the day's value opens with it itself (same word, same ink: `usePinWord`, C11).
     <ReadoutRow label="History reading" pinned={false}>
-      {/* One row of facts, each its own item: a narrower column wraps between them. */}
-      <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
-        {pin.showingPin && <span>{pinWord} </span>}
-        <span className="text-text-bright">{unitNode(day.date)}</span>
-        <span>
-          {' '}
-          · deposited{' '}
-          <span className="text-text">
-            <ReadingCkb shannons={day.shannons} />
-          </span>
-        </span>
-        <span>
-          {' '}
-          · share <span className="text-text">{day.ratio}%</span>
-        </span>
-        <span>
-          {' '}
-          · depositors <span className="text-text">{day.depositors}</span>
-        </span>
-        {week && (
-          <span>
-            {' '}
-            · week from <span className="whitespace-nowrap">{days[week.start].date}</span>{' '}
-            <span
-              data-role="week-net"
-              className={
-                week.net > BigInt(0)
-                  ? 'text-positive'
-                  : week.net < BigInt(0)
-                    ? 'text-negative'
-                    : 'text-text'
-              }
-            >
-              <ReadingCkb shannons={week.net} signed />
-            </span>
-          </span>
-        )}
-        {peak && (
-          <span>
-            {' '}
-            · peak{' '}
-            <span className="text-text">
-              <ReadingCkb shannons={parseCkbDecimal(peak.value)} />
-            </span>{' '}
-            on <span className="whitespace-nowrap">{peak.date}</span>
-          </span>
-        )}
-      </span>
+      {/* The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): its
+          six facts joined by "·" ran 1,180 px and wrapped in the middle of the chain. The day is
+          the figure scanned first (the row's bright ink); the amounts, the share, the count and
+          the dates read in the reading ink, the week's net in its sign's. */}
+      <DetailFacts
+        facts={[
+          {
+            label: pin.active === null || pin.active > last ? closeLabel : 'day',
+            value: (
+              <>
+                {pin.showingPin && <span className="text-text-dim">{pinWord} </span>}
+                {unitNode(day.date)}
+              </>
+            ),
+          },
+          {
+            label: 'deposited',
+            value: (
+              <span className="text-text">
+                <ReadingCkb shannons={day.shannons} />
+              </span>
+            ),
+          },
+          { label: 'share', value: <span className="text-text">{day.ratio}%</span> },
+          { label: 'depositors', value: <span className="text-text">{day.depositors}</span> },
+          ...(week
+            ? [
+                {
+                  label: 'week from',
+                  value: (
+                    <>
+                      <span className="text-text whitespace-nowrap">{days[week.start].date}</span>{' '}
+                      <span
+                        data-role="week-net"
+                        className={
+                          week.net > BigInt(0)
+                            ? 'text-positive'
+                            : week.net < BigInt(0)
+                              ? 'text-negative'
+                              : 'text-text'
+                        }
+                      >
+                        <ReadingCkb shannons={week.net} signed />
+                      </span>
+                    </>
+                  ),
+                },
+              ]
+            : // a range with a whole week shows the fact at its other days: its row keeps its place
+              weeks.length > 0
+              ? [{ label: 'week from', reserved: true as const }]
+              : []),
+          ...(peak
+            ? [
+                {
+                  label: 'peak',
+                  value: (
+                    <>
+                      <span className="text-text">
+                        <ReadingCkb shannons={parseCkbDecimal(peak.value)} />
+                      </span>{' '}
+                      <span className="text-text-dim">on</span>{' '}
+                      <span className="text-text whitespace-nowrap">{peak.date}</span>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
     </ReadoutRow>
   );
 }

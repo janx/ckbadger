@@ -7,6 +7,9 @@ import { TerminalRow } from '@/components/ui/terminal-panel';
 import { RowTag, type RowTagVariant } from '@/components/ui/row-tag';
 import { WIDE_ROW_MIN_WIDTH } from '@/components/ui/list-table';
 import { DetailSection } from '@/components/ui/detail-layout';
+import { Pager } from '@/components/ui/pager';
+import { Select, type SelectOption } from '@/components/ui/select';
+import { TextField } from '@/components/ui/text-field';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   api,
@@ -50,27 +53,40 @@ const COLUMNS = [
   'RTT',
 ];
 
-const STATE_OPTIONS: Array<{ value: NetworkPeerDisplayState; label: string }> = [
-  { value: 'reachable', label: 'Same-network Identify completed' },
-  { value: 'verifiedUnavailable', label: 'Latest aliases exhausted · previously verified' },
-  { value: 'advertisedUnverified', label: 'Aliases exhausted · no retained verification' },
-  { value: 'foreignNetwork', label: 'Foreign-network Identify' },
-  { value: 'noCompletedObservation', label: 'Not dialed by this crawler' },
+/** The crawler's dial states, in the filter's order. */
+const DIAL_STATES: readonly NetworkPeerDisplayState[] = [
+  'reachable',
+  'verifiedUnavailable',
+  'advertisedUnverified',
+  'foreignNetwork',
+  'noCompletedObservation',
 ];
 
-const OBSERVATION_OPTIONS: Array<{ value: NetworkAddressProbeResult; label: string }> = [
-  { value: 'dialRequestFailed', label: 'Dial request failed' },
-  {
-    value: 'noAuthenticatedSessionBeforeDeadline',
-    label: 'No authenticated session before deadline',
-  },
-  {
-    value: 'authenticatedSessionWithoutIdentifyBeforeDeadline',
-    label: 'Authenticated session without Identify before deadline',
-  },
-  { value: 'malformedIdentify', label: 'Malformed Identify' },
-  { value: 'foreignNetwork', label: 'Foreign network' },
-  { value: 'sameNetworkIdentified', label: 'Same-network Identify completed' },
+/** The typed address observations, in the filter's order. */
+const OBSERVATIONS: readonly NetworkAddressProbeResult[] = [
+  'dialRequestFailed',
+  'noAuthenticatedSessionBeforeDeadline',
+  'authenticatedSessionWithoutIdentifyBeforeDeadline',
+  'malformedIdentify',
+  'foreignNetwork',
+  'sameNetworkIdentified',
+];
+
+/**
+ * The filters' choices, `all` (no filter: the empty value) first, as the board's select writes it,
+ * then each state in the words the rows use for it: a dial state as its row's badge says it
+ * (crawlerDialStateTag), an observation as the evidence says it (observationLabel). Every choice
+ * holds a 360 px phone's line alone in its well: 37 glyphs at 13 px (291 px of 328 less the well's
+ * border and the select's padding).
+ */
+const STATE_OPTIONS: SelectOption<'' | NetworkPeerDisplayState>[] = [
+  { value: '', label: 'all' },
+  ...DIAL_STATES.map((state) => ({ value: state, label: crawlerDialStateTag(state).label })),
+];
+
+const OBSERVATION_OPTIONS: SelectOption<'' | NetworkAddressProbeResult>[] = [
+  { value: '', label: 'all' },
+  ...OBSERVATIONS.map((result) => ({ value: result, label: observationLabel(result) })),
 ];
 
 function orDash(value: string | null | undefined): string {
@@ -89,7 +105,7 @@ function optionalAge(timestamp: number | null): ReactNode {
 /**
  * The crawler's dial state, a kind, as a row tag (table-rows T8): accent for a completed
  * same-network Identify, plain for a verification seen before or a foreign network, set back
- * (ghost) where nothing was verified.
+ * (ghost) where nothing was verified. The dial-state filter offers these same words.
  */
 function crawlerDialStateTag(state: NetworkPeerDisplayState): {
   label: string;
@@ -99,7 +115,9 @@ function crawlerDialStateTag(state: NetworkPeerDisplayState): {
     case 'reachable':
       return { label: 'Same-network Identify', variant: 'accent' };
     case 'verifiedUnavailable':
-      return { label: 'Aliases exhausted · prior verification', variant: 'default' };
+      // the aliases of the latest round exhausted; a same-network Identify verified before is
+      // retained (35 glyphs; "· prior verification" took 38, one past a phone's select)
+      return { label: 'Aliases exhausted · verified before', variant: 'default' };
     case 'advertisedUnverified':
       return { label: 'Aliases exhausted', variant: 'ghost' };
     case 'foreignNetwork':
@@ -109,14 +127,21 @@ function crawlerDialStateTag(state: NetworkPeerDisplayState): {
   }
 }
 
+/**
+ * A typed address observation in the evidence's words, which the observation filter offers too.
+ * The two that end at the probe's deadline say "in time" (before it): no authenticated session
+ * by then (32 glyphs), or a session authenticated and no Identify by then (34); the words that
+ * kept "deadline" took 40 and 54, and "Authenticated, no Identify by deadline" 38, past the 37 a
+ * phone's select holds.
+ */
 function observationLabel(result: NetworkAddressProbeResult): string {
   switch (result) {
     case 'dialRequestFailed':
       return 'Dial request failed';
     case 'noAuthenticatedSessionBeforeDeadline':
-      return 'No authenticated session before deadline';
+      return 'No authenticated session in time';
     case 'authenticatedSessionWithoutIdentifyBeforeDeadline':
-      return 'Authenticated session without Identify before deadline';
+      return 'Authenticated, no Identify in time';
     case 'malformedIdentify':
       return 'Malformed Identify';
     case 'foreignNetwork':
@@ -149,7 +174,7 @@ function sessionInitiatorLabel(initiator: NetworkSessionInitiator): string {
 
 function ObservationList({ observations }: { observations: NetworkAddressProbeEvidence[] }) {
   if (observations.length === 0) {
-    return <p className="text-text-dim">No address observations recorded.</p>;
+    return <p className="text-text">No address observations recorded.</p>;
   }
   return (
     <ul className="space-y-1">
@@ -188,7 +213,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised aliases</h4>
         {detail.aliases.length === 0 ? (
-          <p className="text-text-dim">No aliases recorded.</p>
+          <p className="text-text">No aliases recorded.</p>
         ) : (
           <ul className="space-y-1">
             {detail.aliases.map((alias) => (
@@ -208,7 +233,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Direct CKB session evidence</h4>
         {detail.directSessions.length === 0 ? (
-          <p className="text-text-dim">No retained direct-session observation.</p>
+          <p className="text-text">No retained direct-session observation.</p>
         ) : (
           <ul className="space-y-1">
             {detail.directSessions.map((session) => (
@@ -229,7 +254,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
             ))}
           </ul>
         )}
-        <p className="text-text-dim mt-1">
+        <p className="text-text max-w-measure mt-1">
           Direction is from the configured observer&apos;s vantage. Session addresses are not used
           as crawler dial aliases.
         </p>
@@ -240,7 +265,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h4 className="text-text-bright mb-1 font-bold">
             Last completed round #{detail.lastCompleted.roundId}
           </h4>
-          <p className="text-text-dim mb-1">
+          <p className="text-text max-w-measure mb-1">
             <span>{outcomeLabel(detail.lastCompleted.outcome)}</span>
             {detail.lastCompleted.outcome === 'exhausted' && (
               <>
@@ -255,13 +280,15 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <ObservationList observations={detail.lastCompleted.observations} />
         </div>
       ) : (
-        <p className="text-text-dim">No completed probe observation.</p>
+        <p className="text-text">No completed probe observation.</p>
       )}
 
       {detail.active && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Active round #{detail.active.roundId}</h4>
-          <p className="text-text-dim">State: {detail.active.state}</p>
+          <p className="text-text max-w-measure">
+            <span className="text-text-dim">State:</span> {detail.active.state}
+          </p>
           <ObservationList observations={detail.active.observations} />
         </div>
       )}
@@ -269,7 +296,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       {detail.verified && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Retained verification</h4>
-          <p className="text-text-dim">
+          <p className="text-text max-w-measure">
             {detail.verified.clientVersion} · last same-network Identify{' '}
             {ago(detail.verified.lastReachableAt)} · protocols{' '}
             {detail.verified.protocols.join(', ') || '—'}
@@ -294,7 +321,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised by</h4>
         {detail.advertisers.length === 0 ? (
-          <p className="text-text-dim">No retained advertiser evidence.</p>
+          <p className="text-text">No retained advertiser evidence.</p>
         ) : (
           <ul className="space-y-1">
             {detail.advertisers.map((advertiser) => (
@@ -466,7 +493,7 @@ function PeerRow({
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span
-                className="text-text text-meta min-w-0 max-w-full justify-self-start truncate"
+                className="text-text text-small min-w-0 max-w-full justify-self-start truncate"
                 title={peer.primaryAddr ?? undefined}
               >
                 {orDash(peer.primaryAddr)}
@@ -493,7 +520,7 @@ function PeerRow({
                 </RowTag>
               </span>
               <span
-                className="text-text text-meta col-span-2 col-start-2 min-w-0 max-w-full justify-self-start truncate"
+                className="text-text text-small col-span-2 col-start-2 min-w-0 max-w-full justify-self-start truncate"
                 title={peer.primaryAddr ?? undefined}
               >
                 {orDash(peer.primaryAddr)}
@@ -503,12 +530,12 @@ function PeerRow({
           {expanded && (
             <dl
               data-testid="peer-columns"
-              className="text-meta grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
+              className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
             >
               {columns.map((c) => (
                 <Fragment key={c.label}>
-                  <dt className="text-text-dim">{c.label}</dt>
-                  <dd className={cn('text-text min-w-0', c.pair)}>{c.value}</dd>
+                  <dt className="text-text-dim text-meta">{c.label}</dt>
+                  <dd className={cn('text-text text-small min-w-0', c.pair)}>{c.value}</dd>
                 </Fragment>
               ))}
             </dl>
@@ -547,7 +574,7 @@ function PeerRow({
 
 /**
  * Five peers first (hierarchy R5, a list on a topic page), then fifty more a page: every peer stays
- * one "Load more" away, and the cursor is a peer id, so the page sizes may differ.
+ * one "next 50 ↓" away, and the cursor is a peer id, so the page sizes may differ.
  */
 const FIRST_PEERS = 5;
 const MORE_PEERS = 50;
@@ -623,67 +650,42 @@ export function PeersTable() {
           <div
             id={filtersId}
             className={cn(
-              'border-base-border flex-wrap items-center gap-3 border-b px-4 py-2',
+              'border-base-border flex-wrap items-center gap-3 border-b py-2 md:px-4',
               filtersOpen ? 'flex' : 'hidden md:flex'
             )}
           >
-            <select
+            {/* The controls board's select after its label and its text field in the well; each
+                filter starts the list again from its first five. A select's well never shrinks
+                (components/ui/select.tsx): where the pair is wider than the panel's line its well
+                goes under its label, as on a phone ('crawler dial state', 140.4 px, 10 and a
+                310 px well: 460.4 px). Below md the panel's content takes the page's line, no
+                side padding of its own (lane c2-finish, rulings round 1): at 360 its 328 px hold
+                the wells, 310 and 302.2 px, where the 296 px its 16 px padding left did not. */}
+            <Select
+              label="crawler dial state"
               value={filters.state ?? ''}
-              onChange={(event) =>
-                applyFilters({
-                  ...filters,
-                  state: (event.target.value || undefined) as NetworkPeerDisplayState | undefined,
-                })
-              }
-              aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
-            >
-              <option value="">All crawler dial states</option>
-              {STATE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={filters.observation ?? ''}
-              onChange={(event) =>
-                applyFilters({
-                  ...filters,
-                  observation: (event.target.value || undefined) as
-                    | NetworkAddressProbeResult
-                    | undefined,
-                })
-              }
-              aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
-            >
-              <option value="">All address observations</option>
-              {OBSERVATION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={filters.country ?? ''}
-              onChange={(event) =>
-                applyFilters({ ...filters, country: event.target.value || undefined })
-              }
-              placeholder="country"
-              aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
+              options={STATE_OPTIONS}
+              onChange={(value) => applyFilters({ ...filters, state: value || undefined })}
             />
-            <input
-              type="text"
-              value={filters.version ?? ''}
-              onChange={(event) =>
-                applyFilters({ ...filters, version: event.target.value || undefined })
-              }
+            <Select
+              label="address observation"
+              value={filters.observation ?? ''}
+              options={OBSERVATION_OPTIONS}
+              onChange={(value) => applyFilters({ ...filters, observation: value || undefined })}
+            />
+            <TextField
+              label="Filter by country"
+              placeholder="country"
+              value={filters.country ?? ''}
+              onChange={(value) => applyFilters({ ...filters, country: value || undefined })}
+              className="w-[200px]"
+            />
+            <TextField
+              label="Filter by version"
               placeholder="version"
-              aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full border px-2 py-0.5 font-mono"
+              value={filters.version ?? ''}
+              onChange={(value) => applyFilters({ ...filters, version: value || undefined })}
+              className="w-[200px]"
             />
           </div>
 
@@ -721,16 +723,14 @@ export function PeersTable() {
           </div>
         </div>
 
+        {/* The controls board's short-list form: "next 50 ↓", the peers the next load asks for
+            (the API sends no total and no page size; the cursor is the last peer shown). */}
         {data?.nextCursor != null && (
           <div className="border-row-rule flex justify-center border-t px-4 py-2">
-            <button
-              type="button"
-              onClick={() => setCursor(data.nextCursor ?? undefined)}
-              disabled={isFetching}
-              className="text-text-dim hover:text-interactive text-small font-mono transition-colors disabled:opacity-50"
-            >
-              {isFetching ? 'Loading…' : 'Load more'}
-            </button>
+            <Pager
+              mode="more"
+              next={{ count: MORE_PEERS, onShow: () => setCursor(data.nextCursor ?? undefined) }}
+            />
           </div>
         )}
       </div>

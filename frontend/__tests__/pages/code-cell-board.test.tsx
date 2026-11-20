@@ -25,6 +25,8 @@ vi.mock('@/src/navigation', () => ({
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/components/cell/cell-transactions', () => ({
   CellTransactions: () => <div data-testid="transactions" />,
+  // lane D3: the developer tier holds the transactions' script groups
+  CellScriptGroups: () => <div data-testid="script-groups" />,
 }));
 vi.mock('@/lib/api', () => ({
   api: { getCell: vi.fn(), lookupScripts: vi.fn() },
@@ -48,7 +50,8 @@ describe('code cell page against the CellCode board', () => {
 
   it('presses the code cell’s own seal: its Type ID an unregistered type, class other (seal kinds, C3)', async () => {
     const { container } = view();
-    await screen.findByTestId('code-cell-of');
+    // the lede's sentence (lane P1; the wait was on the kind line's "code cell of")
+    await screen.findByTestId('cell-kind');
     expectOnePageSeal(container, {
       kind: 'cell',
       tx: codeCellFixture.txHash,
@@ -59,14 +62,17 @@ describe('code cell page against the CellCode board', () => {
     });
   });
 
-  it('says whose code it is in the header and names lock and type (SC-K2)', async () => {
+  // Re-pinned on purpose, and renamed (lane P1, the plan: one sentence of what the cell is for
+  // every kind; it was "says whose code it is in the header …"): whose code it is is the page's
+  // lede, "This cell holds the code of JoyID, v5", said once; the kind line holds "Cell" alone (it
+  // read "Cell· code cell of JoyID, v5").
+  it('says whose code it is in the lede and names lock and type (SC-K2)', async () => {
     const { container } = view();
-    const codeCellOf = await screen.findByTestId('code-cell-of');
-    expect(codeCellOf).toHaveTextContent('· code cell of JoyID, v5');
-    // the name plate (seals by kind, C10): on the kind line, with the cell's status, after "Cell"
-    const { kindLine, nameBox } = expectNamePlate(container, 'Cell');
-    expect(kindLine).toContainElement(codeCellOf);
-    expect(kindLine).toHaveTextContent(/^Celllive· code cell of JoyID, v5$/);
+    const codeCellOf = await screen.findByTestId('cell-kind');
+    expect(codeCellOf).toHaveTextContent(/^This cell holds the code of JoyID, v5$/);
+    const { kindLine, nameBox, below } = expectNamePlate(container, 'Cell');
+    expect(kindLine).toHaveTextContent(/^Cell$/);
+    expect(below).toContainElement(codeCellOf);
     expect(nameBox).not.toContainElement(codeCellOf);
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     await within(facts).findByRole('link', { name: 'Multisig' });
@@ -197,12 +203,16 @@ describe('code cell page · visual pass', () => {
     view();
     const data = await screen.findByLabelText('CellData byte map');
     const offset = within(data).getByText('0x00000');
-    expect(offset).toHaveClass('w-[74px]');
+    // its text at the dump's 13 px and an 18 px gap, 73 px, where the 4-digit column is 65
+    // (re-pinned, readability R4: the widths were w-[74px] and w-[62px], written by hand at 12 px)
+    expect(offset).toHaveStyle({ width: '73px' });
   });
 
   it('shows the epoch the code cell was created in (SC-C9)', async () => {
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
-    expect(facts).toHaveTextContent('epoch 13,150 · 935/1500');
+    // re-pinned on purpose (lane D2): the epoch is a fact of its own, "Epoch" (it was the line
+    // "epoch 13,150 · 935/1500" under the Created fact's time, which went to the status strip)
+    expect(facts).toHaveTextContent('Epoch13,150 · 935/1500');
   });
 });

@@ -7,6 +7,7 @@ import { RowSeal } from '@/components/ui/row-seal';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { occupiedBytesText } from '@/lib/occupied';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
@@ -28,7 +29,8 @@ export interface CellTileData {
   seal: CellSeal;
   content: ReactNode;
   capacity: string;
-  occupied: string;
+  /** Exact occupied bytes, as the API gives them (`commonKnowledgeSize`). */
+  occupiedBytes: string;
   state: string;
   anatomy?: CellAnatomy;
   testId?: string;
@@ -48,10 +50,12 @@ export interface CellTileProps {
 }
 export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTileProps) {
   const capacity = exactUnsignedInteger(cell.capacity, `${cell.id}: capacity`);
-  const occupied = exactUnsignedInteger(cell.occupied, `${cell.id}: occupied`);
-  if (capacity === BigInt(0) || occupied > capacity)
+  const occupied = exactUnsignedInteger(cell.occupiedBytes, `${cell.id}: occupied bytes`);
+  // one byte of state occupies exactly one CKB, 10^8 shannons of the capacity (F2-tx, TX-19)
+  const occupiedShannons = occupied * SHANNONS_PER_CKB;
+  if (capacity === BigInt(0) || occupiedShannons > capacity)
     throw new Error(
-      `${cell.id}: occupied ${occupied} exceeds capacity ${capacity} or capacity is zero`
+      `${cell.id}: occupied ${occupied} bytes (${occupiedShannons} shannons) exceed capacity ${capacity} shannons, or capacity is zero`
     );
   assertSealOfTile(cell, capacity);
   return (
@@ -75,7 +79,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
+        'bg-base-surface text-small grid min-w-0 grid-cols-[18px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
@@ -83,50 +87,58 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         dimmed && 'quiet'
       )}
     >
-      {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
-          text, 10 px apart, in four rows — the cell's stone with its label and out point, the
-          owner's stone with the owner, the class mark with the content, then the occupied bar.
-          Each mark stands alone, centred in the column, its top on its row's first 18 px line
-          (the round stone overhangs that line by 6 px, into the 12 px top padding; the owner's by
-          1 px; the 16 px class mark sits 1 px down); the 10 px row gap keeps the round stone's
-          drawn 5 px overhang 4 px clear of the owner's stone. Every row's text starts on the same
-          edge; the rows after the first end with their right-end item (lock kind, capacity, the
-          cell's state beside the bar), which wraps under its row's text when it does not fit and
-          stays right. Row 1 is the label and the out point alone: with the state beside them it
-          wrapped on every tile of a 203 px text column (the sheets at 1024). A row is a
-          `contents` pair: its two cells are the grid's. */}
+      {/* One mark column, one text edge (seals by kind, C11): a column of marks as wide as the
+          widest, the cell's 18 px stone (readability R6: it was the 30 px stone's 30; the owner's
+          stone is 13.5 wide, the class mark 16), and the text, 10 px apart, in four rows — the
+          cell's stone with its label and out point, the owner's stone with the owner, the class
+          mark with the content, then the occupied bar. Each mark stands alone, centred in the
+          column, on its row's first line (the row line, 20 px): the cell's 18 px stone centred on
+          it, 1 px clear above and below (RowSeal), and the owner's 18 px stone the same, as high
+          as the cell's (Gate B; it was 20 px and overhung the line by 1 px); the 16 px class mark
+          sits 1 px down. Every row's text starts on the same edge; the rows after the
+          first end with their right-end item (lock kind, capacity, the cell's state beside the
+          bar), which wraps under its row's text when it does not fit and stays right. Row 1 is the
+          label and the out point alone: with the state beside them it wrapped on every tile of a
+          203 px text column (the sheets at 1024 beside the 30 px mark column; 215 beside the 18).
+          A row is a `contents` pair: its two cells are the grid's. */}
       <div data-tile-row="cell" className="contents">
         <span data-tile-mark className="flex items-start justify-center">
-          <RowSeal id={cell.seal.id} state={cell.seal.state} overhang gap={false} />
+          <RowSeal id={cell.seal.id} state={cell.seal.state} gap={false} />
         </span>
         <TileText>
           <span className="min-w-0">
-            {/* R3: the label ("input 0") is quiet; the out point, the tile's link, reads */}
+            {/* R3: the label ("input 0") is quiet; the out point, the tile's link, reads: a link
+                inside the line (components/ui/link.tsx), the line's ink the reading ink */}
             {cell.outPoint ? (
               <>
                 <span className="text-text-dim">{cell.label}</span>{' '}
                 {/* an out point with its index is one unit, never broken; tight: a tile's text
                     column is under 200 px (U-09) */}
-                <Link
-                  href={cell.href}
-                  title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
-                  className="text-text hover:text-jade whitespace-nowrap"
-                >
-                  <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
-                  <OutpointIndex index={cell.outPoint.index} />
-                </Link>
+                <span className="text-text">
+                  <Link
+                    href={cell.href}
+                    look="inline"
+                    title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
+                    className="whitespace-nowrap"
+                  >
+                    <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
+                    <OutpointIndex index={cell.outPoint.index} />
+                  </Link>
+                </span>
               </>
             ) : (
-              <Link href={cell.href} className="text-text hover:text-jade">
-                {cell.label}
-              </Link>
+              <span className="text-text">
+                <Link href={cell.href} look="inline">
+                  {cell.label}
+                </Link>
+              </span>
             )}
           </span>
         </TileText>
       </div>
       <div data-tile-row="owner" data-tile-owner className="contents">
         <span data-tile-mark className="flex items-start justify-center">
-          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="-my-px" />
+          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="h-row items-center" />
         </span>
         {/* the lock's kind, a label beside the owner: quiet (R3) */}
         <TileText end={cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}>
@@ -136,7 +148,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="content" className="contents">
         <span data-tile-mark className="flex items-start justify-center pt-px">
-          <ClassMark kind={cell.kind} />
+          <ClassMark kind={cell.kind} size={16} />
         </span>
         <TileText end={<CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />}>
           <span className="text-text-bright min-w-0 max-w-full">{cell.content}</span>
@@ -144,8 +156,14 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        {/* the bar, its bytes and the state: 56 + 6 + 79.2 ('occupied 231') + 6 + 52.8
-            ('consumed') = 200 px, inside the narrowest text column (203 px, the sheets at 1024) */}
+        {/* the bar, its bytes and the state at 12 px on one line (lane D3): the bar's track 40 px
+            (it was 56). The widest state is an output's "spent later" (lane P1; 79.2 px), so a
+            cell under 1,000,000 bytes, "occupied 999,999 B" (129.6 px), holds 40 + 6 + 129.6 + 6 +
+            79.2 = 260.8 px from 390 up (278 px stacked; 383 at 1024 and 511 at 1280 on the
+            transaction page, 335 at 1024 on the cell page beside its onward bridge), and so does
+            the widest of record (LARGEST_TX_BYTES, genesis's cellbase, "occupied 1,236,271 B",
+            144 px), 275.2 px; at 360, 248 px of text where the sheets stack, a cell under 10,000
+            bytes (246.4 px). Where it does not fit, the state wraps under the bar at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)
@@ -154,20 +172,18 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
-            <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
+            <div aria-hidden="true" className="bg-bar-track h-1 w-10 shrink-0">
               <div
                 className="bg-jade scan-fill h-full"
-                style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}
+                style={{ width: `${(Number(occupiedShannons) / Number(capacity)) * 100}%` }}
               />
             </div>
           )}
-          {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195".
-              R3: "occupied" is the label, quiet; its bytes are a number, the reading ink. */}
+          {/* F2-tx (TX-19): occupied capacity is bytes, written whole with its unit by the one
+              writer, "occupied 195 B" (B4). R3: "occupied" is the label, quiet; its figure is a
+              number, the reading ink. */}
           <span className="text-text-dim text-meta">
-            occupied{' '}
-            <span className="text-text">
-              {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
-            </span>
+            occupied <span className="text-text">{occupiedBytesText(occupied, cell.id)}</span>
           </span>
         </TileText>
       </div>
@@ -224,11 +240,4 @@ function assertSealOfTile(cell: CellTileData, capacity: bigint): void {
     throw new Error(
       `${cell.id}: its seal (cell ${id.tx}:${id.index}, ${sealClass}, ${id.capacity} shannons) is not the tile's (${outPoint ? `cell ${outPoint.txHash}:${outPoint.index}, ` : ''}${cell.kind}, ${capacity} shannons)`
     );
-}
-
-// F2-tx (TX-19): one byte of state occupies exactly one CKB.
-function occupiedBytes(id: string, shannons: bigint): bigint {
-  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
-    throw new Error(`${id}: occupied ${shannons} shannons is not whole bytes`);
-  return shannons / SHANNONS_PER_CKB;
 }

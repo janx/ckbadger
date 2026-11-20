@@ -11,7 +11,7 @@ import { AssetFeed } from '@/components/asset/asset-feed';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { CellVersions } from '@/components/asset/cell-versions';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { TenureBar } from '@/components/ui/tenure-bar';
 import { useClockTime } from '@/components/ui/utc8-date';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -45,6 +45,7 @@ import { identityTitleParts, type IdentityItemKind } from '@/lib/identity-title'
 import { formatStandard } from '@/components/activity-event-row';
 import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { versionFree } from '@/lib/held-point';
 
 type IdentityKind = IdentityItemKind;
 export interface CanonicalIdentityDetailProps {
@@ -194,7 +195,13 @@ export function CanonicalIdentityDetail({
   const subject = parts.full;
   const current = versions.data?.data.at(-1);
   const held = current ? (current.isLive ? current.capacity : '0') : null,
-    occupied = current ? (current.isLive ? current.occupiedCapacity : '0') : null;
+    occupied = current ? (current.isLive ? current.occupiedCapacity : '0') : null,
+    // the free part, the route's (lane exactness, part B5: it was held − occupied, in two places below)
+    free = current
+      ? current.isLive
+        ? versionFree(current, `${current.txHash}:${current.outputIndex}`).toString()
+        : '0'
+      : null;
   const collectionHref = getIdentityCollectionHref(standard, kind);
   const didDecoded = p?.kind === 'did_ckb' ? p.versions.at(-1)!.decoded : undefined;
   const records =
@@ -223,11 +230,17 @@ export function CanonicalIdentityDetail({
         note={termNote(term, kind)}
       />
     ) : term?.kind === 'unrecorded' ? (
-      <p className="text-text-dim">Version {term.version} of its cell records no expiry.</p>
+      <p className="text-text max-w-measure">
+        Version {term.version} of its cell records no expiry.
+      </p>
     ) : null;
   return (
     <AssetDetailShell
-      title={<IdentityName name={parts.name} suffix={parts.suffix} />}
+      title={
+        // a did:ckb's title is its handle whole (lane P2's third round, item 6): the domain after
+        // its first dot is the personal data server's, no standard's suffix, so it takes no rose
+        kind === 'did' ? parts.full : <IdentityName name={parts.name} suffix={parts.suffix} />
+      }
       documentTitle={[`${parts.name}${parts.suffix}`, 'identity']}
       kind="identities"
       railAfterHeader
@@ -244,12 +257,31 @@ export function CanonicalIdentityDetail({
       }
       identity={
         kind === 'did' && didDecoded ? (
-          <Hash hash={didDecoded.did} truncate={false} className="text-text text-body" />
+          // the head's id (a did:ckb), its copy button after it (lane c2-finish, item 4), at the
+          // asset heads' id step (the identity line's 12 px; it was 14): 40 × 7.2 = 288 px and the
+          // copy's 40 (its gap and box; its answer takes no room) hold a 390 phone's 358 on one
+          // line, where 336 + 40 did not
+          <span className="text-text block">
+            <HeadId value={didDecoded.did} kind="did" copy="copy DID" />
+          </span>
         ) : undefined
       }
-      // Consistency round C7: the standard's sentence is the lede; the facts are the metrics row,
-      // and the summary paragraph that restated them is tier 2's "in words" (as the Spore page's).
-      intro={<IdentityPositioning standard={standard} />}
+      // Readability R8: the lede is the identity's state, what it is and whether it is live, the
+      // sentence of "in words" that says so (it was the standard's sentence, which a recycled name
+      // contradicted); the facts are the metrics row (C7), the rest of "in words" tier 2's
+      lede={
+        state && (
+          <IdentityPositioning
+            standard={standard}
+            state={state}
+            accountGone={
+              state === 'expired' &&
+              p?.kind === 'bit_cell' &&
+              p.versions.at(-1)!.decoded.linkedAccount?.isLive === false
+            }
+          />
+        )
+      }
       metrics={
         p && term ? (
           <AssetMetrics
@@ -330,6 +362,11 @@ export function CanonicalIdentityDetail({
       ) : (
         <AssetReadState label="identity document" error={protocol.error} read={protocol} />
       )}
+      {/* One section order on the four identity pages (lane D2, PB-22): the term first, the lease
+          a name is and when it ends; then what it resolves to (its records, a did:ckb's
+          document); then who controls it (a .cell's roles); then the CKB its cell holds. The
+          .bit page read so already; the .cell page read its records and roles before its term. */}
+      {termSection}
       {p?.kind === 'did_ckb' && (
         <>
           <DidDocumentReadout protocol={p} />
@@ -360,7 +397,6 @@ export function CanonicalIdentityDetail({
           />
         </>
       )}
-      {termSection}
       {p?.kind === 'dotbit' && records.length > 0 && (
         <IdentityRecords subject={subject} records={records} />
       )}
@@ -368,35 +404,25 @@ export function CanonicalIdentityDetail({
       <section aria-label="CKB held in its cell" className="space-y-4">
         <PromptHeading command="CKB held" note="1 CKB per byte" />
         {held !== null && occupied !== null && current?.isLive && (
-          <p>
+          <p className="max-w-measure">
             The cell holds{' '}
             <span className="text-text-bright">
-              <CkbAmount form="column" shannons={BigInt(held)} signed={false} tone="plain" />
+              <CkbAmount form="exact" shannons={BigInt(held)} signed={false} tone="plain" />
             </span>
-            . <CkbAmount form="column" shannons={BigInt(occupied)} signed={false} tone="plain" />{' '}
-            pay for its bytes;{' '}
+            . <CkbAmount form="exact" shannons={BigInt(occupied)} signed={false} tone="plain" /> pay
+            for its bytes;{' '}
             {BigInt(held) === BigInt(occupied) ? (
               'none is free.'
             ) : (
               <>
-                <CkbAmount
-                  form="column"
-                  shannons={BigInt(held) - BigInt(occupied)}
-                  signed={false}
-                  tone="plain"
-                />{' '}
-                are free.
+                <CkbAmount form="exact" shannons={BigInt(free!)} signed={false} tone="plain" /> are
+                free.
               </>
             )}
           </p>
         )}
         {held !== null && occupied !== null && (
-          <CapacityPartition
-            subject={subject}
-            total={held}
-            occupied={occupied}
-            free={(BigInt(held) - BigInt(occupied)).toString()}
-          />
+          <CapacityPartition subject={subject} total={held} occupied={occupied} free={free!} />
         )}
         {versions.data ? (
           <>

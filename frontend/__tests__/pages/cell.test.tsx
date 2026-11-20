@@ -6,6 +6,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -19,6 +21,8 @@ vi.mock('@/components/cell/cell-transactions', () => ({
       {cell.status === 'dead' ? 'spent evidence' : 'live evidence'}
     </div>
   ),
+  // lane D3: the developer tier holds the transactions' script groups
+  CellScriptGroups: () => <div data-testid="script-groups" />,
 }));
 vi.mock('@/lib/api', async (importOriginal) => ({
   // the error class itself: the page's failed-read line reads a gateway status off it
@@ -42,7 +46,8 @@ const base = {
     totalBytes: 61,
   },
   lockScriptHash: `0x${'11'.repeat(32)}`,
-  address: 'ckb1qtest',
+  // the address that spells its lock (the lock words read the lock off it and check the two)
+  address: ckbAddress({ codeHash: `0x${'22'.repeat(32)}`, args: `0x${'33'.repeat(20)}` }),
   typeScriptHash: undefined,
   dataSize: 0,
   createdAtBlock: 123,
@@ -303,8 +308,12 @@ describe('CellDetailPage', () => {
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('live evidence');
     expect(screen.getByRole('region', { name: 'Cell facts' })).toHaveTextContent(
-      'Occupied61 B · 39.00000000 CKB free'
+      'Occupied61 B · 39 CKB free'
     );
+    // lane P1, the ink and size roles: its free CKB is a value, the reading ink (it was quiet)
+    expect(
+      inkOf(within(screen.getByRole('region', { name: 'Cell facts' })).getByText(/ free$/))
+    ).toBe(READING);
   });
   it('shows exact spent input, timestamps and chain lifetime', async () => {
     getCell.mockResolvedValue({
@@ -325,14 +334,22 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
-    // Lane U (U3): a spent cell's origin line names the block that spent it.
-    // R9 (re-pinned): the origin line is prose, at the row size (it was the head size)
-    expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
-    );
+    // Lane U (U3): a spent cell's origin line named the block that spent it. Re-pinned on purpose
+    // (lane P1, said once): the origin line is gone; the Spent fact names that block
+    expect(screen.queryByTestId('cell-origin')).toBeNull();
+    expect(
+      within(screen.getByRole('region', { name: 'Cell facts' })).getByRole('link', { name: '#125' })
+    ).toHaveAttribute('href', '/mainnet/blocks/125');
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent('existed from block #123 until block #125 spent it.');
+    // readability R3 / R4 (lane B7): the sentence explains, so it reads in the reading ink at the
+    // body step, on the measure (it ran 171 characters a line at 1280, quiet, small). Re-pinned
+    // on purpose (lane D3, U-17): it stands in the page's developer tier, its own measure, where it
+    // stood in the lede's measured holder
+    expect(onlyName).toHaveClass('text-text', 'text-body', 'max-w-measure');
+    expect(onlyName.closest('[data-tier="2"]')).not.toBeNull();
+    expect(onlyName.closest('[data-detail-lede]')).toBeNull();
     expect(within(onlyName).getByRole('link', { name: '#123' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/123'

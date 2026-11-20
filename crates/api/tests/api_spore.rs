@@ -196,12 +196,12 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     assert_eq!(json["title"], "Test Cluster Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
-    assert_eq!(data[1]["values"]["used"], "60");
-    assert_eq!(data[1]["values"]["unused"], "40");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[1]["values"]["freeCapacity"], "40");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -217,8 +217,8 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
@@ -284,6 +284,8 @@ async fn test_spore_cluster_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_a))
     );
     assert_eq!(json["data"][0]["itemCount"], 3);
+    // lane exactness, part A (A3): the rank of the page's first row, the route's
+    assert_eq!(json["firstRank"], 1, "{json}");
     let next_cursor = json["nextCursor"].as_str().expect("next cursor");
 
     let request = Request::builder()
@@ -304,6 +306,70 @@ async fn test_spore_cluster_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_b))
     );
     assert_eq!(json["data"][0]["itemCount"], 1);
+    assert_eq!(json["firstRank"], 2, "{json}");
+}
+
+/// lane exactness, part A2 (S1): a holders cursor is a place in the ranking (count desc, lock asc), not a row that
+/// must still be there. Page one ends at owner_a (3 items); owner_a then sends one item to a new
+/// holder, owner_c, and later sends its last ones away: page two starts at the first row after
+/// the place (3, owner_a), and its firstRank counts the rows before it in that read, never a 400.
+#[tokio::test]
+async fn cluster_holders_start_a_page_after_the_cursor_s_place_when_its_holder_moved() {
+    let store = test_store();
+    let cluster_id = [0xC5u8; 32];
+    let (owner_a, owner_b, owner_c) = ([0x0Au8; 32], [0x0Bu8; 32], [0x0Cu8; 32]);
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: None,
+                name: Some("Moving".into()),
+                description: None,
+                is_live: true,
+                created_at_block: 0,
+                created_at_tx: vec![0x01; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let set = |owner: &[u8; 32], count: i64| {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cluster_owner_count(&cluster_id, owner, count);
+        batch.commit().unwrap();
+    };
+    set(&owner_a, 3);
+    set(&owner_b, 1);
+    let app = create_router(test_config(store.clone())).await;
+    let path = format!("/spore/clusters/0x{}/holders", hex::encode(cluster_id));
+    let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+
+    // owner_a sends one item to owner_c: the ranking is now b 1, c 1 after a 2, by lock
+    set(&owner_a, 2);
+    set(&owner_c, 1);
+    let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    // the place (3, a) lies before every row now: the page starts at the first, a at 2, rank 1
+    assert_eq!(
+        second["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_a))
+    );
+    assert_eq!(second["firstRank"], 1, "{second}");
+
+    // owner_a's items all leave: it is no longer in the ranking, and the page after its place
+    // starts at b, rank 1
+    set(&owner_a, 0);
+    let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{third}");
+    assert_eq!(
+        third["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_b))
+    );
+    assert_eq!(third["firstRank"], 1, "{third}");
 }
 
 #[tokio::test]
@@ -600,10 +666,10 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     assert_eq!(json["title"], "Spore Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[1]["values"]["used"], "61");
-    assert_eq!(data[1]["values"]["unused"], "39");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "61");
+    assert_eq!(data[1]["values"]["freeCapacity"], "39");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -619,8 +685,8 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "61");
-    assert_eq!(data[0]["values"]["unused"], "39");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "61");
+    assert_eq!(data[0]["values"]["freeCapacity"], "39");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/objects/{}", spore_id_hex))

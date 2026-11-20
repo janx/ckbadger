@@ -2,7 +2,11 @@ use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
-    build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
+    build_address_cohort_response, build_block_time_distribution_response,
+    build_cell_size_response, BlockTimeDistributionChartResponse,
+    CellSizeDistributionChartResponse, CACHE_KEY_ADDRESS_COHORT_RETENTION,
+    CACHE_KEY_BLOCK_TIME_DISTRIBUTION, CACHE_KEY_CELL_SIZE_DISTRIBUTION,
+    CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_dob_collection_name,
@@ -280,8 +284,9 @@ impl CachedAssetEntry {
     pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
         let h_multiplier = self
             .h_multiplier_ratio()?
+            // cut at the two places the inventory shows, never rounded (lane exactness, part A2, S5)
             .map(|(cap, used)| {
-                crate::utils::exact_ratio::format_ratio(cap as i128, used as i128, 2)
+                crate::utils::exact_ratio::format_ratio_cut(cap as i128, used as i128, 2)
                     .map_err(anyhow::Error::msg)
             })
             .transpose()?;
@@ -1165,7 +1170,7 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
     {
         let size_response = build_cell_size_response(&snapshot);
         state.mem_cache.set(
-            "chart:cell-size-distribution:v1",
+            CACHE_KEY_CELL_SIZE_DISTRIBUTION,
             &size_response,
             CacheTtl::CHART,
         );
@@ -1179,7 +1184,7 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
     {
         let response = build_address_cohort_response(&cohort);
         state.mem_cache.set(
-            "chart:address-cohort-retention:v1",
+            CACHE_KEY_ADDRESS_COHORT_RETENTION,
             &response,
             CacheTtl::CHART,
         );
@@ -1210,24 +1215,20 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
             // Transfer mem_cache entries to the async cache backend
             if let Some(size) = state
                 .mem_cache
-                .get::<ChartResponse>("chart:cell-size-distribution:v1")
+                .get::<CellSizeDistributionChartResponse>(CACHE_KEY_CELL_SIZE_DISTRIBUTION)
             {
                 state
                     .cache
-                    .set("chart:cell-size-distribution:v1", &size, CacheTtl::CHART)
+                    .set(CACHE_KEY_CELL_SIZE_DISTRIBUTION, &size, CacheTtl::CHART)
                     .await;
             }
             if let Some(cohort) = state
                 .mem_cache
-                .get::<ChartResponse>("chart:address-cohort-retention:v1")
+                .get::<ChartResponse>(CACHE_KEY_ADDRESS_COHORT_RETENTION)
             {
                 state
                     .cache
-                    .set(
-                        "chart:address-cohort-retention:v1",
-                        &cohort,
-                        CacheTtl::CHART,
-                    )
+                    .set(CACHE_KEY_ADDRESS_COHORT_RETENTION, &cohort, CacheTtl::CHART)
                     .await;
             }
             info!("Warmed up materialized chart caches (cell-size + address-cohort)");
@@ -1262,7 +1263,9 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         "chart:uncle-rate",
         "chart:block-time-distribution",
         "chart:block-time-distribution:v2",
+        CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
         "chart:epoch-time-distribution",
+        CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
         "chart:epoch-time-length",
         "chart:miner-address-distribution",
         "chart:total-supply",
@@ -1292,11 +1295,11 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         run_warmup!("chart:difficulty", warmup_difficulty),
         run_warmup!("chart:uncle-rate", warmup_uncle_rate),
         run_warmup!(
-            "chart:block-time-distribution:v2",
+            CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
             warmup_block_time_distribution
         ),
         run_warmup!(
-            "chart:epoch-time-distribution",
+            CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
             warmup_epoch_time_distribution
         ),
         run_warmup!("chart:epoch-time-length", warmup_epoch_time_length),
@@ -1342,17 +1345,13 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
     let response = build_block_time_distribution_response(state.store.as_ref())?;
 
-    // Only cache if the distribution has actual data (non-zero ratios).
-    // Secondary store may not have caught up at startup, producing all-zero data.
-    let has_data = response
-        .data
-        .iter()
-        .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0));
-    if has_data {
+    // Only cache a window with intervals: the secondary store may not have caught up at startup.
+    let response: BlockTimeDistributionChartResponse = response;
+    if response.intervals > 0 {
         state
             .cache
             .set(
-                "chart:block-time-distribution:v2",
+                CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
                 &response,
                 CHART_CACHE_TTL,
             )
@@ -1363,7 +1362,7 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
 }
 
 async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> {
-    state.cache.delete("chart:epoch-time-distribution").await;
+    state.cache.delete(CACHE_KEY_EPOCH_TIME_DISTRIBUTION).await;
     Ok(())
 }
 
@@ -1496,6 +1495,15 @@ mod tests {
         broken.owned_capacity = Some("0".to_string());
         broken.owned_knowledge = Some("0".to_string());
         assert!(broken.to_asset_response().unwrap().h_multiplier.is_none());
+        // lane exactness, part A2, S5: the multiplier is cut at the two places the inventory shows: 401 / 200 is
+        // 2.005, ×2.00 (half up it read ×2.01)
+        let mut cut = asset.clone();
+        cut.owned_capacity = Some("401".to_string());
+        cut.owned_knowledge = Some("200".to_string());
+        assert_eq!(
+            cut.to_asset_response().unwrap().h_multiplier.as_deref(),
+            Some("2.00")
+        );
     }
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
     use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskKind};

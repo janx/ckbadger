@@ -2,6 +2,8 @@
 
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { useFromMd } from '@/hooks/useFromMd';
 import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import type { NetworkStats } from '@/lib/api';
@@ -10,6 +12,7 @@ import { clockNow, clockText, subscribeClock, zoned } from '@/lib/clock';
 import { formatBlockNumber } from '@/lib/format-block';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
+import { STATUS_LINE_INSET_PX, TIP_WORD, fitStatusLine } from '@/lib/status-line-fit';
 import { cn } from '@/lib/utils';
 
 /** The mode block's ground per mode: celadon live, gold (the warning hue) syncing, cinnabar off. */
@@ -19,7 +22,14 @@ const MODE_CLASS: Record<ChainMode, string> = {
   OFFLINE: 'bg-rouge text-base-bg',
 };
 
-/** A segment: its own cell between 1 px lines, the line on the side away from the edge it keeps. */
+/** The mode block's and a segment's insets, drawn from the line's budget (lib/status-line-fit.ts). */
+const { mode: MODE_PAD, segment: SEGMENT_PAD, line: LINE, gap: GAP } = STATUS_LINE_INSET_PX;
+
+/**
+ * A segment: its own cell between 1 px lines, the line on the side away from the edge it keeps.
+ * Its padding, its line and the gap between its runs are the budget's own numbers, an inline style
+ * over any class, so what the line draws is what it counted.
+ */
 function Segment({
   children,
   side = 'left',
@@ -34,11 +44,13 @@ function Segment({
   return (
     <span
       title={title}
-      className={cn(
-        'border-base-border flex items-center gap-1.5 px-3',
-        side === 'left' ? 'border-r' : 'border-l',
-        className
-      )}
+      className={cn('border-base-border flex items-center', className)}
+      style={{
+        paddingLeft: SEGMENT_PAD,
+        paddingRight: SEGMENT_PAD,
+        columnGap: GAP,
+        ...(side === 'left' ? { borderRightWidth: LINE } : { borderLeftWidth: LINE }),
+      }}
     >
       {children}
     </span>
@@ -57,7 +69,13 @@ function Segment({
  * and the key hints are the wide form's only: a touch screen has no keys. From md the release is
  * here and the clock's zone in the `?` help; below md, where nothing opens the help (the footer's
  * "Keyboard shortcuts" is drawn from md only, PA-29), the footer's last row says both
- * (components/layout/site-footer.tsx) — designed, not dropped.
+ * (components/layout/site-footer.tsx) — designed, not dropped. The form follows md (useFromMd, the
+ * footer's own breakpoint for that row).
+ *
+ * Within its form the line draws a part only where its width holds it (readability F3-f): it
+ * measures itself before paint and gives its parts up in one order, the key hints from the last,
+ * then the tip's word, the tip, the network, the release; the mode and the clock never
+ * (lib/status-line-fit.ts, the numbers there). Never two rows, never a part cut at the edge.
  *
  * It is a polite live region for the mode and the release; the tip (every block) and the clock
  * (every second) are `aria-live="off"`, so a screen reader is not read the time.
@@ -68,14 +86,25 @@ export function StatusLine() {
   const connected = useRealtimeStore((s) => s.isConnected);
   const network = useActiveNetwork();
   const buildVersion = resolveBuildVersion();
+  const fromMd = useFromMd();
+  const [ref, width] = useElementWidth<HTMLDivElement>();
   const mode = chainMode({ stats, failed: error !== null, socketHeld, connected });
   const sync = stats === undefined ? null : stats.syncStatus.isSyncing ? 'syncing' : 'synced';
+  const tip = stats === undefined ? '—' : formatBlockNumber(stats.latestBlock);
+  const release = `ckbadger ${releaseOf(buildVersion)}${sync === null ? '' : ` · ${sync}`}`;
+  const parts = fitStatusLine(
+    fromMd ? 'wide' : 'narrow',
+    { mode: mode ?? '—', network, tip, release, hints: STATUS_KEY_HINTS },
+    width
+  );
 
   return (
     <div
+      ref={ref}
       role="status"
       aria-label="Status line"
       data-testid="status-line"
+      data-measured={width !== null}
       className="bg-base-elevated border-base-border text-meta text-text-dim fixed inset-x-0 bottom-0 z-40 flex h-[26px] items-stretch overflow-hidden whitespace-nowrap border-t font-mono"
     >
       <span
@@ -83,25 +112,27 @@ export function StatusLine() {
         data-mode={mode ?? 'unknown'}
         title={modeTitle(mode, error, stats)}
         className={cn(
-          'flex items-center px-2.5 font-semibold',
+          'flex items-center font-semibold',
           mode === null ? 'bg-base-border text-text-dim' : MODE_CLASS[mode]
         )}
+        style={{ paddingLeft: MODE_PAD, paddingRight: MODE_PAD }}
       >
         {mode ?? '—'}
       </span>
-      <Segment>{network}</Segment>
-      <Segment>
-        tip
-        <span aria-live="off" className="text-text-bright tabular-nums">
-          {stats === undefined ? '—' : formatBlockNumber(stats.latestBlock)}
-        </span>
-      </Segment>
-      <Segment className="hidden md:flex" title={`ckbadger ${buildVersion}`}>
-        {`ckbadger ${releaseOf(buildVersion)}${sync === null ? '' : ` · ${sync}`}`}
-      </Segment>
+      {parts.network && <Segment>{network}</Segment>}
+      {parts.tip !== null && (
+        <Segment>
+          {/* the number alone where the line cannot hold the word: its `#` says it is a block */}
+          {parts.tip === 'labelled' ? TIP_WORD : <span className="sr-only">{`${TIP_WORD} `}</span>}
+          <span aria-live="off" className="text-text-bright tabular-nums">
+            {tip}
+          </span>
+        </Segment>
+      )}
+      {parts.release && <Segment title={`ckbadger ${buildVersion}`}>{release}</Segment>}
       <span className="ml-auto flex">
-        {STATUS_KEY_HINTS.map((hint) => (
-          <Segment key={hint.keys} side="right" className="hidden md:flex">
+        {STATUS_KEY_HINTS.slice(0, parts.hints).map((hint) => (
+          <Segment key={hint.keys} side="right">
             <kbd className="text-text-bright font-mono">{hint.keys}</kbd>
             {hint.short}
           </Segment>

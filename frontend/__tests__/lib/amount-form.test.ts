@@ -4,6 +4,7 @@ import {
   ckbAmountText,
   ckbAmountTitle,
   ckbShortenedTitle,
+  tokenAmountText,
   type AmountForm,
 } from '@/lib/amount-form';
 import { MINUS } from '@/lib/chart-ticks';
@@ -214,5 +215,21 @@ describe('the four forms of a token amount: its own decimals', () => {
 
   it('refuses a negative number of decimals', () => {
     expect(() => amountDigits(BigInt(1), -1, 'exact')).toThrow(/decimals/);
+  });
+});
+
+describe('a token amount as text (the widest figure of a column)', () => {
+  it('writes the amount in a form at its decimals, without a sign or a unit', () => {
+    expect(tokenAmountText(BigInt(10) ** BigInt(17) - BigInt(1), 8, 'column')).toBe(
+      '999,999,999.99999999'
+    );
+    expect(tokenAmountText(BigInt(999_999_999), 0, 'exact')).toBe('999,999,999');
+    expect(tokenAmountText(BigInt(0), 8, 'exact')).toBe('0');
+  });
+
+  it('refuses a negative amount: it is never written as its absolute value', () => {
+    expect(() => tokenAmountText(BigInt(-1), 8, 'exact')).toThrow(
+      'token amount -1 is negative where a sign is not written'
+    );
   });
 });

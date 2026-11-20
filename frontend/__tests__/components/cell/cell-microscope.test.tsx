@@ -2,15 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
-import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
+import { DetailTier2 } from '@/components/ui/detail-layout';
+import { cellDataParts, cellOutputParts, elfRegions } from '@/lib/cell-parts';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
+import { color, inkOnFill, type PaletteKey } from '@/lib/palette';
+import { HEX_BOX_INSET_PX, hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const cell = {
   txHash: `0x${'01'.repeat(32)}`,
@@ -59,6 +63,22 @@ describe('cell microscope', () => {
     expect(within(args!).getByText('6')).toHaveStyle({ color: DATA_COLOR });
     expect(promptNote(heading)).toHaveTextContent(/^room for 94 more$/);
     expect(heading).not.toHaveTextContent('occupied bytes');
+  });
+
+  // Lane P1 (lane D3's note: the byte map's heading was a tier-1 command line inside the developer
+  // tier): in tier 2 it is a tier-2 heading, as every section there is, its args and note quiet.
+  it('heads the bytes as a tier-2 section in the developer tier (P1)', () => {
+    render(
+      <DetailTier2>
+        <CellMicroscope cell={cell} />
+      </DetailTier2>
+    );
+    const heading = screen.getByRole('heading', { name: 'Bytes 8 + 0 + 0 + 4 = 6' });
+    expect(heading.tagName).toBe('H2');
+    expect(heading).toHaveClass('text-body', 'text-text', 'font-medium');
+    expect(heading.querySelector('.section-mark')).toBeNull();
+    const section = screen.getByRole('region', { name: 'Cell byte microscope' });
+    expect(within(section).getByText(/^room for 94 more$/)).toHaveClass('text-text-dim');
   });
 
   it('sticks the field detail one gutter under the measured site header, not a fixed offset', () => {
@@ -114,7 +134,8 @@ describe('cell microscope', () => {
     expect(box).not.toHaveClass('neon-edge-top');
     expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
-    expect(dump).toHaveClass('px-4', 'py-3');
+    // re-pinned (lane P1 follow-up, item 5): px-2.5, the padding hexRowBytes measures by (px-4)
+    expect(dump).toHaveClass('px-2.5', 'py-3');
     // material pass v2 (move 2): the dump itself is a well inside the glass
     expect(dump).toHaveClass('well', 'm-2');
     expect(dump).toContainElement(box.querySelector('[data-byte="data:2"]') as HTMLElement);
@@ -376,14 +397,20 @@ describe('cell microscope at phone width (responsive review A#10, A#11)', () => 
     },
   } as Cell;
 
-  it('lays the hex dump out 8 bytes a row in a 358 px box, its headers wrapping as wholes', () => {
+  // Re-pinned on purpose (lane P1 follow-up, item 5; renamed, it was "… 8 bytes a row in a 358
+  // px box …"): the 8-byte row, 329.2 px, ran 23 px out of the 306 px well a 390 phone's 358 px
+  // box leaves and scrolled it (Chrome, the integration preview); a 4-byte row, 211.6 px, is drawn
+  // whole, its bytes at full size (a byte map is drawn to scale: fewer bytes a row, never smaller)
+  it('lays the hex dump out 4 bytes a row in a 358 px box, its headers wrapping as wholes', () => {
     stubChartWidth(358);
     render(<CellMicroscope cell={wide} />);
     const data = screen.getByLabelText('CellData byte map');
     const offsets = within(data)
       .getAllByText(/^0x[0-9a-f]{4}$/)
       .map((n) => n.textContent);
-    expect(offsets).toEqual(['0x0000', '0x0008', '0x0010', '0x0018', '0x0020']);
+    expect(offsets).toEqual(
+      Array.from({ length: 10 }, (_, i) => `0x${(4 * i).toString(16).padStart(4, '0')}`)
+    );
     // Each header is one wrapping row of two parts, never two ragged columns.
     for (const block of ['CellOutput byte map', 'CellData byte map'])
       expect(screen.getByLabelText(block).firstElementChild).toHaveClass('flex-wrap');
@@ -480,12 +507,63 @@ describe('cell microscope field detail rail (old issue B)', () => {
       ...cell,
       commonKnowledgeSizeBreakdown: { ...cell.commonKnowledgeSizeBreakdown!, lockScriptBytes: 2 },
     } as Cell;
-    render(<CellMicroscope cell={locked} lockName="Multisig" />);
+    render(<CellMicroscope cell={locked} lockLabel="Multisig" />);
     const map = screen.getByRole('group', { name: 'Capacity map' });
     fireEvent.mouseEnter(within(map).getByTitle('lock · 2 bytes'));
     expectHead('lock · Multisig', '2 B occupied');
     fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
     expectHead('data', '4 B occupied');
+  });
+
+  // Lane P1 (the F1 follow-up in the page-lane notes): an ELF region's words stood in the page
+  // ground's ink (`text-base-bg`) on the region's tone at 35 %, 2.04 : 1 by night and 1.72 by day.
+  // They take the fill-ink rule's ink for that fill (`inkOnFill`), which reads at text grade.
+  // lane P1, the ink and size roles: the line saying how many ELF fields the index leaves to the
+  // line under their bytes is a sentence, the reading ink at 13 px (it was quiet, 12 px); a cell
+  // with no data says so in the reading ink (it was quiet)
+  it('says the fields it leaves out of the index, and a cell with no data, in the reading ink', () => {
+    const { unmount } = render(<CellMicroscope cell={elfCell} />);
+    const more = screen.getByText(/^\+ \d+ more ELF header fields and program headers/);
+    expect(inkOf(more)).toBe(READING);
+    expect(typeStepOf(more)).toBe('small');
+    unmount();
+    render(
+      <CellMicroscope
+        cell={
+          {
+            ...cell,
+            data: '0x',
+            dataSize: 0,
+            dataAnalysis: undefined,
+            // the fixture's CellOutput occupies 2 of its 6 bytes; with no data, 2 in all
+            commonKnowledgeSizeBreakdown: {
+              ...cell.commonKnowledgeSizeBreakdown!,
+              dataBytes: 0,
+              totalBytes: 2,
+            },
+          } as Cell
+        }
+      />
+    );
+    expect(inkOf(screen.getByText('No data: the cell carries 0 bytes.'))).toBe(READING);
+  });
+  it('writes an ELF region’s words in the ink its fill reads in (P1)', () => {
+    render(<CellMicroscope cell={elfCell} />);
+    const map = screen.getByRole('group', { name: 'ELF binary map' });
+    const labelled = Array.from(map.querySelectorAll<HTMLElement>('[data-region]')).filter(
+      (region) => region.textContent !== ''
+    );
+    expect(labelled.length).toBeGreaterThan(0);
+    for (const region of labelled) {
+      expect(region).not.toHaveClass('text-base-bg');
+      const tone = elfRegions(cellDataParts(elfCell)).find(
+        (r) => r.id === region.dataset.region
+      )!.tone;
+      const key = /^var\(--c-(.+)\)$/.exec(tone)![1] as PaletteKey;
+      const { ink, contrast } = inkOnFill('dark', key, 0.35);
+      expect(region.style.color, region.textContent!).toBe(color(ink));
+      expect(contrast, region.textContent!).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('lets an ELF region’s range wrap under its name', () => {
@@ -507,8 +585,12 @@ describe('cell microscope field detail rail (old issue B)', () => {
     // 1024 − the container's 2 × 24 px gutter = 976; the grid's gap-6 is 24
     const bytes = 976 - 24 - rail;
     expect(bytes).toBe(632);
-    // the dump's frame: the panel's 1 px border, its well's m-2, the well's 1 px border and px-4
-    const frame = 2 * (1 + 8 + 1 + 16);
+    // the dump's frame: the panel's 1 px border, its well's m-2, the well's 1 px border and its
+    // px-2.5 (re-pinned, lane P1 follow-up: px-4), the frame hexRowBytes measures by
+    const frame = 2 * (1 + 8 + 1 + 10);
+    expect(HEX_BOX_INSET_PX).toBe(frame);
+    const well = screen.getByLabelText('Cell bytes').querySelector('.well')!;
+    expect(well).toHaveClass('m-2', 'px-2.5');
     for (const digits of [4, 5] as const) {
       expect(hexRowBytes(bytes, digits)).toBe(16);
       expect(hexRowWidth(16, digits) + frame).toBeLessThanOrEqual(bytes);

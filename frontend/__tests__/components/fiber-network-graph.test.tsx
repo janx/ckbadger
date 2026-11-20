@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
-  FiberGraphNotes,
   FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
@@ -11,7 +10,17 @@ import {
 import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { fullText } from '@/__tests__/utils/full-text';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
@@ -50,15 +59,33 @@ describe('FiberNetworkGraph', () => {
     const svg = container.querySelector('svg[data-fiber-graph]')!;
     const name = svg.querySelector('[data-role="chart-name"]')!;
     expect(name).toHaveTextContent('the network, as the chain sees it');
-    expect(name).toHaveAttribute('font-size', '11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(name).toHaveAttribute('font-size', '12');
     expect(Number(name.getAttribute('x'))).toBeLessThanOrEqual(8);
     // the legend heads the column at the plot's right, before any party or pair is chosen
     const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    // each item's words, its drawn glyph (a circle's number) apart
     expect(
       within(key)
         .getAllByRole('listitem')
-        .map((item) => item.textContent)
-    ).toEqual(['CKB locked now', 'channels over time', 'force-closed', 'has an open channel']);
+        .map((item) =>
+          Array.from(item.childNodes)
+            .filter((n) => n.nodeName.toLowerCase() !== 'svg')
+            .map((n) => n.textContent)
+            .join('')
+            .trim()
+        )
+      // Re-pinned on purpose (lane P4, the plan's P4 sentence: the Fiber graph's numbers and sizes
+      // come up from tier 2 as a legend): the key names what a circle's size and number are and
+      // what each line's width is; it named the lines' colours and the ring only, the rest was
+      // tier 2's prose ("How to read the graph")
+    ).toEqual([
+      'party · size and number: its channels',
+      'has an open channel',
+      'pair · grey width: channels over time',
+      'green width: CKB locked now',
+      'force-closed',
+    ]);
     expect(key).toHaveClass('text-meta', 'text-text-dim');
     expect(svg.querySelectorAll('[data-node]')).toHaveLength(25);
     expect(svg.querySelectorAll('[data-edge]')).toHaveLength(35);
@@ -75,6 +102,49 @@ describe('FiberNetworkGraph', () => {
     expect(Number(note.getAttribute('x'))).toBeLessThanOrEqual(880);
     // tier 1 carries no developer sentence about represented histories (FF-F6)
     expect(screen.queryByText(/channel histories represented/)).toBeNull();
+  });
+
+  // The plan's P4 sentence ("keys that a tier-1 figure needs come up from tier 2 as a legend, not
+  // as prose": the Fiber graph's numbers and sizes). The key draws each mark as the figure draws
+  // it: a party's circle with its count inside, its ring, and a pair's grey, green and dashed
+  // lines, the grey at the strength the edges are drawn at (review fiber-channels: the grey
+  // "channels over time" edges all but vanished by night; at 0.28 the night reading ink makes
+  // 2.0 : 1 on the page ground, at 0.4 2.86 : 1, and the key drew 0.4 while the figure drew 0.28).
+  it('keys a party’s size and number and each line’s width in tier 1, drawn as the figure draws them (P4)', () => {
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    const party = within(key).getAllByRole('listitem')[0];
+    // a circle with a number inside, as a hub carries its count
+    expect(party.querySelector('circle')).not.toBeNull();
+    expect(party.querySelector('svg text')).toHaveTextContent(/^\d+$/);
+    // the key's grey line and every grey edge of the figure: one strength
+    const keyGrey = within(key).getAllByRole('listitem')[2].querySelector('line')!;
+    const edges = Array.from(
+      container.querySelectorAll('svg[data-fiber-graph] [data-edge] line[data-history]')
+    );
+    expect(edges.length).toBe(35);
+    for (const edge of edges)
+      expect(edge.getAttribute('stroke-opacity')).toBe(keyGrey.getAttribute('stroke-opacity'));
+    expect(keyGrey.getAttribute('stroke-opacity')).toBe('0.4');
+    // the key's words are labels: the meta step, the quiet ink (R3)
+    expect(key).toHaveClass('text-meta', 'text-text-dim');
+  });
+
+  it('says an empty network in the reading ink (R3: an empty state reads)', () => {
+    const net = network as FiberNetwork;
+    render(
+      <Graph
+        network={{
+          ...net,
+          summary: { ...net.summary, observedParties: 0, observedPairs: 0 },
+          parties: [],
+          pairs: [],
+        }}
+      />
+    );
+    const empty = screen.getByText('No on-chain parties observed yet.');
+    expect(empty).toHaveClass('text-text');
+    expect(empty).not.toHaveClass('text-text-dim');
   });
 
   it('keeps the explainer out of the picture: the column holds the legend until a party is chosen (R13, R14)', () => {
@@ -103,6 +173,38 @@ describe('FiberNetworkGraph', () => {
     expect(node('kdeakp')).toHaveAttribute('data-lit', 'true');
   });
 
+  // The lead's final round, item 7: a party's lock is written by the one lock decision, from the
+  // lock its address encodes and the registry's name the route sends for it, never the name alone.
+  // The route reads the address and the name from one stored lock script, so a party with no
+  // address has no name either: its lock is not indexed.
+  it('names a party’s lock by the lock decision: a Default Lock code by data is its code hash and "by data"', () => {
+    const net = structuredClone(mainnet) as FiberNetwork;
+    const byData = ckbAddress({
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data',
+      args: '0x' + 'ab'.repeat(20),
+    });
+    const party = net.parties.find((p) => p.address?.endsWith('ppedrr'))!;
+    expect(party.lockScriptName).toBe('Default Lock');
+    party.address = byData;
+    render(<Graph network={net} />);
+    fireEvent.mouseEnter(node(byData.slice(-6)));
+    expect(
+      within(panel()).getByText(/^lock 0x9bd7e06f…a3cce8 by data · lock hash/)
+    ).toBeInTheDocument();
+    expect(panel()).not.toHaveTextContent(/Default Lock/);
+  });
+
+  it('says a party’s lock is not indexed where the route holds no lock script for it', () => {
+    const net = structuredClone(mainnet) as FiberNetwork;
+    const party = net.parties.find((p) => p.address?.endsWith('ppedrr'))!;
+    party.address = null;
+    party.lockScriptName = null;
+    render(<Graph network={net} />);
+    fireEvent.mouseEnter(node(party.lockScriptHash.slice(-6)));
+    expect(within(panel()).getByText(/^not indexed · lock hash/)).toBeInTheDocument();
+  });
+
   it('a pair shows open CKB with its unit, lifetime, and block range with separators (FF-F3, FF-F7)', () => {
     const { container } = render(<Graph network={network as FiberNetwork} />);
     const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2\schannels/ });
@@ -126,17 +228,13 @@ describe('FiberNetworkGraph', () => {
     expect(edge).not.toHaveClass('outline-none');
   });
 
-  it('says in tier 2 how to read the graph, what a party is, and which channels it cannot draw', () => {
-    render(
-      <>
-        <FiberGraphNotes />
-        <FiberPartiesNote network={network as FiberNetwork} />
-      </>
-    );
-    expect(
-      screen.getByText(/^Each circle is a party: the address that funded/)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/^Each line is a pair that opened channels\./)).toBeInTheDocument();
+  // Re-pinned on purpose (lane P4; renamed, it said "says in tier 2 how to read the graph, what a
+  // party is, and which channels it cannot draw"): how to read the graph is its key in tier 1, so
+  // the tier-2 explainer (FiberGraphNotes, "Each circle is a party …") is gone; what a party is
+  // stays in tier 2
+  it('says in tier 2 what a party is and which channels it cannot draw', () => {
+    render(<FiberPartiesNote network={network as FiberNetwork} />);
+    expect(screen.queryByText(/^Each circle is a party/)).toBeNull();
     expect(
       screen.getByText(
         fullText(
@@ -144,11 +242,8 @@ describe('FiberNetworkGraph', () => {
         )
       )
     ).toBeInTheDocument();
-    // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:
-    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
-    // explainer carries its own Prose; the parties note is one paragraph set in the page's.
-    const notes = screen.getByText(/^Each circle is a party: the address that funded/);
-    expect(notes.closest('[data-prose]')).toHaveClass('prose-tier2');
+    // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece, not by a body
+    // class on each paragraph; the parties note is one paragraph set in the page's.
     for (const p of Array.from(document.querySelectorAll('p'))) {
       expect(p).not.toHaveClass('text-body', 'text-text-dim');
     }
@@ -186,8 +281,9 @@ describe('FiberNetworkGraph', () => {
         const r = Number(hit.getAttribute('r')) - 8;
         const cx = Number(hit.getAttribute('cx'));
         const cy = Number(hit.getAttribute('cy')) + shift;
-        // its ring (r + 4) and its label (half of six 11 px characters with the halo: 23 px)
-        const across = Math.max(r + 4, 23);
+        // its ring (r + 4) and its label (half of six 12 px characters with the halo, rounded up:
+        // 24 px; re-pinned from 23 at 11 px)
+        const across = Math.max(r + 4, 24);
         expect(cx - across).toBeGreaterThanOrEqual(0);
         expect(cx + across).toBeLessThanOrEqual(vw);
         expect(cy - r - 4).toBeGreaterThanOrEqual(0);
@@ -219,7 +315,7 @@ describe('FiberNetworkGraph', () => {
     });
   }
 
-  it('draws the graph 1:1 at its measured width, islands below, with 11 px labels (R4, FF-F8)', () => {
+  it('draws the graph 1:1 at its measured width, islands below, with 12 px labels (R4, FF-F8)', () => {
     stubChartWidth(358);
     const { container } = render(<Graph network={mainnet as FiberNetwork} />);
     const svg = container.querySelector('svg[data-fiber-graph]')!;
@@ -234,9 +330,10 @@ describe('FiberNetworkGraph', () => {
     const note = screen.getByText('not linked to the rest');
     expect(note).toHaveAttribute('text-anchor', 'start');
     expect(note).toHaveAttribute('x', '0');
-    expect(note).toHaveAttribute('font-size', '11');
-    // party labels are 11 px
-    expect(within(svg as HTMLElement).getByText('kdeakp')).toHaveAttribute('font-size', '11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(note).toHaveAttribute('font-size', '12');
+    // party labels are 12 px
+    expect(within(svg as HTMLElement).getByText('kdeakp')).toHaveAttribute('font-size', '12');
     for (const n of Array.from(svg.querySelectorAll('[data-node] circle:last-of-type'))) {
       const cx = Number(n.getAttribute('cx'));
       expect(cx).toBeGreaterThan(0);
@@ -252,7 +349,8 @@ describe('FiberNetworkGraph', () => {
     const shift = Number(
       /translate\(0[ ,]+([\d.]+)\)/.exec(drawing.getAttribute('transform')!)![1]
     );
-    // the name's 11 px line sits in the top 18 px; no party's ring (r + 4) starts above it
+    // the name's 12 px line (baseline 14, descent to 17.6) sits in the top 18 px; no party's ring
+    // (r + 4) starts above it
     const tops = Array.from(svg.querySelectorAll('[data-node]')).map((g) => {
       const hit = g.querySelector('circle[fill="transparent"]')!;
       const r = Number(hit.getAttribute('r')) - 8;
@@ -310,9 +408,54 @@ describe('FiberNetworkGraph', () => {
   it('writes one caption under the reading: one sentence within 640 px (R13, R14)', () => {
     render(<Graph network={mainnet as FiberNetwork} />);
     const caption = screen.getByTestId('under').querySelector('p[data-role="caption"]')!;
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     // one line inside 640 px (13 px mono, about 8 px a character)
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(caption.textContent).toMatch(/^Each circle is a party, each line a pair/);
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the graph — its name, a party's label under its circle and ring, a hub's count inside its
+// circle, the islands' note — stands whole inside the svg, touches no other word, and a party's
+// label clears its own circle and ring, measured by the type modules (0.6 em a glyph; a tight line
+// over its baseline, its descent under it). The real case is mainnet's network (25 parties), at
+// the desktop column (880), the 640 column (584) and on phones (358, 326).
+describe('FiberNetworkGraph: every word in its place (readability F3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([880, 584, 358, 326])('at %i px', (width) => {
+    stubChartWidth(width);
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    const svg = container.querySelector('svg[data-fiber-graph]')!;
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the graph', 'flush');
+    expectApart(lines, `the graph at ${width}`);
+    for (const g of [...svg.querySelectorAll('[data-node]')]) {
+      const circles = [...g.querySelectorAll('circle')].filter(
+        (c) => c.getAttribute('fill') !== 'transparent'
+      );
+      // its circle or its ring, with its stroke
+      const reach = Math.max(
+        ...circles.map(
+          (c) => Number(c.getAttribute('r')) + Number(c.getAttribute('stroke-width')) / 2
+        )
+      );
+      const [label] = textLines(g.querySelector('text')!);
+      const cy =
+        Number(circles[0].getAttribute('cy')) +
+        Number(
+          /translate\(0[ ,]+([\d.]+)\)/.exec(
+            svg.querySelector('[data-role="drawing"]')!.getAttribute('transform')!
+          )![1]
+        );
+      expect(label.top, `"${label.text}" clears its ring`).toBeGreaterThan(cy + reach);
+    }
   });
 });

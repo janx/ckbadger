@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { shrinksAt } from '@/__tests__/utils/tailwind-box';
 import { NetworkClientPage } from '@/app/network/client-page';
 import { layoutCountryClusters } from '@/app/network/network-map';
 import { NetworkMapView } from '@/__tests__/utils/network-map-view';
@@ -11,6 +12,10 @@ import { PeersTable } from '@/app/network/nodes-table';
 import { HostingBar, NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
 import type { NetworkMap } from '@/lib/api';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, textPx } from '@/lib/type-metrics';
+import { expectApart, expectInside } from '@/__tests__/utils/svg-text-boxes';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 // F2 charts group: the Network board (V70, "no edges, not centred on this node").
 
@@ -126,12 +131,15 @@ describe('Network board (F2 charts)', () => {
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
     expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);
-    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14 min · 2,345 dials/);
+    // re-pinned for lane exactness, part A (A8): the span form, cut (was "14 min", rounded)
+    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14m · 2,345 dials/);
     for (const el of [hero, figures])
       expect(el.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
     // The old tier-1 evidence box and per-round counters moved to the developer tier.
     const tier2 = container.querySelector('[data-tier="2"]')!;
-    expect(within(tier2 as HTMLElement).getByText(/2,345 address attempts/)).toBeInTheDocument();
+    const evidence = within(tier2 as HTMLElement).getByText(/2,345 address attempts/);
+    // P4 topics (the ink-role gate's work list): the round's counts are values in the reading ink
+    expect(evidence).toHaveClass('text-text');
   });
 
   it('draws reachable dots solid, verified-before hollow, this node’s session peers ringed (CH-51)', async () => {
@@ -257,24 +265,26 @@ describe('Network board (F2 charts)', () => {
   it('merges one provider’s ASNs into a hosting bar with one sentence (CH-52)', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 66,
-          sameNetworkReachable: 62,
-          verifiedUnavailable: 4,
-          versions: [{ label: '0.204.0', count: 66 }],
-          countries: [
-            { label: 'US', count: 40 },
-            { label: 'DE', count: 20 },
-            { label: 'Unknown', count: 6 },
-          ],
-          asns: [
-            { label: 'AS16509 Amazon.com', count: 31 },
-            { label: 'AS24940 Hetzner Online GmbH', count: 20 },
-            { label: 'AS14618 Amazon.com', count: 5 },
-            { label: 'Unknown', count: 10 },
-          ],
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 66,
+            sameNetworkReachable: 62,
+            verifiedUnavailable: 4,
+            versions: [{ label: '0.204.0', count: 66 }],
+            countries: [
+              { label: 'US', count: 40 },
+              { label: 'DE', count: 20 },
+              { label: 'Unknown', count: 6 },
+            ],
+            asns: [
+              { label: 'AS16509 Amazon.com', count: 31 },
+              { label: 'AS24940 Hetzner Online GmbH', count: 20 },
+              { label: 'AS14618 Amazon.com', count: 5 },
+              { label: 'Unknown', count: 10 },
+            ],
+            protocols: [],
+          })
+        )
       )
     );
     render(wrap(<HostingBar />));
@@ -283,7 +293,8 @@ describe('Network board (F2 charts)', () => {
       [...bar.querySelectorAll('[data-provider]')].map((n) => n.getAttribute('data-provider'))
     ).toEqual(['Amazon.com', 'Hetzner Online GmbH', 'Unknown']);
     expect(
-      screen.getByText('36 of the 66 verified nodes run on Amazon.com, across 2 countries.')
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      screen.getByText('36 of the 66 verified nodes run on Amazon.com.')
     ).toBeInTheDocument();
     expect(screen.queryByText('AS16509 Amazon.com')).toBeNull();
   });
@@ -291,18 +302,20 @@ describe('Network board (F2 charts)', () => {
   it('keeps only the version bars in tier 1, in the data hue (CH-54)', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
-        HttpResponse.json({
-          verifiedRetained: 7,
-          sameNetworkReachable: 5,
-          verifiedUnavailable: 2,
-          versions: [
-            { label: '0.204.0', count: 5 },
-            { label: '0.203.0', count: 2 },
-          ],
-          countries: [{ label: 'US', count: 7 }],
-          asns: [{ label: 'AS1 Example', count: 7 }],
-          protocols: [{ label: '/ckb/2', count: 7 }],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 7,
+            sameNetworkReachable: 5,
+            verifiedUnavailable: 2,
+            versions: [
+              { label: '0.204.0', count: 5 },
+              { label: '0.203.0', count: 2 },
+            ],
+            countries: [{ label: 'US', count: 7 }],
+            asns: [{ label: 'AS1 Example', count: 7 }],
+            protocols: [{ label: '/ckb/2', count: 7 }],
+          })
+        )
       )
     );
     render(wrap(<NetworkDistributions />));
@@ -317,6 +330,53 @@ describe('Network board (F2 charts)', () => {
     const fills = [...document.querySelectorAll('[data-version-bar]')];
     expect(fills).toHaveLength(2);
     expect(fills[0]).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
+  });
+
+  // P4 topics (the review's network page: in "which software they run" the names stood at x 24–270,
+  // their bars at 608 and their counts at 744, and one release's builds were scattered by count).
+  // The list is one grid: the names' column as wide as the widest name, the bar right after it,
+  // then the count; the top eight by count stand with a release's builds together, the release of
+  // the most nodes first. Nothing is totalled: a release's total is not the API's figure.
+  it('keeps a release’s builds together, each bar beside its name, nothing totalled (P4)', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 65,
+            sameNetworkReachable: 65,
+            verifiedUnavailable: 0,
+            versions: [
+              { label: '0.210.0 (2592ddf 2026-09-17)', count: 37 },
+              { label: '0.209.0 (d166e28 2026-07-29)', count: 10 },
+              { label: '0.210.0 (a1b2c3d 2026-10-01)', count: 6 },
+              { label: '0.5.3', count: 5 },
+              { label: '0.210.0 (e4f5a6b 2026-10-20)', count: 4 },
+              { label: '0.210.0 (c7d8e9f 2026-11-02)', count: 3 },
+            ],
+            countries: [{ label: 'US', count: 65 }],
+            asns: [{ label: 'AS1 Example', count: 65 }],
+            protocols: [],
+          })
+        )
+      )
+    );
+    render(wrap(<NetworkDistributions />));
+    const section = await screen.findByRole('region', { name: 'Which software they run' });
+    const list = within(section).getByRole('list', { name: 'Client versions' });
+    // one grid for every row: the names' column is the widest name, then a 90 px bar, then counts
+    expect(list).toHaveClass('grid', 'w-fit', 'grid-cols-[minmax(0,max-content)_90px_max-content]');
+    const rows = within(list).getAllByRole('listitem');
+    for (const row of rows) expect(row).toHaveClass('contents');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '0.210.0 (2592ddf 2026-09-17)37',
+      '0.210.0 (a1b2c3d 2026-10-01)6',
+      '0.210.0 (e4f5a6b 2026-10-20)4',
+      '0.210.0 (c7d8e9f 2026-11-02)3',
+      '0.209.0 (d166e28 2026-07-29)10',
+      '0.5.3' + '5',
+    ]);
+    // no release total is made in the page (37 + 6 + 4 + 3)
+    expect(section).not.toHaveTextContent('50');
   });
 
   it('draws verified as a line over the reachable area, with its first and last day on the axis (CH-58, R14)', async () => {
@@ -451,6 +511,72 @@ describe('Network board (F2 charts)', () => {
     expect(desktop.listed).toEqual([]);
   });
 
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor a
+  // country's label stands whole on the map, clear of its own cluster's dots and rings and of every
+  // other label, measured by the type modules (0.6 em a glyph; a tight line over its baseline, its
+  // descent under it). The real case is the 2026-11-01 mainnet crawl, at the map's column at 1280
+  // (880 × 431), at 640 (576 × 282) and on phones (358 × 256, 326 × 256).
+  it.each([880, 576, 358, 326])(
+    'writes every country label clear of its cluster and of the others at %i px (readability F3)',
+    (width) => {
+      const crawl: [string, number, number, number][] = [
+        ['AE', 2, 25.1, 55.3],
+        ['AU', 2, -35.8, 148.1],
+        ['BR', 1, -23.5, -46.6],
+        ['CA', 4, 44.1, -77.9],
+        ['CL', 1, -33.5, -70.7],
+        ['CN', 1, 34.8, 113.7],
+        ['DE', 10, 50.4, 9.2],
+        ['FR', 3, 48.9, 4.3],
+        ['GB', 1, 51.5, -0.1],
+        ['HK', 10, 22.3, 114.2],
+        ['ID', 1, -6.2, 106.8],
+        ['IN', 1, 19.1, 72.9],
+        ['JP', 1, 35.7, 139.7],
+        ['KR', 6, 37.5, 127.0],
+        ['MO', 1, 22.2, 113.6],
+        ['PL', 1, 52.2, 21.0],
+        ['SG', 8, 1.3, 103.8],
+        ['TW', 1, 25.1, 121.5],
+        ['US', 12, 38.9, -94.8],
+        ['ZA', 1, -33.9, 18.4],
+      ];
+      const points = crawl.flatMap(([country, n, lat, lon]) =>
+        Array.from({ length: n }, (_, i) => ({
+          ...point(`${country}${i}`, country, i % 2 === 0, i === 0),
+          lat,
+          lon,
+        }))
+      );
+      // the map's own height for its width (network-map.tsx)
+      const height = Math.max(256, Math.round(width * 0.49));
+      const { dots, labels } = layoutCountryClusters(points, width, height);
+      expect(labels.length).toBeGreaterThan(5);
+      const px = SVG_TEXT.tick;
+      const lines = labels.map((l) => {
+        const text = `${l.country} ${l.count.toLocaleString('en-US')}`;
+        const w = textPx(text.length, px);
+        return {
+          text,
+          size: px,
+          left: l.x - w / 2,
+          right: l.x + w / 2,
+          top: l.y - lineAscentPx(px),
+          bottom: l.y + descentPx(px),
+        };
+      });
+      const map = { left: 0, top: 0, right: width, bottom: height };
+      for (const line of lines) expectInside(line, map, 'the map', 'flush');
+      expectApart(lines, `the labels at ${width}`);
+      // a dot's ring (6.2 px and its 1.2 px stroke) is the most a dot reaches
+      for (const [i, l] of labels.entries()) {
+        const own = dots.filter((d) => d.point.country === l.country);
+        const foot = Math.max(...own.map((d) => d.y)) + 6.2 + 0.6;
+        expect(lines[i].top, `${lines[i].text} clears its dots`).toBeGreaterThan(foot);
+      }
+    }
+  );
+
   it('names every unlabelled single-node country under the phone map, as text', async () => {
     stubChartWidth(358);
     const solo = (peerId: string, country: string, lat: number, lon: number) => ({
@@ -475,18 +601,37 @@ describe('Network board (F2 charts)', () => {
       )
     );
     render(wrap(<NetworkMapView neverVerified={0} />));
-    const list = await screen.findByLabelText('Countries with one verified node');
-    expect(list).toHaveTextContent('MO 1');
-    expect(list).toHaveTextContent('TW 1');
+    // Re-pinned on purpose (readability P4, the ranked country list): the countries a phone map
+    // leaves unlabelled were named in a quiet line under it ("One verified node each, not labelled
+    // on the map: MO 1 · TW 1"); every country is now a row of the ranked list beside the map, those
+    // too, and the line went (said once).
+    const list = await screen.findByRole('list', { name: 'Countries by verified nodes' });
+    expect(list.querySelector('[data-country-row="MO"]')).toHaveTextContent('MOMacao SAR China1');
+    expect(list.querySelector('[data-country-row="TW"]')).toHaveTextContent('TWTaiwan1');
+    expect(screen.queryByLabelText('Countries with one verified node')).toBeNull();
     expect(
       [...document.querySelectorAll('[data-country-label]')].map((n) => n.textContent)
     ).toEqual(['US 2']);
   });
 
   it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
+    // the panel's line on a 360 px phone: the page's 328 (re-pinned, lane c2-finish rulings
+    // round 1: it was 296, less the panel's 16 px side padding, which goes below md)
+    stubChartWidth(328);
     render(wrap(<PeersTable />));
-    const select = await screen.findByLabelText('Filter by address observation');
-    expect(select).toHaveClass('max-w-full');
-    expect(screen.getByLabelText('Filter by crawler dial state')).toHaveClass('max-w-full');
+    // re-pinned (lane C2 topics): the filters are the controls board's selects, each after its
+    // label in the field's well (they were bare selects named "Filter by …", capped at the line by
+    // max-w-full). Re-pinned again (lane c2-finish, item 2): every box down to the native select
+    // shrank (min-w-0), so the well took what the label left of the line and a native select
+    // clipped its chosen value without a mark; now the well and the select never shrink, and the
+    // well goes under its label where the pair does not fit the panel's line (on a phone: 'crawler
+    // dial state' 140.4 + 10 + a 310 px well, 460.4 px, past 328)
+    for (const name of ['address observation', 'crawler dial state']) {
+      const select = await screen.findByLabelText(name);
+      const well = select.parentElement!;
+      const item = well.parentElement!;
+      for (const box of [select, well]) expect(shrinksAt(box, 390), name).toBe(false);
+      expect(item, name).toHaveAttribute('data-well', 'under');
+    }
   });
 });

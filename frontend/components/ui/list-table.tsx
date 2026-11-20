@@ -13,6 +13,13 @@ export interface ListColumn<T> {
   minWidth: number;
   width?: string;
   numeric?: boolean;
+  /**
+   * The cells' own classes, and only these families, with no variant (`cellClassOwner`): ink and
+   * size (`text-*`), vertical padding (`py-*`, `pt-*`, `pb-*`), white-space (`whitespace-*`),
+   * truncation (`truncate`), alignment (`text-left` … `text-right`, `align-*`). Never a class that
+   * takes a horizontal pixel (a padding, a margin, a width, a side border): the table owns those
+   * (`CELL_HORIZONTAL_CLASSES`), and a mark a column draws beside its content is in its minWidth.
+   */
   className?: string;
   /** F2 blocks: a richer column header (e.g. a bar column's 0 … scale ticks); `label` stays the plain name. */
   header?: ReactNode;
@@ -73,27 +80,131 @@ export interface ListTableProps<T> {
 export type ListTableDensity = 'default' | 'row';
 
 /**
+ * The gap a column keeps after its content, its cells' `pr-4` (the last column keeps none,
+ * `last:pr-0`): every column but the last budgets it in its minimum width. It is a cell's ONLY
+ * horizontal padding: `pl-0` is written out because a browser gives a table cell 1 px of padding
+ * on every side by default, and a pixel the budget does not count breaks the column that is
+ * budgeted to the pixel.
+ */
+export const CELL_GAP_PX = 16;
+
+/**
+ * The gap as the class that draws it: Tailwind's `pr-4`, four of its 0.25 rem steps, 16 px at the
+ * root's 16 px (`__tests__/components/list-table.test.tsx` reads the step from the config, so the
+ * class and CELL_GAP_PX cannot move apart).
+ */
+export const CELL_GAP_CLASS = 'pr-4';
+
+/**
+ * Every horizontal class a head and a cell carry, and the only ones: no left padding, the gap,
+ * none after the last column.
+ */
+export const CELL_HORIZONTAL_CLASSES: readonly string[] = ['pl-0', CELL_GAP_CLASS, 'last:pr-0'];
+
+/**
  * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
  * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
  * collapsed table border is painted by the table and would stay behind where the head was.
  */
-const HEAD_CLASS =
-  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
+const HEAD_CLASS = [
+  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 font-normal after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule',
+  ...CELL_HORIZONTAL_CLASSES,
+].join(' ');
 const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
 
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
-  default: 'min-w-0 py-3 pr-4 align-top last:pr-0',
-  row: 'min-w-0 py-[11px] pr-4 align-middle last:pr-0',
+  default: ['min-w-0 py-3 align-top', ...CELL_HORIZONTAL_CLASSES].join(' '),
+  row: ['min-w-0 py-[11px] align-middle', ...CELL_HORIZONTAL_CLASSES].join(' '),
 };
 
+/**
+ * A cell holds its content (readability 2026-11-18, the lead's rulings on the fb reviews): nothing
+ * in a cell draws outside it, and how its content may break is the table's rule, not a page's.
+ *
+ * - A figure — a number with its sign, its `#`, its decimals — is one unbreakable unit. No cell
+ *   lets a word break where it overflows (no `overflow-wrap: break-word` here, as a non-numeric
+ *   cell once had), so nothing in a table can cut a figure: a column budgeted to the pixel holds
+ *   its figure on one line, and a figure past its column's bound shows the shortfall past the
+ *   figure's edge, never "#21,045,84" over "5". A numeric column's cell is one figure with its
+ *   label and is held on one line whole (`NUMERIC_CELL`).
+ * - Words break between them, never inside one: a phrase is never one unbreakable run in a cell
+ *   (a headline, "this device's clock is behind"), so it makes its row taller, never its column
+ *   wider; a separated list breaks between its parts first (`Dotted`). A column holds its longest
+ *   word at its minimum.
+ * - A chip (a row tag, a composition badge) is one unit as a figure is, budgeted whole.
+ *
+ * `__tests__/utils/list-table-cells.ts` reads every table the suite renders against these.
+ */
+const NUMERIC_CELL = 'whitespace-nowrap text-right tabular-nums';
+
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
+
+/**
+ * What a column may write on its cells (`ListColumn.className`), family by family, each a bare
+ * utility with no variant and no arbitrary value (`!` important allowed): ink, size and text
+ * alignment (`text-` and a word: a palette colour, a step of the type scale, `text-right`),
+ * vertical padding, vertical alignment, white-space, truncation. Every column of the site sets
+ * only these (read 2026-11-19: `whitespace-nowrap`, `!whitespace-normal`, `truncate`,
+ * `text-text-dim`, `text-body`, `py-1.5`, `py-[9px]`, `py-3`, `align-top`).
+ */
+const COLUMN_CLASS_FAMILIES: readonly RegExp[] = [
+  /^text-[a-z]+(?:-[a-z0-9]+)*(?:\/\d{1,3})?$/,
+  /^p[ytb]-(?:px|\d+(?:\.\d+)?|\[\d+(?:\.\d+)?px\])$/,
+  /^align-(?:baseline|top|middle|bottom|text-top|text-bottom|sub|super)$/,
+  /^whitespace-(?:normal|nowrap|pre|pre-line|pre-wrap|break-spaces)$/,
+  /^truncate$/,
+];
+
+/** Every class the table writes on its heads and cells itself. */
+const TABLE_CELL_CLASSES: ReadonlySet<string> = new Set(
+  [
+    HEAD_CLASS,
+    ...Object.values(HEAD_TOP),
+    ...Object.values(CELL_CLASS),
+    NUMERIC_CELL,
+    'text-left',
+    'text-right',
+  ].flatMap((classes) => classes.split(/\s+/))
+);
+
+/**
+ * Whose a class on a head or a cell is (review fb-logic N2, the lead's ruling: one rule, an
+ * allow-list): `column` for a class a column may set (`COLUMN_CLASS_FAMILIES`), `table` for one
+ * the table writes itself (its `pl-0`, its gap, its head's stickiness), null for anything else.
+ * The table refuses a column's class that is not `column`; the after-test check
+ * (`__tests__/utils/list-table-cells.ts`) refuses a cell's class that is neither.
+ */
+export function cellClassOwner(cls: string): 'column' | 'table' | null {
+  const important = cls.replace(/^!/, '');
+  if (COLUMN_CLASS_FAMILIES.some((family) => family.test(important))) return 'column';
+  return TABLE_CELL_CLASSES.has(cls) ? 'table' : null;
+}
+
+/**
+ * A column's own classes take no horizontal pixel of its cells, and nothing else a column's doc
+ * does not permit (review fb-tests 5 and fb-logic N2, the lead's rulings): the table writes `pl-0`
+ * and the gap on every cell, and a column's `px-2` would replace both through cn() and draw its
+ * content in pixels its minWidth never counted; a class the rule cannot place is refused too.
+ */
+function refuseColumnClasses<T>(label: string, column: ListColumn<T>): void {
+  for (const cls of column.className?.split(/\s+/).filter(Boolean) ?? []) {
+    if (cellClassOwner(cls) !== 'column')
+      throw new Error(
+        `${label}: column ${column.key} sets a class a column may not (${cls}): a column sets its ` +
+          "cells' ink, size, vertical padding, white-space, truncation and alignment, with no " +
+          `variant; a cell's horizontal space is the table's, its ${CELL_GAP_PX} px gap, and a ` +
+          'column budgets what it draws beside its content in minWidth'
+      );
+  }
+}
 
 export function minimumWidth<T>(label: string, columns: readonly ListColumn<T>[]): number {
   let sum = 0;
   for (const c of columns) {
     if (!Number.isFinite(c.minWidth) || c.minWidth <= 0)
       throw new Error(`${label}: invalid minimum width for ${c.key}`);
+    refuseColumnClasses(label, c);
     sum += c.minWidth;
   }
   return sum;
@@ -251,11 +362,7 @@ export function ListTable<T>({
                 {shown.map((c) => (
                   <td
                     key={c.key}
-                    className={cn(
-                      CELL_CLASS[density],
-                      c.numeric ? 'whitespace-nowrap text-right tabular-nums' : 'break-words',
-                      c.className
-                    )}
+                    className={cn(CELL_CLASS[density], c.numeric && NUMERIC_CELL, c.className)}
                   >
                     {unitNode(c.render(row))}
                   </td>

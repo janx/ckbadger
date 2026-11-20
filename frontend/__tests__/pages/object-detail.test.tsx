@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { Component, type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -5,6 +6,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  within,
   act,
   createTestQueryClient,
 } from '@/__tests__/utils/test-utils';
@@ -19,6 +21,9 @@ import {
   sporeCellVersionsProducer,
   objectGeneticsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 const replace = vi.fn();
 vi.mock('@/src/navigation', () => ({
@@ -51,12 +56,13 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   );
   // Consistency plan C1: the tab names the page.
   await waitFor(() => expect(document.title).toBe('Genes · object · CKBadger'));
-  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '229.00000000'
-  );
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '271.00000000'
+  // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
+  // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
+  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.queryByLabelText(`Object ${id} capacity partition`)).toBeNull();
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    '229 occupied · 271 free'
   );
   expect(container.querySelector('[data-tier="2"]')).toHaveClass(
     'mt-24',
@@ -67,6 +73,36 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
 });
 // A4 Chrome F3: the object id under the title was HexCode's own-box scroller (box 358 px for
 // 436 px at 390, the first screen); it is the head's HeadId in the head's 11 px.
+// Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+// lock decision's refusals placed above their parts fail the part they are in, said in its place,
+// never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+it('fails the owner note in place when its lock is refused, the page drawn', async () => {
+  const joy = seededAddress('joysp', JOYID_CODE_HASH);
+  const versions = sporeCellVersionsProducer.data.map((cell) => ({ ...cell, ownerAddress: joy }));
+  vi.spyOn(api, 'getItemCellVersions').mockResolvedValue({
+    data: versions,
+    total: versions.length,
+  });
+  render(<SporeDetailPage sporeId={id} />);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    )
+  );
+});
+
+it('fails the owner note in place when an owner has no cell version, the page drawn', async () => {
+  vi.spyOn(api, 'getItemCellVersions').mockResolvedValue({ data: [], total: 0 });
+  render(<SporeDetailPage sporeId={id} />);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(/but no cell versions/)
+  );
+});
+
 it('prints the object id in its head as the head’s full id, never a scroller', async () => {
   render(<SporeDetailPage sporeId={id} />);
   expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
@@ -125,12 +161,14 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
     'title',
     'melted, in Spore’s words'
   );
-  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000").
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0 CKB');
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).not.toHaveTextContent(
-    '0.00000000'
+  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000"). re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell0 CKB/
   );
-  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
+  expect(screen.getByRole('region', { name: 'Metrics' })).not.toHaveTextContent('0.00000000');
+  // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
+  // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
+  expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
 });
 // Lane E4: how long ago the object was minted, the life sentence's hover, reads the page's one
 // clock, so it moves with no data change; it was written once, from the time the page mounted.
@@ -318,15 +356,16 @@ it('keeps object data visible with a background refresh error', async () => {
   expect(await screen.findByText(/Could not refresh object/)).toHaveTextContent(
     'Showing previously loaded data'
   );
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '500.00000000'
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell500 CKB/
   );
 });
 it('switches to real transaction layer and requests its own full scope', async () => {
   vi.mocked(api.getItemTransactions).mockResolvedValue(emptyPage());
   render(<SporeDetailPage sporeId={id} />);
-  await screen.findByRole('tab', { name: 'Transactions' });
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  await screen.findByRole('tab', { name: 'transactions' });
+  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(await screen.findByText('No transactions.')).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('spore', id, {
     limit: 20,

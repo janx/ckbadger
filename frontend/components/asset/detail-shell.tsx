@@ -127,7 +127,10 @@ export function AssetDetailShell({
     <>
       <section aria-labelledby={titleId} className="min-w-0 space-y-3">
         {named}
-        <div data-role="lede">{lede}</div>
+        {/* the page's one sentence, on the measure (readability R4, lane B7) */}
+        <div data-role="lede" className="max-w-measure">
+          {lede}
+        </div>
         {hero && (
           <div data-role="hero" className="min-w-0 pt-6">
             {hero}
@@ -146,14 +149,13 @@ export function AssetDetailShell({
     <header
       className={railAfterHeader ? 'min-w-0 space-y-3 lg:col-start-1 lg:row-start-1' : 'space-y-3'}
     >
-      <nav
-        aria-label="Breadcrumb"
-        className="text-text-dim text-small flex flex-wrap items-center gap-2"
-      >
+      <nav aria-label="Breadcrumb" className="text-small flex flex-wrap items-center gap-2">
         {breadcrumb.map((b, i) => (
           <span key={`${b.href}:${b.label}`}>
             {i > 0 && <span className="text-text-ghost mr-2">/</span>}
-            <AppLink href={b.href}>{b.label}</AppLink>
+            <AppLink look="inline" href={b.href}>
+              {b.label}
+            </AppLink>
           </span>
         ))}
       </nav>
@@ -308,7 +310,9 @@ export function AssetReadState({
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
     <p
       role={error ? 'alert' : 'status'}
-      className="text-text-dim text-small py-3 [overflow-wrap:anywhere]"
+      // a failure, the loading line and the unavailable line are sentences, the reading ink (ink
+      // and size roles; the loading and unavailable lines stood quiet)
+      className="text-text text-small max-w-measure py-3 [overflow-wrap:anywhere]"
     >
       {sentence}
     </p>

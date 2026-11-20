@@ -9,6 +9,23 @@ import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  meetings,
+  meets,
+  pastPx,
+  rectBox,
+  standsInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
+
+/** A word of the icicle where it should not stand, by what it measures. */
+type IcicleFault =
+  | { kind: 'meets'; a: string; b: string; by: number }
+  | { kind: 'out of its box'; text: string; box: string; by: number };
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -105,7 +122,9 @@ describe('IciclePartition (DAO-7)', () => {
       <IciclePartition root={root} label="Where secondary issuance goes" formatValue={String} />
     );
     const svg = container.querySelector('svg')!;
-    expect(svg.getAttribute('viewBox')).toBe('0 0 900 240');
+    // re-pinned (readability F3): the last row's labels under its boxes are a 52 px band (3 + a
+    // label line, a value line, a note line + 3, up to the pixel), not 44: 168 + 28 + 52
+    expect(svg.getAttribute('viewBox')).toBe('0 0 900 248');
     expect(svg).toHaveAttribute('width', '100%');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(box('total').getAttribute('width')).toBe('900');
@@ -176,13 +195,15 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     );
     const svg = container.querySelector('svg')!;
     // The root's words sit inside it, so row 1 follows 16 px below it, not a label band.
-    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 116');
+    // re-pinned (readability F3): 44 + 28 + the 52 px band of labels under the last row (was 44)
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 124');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(box('total').getAttribute('fill')).toBe('var(--c-ink-quiet)');
     expect(box('c').getAttribute('x')).toBe('120');
     // inside: one line in the box; end: right-aligned under the box; default: left under it
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`)!;
-    expect(label('total').getAttribute('y')).toBe('19');
+    // re-pinned (readability F3): the line is centred in the 28 px box, (28 − 16) / 2 + 12.1 (was 19)
+    expect(label('total').getAttribute('y')).toBe('18.1');
     expect(label('total')).toHaveTextContent(
       'Secondary issuance since genesis 100 · 1.344 billion CKB a year'
     );
@@ -194,7 +215,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     expect(label('c').getAttribute('x')).toBe('350');
     expect(container.querySelector('[data-note="c"]')).toHaveTextContent('20.00% · via AR');
     expect(label('m').getAttribute('text-anchor')).toBe('start');
-    expect(label('b').getAttribute('y')).toBe(String(44 + 19));
+    expect(label('b').getAttribute('y')).toBe(String(44 + 18.1));
   });
   it('can leave every word to an HTML legend at narrow widths', () => {
     const { container } = render(
@@ -263,7 +284,10 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     const { container } = render(
       <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
     );
-    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 134');
+    // re-pinned (lane P4: a part too narrow for its name and share is named on a line under the
+    // icicle): 134 px of rows, then 8 px and the two named parts, miners and still owed, a 15 px
+    // line each 4 px apart: 134 + 8 + 15 + 4 + 15 = 176 (it was 134)
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 176');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('y'))).toEqual(['0', '51', '102']);
     expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('height'))).toEqual([
@@ -281,26 +305,40 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     expect(box('o').getAttribute('x')).toBe('243.3');
   });
 
-  it('writes the name and share inside each box, falling back to the share alone where the words do not fit', () => {
+  // Renamed and re-pinned (lane P4; it was "writes the name and share inside each box, falling
+  // back to the share alone where the words do not fit"): a split bar names every segment in
+  // place, so a box too narrow for its name and share writes nothing, and the part is named on a
+  // line of its own under the icicle, its swatch at its box's left edge
+  it('writes the name and share inside each box, naming under the icicle a part whose words do not fit', () => {
     const { container } = render(
       <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
     );
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`);
     expect(label('total')).toHaveTextContent('secondary issuance since genesis 100 CKB');
-    expect(label('total')!.getAttribute('y')).toBe('29');
-    // 119 px holds "10.00%" but not "miners 10.00%" at 13 px
-    expect(label('m')!.textContent).toBe('10.00%');
+    // re-pinned (readability F3): the 14 px line centred in the 48 px box, (48 − 17) / 2 + 12.8
+    // (was 24 + round(14 × 0.35) = 29)
+    expect(label('total')!.getAttribute('y')).toBe('28.3');
+    // 119 px holds "10.00%" but not "miners 10.00%" at 14 px (the reading role, the body step):
+    // the box writes nothing, its part named under the icicle
+    expect(label('m')).toBeNull();
+    const under = (key: string) => container.querySelector(`[data-under-label="${key}"]`);
+    expect(under('m')!.textContent).toBe('miners 10.00%');
+    expect(under('m')!.querySelector('rect')!.getAttribute('x')).toBe('0');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
     expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
     // the note is in the box's one ink, no dim ink on a fill (re-pinned on purpose)
     expect(label('b')!.querySelector('[data-part="note"]')!.getAttribute('class')).toBeNull();
-    // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
+    // the 32 px row reads at the label role, 12 px since R4 (re-pinned, was 11): "paid out 50.0%"
+    // (14 × 7.2 + 16 = 116.8) fits 118 px, "still owed 50.0%" (131.2) does not
     expect(label('p')!.textContent).toBe('paid out 50.0%');
-    expect(label('p')).toHaveAttribute('font-size', '11');
-    expect(label('o')!.textContent).toBe('50.0%');
+    expect(label('p')).toHaveAttribute('font-size', '12');
+    expect(label('o')).toBeNull();
+    expect(under('o')!.textContent).toBe('still owed 50.0%');
+    expect(under('o')!.querySelector('rect')!.getAttribute('x')).toBe('243.3');
     // ink: the ink each fill calls for (inkOnFill, re-pinned on purpose: the dark ink was the page
-    // ground picked by hand): by night the well on the light text fill, the bright ink on the slate
-    expect(label('m')).toHaveClass('fill-base-void');
+    // ground picked by hand): by night the bright ink on the slate; under the icicle a part's words
+    // stand on the page ground in the reading ink
+    expect(under('m')!.querySelector('text')).toHaveClass('fill-text');
     expect(label('b')).toHaveClass('fill-text-bright');
     // no words under the boxes (R12)
     expect(container.querySelectorAll('[data-note]')).toHaveLength(0);
@@ -362,29 +400,40 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
     { label: 'next 90', value: BigInt(311) },
     { label: 'the other 16,541', value: BigInt(427) },
   ];
-  const bar = (width: number) => {
+  /** A largest group of 11 %, whose words fit its segment at the DAO page's widest column. */
+  const fitting = [
+    { label: 'largest', value: BigInt(110) },
+    { label: 'next 9', value: BigInt(179) },
+    { label: 'next 90', value: BigInt(311) },
+    { label: 'the other 16,541', value: BigInt(400) },
+  ];
+  const bar = (width: number, of = groups) => {
     stubChartWidth(width);
     return render(
       <ConcentrationBar
         label="Share of deposits"
         assetClass="dao"
         total={BigInt(1000)}
-        groups={groups}
+        groups={of}
         labelsInside
       />
     );
   };
 
   it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
-    const { container } = bar(1408);
+    // Re-pinned (review-fb-tests finding 3): the bar was drawn 1,480 px wide (1,408 before R4) so
+    // that a largest group of 8.3 % held its words, a width no page gives it (the DAO page's
+    // column is at most 1,232 px). Drawn at 1,232 with a largest group of 11 %: "largest 11.00%"
+    // is 14 glyphs at 13 px and 2 × 10 px of padding, 129.2 px of the segment's 135.5.
+    const { container } = bar(1232, fitting);
     const img = screen.getByRole('img', { name: /^Share of deposits/ });
     expect(img).toHaveClass('h-[28px]');
     const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
     expect(segments.map((s) => s.textContent)).toEqual([
-      'largest 8.30%',
+      'largest 11.00%',
       'next 9 · 17.90%',
       'next 90 · 31.10%',
-      'the other 16,541 · 42.70%',
+      'the other 16,541 · 40.00%',
     ]);
     // The fade is the background's, so the words keep full ink. Re-pinned with DY-03 (UI review
     // 2026-11-14): the ink is the one the fill's own luminance calls for in the theme (by night the
@@ -588,6 +637,295 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     expect(container.querySelector('[data-role="tenure-now"] title')).toHaveTextContent(
       /^3,900 days left$/
     );
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the icicle stands whole where it is written — inside its box, inside a dashed placeholder, or
+// under its box clear of every box — touches no other word and stays inside the svg, measured by
+// the type modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The
+// real cases: the DAO page's partition (rows 48 / 48 / 32, words inside the boxes) at the DAO
+// column at 1280 (1232), at 640 (608) and on a phone (358); the original drawing's labels under
+// the boxes, with mainnet's amounts, on its 900-unit viewBox; the words inside the boxes at 1200.
+describe('IciclePartition: every word where it is written (readability F3)', () => {
+  // the original drawing, as its own test draws it (DAO-7): no page draws this form today
+  const under = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    children: [
+      {
+        key: 'miners',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        placeholder: 'paid in cellbases',
+      },
+      {
+        key: 'comp',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        note: 'via AR',
+        children: [
+          { key: 'paid', label: 'paid out', value: BigInt(5), tone: 'dao' as const },
+          {
+            key: 'owed',
+            label: 'still owed',
+            value: BigInt(15),
+            tone: 'dao' as const,
+            opacity: 0.4,
+          },
+        ],
+      },
+      {
+        key: 'burnt',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        note: 'no cell can ever claim it',
+        placeholder: 'No cell can ever claim it.',
+      },
+    ],
+  };
+  const inside = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    align: 'inside' as const,
+    note: '1.344 billion CKB a year',
+    fill: 'ink-quiet' as const,
+    children: [
+      { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
+      {
+        key: 'c',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        align: 'end' as const,
+        note: '20.00% · via AR',
+      },
+      {
+        key: 'b',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        align: 'inside' as const,
+      },
+    ],
+  };
+  const dao = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    fill: 'ink-quiet' as const,
+    opacity: 0.55,
+    boxLabel: { name: 'secondary issuance since genesis', share: '9,314,713,506', unit: 'CKB' },
+    children: [
+      {
+        key: 'miners',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        fill: 'text' as const,
+        boxLabel: { name: 'miners', share: '10.34%' },
+      },
+      {
+        key: 'compensation',
+        label: 'compensation for depositors',
+        value: BigInt(17),
+        tone: 'dao' as const,
+        boxLabel: { name: 'depositors', share: '17.17%' },
+        children: [
+          {
+            key: 'paid',
+            label: 'paid out',
+            value: BigInt(8),
+            tone: 'dao' as const,
+            boxLabel: { name: 'paid out', share: '47.57%' },
+          },
+          {
+            key: 'owed',
+            label: 'still owed',
+            value: BigInt(9),
+            tone: 'dao' as const,
+            opacity: 0.4,
+            boxLabel: { name: 'still owed', share: '52.43%' },
+          },
+        ],
+      },
+      {
+        key: 'burnt',
+        label: 'burnt',
+        value: BigInt(73),
+        tone: 'other' as const,
+        boxLabel: { name: 'burnt', share: '72.49%', note: 'no cell can ever claim it' },
+      },
+    ],
+  };
+  const cases = [
+    ...[1232, 608, 358].map(
+      (width) =>
+        [
+          `the DAO page at ${width}`,
+          { root: dao, width, rows: { heights: [48, 48, 32], gap: 3 } },
+        ] as const
+    ),
+    ['labels under the boxes, on the 900-unit viewBox', { root: under }] as const,
+    ['words inside the boxes at 1200', { root: inside, width: 1200 }] as const,
+  ];
+
+  /**
+   * The icicle's known faults, each pinned by what it measures (the ruling on review F-B's test
+   * finding 1: no case is filtered out and no check relaxed; a fault a later lane owns is held at
+   * its measured size). They are all in the original drawing's "labels under the boxes" form,
+   * which no page draws (the DAO page passes `rows`): under the boxes a part's name wider than
+   * its part runs into the next part's, and a placeholder's words wider than their part run out
+   * of their dashed box. Every other case holds the property whole. The list can only shrink: a
+   * fix fails its entry's pin, and the entry goes with it.
+   */
+  const UNDER_FORM = 'labels under the boxes, on the 900-unit viewBox';
+  const NO_RULE =
+    'the "labels under the boxes" form has no rule for a name wider than its part (PAGE-LANE-NOTES, P4); no page draws it, and this lane does not design one';
+  const KNOWN_FAULTS: readonly {
+    case: string;
+    fault: IcicleFault;
+    owner: string;
+    why: string;
+  }[] = [
+    {
+      case: UNDER_FORM,
+      // "paid out" (8 glyphs at 12 px, 57.6 px) under its 45-unit part runs 12.6 px into
+      // "still owed", written from the next part's left edge, 45 units on
+      fault: { kind: 'meets', a: 'paid out', b: 'still owed', by: 12.6 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+    {
+      case: UNDER_FORM,
+      // "paid in cellbases" (17 glyphs at 12 px, 122.4 px) in the dashed box under the 90-unit
+      // "to miners" part ends 41.4 px past the box's inner right edge
+      fault: { kind: 'out of its box', text: 'paid in cellbases', box: 'a placeholder', by: 41.4 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+  ];
+
+  it('pins the known faults it holds, which only shrink', () => {
+    expect(KNOWN_FAULTS).toHaveLength(2);
+    for (const known of KNOWN_FAULTS) expect(cases.map(([name]) => name)).toContain(known.case);
+  });
+
+  it.each(cases)('%s', (name, props) => {
+    const { container } = render(
+      <IciclePartition label="issuance" formatValue={String} {...props} />
+    );
+    const svg = container.querySelector('svg')!;
+    const boxes = [...svg.querySelectorAll('rect[data-node], [data-placeholder] rect')];
+    const lines = allTextLines(svg);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the icicle', 'flush');
+    // A part's words stand apart: its name, value and note under its box, or its words inside.
+    const parts = [...svg.querySelectorAll('g')].filter((g) =>
+      [...g.children].some((c) => c.hasAttribute('data-node'))
+    );
+    // the DAO page's six parts and the original drawing's; four in the inside form
+    expect(parts.length).toBeGreaterThanOrEqual(4);
+    for (const part of parts)
+      expectApart(
+        allTextLines(part),
+        `${name}: ${part.querySelector('rect')!.getAttribute('data-node')}`
+      );
+    const faults: IcicleFault[] = [];
+    // across parts too, no two words meet (within a part they are held apart above)
+    for (const m of meetings(lines)) faults.push({ kind: 'meets', ...m });
+    for (const line of lines) {
+      // a word that stands on a box stands inside it, clear of its edges; one under its box
+      // meets none
+      const host = boxes.find((b) => meets(rectBox(b), line));
+      if (!host) continue;
+      const box = rectBox(host);
+      if (!standsInside(line, box))
+        faults.push({
+          kind: 'out of its box',
+          text: line.text,
+          box: host.getAttribute('data-node') ?? 'a placeholder',
+          by: pastPx(line, box),
+        });
+    }
+    expect(faults, name).toEqual(KNOWN_FAULTS.filter((k) => k.case === name).map((k) => k.fault));
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the term bar stands whole in its row — a period's name, the grace and the lapse over the
+// bar and clear of the now mark's line, the dates under the bar and clear of that line, the now
+// mark's date under them — touches no other word, and stays inside the svg, measured by the type
+// modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The real cases:
+// a .bit held three years and renewed twice, a .cell in its first year with its 30-day grace, a
+// .cell inside its grace, a .bit lapsed and not renewed, at the identity column at 1280 (1232),
+// the default 900, at 640 (608) and on phones (358, 326).
+describe('TenureBar: every word in its row (readability F3)', () => {
+  const day = 86_400_000;
+  const reg = Date.parse('2024-02-20T00:00:00Z');
+  const cases = [
+    {
+      name: 'valar.bit',
+      periods: [
+        { label: 'paid at registration', start: reg, end: reg + 365 * day },
+        { label: 'renewed 2025-02-04', start: reg + 365 * day, end: reg + 730 * day },
+        { label: 'renewed 2025-02-18', start: reg + 730 * day, end: reg + 1095 * day },
+      ],
+      now: reg + 979 * day,
+    },
+    {
+      name: 'apt.cell',
+      periods: [{ label: 'registered, one year', start: reg, end: reg + 365 * day }],
+      graceEnd: reg + 395 * day,
+      now: reg + 100 * day,
+    },
+    {
+      name: 'late.cell',
+      periods: [{ label: 'registered, one year', start: reg, end: reg + 365 * day }],
+      graceEnd: reg + 395 * day,
+      now: reg + 380 * day,
+    },
+    {
+      name: '888899.bit',
+      periods: [{ label: 'from minting', start: reg, end: reg + 365 * day }],
+      now: reg + 549 * day,
+    },
+  ];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(
+    [1232, 900, 608, 358, 326].flatMap((width) => cases.map((c) => [width, c.name, c] as const))
+  )('at %i px: %s', (width, _name, c) => {
+    stubChartWidth(width);
+    const { container } = render(<TenureBar {...c} />);
+    const svg = container.querySelector('svg')!;
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), c.name, 'flush');
+    expectApart(lines, `${c.name} at ${width}`);
+    // the bar, and the now mark's line through it
+    const bar = Number(svg.querySelector('[data-elapsed], [data-remaining]')!.getAttribute('y'));
+    const barFoot =
+      bar + Number(svg.querySelector('[data-elapsed], [data-remaining]')!.getAttribute('height'));
+    const mark = svg.querySelector('line')!;
+    const [markTop, markFoot] = [Number(mark.getAttribute('y1')), Number(mark.getAttribute('y2'))];
+    for (const line of lines)
+      if (line.bottom <= bar)
+        expect(line.bottom, `"${line.text}" clears the now mark`).toBeLessThan(markTop);
+      else {
+        expect(line.top, `"${line.text}" clears the bar`).toBeGreaterThan(barFoot);
+        expect(line.top, `"${line.text}" clears the now mark`).toBeGreaterThan(markFoot);
+      }
   });
 });
 

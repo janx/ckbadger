@@ -3,49 +3,57 @@
  * order, quiet states in sentence case, day dividers on the site's one UTC+8 clock (D2), and
  * object items with their collection and composition (R12, TX-29).
  */
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { api, type GlobalActivity } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
+import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
   api: { getGlobalActivities: vi.fn() },
 }));
 
-const page = (data: GlobalActivity[]) => ({
-  data,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-});
+const page = (data: GlobalActivity[]) =>
+  pagedRead({
+    data,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
 const activity = (
   txHash: string,
   at: string,
   extra: Partial<GlobalActivity> = {}
-): GlobalActivity => ({
-  txHash,
-  blockNumber: 20835685,
-  txIndex: 1,
-  timestamp: String(Date.parse(at)),
-  isCellbase: false,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  participants: [
-    {
-      address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwlng7r',
-      lockHash: `0x${'aa'.repeat(32)}`,
-      lockHashPrefix: null,
-      roles: [],
-      ckbDelta: '-100000000',
-      usedDelta: '0',
-      itemDeltas: [],
-      tags: 0,
-    },
-  ],
-  ...extra,
-});
+): GlobalActivity =>
+  activityRead({
+    txHash,
+    blockNumber: 20835685,
+    txIndex: 1,
+    timestamp: String(Date.parse(at)),
+    isCellbase: false,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
+    participants: [
+      {
+        address: seededAddress('wlng7r'),
+        lockHash: `0x${'aa'.repeat(32)}`,
+        lockHashPrefix: null,
+        roles: [],
+        ckbDelta: '-100000000',
+        usedDelta: '0',
+        itemDeltas: [],
+        tags: 0,
+      },
+    ],
+    ...extra,
+  });
 
 class NoopObserver {
   observe() {}
@@ -68,38 +76,57 @@ afterEach(() => {
 });
 
 describe('Activities board (TX-30, TX-32, TX-29)', () => {
+  // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, in
+  // the board's order and its lowercase words, each kind's 7 px mark in its colour (celadon and the
+  // slate swatches as before; the DAO, tokens, objects and identities a square of their class
+  // colour where they drew the class glyph; "all" and the protocols none). It was the aria-pressed
+  // group "Filter by kind" with the words in title case.
   it('uses the board chip names and order, with swatches for CKB transfers and script calls', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
     render(<ActivitiesStreamExplorer />);
-    const group = screen.getByRole('group', { name: 'Filter by kind' });
-    expect(
-      within(group)
-        .getAllByRole('button')
-        .map((b) => b.getAttribute('aria-label'))
-    ).toEqual([
-      'All',
-      'CKB transfers',
-      'Script calls',
-      'Nervos DAO',
-      'Tokens',
-      'Objects',
-      'Identities',
-      'Protocols',
+    const group = screen.getByRole('radiogroup', { name: 'kind' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((b) => b.textContent)).toEqual([
+      'all',
+      'ckb transfers',
+      'script calls',
+      'nervos dao',
+      'tokens',
+      'objects',
+      'identities',
+      'protocols',
     ]);
-    expect(
-      within(group).getByRole('button', { name: 'CKB transfers' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
-    expect(
-      within(group).getByRole('button', { name: 'Script calls' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
+    const mark = (name: string) =>
+      within(group).getByRole('radio', { name }).querySelector('[data-mark]');
+    expect(mark('ckb transfers')).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
+    expect(mark('script calls')).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
+    expect(mark('nervos dao')).toHaveStyle({ backgroundColor: 'var(--c-gold)' });
+    expect(mark('tokens')).toHaveStyle({ backgroundColor: 'var(--c-token)' });
+    expect(mark('objects')).toHaveStyle({ backgroundColor: 'var(--c-object)' });
+    expect(mark('identities')).toHaveStyle({ backgroundColor: 'var(--c-identity)' });
+    expect(mark('all')).toBeNull();
+    expect(mark('protocols')).toBeNull();
     expect(screen.queryByText(/loaded$/)).not.toBeInTheDocument();
   });
 
-  it('says an empty filter in a quiet sentence, not in capitals', async () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles item 3: an empty-state line is a sentence, the reading ink and
+  // the prose measure; it was "… in a quiet sentence …")
+  it('says an empty filter in a sentence in the reading ink, not in capitals', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
     render(<ActivitiesStreamExplorer />);
     const empty = await screen.findByText('Nothing of this kind in the latest activities.');
     expect(empty).not.toHaveClass('uppercase');
+    expect(empty).not.toHaveClass('text-text-dim');
+    expect(empty).toHaveClass('max-w-measure');
+  });
+
+  // BRIEF-ink-size-roles item 3: the counts' period note is a sentence, the reading ink at 13 px (it was quiet at 12)
+  it('says the counts’ period in a sentence in the reading ink at 13 px', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
+    render(<ActivitiesStreamExplorer summary={dailyActivities[0]} />);
+    const note = await screen.findByText(/^Yesterday’s counts \(UTC\+8\): kinds may overlap/);
+    expect(note.className).not.toMatch(/text-text-dim|text-meta/);
+    expect(note).toHaveClass('text-small', 'max-w-measure');
   });
 
   it('says a load failure in sentence case with its reason', async () => {

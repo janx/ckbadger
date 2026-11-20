@@ -151,7 +151,8 @@ describe('HolderTimeline (table-rows L1-3)', () => {
       /^Whoever can spend the code cell can put new code in it; every JoyID cell runs the new code from the next block\.$/
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     // The axis: the first deployment and today.
     expect(screen.getByTestId('holder-axis')).toHaveTextContent(/^2023-10-07\s*today$/);
   });
@@ -178,6 +179,7 @@ describe('HolderTimeline · an unspendable holder', () => {
         requireFirstN: null,
         keyHashes: [],
         verifiedByTx: null,
+        verifiedCodeCell: null,
         witnessState: 'not_applicable' as const,
         owners: [],
       },

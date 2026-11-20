@@ -1,5 +1,6 @@
 // F2 group `objects` (round 2): the Collection board's Objects section (allele gel + Newest).
 // The two tests of the retired 24-card gallery are kept here against the new list.
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
 import { api, type CollectionInsights } from '@/lib/api';
@@ -7,11 +8,16 @@ import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { nervape3xInsights, nervape3xOtherTraits } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { phoneHeadPx, phoneLines, statedHeadPx, dottedItems } from '@/__tests__/utils/phone-row';
+import { shortenAddress } from '@/lib/shorten';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 import {
   collectionGalleryFilteredProducer,
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 beforeEach(() => {
   mockItemReads();
   // the allele gel lays itself out for its measured box (V2); 1248 px is the 1280 column
@@ -42,11 +48,13 @@ it('keeps multiple values of one trait on one row without React identity collisi
 });
 
 it('passes the whole-collection trait predicate before cursor pagination', async () => {
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...collectionGalleryFilteredProducer,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...collectionGalleryFilteredProducer,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const { container } = render(
     <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
   );
@@ -59,7 +67,9 @@ it('passes the whole-collection trait predicate before cursor pagination', async
       traits: { Face: 'Blue' },
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  // re-pinned (lane c2-assets): the list is newest first, so the controls board's pager goes
+  // "older →" (was "Next")
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith('collection', {
       limit: 20,
@@ -97,25 +107,40 @@ it('writes decode coverage with thousands separators (OB-C11)', () => {
 });
 
 // Round 3 (contracts R-A · R-2, OB-C3): the owner's lock kind and the mint date on Newest rows.
+// Readability B4 (re-pinned on purpose): the default lock is named on no row (R9), so the named
+// row is a JoyID owner and the default-lock row says no lock.
 it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
       // 1700000000100 ms = 2023-11-14 22:13:20 UTC = 2023-11-15 06:13:20 UTC+8.
-      { ...base, chainTime: '1700000000100', lockKind: 'SECP256K1/blake160' },
+      // B4 fix round: each owner's address spells the lock the row names (the lock is read off it)
+      {
+        ...base,
+        chainTime: '1700000000100',
+        ownerAddress: seededAddress('joyid1', JOYID_CODE_HASH),
+        lockCodeHash: JOYID_CODE_HASH,
+        lockKind: 'JoyID',
+      },
+      // re-pinned on purpose (lane P2's follow-up, item 3): minted on other days, so the minting
+      // day varies on the page and keeps its column (the same day on every row is said once)
       {
         ...base,
         sporeId: `0x${'03'.repeat(32)}`,
-        chainTime: '1700000000100',
+        chainTime: '1700100000100',
+        ownerAddress: seededAddress('unreg1', `0x${'43'.repeat(32)}`),
         lockCodeHash: `0x${'43'.repeat(32)}`,
         lockKind: null,
       },
+      { ...base, sporeId: `0x${'04'.repeat(32)}`, chainTime: '1700200000100' },
     ])
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   const table = await screen.findByRole('table', { name: 'Newest objects' });
-  const [, named, unnamed] = within(table).getAllByRole('row');
-  expect(named).toHaveTextContent('SECP256K1/blake160');
+  const [, named, unnamed, defaultLock] = within(table).getAllByRole('row');
+  expect(named).toHaveTextContent('JoyID');
+  expect(defaultLock).not.toHaveTextContent('SECP256K1/blake160');
+  expect(defaultLock.querySelector('[data-lock-kind]')).toBeNull();
   // An unnamed lock shows its code hash, never a guessed kind.
   // U-09 (re-pinned): the row size
   expect(unnamed).toHaveTextContent('lock 0x43434343…434343');
@@ -175,12 +200,104 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
 // rest in its title. Consistency round C11 (Main.dc.html): the row is object · the genes that
 // vary · made of · owner · minted; the object is its number (else its short id), never the
 // collection's name again; its id and DNA are in the title.
+// B4 second fix round (review-rules-fixes-logic SHOULD 3, the coordinator's item 5): a row's title
+// writes its owner's lock as the row's tag does, from the one decision: nothing for the default
+// lock, its code hash and hash type for a lock on the default code hash by data.
+it('titles a Newest row with its owner’s lock as its tag writes it', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const byData =
+    'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl';
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, ownerAddress: byData },
+      { ...base, sporeId: `0x${'03'.repeat(32)}` },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  const [, byDataRow, defaultRow] = within(table).getAllByRole('row');
+  expect(byDataRow.getAttribute('title')).toContain(
+    `owner ${byData} · lock 0x9bd7e06f…a3cce8 by data · minted`
+  );
+  expect(defaultRow.getAttribute('title')).toContain(`owner ${base.ownerAddress} · minted`);
+});
+
+// B4 second fix round (review-rules-fixes-logic NOTE 8, the coordinator's item 14, ruling D7): a
+// row whose owner address spells another lock than it says is refused by the lock decision, and
+// the refusal fails the Newest list in its place, never the page.
+it('says in its place that it cannot read the newest objects when an owner’s lock is refused', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const joy = seededAddress('joyown', JOYID_CODE_HASH);
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([{ ...base, ownerAddress: joy }])
+  );
+  render(
+    <main>
+      <h1>The collection page</h1>
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    </main>
+  );
+  // third round (re-pinned on purpose, the coordinator's item 4): said where (the collection and
+  // its page), the section's pager outside the failed part
+  const alert = await screen.findByText(
+    /^Could not draw the newest objects \(collection collection, page 1\): /
+  );
+  expect(alert).toHaveTextContent(`address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`);
+  expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
+});
+
+// Readability P2 (lane p-assets): "lists drop a column that is the same on every row and say it
+// once above the table" (the review: twenty rows of "COPPER · 4,788" and "020172…c · 4,788").
+it('says a gene the same on every row of the page once over the list, not as a column', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const own = base.traits.find((t) => t.name === 'Face')!;
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, number: '7' },
+      { ...base, sporeId: `0x${'03'.repeat(32)}`, number: '8' },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  // re-pinned on purpose (lane P2's follow-up, item 3): the two rows share their owner and their
+  // minting day too, so neither is a column; both are said once with the gene (it kept Owner and
+  // Minted)
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Object', 'Made of']);
+  const once = screen
+    .getByRole('region', { name: 'Objects' })
+    .querySelector('[data-role="said-once"]')!;
+  expect(once).toHaveTextContent(
+    new RegExp(
+      `^every one of the 2\\sobjects listed · Face ${own.value} .* · held by ckb1.* · minted on 2023-11-15$`
+    )
+  );
+  expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // the row's title still names its genes
+  expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(`Face ${own.value}`);
+});
+
 it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
       { ...base, number: '7' },
-      { ...base, sporeId: `0x${'03'.repeat(32)}`, number: null, ownerAddress: null },
+      // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page and
+      // keeps its column (a gene the same on every row is said once over the list)
+      // re-pinned on purpose (lane P2's follow-up, item 3): its own owner's lock hash and its own
+      // minting day, so the owner and the day vary on the page and keep their columns
+      {
+        ...base,
+        sporeId: `0x${'03'.repeat(32)}`,
+        number: null,
+        ownerAddress: null,
+        ownerLockHash: `0x${'05'.repeat(32)}`,
+        chainTime: '1700100000100',
+        traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+      },
     ])
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
@@ -200,9 +317,60 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   const own = base.traits.find((t) => t.name === 'Face')!;
   expect(numbered).toHaveAttribute(
     'title',
-    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
+    // B4 second fix round (re-pinned on purpose): the owner's lock as its tag writes it, nothing
+    // for the default lock (it wrote the API's name, 'SECP256K1/blake160')
+    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
-  expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
+  expect(plain.getAttribute('title')).toContain(`owner 0x${'05'.repeat(32)}`);
+});
+
+// Lane P2's follow-up (item 3): the owner and the minting day the same on every row of the page
+// are no columns and no phone sub-line: said once over the list, by the one helper (SaidOnce).
+it('says an owner and a minting day the same on every row once, as it says a gene', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const rows = [
+    { ...base, number: '7' },
+    {
+      ...base,
+      sporeId: `0x${'03'.repeat(32)}`,
+      number: '8',
+      traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+    },
+  ];
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage(rows));
+  const { unmount } = render(
+    <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+  );
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Object', 'Face', 'Made of']);
+  const once = screen
+    .getByRole('region', { name: 'Objects' })
+    .querySelector<HTMLElement>('[data-role="said-once"]')!;
+  expect(once).toHaveTextContent(
+    /^every one of the 2\sobjects listed · held by ckb1\S+ · minted on 2023-11-15$/
+  );
+  expect(within(once).getByRole('link')).toHaveAttribute(
+    'href',
+    `/mainnet/address/${base.ownerAddress}`
+  );
+  // each row's title still names its owner and its mint
+  expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
+    `owner ${base.ownerAddress}`
+  );
+  unmount();
+  // on a phone the holder's line keeps the chip alone and the mint leaves the genes' line
+  atViewportWidth(390);
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const [first] = await screen.findAllByTestId('cluster-object-row-mobile');
+  expect(phoneLines(first).map((l) => [l.key, l.left, l.right])).toEqual([
+    ['name', '#7', null],
+    ['holder', 'Unknown', null],
+    ['minted', 'Face Blue', null],
+  ]);
 });
 
 // Consistency round (Main.dc.html) + RESPONSIVE_LAYOUT rule 4: the gel sits beside the table only
@@ -237,26 +405,36 @@ it('puts a many-gene gel above the table at full width, a few-gene gel beside it
   );
 });
 
-// Consistency round C11: the objects table pages with the one pager wording — "Showing a–b of N
-// objects · 20 per page" and "Page x of y" — not its own "N objects, 20 per page" line.
+// Consistency round C11: the objects table pages with the one pager wording, not its own
+// "N objects, 20 per page" line. Re-pinned (lane c2-assets): the one wording is the controls
+// board's pager, and a list newest first is a list in time — its order, "← newer", "page 1 of 65",
+// "older →" (was "Showing 1–20 of 1,298 objects · 20 per page" and "Page 1 of 65"); the count
+// stays the list's own line. The page states the page size it served, 20, as the API echoes the
+// request (the fixture said 50).
 it('pages the objects with the shared pager wording (C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...emptyPage(
-      Array.from({ length: 20 }, (_, i) => ({
-        ...base,
-        sporeId: `0x${(i + 16).toString(16).padStart(2, '0').repeat(32)}`,
-        number: String(i + 1),
-      }))
-    ),
-    total: 1298,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...emptyPage(
+        Array.from({ length: 20 }, (_, i) => ({
+          ...base,
+          sporeId: `0x${(i + 16).toString(16).padStart(2, '0').repeat(32)}`,
+          number: String(i + 1),
+        }))
+      ),
+      limit: 20,
+      total: 1298,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   await screen.findByRole('table', { name: 'Newest objects' });
-  expect(screen.getByText('Showing 1–20 of 1,298 objects · 20 per page')).toBeInTheDocument();
-  expect(screen.getByText('Page 1 of 65')).toBeInTheDocument();
+  const pager = screen.getByRole('navigation', { name: 'objects' });
+  expect(pager).toHaveTextContent(/^newest first← newerpage 1 of 65older →$/);
+  expect(within(pager).queryByRole('button', { name: '← newer' })).toBeNull();
+  expect(within(pager).getByRole('button', { name: 'older →' })).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Objects' })).toHaveTextContent('1,298 objects');
   expect(screen.queryByText(/objects, 20 per page/)).toBeNull();
 });
 
@@ -363,5 +541,156 @@ describe('gene cells keep their share whole (lane A follow-up)', () => {
       'grid-cols-[minmax(0,1fr)_auto]',
       'md:grid-cols-[var(--object-cols)]'
     );
+  });
+});
+
+// Readability B7, the third round (review of the second fixes): the dropped-genes caption stands
+// in a 400 px box on the collection page, and the box is drawn exactly when the caption is: an
+// empty box in the gel's `space-y-3` column added a 12 px gap below xl where no gene is dropped.
+describe('the dropped-genes caption’s box', () => {
+  const gelColumn = (container: HTMLElement) =>
+    container.querySelector('[data-role="objects-columns"] > div') as HTMLElement;
+
+  it('draws no box when no gene is dropped, nor any empty element in the gel’s column', async () => {
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const column = gelColumn(container);
+    expect(column).toHaveClass('space-y-3');
+    expect(container.querySelector('.max-w-\\[400px\\]')).toBeNull();
+    for (const child of Array.from(column.children))
+      expect(child.childNodes.length).toBeGreaterThan(0);
+  });
+
+  it('draws the caption inside its 400 px box, on the measure, when a gene is dropped', async () => {
+    // a second gene the pattern declares, one value on every object: it gets no lane (C9)
+    const pattern = collectionInsightsProducer.currentPattern;
+    const step = pattern.steps[0];
+    const face = step.description.genes[0];
+    const insights = {
+      ...collectionInsightsProducer,
+      currentPattern: {
+        ...pattern,
+        steps: [
+          {
+            ...step,
+            description: {
+              ...step.description,
+              genes: [
+                face,
+                { ...face, index: 1, name: 'Hat', byteOffset: '1', ruleArguments: ['Cap'] },
+              ],
+            },
+          },
+        ],
+      },
+      genetics: {
+        ...collectionInsightsProducer.genetics,
+        traits: [
+          ...collectionInsightsProducer.genetics.traits,
+          { name: 'Hat', values: [{ value: 'Cap', count: 8 }] },
+        ],
+      },
+    } as CollectionInsights;
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={insights} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const boxes = gelColumn(container).querySelectorAll('.max-w-\\[400px\\]');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].children).toHaveLength(1);
+    const caption = boxes[0].firstElementChild!;
+    expect(caption).toHaveAttribute('data-role', 'caption');
+    expect(caption).toHaveClass('max-w-measure');
+    expect(caption).toHaveTextContent(/Hat/);
+  });
+});
+
+// Lane D4 follow-up (the coordinator's item 1; PB-10): below md a cluster's newest objects were the
+// table's grid in two columns, its cells flowing in pairs — the minting day and the block with no
+// label, the genes split over two lines, the owner's lock cut to "…" in its tag. Each object is the
+// phone-rows board's item row now: its name alone on line 1 (it may wrap, it is never cut); who holds
+// it on line 2, its lock in plain words where it is not the default lock, the composition chip held
+// at the line's right edge; quiet on line 3, the genes the grid shows as columns, each named by its
+// gene, and where and when it was minted, named. The share of each gene (how many objects carry it)
+// is the gel's above the list and the cell's title in the table; the object's page has every gene.
+describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const joy = seededAddress('joyid1', JOYID_CODE_HASH);
+
+  it('is the board’s item row below md: name · holder and chip · genes and the mint, named', async () => {
+    atViewportWidth(390);
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(
+      emptyPage([
+        {
+          ...base,
+          chainTime: '1700000000100',
+          ownerAddress: joy,
+          lockCodeHash: JOYID_CODE_HASH,
+          lockKind: 'JoyID',
+          mediaProfile: { ...base.mediaProfile, tier: 'pure_ckb' },
+        },
+        {
+          ...base,
+          sporeId: `0x${'04'.repeat(32)}`,
+          number: null,
+          ownerLockHash: null,
+          ownerAddress: null,
+          // no media profile: the grid's "not recorded"
+          mediaProfile: null,
+          // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page
+          // and each row says its own (a gene the same on every row is said once over the list)
+          traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+          // re-pinned on purpose (lane P2's follow-up, item 3): minted on its own day, so each
+          // row says its mint (the same day on every row is said once over the list)
+          chainTime: '1700100000100',
+        },
+      ])
+    );
+    render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    const [held, ownerless] = await screen.findAllByTestId('cluster-object-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Newest objects' })).toBeNull();
+    expect(phoneLines(held).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['name', 'head', '#18,446,744,073,709,551,614', null],
+      ['holder', 'body', `held by ${shortenAddress(joy, 'row')} JoyID`, 'Pure CKB'],
+      ['minted', 'quiet', 'Face Blue · minted at #100 on 2023-11-15', null],
+    ]);
+    // the chip holds the holder's line's right edge; the lock is words, never a tag cut to "…"
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(held.querySelector('[data-line="holder"] > [data-part="left"]')).toHaveClass(
+      'basis-0',
+      'min-w-min'
+    );
+    expect(held.querySelector('[data-line="holder"] [data-row-tag]')).toBeNull();
+    expect(dottedItems(held.querySelector('[data-line="minted"]')!)).toEqual([
+      'Face Blue',
+      'minted at #100 on 2023-11-15',
+    ]);
+    const labels = Array.from(held.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['held by', 'Face', 'minted at', 'on']);
+    expect(phoneLines(ownerless).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['name', '0x04040404…040404', null],
+      ['holder', 'No live owner', 'not recorded'],
+      ['minted', 'Face Red · minted at #100 on 2023-11-16', null],
+    ]);
+    // line 1 is the name alone at its widest: the mark and its gap and a u64 object number
+    expect(statedHeadPx(held)).toBe(246.8);
+    expect(statedHeadPx(held)).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
+    expect(phoneHeadPx(held, 360)).toBeLessThanOrEqual(statedHeadPx(held));
+  });
+
+  it('keeps the table from md', async () => {
+    atViewportWidth(1024);
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage([base]));
+    render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    expect(screen.queryByTestId('cluster-object-row-mobile')).toBeNull();
   });
 });

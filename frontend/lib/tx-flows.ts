@@ -9,6 +9,7 @@
  * hash.
  */
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PARTICIPANT_LIMIT } from '@/lib/participant-order';
 
 export type FlowAsset =
@@ -40,9 +41,96 @@ export interface TxFlow {
   to: FlowEnd[];
   /** What left the givers, terminals included: the flow's volume. */
   total: bigint;
+  /**
+   * What left the giving parties: `from`'s party ends, without a giving terminal (compensation,
+   * minted). The figure of a sentence that says what left them.
+   */
+  sent: bigint;
+  /**
+   * What reached the receiving parties: `to`'s party ends, without a receiving terminal (the
+   * miner's fee, burnt). The figure of a sentence that says what moved to them (lane P1).
+   */
+  received: bigint;
 }
 
 const ZERO = BigInt(0);
+
+/** A Nervos DAO step in words, one and several, by the activity's action (`dao` actions). */
+const DAO_STEP: Readonly<Record<string, readonly [string, string]>> = {
+  deposit: ['Nervos DAO deposit', 'Nervos DAO deposits'],
+  withdraw_request: ['Nervos DAO withdrawal request', 'Nervos DAO withdrawal requests'],
+  withdraw_complete: ['Nervos DAO withdrawal', 'Nervos DAO withdrawals'],
+};
+
+/**
+ * A party's Nervos DAO step: its words, and the step's own amount (the action's capacity, the
+ * figure the lede states) where it is the party's one step of its kind; null where the party took
+ * several of a kind (their count is said, and no total: the API states none).
+ */
+export interface DaoStep {
+  words: string;
+  capacity: bigint | null;
+}
+
+/**
+ * Each Nervos DAO action of a transaction with its owner, the participant whose cell took the step
+ * (lane exactness, part B6): the action names it (`protocolActionMeta(...).owner`, the indexer's
+ * `lockHash`). An action that names no owner, or an owner who is no participant of the
+ * transaction, is refused with the transaction named, never drawn without a party; a DAO action
+ * this page has no words for too.
+ */
+export function daoStepOwners<P extends Pick<ParticipantInfo, 'lockHash'>>(activity: {
+  txHash: string;
+  protocolActions: GlobalActivity['protocolActions'];
+  participants: readonly P[];
+}): { action: GlobalActivity['protocolActions'][number]; owner: P }[] {
+  return activity.protocolActions
+    .filter((a) => a.protocol === 'dao')
+    .map((action) => {
+      if (!DAO_STEP[action.action])
+        throw new Error(`${activity.txHash}: a Nervos DAO step "${action.action}" has no words`);
+      const words = DAO_STEP[action.action][0];
+      const hash = protocolActionMeta(action).owner;
+      if (hash === null) throw new Error(`${activity.txHash}: a ${words} names no owner`);
+      const owner = activity.participants.find((p) => p.lockHash?.toLowerCase() === hash);
+      if (!owner)
+        throw new Error(
+          `${activity.txHash}: a ${words} names the owner ${hash}, no participant of the transaction`
+        );
+      return { action, owner };
+    });
+}
+
+/**
+ * What a party's Nervos DAO steps are (lane exactness, part B6): the transaction's DAO actions the
+ * party owns (each names its owner, `daoStepOwners`), each kind once, with the step's own amount where it is the
+ * party's one step of the kind (lane P1, the lead's look after the third round: a self-deposit's
+ * end read "0.00001124 CKB · Nervos DAO deposit", the fee beside the step, as if the deposit were
+ * the fee), else their count; null where the party owns none. Every party is given its own steps,
+ * in a transaction where one deposits and another withdraws too (it said "a Nervos DAO step" there,
+ * reading the actions as naming no party).
+ */
+export function daoStepsOf(
+  activity: {
+    txHash: string;
+    protocolActions: GlobalActivity['protocolActions'];
+    participants: readonly Pick<ParticipantInfo, 'lockHash'>[];
+  },
+  party: Pick<ParticipantInfo, 'lockHash'>
+): DaoStep[] | null {
+  const owned = daoStepOwners(activity)
+    .filter(({ owner }) => party.lockHash !== null && owner.lockHash === party.lockHash)
+    .map(({ action }) => action);
+  if (owned.length === 0) return null;
+  const kinds = [...new Set(owned.map((a) => a.action))];
+  return kinds.map((kind) => {
+    const [one, several] = DAO_STEP[kind];
+    const of = owned.filter((a) => a.action === kind);
+    return of.length === 1
+      ? { words: one, capacity: protocolActionMeta(of[0]).capacity }
+      : { words: `${of.length.toLocaleString('en-US')} ${several}`, capacity: null };
+  });
+}
 
 function exact(value: string | number, what: string, hash: string): bigint {
   const s = String(value);
@@ -84,6 +172,11 @@ function partyEnds(entries: Entry[]): FlowEnd[] {
 
 function sum(ends: readonly FlowEnd[]): bigint {
   return ends.reduce((acc, e) => acc + e.amount, ZERO);
+}
+
+/** A side's party ends alone: its terminals (the miner, compensation, minted, burnt) left out. */
+function parties(ends: readonly FlowEnd[]): FlowEnd[] {
+  return ends.filter((e) => e.t === 'party');
 }
 
 /**
@@ -133,7 +226,15 @@ export function txFlows({
     const diff = sum(to) - sum(from);
     if (diff > ZERO) from.unshift({ t: 'minted', amount: diff });
     else if (diff < ZERO) to.push({ t: 'burnt', amount: -diff });
-    return { key, asset: flow.asset, from, to, total: sum(from) };
+    return {
+      key,
+      asset: flow.asset,
+      from,
+      to,
+      total: sum(from),
+      sent: sum(parties(from)),
+      received: sum(parties(to)),
+    };
   });
 
   const from = partyEnds(ckbFrom);
@@ -153,9 +254,40 @@ export function txFlows({
       throw new Error(
         `${hash}: the CKB flow does not conserve: ${given} shannons from the givers, ${received} to the receivers (fee ${feeShannons}, compensation ${compensation ?? 0})`
       );
-    flows.push({ key: 'ckb', asset: { kind: 'ckb' }, from, to, total: given });
+    flows.push({
+      key: 'ckb',
+      asset: { kind: 'ckb' },
+      from,
+      to,
+      total: given,
+      sent: sum(parties(from)),
+      received: sum(parties(to)),
+    });
   }
   return flows;
+}
+
+/**
+ * Whether a transaction moved its fee and nothing else (lane P1, the plan's "a transaction that
+ * moves only its fee says so in one line"): it takes no protocol step, and its flows are the CKB
+ * flow alone, which ends at the miner and at no party, with no Nervos DAO compensation entering
+ * it. A transaction that moved nothing, not even a fee, did not move "only its fee". The one
+ * decision the lede, What moved and the balance table follow (lane P1, third round; review
+ * p-logic-chain MUST 2: a DAO deposit or withdrawal request from the owner's own address leaves its
+ * one party −fee and no item, and read as "only the fee moved").
+ */
+export function onlyFeeMoved(
+  activity: Pick<GlobalActivity, 'protocolActions'>,
+  flows: readonly TxFlow[]
+): boolean {
+  if (activity.protocolActions.length > 0) return false;
+  if (flows.length !== 1 || flows[0].asset.kind !== 'ckb') return false;
+  const [ckb] = flows;
+  return (
+    ckb.to.length > 0 &&
+    ckb.to.every((e) => e.t === 'miner') &&
+    ckb.from.every((e) => e.t === 'party')
+  );
 }
 
 const SHOWN_WHEN_FOLDED = PARTICIPANT_LIMIT - 1;

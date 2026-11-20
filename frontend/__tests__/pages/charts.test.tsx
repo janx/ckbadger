@@ -124,6 +124,7 @@ const mockMinerDistributionResponse = {
     },
   ],
   totalBlocks: 200,
+  restBlocks: 100,
   windowDays: 7,
   fromDate: '2026-07-23',
   toDate: '2026-07-29',
@@ -236,11 +237,24 @@ describe('ChartsPage', () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue({
+      ...mockChartResponse,
+      // the route's wholes (lane D1)
+      liveCells: '100',
+      occupiedCapacity: '0',
+    });
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue(mockMostUtilizedScriptsResponse);
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue(mockMostUtilizedAssetsResponse);
-    vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
+    // the window the route counts (lane D1's third round, S4)
+    vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue({
+      ...mockChartResponse,
+      epochs: 42,
+      intervals: 100,
+      beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: [100],
+    });
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue(mockChartResponse);
@@ -249,6 +263,11 @@ describe('ChartsPage', () => {
     vi.mocked(api.getUncleRateChart).mockResolvedValue({
       ...mockChartResponse,
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: mockChartResponse.data.map((point) => ({
+        date: point.date,
+        uncles: 1,
+        blocks: 40,
+      })),
     });
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue(
       mockMinerDistributionResponse

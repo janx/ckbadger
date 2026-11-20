@@ -50,15 +50,17 @@ describe('SiteFooter', () => {
       expect(external).toHaveAttribute('target', '_blank');
       expect(external).toHaveAttribute('rel', 'noreferrer');
     }
+    // re-pinned (lane c2-finish, rulings round 2): the ↗ is glued to the last word by a no-break
+    // space (it was a space), so it never stands alone on a line
     expect(
       Array.from(navigation.querySelectorAll('a, button')).map((el) => el.textContent)
     ).toEqual([
       'Hardforks',
       'Network',
       'Fiber channels',
-      'Fiber dashboard ↗',
-      'cknerv ↗',
-      'Web5 ↗',
+      'Fiber dashboard\u00a0↗',
+      'cknerv\u00a0↗',
+      'Web5\u00a0↗',
       'Keyboard shortcuts',
     ]);
     // the links within the site carry no mark
@@ -97,12 +99,14 @@ describe('SiteFooter', () => {
     render(<SiteFooter />);
     const footer = screen.getByRole('contentinfo');
     const about = within(footer).getByTestId('footer-about');
-    // the footer's last row: after the links, a line of its own, quiet, lowercase, phone only
+    // the footer's last row: after the links, a line of its own, lowercase, phone only; its release
+    // and zone are values, in the reading ink (re-pinned on purpose, lane cd-fixes-controls, the ink
+    // and size round: it was quiet)
     expect(about.parentElement!.lastElementChild).toBe(about);
     expect(about.previousElementSibling).toBe(
       within(footer).getByRole('navigation', { name: 'Footer' })
     );
-    expect(about).toHaveClass('basis-full', 'text-text-dim', 'lowercase', 'md:hidden');
+    expect(about).toHaveClass('basis-full', 'text-text', 'lowercase', 'md:hidden');
     expect(about.tagName).toBe('P');
     expect(about.querySelector('a, button')).toBeNull();
     // two tokens, each unbreakable: the release with its name, the zone

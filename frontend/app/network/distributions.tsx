@@ -1,8 +1,10 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { sentField } from '@/lib/api-fields';
+import { readPart } from '@/components/read-failure';
 import { isAwaited } from '@/lib/query-state';
-import { api, LabelCount } from '@/lib/api';
+import { api, LabelCount, type NetworkDistributions as Distributions } from '@/lib/api';
 import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
@@ -12,7 +14,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { TopicSection } from '@/app/network/topic-section';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { charPx } from '@/lib/type-metrics';
+import { fontPx, foreignTextPx } from '@/lib/type-metrics';
 
 const TOP_N = 8;
 /**
@@ -43,41 +45,86 @@ function useDistributions() {
 }
 
 /**
- * A top-N bar list in the data hue, the leader strongest (Network board). Labels stay DOM text;
- * `attr` marks the bars for their own section.
+ * A grouping the distributions route states for this page (lane exactness, part A, A5 iii); an API older than the
+ * page sends none, and the part says so in place.
  */
-function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
+function grouping<K extends 'hosting' | 'releases'>(
+  data: Distributions,
+  field: K
+): Distributions[K] | string {
+  // through the one reader of a field an older API does not send, its sentence drawn in place
+  const read = readPart(() => sentField(data[field], 'Network distributions', field));
+  return read.error ? read.error.message : (read.value as Distributions[K]);
+}
+
+/**
+ * The shown rows with one release's builds together (P4 topics: one release's builds stood apart,
+ * by count), in the route's releases' order, the largest release first, each release's builds by
+ * count (lane exactness, part A, A5 iii: the release of a build is the route's, read from its `releases`). A
+ * row's count is the API's; the page totals nothing.
+ */
+function grouped(rows: readonly LabelCount[], releases: Distributions['releases']): LabelCount[] {
+  const shown = new Set(rows.map((row) => row.label));
+  return releases.flatMap((release) => release.builds.filter((build) => shown.has(build.label)));
+}
+
+/**
+ * A top-N bar list in the data hue, the leader strongest (Network board). Labels stay DOM text;
+ * `attr` marks the bars for their own section. One grid for every row (P4 topics: the names stood
+ * at the list's left, their bars 340 px away): the names' column as wide as the widest name (a
+ * client version, "0.210.0 (2592ddf 2026-09-17)", 28 characters at 13 px, 218.4 px), its bar 10 px
+ * after it, its count after that; a name wider than the line is cut, whole in its title.
+ */
+function Bars({
+  items,
+  attr,
+  label,
+  group,
+}: {
+  items: LabelCount[];
+  attr: string;
+  /** The list's name, for a screen reader. */
+  label: string;
+  /** Rows of one release stand together (a release's builds): the route's releases. */
+  group?: Distributions['releases'];
+}) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
-  if (top.length === 0) return <p className="text-text-dim text-small">No data.</p>;
+  if (top.length === 0) return <p className="text-text text-small">No data.</p>;
+  const rows = group === undefined ? top : grouped(top, group);
   return (
-    <div className="flex max-w-[720px] flex-col gap-1">
-      {top.map((it, i) => (
-        <div
-          key={it.label}
-          className="text-small grid grid-cols-[minmax(0,1fr)_90px_36px] items-center gap-2.5 py-0.5"
-        >
-          <span
-            className={`truncate ${i === 0 ? 'text-text-bright' : 'text-text'}`}
-            title={it.label}
-          >
-            {it.label}
-          </span>
-          <span aria-hidden="true" className="bg-bar-track flex h-1.5">
+    <ul
+      aria-label={label}
+      className="text-small grid w-fit max-w-full grid-cols-[minmax(0,max-content)_90px_max-content] items-center gap-x-2.5 gap-y-1"
+    >
+      {rows.map((it) => {
+        const leader = it === top[0];
+        return (
+          <li key={it.label} className="contents">
             <span
-              {...{ [attr]: '' }}
-              className="scan-fill"
-              style={{
-                width: `${(100 * it.count) / max}%`,
-                backgroundColor: DATA_COLOR,
-                opacity: i === 0 ? 0.9 : 0.5,
-              }}
-            />
-          </span>
-          <span className="text-text text-right tabular-nums">{it.count.toLocaleString()}</span>
-        </div>
-      ))}
-    </div>
+              className={`truncate ${leader ? 'text-text-bright' : 'text-text'}`}
+              title={it.label}
+            >
+              {it.label}
+            </span>
+            <span aria-hidden="true" className="bg-bar-track flex h-1.5">
+              <span
+                {...{ [attr]: '' }}
+                className="scan-fill"
+                style={{
+                  width: `${(100 * it.count) / max}%`,
+                  backgroundColor: DATA_COLOR,
+                  opacity: leader ? 0.9 : 0.5,
+                }}
+              />
+            </span>
+            <span className="text-text text-right tabular-nums">
+              {it.count.toLocaleString('en-US')}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -92,10 +139,22 @@ export function NetworkDistributions() {
         Failed to load distributions.
       </p>
     );
+  const releases = grouping(data, 'releases');
+  if (typeof releases === 'string')
+    return (
+      <p role="alert" className="text-negative text-small max-w-measure">
+        {releases}
+      </p>
+    );
   // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
     <TopicSection title="Which software they run" args={formatCount(data.verifiedRetained, 'node')}>
-      <Bars items={data.versions} attr="data-version-bar" />
+      <Bars
+        items={data.versions}
+        attr="data-version-bar"
+        label="Client versions"
+        group={releases}
+      />
     </TopicSection>
   );
 }
@@ -111,15 +170,7 @@ export function NetworkProtocols() {
         Failed to load protocol counts.
       </p>
     );
-  return <Bars items={data.protocols} attr="data-protocol-bar" />;
-}
-
-/** The organisation part of an ASN label "AS16509 Amazon.com" (the API's one label form). */
-function asnOrganisation(label: string): string {
-  if (label === 'Unknown') return label;
-  const match = /^AS\d+ (.+)$/.exec(label);
-  if (!match) throw new Error(`unexpected ASN label ${label}`);
-  return match[1];
+  return <Bars items={data.protocols} attr="data-protocol-bar" label="Protocols" />;
 }
 
 /**
@@ -139,33 +190,50 @@ export function HostingBar() {
       </p>
     );
   if (data.verifiedRetained === 0) return null;
-  const byOrg = new Map<string, number>();
-  for (const asn of data.asns)
-    byOrg.set(asnOrganisation(asn.label), (byOrg.get(asnOrganisation(asn.label)) ?? 0) + asn.count);
-  const total = [...byOrg.values()].reduce((sum, count) => sum + count, 0);
-  if (total !== data.verifiedRetained)
+  // the organisations and their rest, the route's (lane exactness, part A, A5 iii: the page summed the ASNs by
+  // organisation and the rest); they make the verified nodes, which the route checks
+  const hosting = grouping(data, 'hosting');
+  if (typeof hosting === 'string')
     return (
-      <p role="alert" className="text-negative text-small">
-        Hosting networks cover {unitNode(formatCount(total, 'peer'))}, not the{' '}
-        {data.verifiedRetained} verified.
+      <p role="alert" className="text-negative text-small max-w-measure">
+        {hosting}
       </p>
     );
-  const ranked = [...byOrg.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const shown = ranked.slice(0, 5);
-  const rest = ranked.slice(5).reduce((sum, [, count]) => sum + count, 0);
-  const segments = rest > 0 ? [...shown, ['other networks', rest] as const] : shown;
-  const leader = ranked.find(([org]) => org !== 'Unknown');
-  const countries = data.countries.filter((country) => country.label !== 'Unknown').length;
+  const total = data.verifiedRetained;
+  const shown = hosting.organisations.map((org) => [org.label, org.count] as const);
+  const segments = hosting.rest > 0 ? [...shown, ['other networks', hosting.rest] as const] : shown;
+  const leader = shown.find(([org]) => org !== 'Unknown');
+  // the countries are counted once, on the map, of its located nodes (lane exactness, part A2, the pages review's
+  // NOTE 3: this said "across C countries" of every verified node, beside the map's own count)
   return (
     <HostingSection
       segments={segments}
       total={total}
       caption={
         leader &&
-        `${leader[1].toLocaleString()} of the ${total.toLocaleString()} verified nodes run on ${leader[0]}, across ${countries} countries.`
+        `${leader[1].toLocaleString('en-US')} of the ${total.toLocaleString('en-US')} verified nodes run on ${leader[0]}.`
       }
     />
   );
+}
+
+/** The segments of the hosting bar stand this far apart (`gap-0.5`). */
+const SEGMENT_GAP_PX = 2;
+/** A part's swatch under the bar and the room after it (`h-[9px] w-[9px]`, `mr-1.5`). */
+const SWATCH_PX = 9;
+const SWATCH_GAP_PX = 6;
+
+/**
+ * Where a part named under the bar stands (readability plan 2026-11-18, P4: "a split bar names
+ * every segment in place"): its line starts at the part's left edge where its words fit from there
+ * to the bar's end, else it ends at the part's right edge, else (words wider than the bar up to the
+ * part's end, a narrow phone) it starts at the bar's start and wraps inside the bar's width. Never
+ * before the bar's start, never past its end.
+ */
+function underLineLeft(left: number, right: number, words: number, bar: number): number {
+  if (left + words <= bar) return left;
+  if (words <= right) return right - words;
+  return 0;
 }
 
 /** The section once its counts are known, so the bar measures its own width from mount. */
@@ -180,22 +248,38 @@ function HostingSection({
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { resolved: theme } = useTheme();
-  const spans = partitionSpans(
-    segments.map(([, count]) => BigInt(count)),
-    BigInt(total),
-    0,
-    100,
-    'hosting networks'
-  );
+  const counts = segments.map(([, count]) => BigInt(count));
+  // The segments grow by their parts from no width (`flex-grow`), so the bar's width less its gaps
+  // is shared by the parts exactly as `partitionSpans` shares it: the lines under the bar stand at
+  // the segments' own edges.
+  const weights = partitionSpans(counts, BigInt(total), 0, 100, 'hosting networks');
+  const gaps = SEGMENT_GAP_PX * (segments.length - 1);
+  const spans =
+    width === null
+      ? null
+      : partitionSpans(counts, BigInt(total), 0, width - gaps, 'hosting networks').map(
+          (span, i) => ({ left: span.x + SEGMENT_GAP_PX * i, width: span.width })
+        );
   const share = (count: number) => percentOf(BigInt(count), BigInt(total));
-  /** The words a segment holds: name and share, else the share alone, else none. */
-  const inside = (org: string, count: number, i: number): string => {
-    if (width === null) return '';
-    const room = (width * spans[i].width) / 100;
-    const fits = (text: string) => text.length * charPx('small') + 2 * LABEL_PAD <= room;
-    const full = `${org} ${share(count)}`;
-    return fits(full) ? full : fits(share(count)) ? share(count) : '';
-  };
+  /** A part's words, said once: its name, its share and its count. */
+  const words = (org: string, count: number) =>
+    `${org} ${share(count)} · ${formatCount(count, 'node')}`;
+  // An organisation is the ASN registry's text, in any script: measured by lib/type-metrics.ts's
+  // count for text that is not ours (not an upper bound: a few graphemes draw wider), and held by
+  // its room either way: clipped at its segment's edge, wrapped inside the bar under it.
+  const wordsPx = (org: string, count: number) => foreignTextPx(words(org, count), fontPx('small'));
+  /** Whether a part's segment holds its words, 10 px each side. */
+  const inside = (org: string, count: number, i: number): boolean =>
+    spans !== null && wordsPx(org, count) + 2 * LABEL_PAD <= spans[i].width;
+  const under =
+    spans === null
+      ? []
+      : segments.flatMap(([org, count], i) => {
+          if (inside(org, count, i)) return [];
+          const line = SWATCH_PX + SWATCH_GAP_PX + wordsPx(org, count);
+          const { left, width: part } = spans[i];
+          return [{ org, count, i, left: underLineLeft(left, left + part, line, width!) }];
+        });
   return (
     <TopicSection title="Where they run" args={formatCount(total, 'node')}>
       <div
@@ -209,32 +293,46 @@ function HostingSection({
           <span
             key={org}
             data-provider={org}
-            className="flex items-center overflow-hidden whitespace-nowrap px-2.5"
+            className="flex min-w-0 items-center overflow-hidden whitespace-nowrap px-2.5"
             style={{
-              width: `${spans[i].width}%`,
+              flexGrow: weights[i].width,
+              flexShrink: 1,
+              flexBasis: 0,
               backgroundColor: dataHue(PROVIDER_OPACITY[i]),
-              // DY-03: the share takes the ink its fill's own luminance calls for, in this theme.
+              // DY-03: the words take the ink their fill's own luminance calls for, in this theme.
               color: color(inkOnFill(theme, DATA_KEY, PROVIDER_OPACITY[i]).ink),
             }}
           >
-            {inside(org, count, i) && <span>{inside(org, count, i)}</span>}
+            {inside(org, count, i) && <span>{words(org, count)}</span>}
           </span>
         ))}
       </div>
-      {/* R12: the exact counts leave the bar for one quiet line, which also names every segment. */}
-      <p data-role="exact-amounts" className="text-text-dim text-small mt-2.5">
-        {segments.map(([org, count], i) => (
-          <span key={org}>
-            {i > 0 && ' · '}
-            {org}{' '}
-            <span data-role="count" className="text-text tabular-nums">
-              {count.toLocaleString()}
-            </span>
-          </span>
-        ))}
-      </p>
+      {under.length > 0 && (
+        // Each part that does not hold its words is named on a line of its own under the bar, at
+        // the part, after a swatch of its own fill: one line a part, in the bar's order.
+        <ul aria-label="Hosting networks named under the bar" className="text-small mt-1.5">
+          {under.map(({ org, count, i, left }) => (
+            <li
+              key={org}
+              data-provider-line={org}
+              className="text-text w-fit [overflow-wrap:anywhere]"
+              style={{ marginLeft: `${left}px`, maxWidth: `${width! - left}px` }}
+            >
+              <span
+                aria-hidden="true"
+                data-role="swatch"
+                className="mr-1.5 inline-block h-[9px] w-[9px] align-middle"
+                style={{ backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
+              />
+              {org} <span className="tabular-nums">{share(count)}</span>
+              <span className="text-text-dim"> · </span>
+              <span className="tabular-nums">{unitNode(formatCount(count, 'node'))}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {caption && (
-        <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+        <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
           {caption}
         </p>
       )}

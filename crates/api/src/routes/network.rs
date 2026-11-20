@@ -400,7 +400,12 @@ async fn map(State(state): State<Arc<AppState>>) -> ApiResult<NetworkMap> {
                 {
                     points.push(NetworkMapPoint {
                         peer_id: hex(&peer_id),
-                        country: geo.country,
+                        // one name for no country, the distributions route's (lane exactness, part A2)
+                        country: if geo.country.is_empty() {
+                            "Unknown".to_string()
+                        } else {
+                            geo.country
+                        },
                         lat,
                         lon,
                         reachable: record.reachable,
@@ -581,6 +586,99 @@ pub struct NetworkDistributions {
     pub countries: Vec<LabelCount>,
     pub asns: Vec<LabelCount>,
     pub protocols: Vec<LabelCount>,
+    /// The verified nodes by hosting organisation, an organisation's several ASNs as one
+    /// (lane exactness, part A, A5 iii; the page summed the ASNs by organisation and the rest).
+    pub hosting: HostingSplit,
+    /// The client versions by release, the label before its build, each release's nodes counted.
+    pub releases: Vec<ReleaseCount>,
+}
+
+/// The hosting organisations the page draws: the largest, and the rest as one count.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostingSplit {
+    /// The five largest organisations by nodes, ties by name; `Unknown` where a node has no ASN.
+    pub organisations: Vec<LabelCount>,
+    /// The nodes of every other organisation.
+    pub rest: u64,
+    /// How many organisations the rest holds.
+    pub rest_organisations: u64,
+}
+
+/// A client release and its builds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseCount {
+    pub release: String,
+    pub count: u64,
+    pub builds: Vec<LabelCount>,
+}
+
+/// The organisations the hosting bar draws by name; the rest is one part.
+const HOSTING_DRAWN: usize = 5;
+
+fn asn_organisation(record: &NodeRecord) -> String {
+    match &record.asn {
+        Some(asn) => asn.org.clone(),
+        None => "Unknown".to_string(),
+    }
+}
+
+fn hosting_split(
+    nodes: &[(Vec<u8>, NodeRecord)],
+    verified: u64,
+) -> Result<HostingSplit, ApiRouteError> {
+    let ranked = histogram(nodes.iter().map(|(_, record)| asn_organisation(record)))?;
+    let organisations: Vec<LabelCount> = ranked.iter().take(HOSTING_DRAWN).cloned().collect();
+    let rest_rows = &ranked[organisations.len()..];
+    let rest: u64 = rest_rows.iter().map(|row| row.count).sum();
+    let drawn: u64 = organisations.iter().map(|row| row.count).sum();
+    if drawn + rest != verified {
+        return Err(ApiError::internal(format!(
+            "hosting organisations hold {} nodes, not the {verified} verified",
+            drawn + rest
+        )));
+    }
+    Ok(HostingSplit {
+        organisations,
+        rest,
+        rest_organisations: u64::try_from(rest_rows.len())
+            .map_err(|_| ApiError::internal("organisation count exceeds u64"))?,
+    })
+}
+
+fn release_counts(nodes: &[(Vec<u8>, NodeRecord)]) -> Result<Vec<ReleaseCount>, ApiRouteError> {
+    use std::collections::BTreeMap;
+    let builds = histogram(
+        nodes
+            .iter()
+            .map(|(_, record)| record.client_version.clone()),
+    )?;
+    let mut by_release: BTreeMap<String, Vec<LabelCount>> = BTreeMap::new();
+    for build in builds {
+        let release = build
+            .label
+            .split(' ')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        by_release.entry(release).or_default().push(build);
+    }
+    let mut releases: Vec<ReleaseCount> = by_release
+        .into_iter()
+        .map(|(release, builds)| ReleaseCount {
+            count: builds.iter().map(|build| build.count).sum(),
+            release,
+            builds,
+        })
+        .collect();
+    releases.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.release.cmp(&right.release))
+    });
+    Ok(releases)
 }
 
 fn histogram<I: IntoIterator<Item = String>>(labels: I) -> Result<Vec<LabelCount>, ApiRouteError> {
@@ -650,6 +748,8 @@ async fn distributions(State(state): State<Arc<AppState>>) -> ApiResult<NetworkD
                 .iter()
                 .flat_map(|(_, record)| record.protocols.clone()),
         )?,
+        hosting: hosting_split(&nodes, verified_retained)?,
+        releases: release_counts(&nodes)?,
     })
 }
 

@@ -1,4 +1,8 @@
 'use client';
+import { HeadId } from '@/components/ui/head-id';
+import { cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type DotCellItem, type ItemProtocol, type ProtocolVersion } from '@/lib/api';
@@ -206,15 +210,19 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       label: 'account → next',
       value: (
         <>
-          <Field name="account id">
-            <span className="[overflow-wrap:anywhere]">{d.accountId}</span>
-          </Field>
+          {/* Lane P2's follow-up (items 8, 9): the account id is set as a head's id (HeadId), not
+              held on one line: 42 characters at 13 px are 327.6 px, past the 288 px of the
+              value column at 320 (the page ran 24 px wide); one line from 360 (328), two halves
+              of 22 characters (171.6) at 320 */}
+          <span title="account id" className="block">
+            <HeadId value={d.accountId} kind="hash" />
+          </span>
           <Dim> → </Dim>
           <Field name="next" label="next">
             {d.nextAccountId === null ? (
               <Dim>none</Dim>
             ) : (
-              <AppLink href={`/identities/dotbit/${d.nextAccountId}`}>
+              <AppLink look="inline" href={`/identities/dotbit/${d.nextAccountId}`}>
                 {d.nextAccountName ?? d.nextAccountId}
               </AppLink>
             )}
@@ -241,10 +249,19 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-meta">
+      {/* a sentence, the reading ink at 13 px, its link in its look (ink and size roles: a credit in
+          the quiet ink at 12 px) */}
+      <p className="text-text text-small max-w-measure">
         Decoded from the account data in the witness of tx{' '}
-        <AppLink href={`/tx/${v.cell.txHash}`}>
-          <Hash hash={v.cell.txHash} size="row" copyable={false} className="text-meta" />
+        <AppLink
+          look="inline"
+          // the witness's transaction opened at the account cell it made (its fold never hides it)
+          href={transactionAtCellHref(v.cell.txHash, {
+            txHash: v.cell.txHash,
+            index: v.cell.outputIndex,
+          })}
+        >
+          <Hash hash={v.cell.txHash} size="row" className="text-small" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -323,7 +340,9 @@ export function BitCellAccountNow({ protocol }: { protocol: Of<'bit_cell'> }) {
                 [
                   'account now',
                   <>
-                    <AppLink href={`/identities/dotbit/${a.id}`}>{a.name ?? a.id}</AppLink>
+                    <AppLink look="inline" href={`/identities/dotbit/${a.id}`}>
+                      {a.name ?? a.id}
+                    </AppLink>
                     <Dim> · {a.isLive ? 'live' : 'not live'}</Dim>
                   </>,
                 ],
@@ -365,7 +384,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-small whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>
@@ -388,6 +407,9 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
     enabled: !ZERO_ID.test(d.nextId),
     retry: retryTransientOnly,
   });
+  // the name cell's lock in the one decision's words (lane P2's follow-up, item 6): a lock the
+  // registry does not name by its code hash; a refusal says so in the row, the section drawn
+  const lock = readPart(() => lockWordsText(cellLockWords(v.cell), 'row'));
   return (
     <>
       {d.records.length === 0 ? (
@@ -421,14 +443,20 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               </>,
             ],
             [
-              `Lock · ${v.cell.lockName ?? 'not named'}`,
+              lock.error === undefined ? `Lock · ${lock.value}` : 'Lock',
               <>
-                <AppLink href={`/address/${v.cell.ownerAddress}`}>
+                {lock.error !== undefined && (
+                  <PartReadError
+                    what="the lock's words"
+                    where={`cell ${v.cell.txHash}:${v.cell.outputIndex}`}
+                    error={lock.error}
+                  />
+                )}
+                <AppLink look="inline" href={`/address/${v.cell.ownerAddress}`}>
                   <Hash
                     hash={v.cell.ownerAddress}
                     kind="address"
                     size="row"
-                    copyable={false}
                     className="text-small"
                   />
                 </AppLink>{' '}
@@ -444,13 +472,13 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ZERO_ID.test(d.nextId) ? (
                 <Dim>the ring&apos;s end</Dim>
               ) : next.data ? (
-                <AppLink href={`/identities/dotcell/${next.data.identityId}`}>
+                <AppLink look="inline" href={`/identities/dotcell/${next.data.identityId}`}>
                   {next.data.name}
                 </AppLink>
               ) : (
                 <>
-                  <AppLink href={`/identities/dotcell/${d.nextId}`}>
-                    <Hash hash={d.nextId} size="row" copyable={false} className="text-small" />
+                  <AppLink look="inline" href={`/identities/dotcell/${d.nextId}`}>
+                    <Hash hash={d.nextId} size="row" className="text-small" />
                   </AppLink>
                   <AssetReadState label="its name" error={next.error} read={next} />
                 </>

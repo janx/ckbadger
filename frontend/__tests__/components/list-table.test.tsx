@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, render, screen, within } from '@testing-library/react';
+import resolveConfig from 'tailwindcss/resolveConfig';
+import tailwindConfig from '@/tailwind.config';
 import {
+  CELL_GAP_CLASS,
+  CELL_GAP_PX,
+  CELL_HORIZONTAL_CLASSES,
   ListTable,
   WIDE_ROW_MIN_WIDTH,
+  cellClassOwner,
   listTableForm,
+  minimumWidth,
   type ListColumn,
   type ListTableProps,
 } from '@/components/ui/list-table';
@@ -327,6 +334,21 @@ describe('ListTable row density and row title (table-rows plan T2, lane R1)', ()
     }
   });
 
+  // Regression (the lead's Chrome check of F3-e, 2026-11-18): a browser gives every table cell 1 px
+  // of padding on each side unless a class says otherwise. `py-*` and `pr-4` set three sides, so the
+  // left side kept that pixel and every column's content box was 1 px narrower than its budget
+  // (content + CELL_GAP_PX): in the 608 px blocks table the 92.4 px block number stood in 92 px and
+  // broke after its tenth glyph. A cell's only horizontal padding is its gap.
+  it('gives a cell and a head no left padding: the budget is the content and its gap', () => {
+    for (const density of ['default', 'row'] as const) {
+      stubChartWidth(608);
+      const { unmount } = render(table({ density }));
+      const t = screen.getByRole('table', { name: 'Holdings' });
+      for (const cell of [...headsOf(t), ...cellsOf(t)]) expect(cell).toHaveClass('pl-0');
+      unmount();
+    }
+  });
+
   it('draws one-line rows with density="row": 11 px padding, middle-aligned, heads unchanged', () => {
     stubChartWidth(608);
     render(table({ density: 'row' }));
@@ -405,5 +427,156 @@ describe('ListTable row density and row title (table-rows plan T2, lane R1)', ()
     expect(() => render(table({ rowTitle: (r) => (r.name === 'Coin' ? ' ' : r.name) }))).toThrow(
       'Holdings: row Coin has an empty title'
     );
+  });
+});
+
+// Review fb-tests 5 (the lead's ruling: ListTable owns every horizontal pixel of a cell). A
+// column's budget is its content and CELL_GAP_PX; a padding, a margin, a width or a side border a
+// column wrote on its cells would take pixels no budget counts (cn() lets a column's `px-2` replace
+// the table's `pl-0` and `pr-4`), so the table refuses it when it is built.
+describe('ListTable owns every horizontal pixel of a cell (review fb-tests 5)', () => {
+  const named = (className: string): ListColumn<Row> => ({
+    key: 'name',
+    label: 'Name',
+    minWidth: 180,
+    className,
+    render: (r) => r.name,
+  });
+
+  // Re-pinned on purpose (review fb-logic N2 with fb-tests SHOULD-3, the lead's ruling): the rule
+  // was a list of what a column may NOT set, so a class it did not parse passed — a variant it did
+  // not strip (`max-[600px]:px-2`, `[&_a]:ml-2`), a utility it did not list (`space-x-2`,
+  // `indent-4`), a border value it did not read (`border-l-[var(--w)]`). It is a list of what a
+  // column MAY set now (`cellClassOwner`): its cells' ink, size, vertical padding, white-space,
+  // truncation and alignment, with no variant; anything else is refused by name (the message was
+  // "sets its own horizontal space", which no longer names every refusal).
+  const refused = (cls: string) => `Holdings: column name sets a class a column may not (${cls})`;
+  it('refuses a column that sets anything but its cells’ ink, size, vertical padding, white-space, truncation or alignment, naming it', () => {
+    for (const cls of [
+      'px-2',
+      'pl-1',
+      'pr-3',
+      'p-2',
+      'ps-1',
+      'pe-1',
+      'ml-2',
+      '-mr-1',
+      'mx-auto',
+      'w-24',
+      'min-w-0',
+      'min-w-[80px]',
+      'max-w-xs',
+      'border',
+      'border-l',
+      'border-x-2',
+      'border-r-[3px]',
+      '!pl-2',
+      'md:px-4',
+      'last:pr-2',
+      '[padding-left:3px]',
+      // what the list of refusals let through (review fb-logic N2)
+      'max-[600px]:px-2',
+      '*:px-2',
+      '[&_a]:ml-2',
+      'group-hover/row:px-2',
+      'data-[x=y]:pl-2',
+      'space-x-2',
+      'indent-4',
+      '-indent-[2ch]',
+      'translate-x-1',
+      'tracking-wide',
+      'border-l-[length:3px]',
+      'border-l-[var(--w)]',
+      // no family a column's doc permits (moved here from the passing list on purpose: no column
+      // sets them, and the list is what columns may set)
+      'border-b',
+      'border-t-2',
+      'border-row-rule',
+      'font-medium',
+      'tabular-nums',
+      // a permitted family under a variant: a column's classes have none
+      'md:whitespace-nowrap',
+      'hover:text-jade',
+      // an arbitrary value or property
+      'text-[13px]',
+      '[white-space:nowrap]',
+    ])
+      expect(() => listTableForm('Holdings', 608, [named(`text-body ${cls}`), COLUMNS[1]])).toThrow(
+        refused(cls)
+      );
+    // the narrower table's columns, and the sum a page computes at load, are held to it too
+    expect(() => listTableForm('Holdings', 300, COLUMNS, [named('px-2'), NARROW[1]])).toThrow(
+      refused('px-2')
+    );
+    expect(() => minimumWidth('Holdings', [named('pl-3')])).toThrow(refused('pl-3'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubChartWidth(608);
+    expect(() => render(table({ columns: [named('px-2'), COLUMNS[1]] }))).toThrow(refused('px-2'));
+  });
+
+  // Every class a column of the site sets (the 18 files that build ListColumns, read 2026-11-19),
+  // and each family the list permits.
+  it('lets a column set its cells’ ink, size, vertical padding, white-space, truncation and alignment', () => {
+    for (const cls of [
+      'py-1.5',
+      'py-[9px] align-top',
+      'py-3 align-top',
+      'text-body py-1.5',
+      'text-body text-text-dim',
+      'text-text-dim',
+      'truncate',
+      'whitespace-nowrap',
+      'whitespace-nowrap truncate',
+      'whitespace-normal',
+      '!whitespace-normal',
+      '!whitespace-normal text-text-dim',
+      'py-[9px] truncate',
+      'text-meta text-jade/80 text-right align-middle pt-1 pb-px',
+    ])
+      expect(listTableForm('Holdings', 608, [named(cls), COLUMNS[1]])).toBe('table');
+    expect(cellClassOwner('py-3')).toBe('column');
+    expect(cellClassOwner('sticky')).toBe('table');
+    expect(cellClassOwner('pl-0')).toBe('table');
+    expect(cellClassOwner('px-2')).toBeNull();
+  });
+
+  // The gap and the class that draws it are one fact: the class's step read from the Tailwind
+  // config (the root's 16 px a rem: no rule in globals.css sets the root's font size) is the
+  // number every budget adds. Moving either alone fails here.
+  it('draws the gap with the class whose step is CELL_GAP_PX', () => {
+    const { padding } = resolveConfig(tailwindConfig).theme as { padding: Record<string, string> };
+    const step = /^pr-(.+)$/.exec(CELL_GAP_CLASS);
+    expect(step).not.toBeNull();
+    const rem = /^([\d.]+)rem$/.exec(padding[step![1]]);
+    expect(rem).not.toBeNull();
+    const css = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+    expect(css).not.toMatch(/(^|[\s,}])html\s*\{[^}]*font-size/);
+    expect(Number(rem![1]) * 16).toBe(CELL_GAP_PX);
+  });
+
+  // Head and cell pinned alike, in both densities and both tables: their horizontal classes are
+  // exactly the table's, no more and no fewer.
+  it('gives every head and every cell exactly pl-0, the gap and last:pr-0', () => {
+    expect(CELL_HORIZONTAL_CLASSES).toEqual(['pl-0', CELL_GAP_CLASS, 'last:pr-0']);
+    const horizontal = (el: Element) =>
+      Array.from(el.classList)
+        .filter((c) =>
+          /^(\w+:)*!?-?(p|px|pl|pr|ps|pe|m|mx|ml|mr|ms|me|w|max-w)-|^border-[xlrse]/.test(c)
+        )
+        .sort();
+    for (const [width, props] of [
+      [608, {}],
+      [608, { density: 'row' }],
+      [300, { narrowColumns: NARROW }],
+      [300, { narrowColumns: NARROW, density: 'row' }],
+    ] as const) {
+      stubChartWidth(width);
+      const { unmount } = render(table(props));
+      const cells = Array.from(screen.getByRole('table').querySelectorAll('th, td'));
+      expect(cells.length).toBeGreaterThan(4);
+      for (const cell of cells) expect(horizontal(cell)).toEqual(['last:pr-0', 'pl-0', 'pr-4']);
+      unmount();
+      vi.restoreAllMocks();
+    }
   });
 });

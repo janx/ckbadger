@@ -50,7 +50,9 @@
   "nextCursor": null,
   "roleCounts": {
     "all": 1,
+    "both": 0,
     "locks": 1,
+    "neither": 0,
     "types": 0
   },
   "total": 1

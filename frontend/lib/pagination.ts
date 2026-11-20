@@ -8,3 +8,308 @@ export const DEFAULT_PAGE_SIZE = 50;
  * is a list by nature and keeps {@link DEFAULT_PAGE_SIZE}; a phone reads twenty on both.
  */
 export const ENTITY_PAGE_SIZE = 20;
+
+/** One page of a cursor-paged list as the API sent it: what a pager reads of it. */
+export interface CursorPageRead {
+  data: readonly unknown[];
+  /** The page size the API served. */
+  limit: number;
+  hasMore: boolean;
+  /** The cursor of the page after it, where one follows. */
+  nextCursor: string | null;
+  /** The rows in all, where the API counts them (absent, or null while not derived). */
+  total?: number | null;
+}
+
+/**
+ * Where a response was asked for in its walk (lane cd-fixes-controls, item 1): the page, the
+ * cursor and the page size it was asked at (none where the list asks for none of its own), and the
+ * list it was asked of (the second read's SHOULD 1: its filter, its class, its sort, written out
+ * by the walk); `kept` marks a page merged from reads asked at different places (`mergeAsked`).
+ */
+export interface AskedAt {
+  readonly page: number;
+  readonly cursor: string | undefined;
+  readonly size: number | undefined;
+  readonly list: string;
+  readonly kept?: true;
+}
+
+declare const ASKED: unique symbol;
+
+/**
+ * A response that carries where it was asked for. Only a walk's `ask`
+ * (hooks/useCursorPagination) makes one, through `stampAsked`: the page a response was asked for
+ * travels with it, and the helpers below take no page number of their own, so no caller can pair
+ * a walk's page with a response of another page (a type error, not a convention). The brand is a
+ * type alone; the stamp is a plain field, which the query cache's structural sharing keeps.
+ */
+export type Asked<R> = R & { readonly asked: AskedAt; readonly [ASKED]: true };
+
+/** For a walk's `ask` alone (hooks/useCursorPagination): a response, stamped where it was asked. */
+export function stampAsked<R extends object>(read: R, at: AskedAt): Asked<R> {
+  return { ...read, asked: at } as Asked<R>;
+}
+
+/**
+ * A page merged from several reads (a script's cells across its references), asked where all its
+ * reads were; where they were not all asked at one place (one still kept from another page while
+ * the others load), it is kept data, which offers no next. Null where no read has answered.
+ */
+export function mergeAsked<R extends object>(
+  reads: readonly (Asked<object> | undefined)[],
+  merged: R
+): Asked<R> | null {
+  const at = reads.filter((read): read is Asked<object> => read !== undefined).map((r) => r.asked);
+  if (at.length === 0) return null;
+  const [first] = at;
+  const one = at.every(
+    (a) =>
+      a.page === first.page &&
+      a.cursor === first.cursor &&
+      a.size === first.size &&
+      a.list === first.list &&
+      !a.kept
+  );
+  return stampAsked(merged, one ? first : { ...first, kept: true });
+}
+
+/**
+ * A walk through a cursor-paged list (hooks/useCursorPagination): where it stands, its
+ * ways, and `ask`, which reads a page and stamps it where it was asked.
+ */
+export interface CursorWalk {
+  readonly cursor: string | undefined;
+  readonly page: number;
+  /** The page size the walk asks at (none where the list asks for none of its own). */
+  readonly size: number | undefined;
+  /** The list it pages, written out: a change of it starts the walk again. */
+  readonly list: string;
+  readonly hasPrevious: boolean;
+  /** To the page after the one this response was asked for, where the walk still stands on it. */
+  goToNext(read: Asked<{ nextCursor: string | null }>): void;
+  goToPrevious(): void;
+  ask<R extends object>(fetch: (cursor: string | undefined) => Promise<R>): () => Promise<Asked<R>>;
+}
+
+/** The most rows of the tx pool page one of an address's list carries (POOL_ROWS_PER_ADDRESS). */
+export const POOL_ROWS_MAX = 200;
+
+/**
+ * How many of a page's rows are the tx pool's (lane cd-fixes-controls, the second read's MUST 1).
+ * Page one of an address's activities and of its transactions carries, on purpose, the pool's rows
+ * above up to a page of committed rows, its page size stated as asked (crates/api/src/routes/
+ * activities.rs, cells.rs: "a page-one-only segment, above every committed row"; at most
+ * POOL_ROWS_MAX, crates/api/src/routes/address_pool.rs). They are page one's own part, not rows of
+ * the page: a page counts its committed rows against its size, and its count counts committed rows.
+ * The one rule, read here alone: a row whose `poolStatus` is set is the pool's, as the API marks
+ * every pool row and no committed one. A pool row below a committed row, or more pool rows than the
+ * API sends, is refused.
+ */
+export function poolRowsOf(list: string, data: readonly unknown[]): number {
+  const pool = (row: unknown) =>
+    typeof row === 'object' && row !== null && (row as { poolStatus?: unknown }).poolStatus != null;
+  let pooled = 0;
+  while (pooled < data.length && pool(data[pooled])) pooled++;
+  if (data.slice(pooled).some(pool))
+    throw new Error(`${list}: a pool row below a committed row (the pool’s rows stand above them)`);
+  if (pooled > POOL_ROWS_MAX)
+    throw new Error(`${list}: ${pooled} pool rows, more than the ${POOL_ROWS_MAX} the API sends`);
+  return pooled;
+}
+
+/** The pages a count of rows fills at the page size the response states. */
+function pageCount(list: string, total: number, limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw new Error(`${list}: a page size of ${limit} rows`);
+  if (!Number.isSafeInteger(total) || total < 0) throw new Error(`${list}: ${total} rows in all`);
+  return Math.ceil(total / limit);
+}
+
+/**
+ * What a response says of itself, checked once for both helpers: the stamp (a response no walk
+ * asked for is refused), the page size it served (a whole number of rows: the API clamps a limit
+ * to 1–100 and states back the size it served, and the rows before a page are counted at it), its
+ * rows (its committed rows no more than a page; the pool's rows of page one apart, `poolRowsOf`,
+ * and only on a page asked with no cursor), its count (a whole number), and its next cursor (one where more
+ * follows, never the cursor it was asked with: an API fault, L1 NOTE 8). And whether it is kept
+ * data: a response asked at another page, cursor, page size or list than the walk stands on, shown
+ * while the walk's page loads; it states its own page and offers no next, and a way back only
+ * where its own page has one (the second read's NOTE 1: page 1's kept response offered `← prev`).
+ */
+function readOf(list: string, read: Asked<CursorPageRead>, walk: CursorWalk) {
+  const at = read?.asked;
+  if (!at)
+    throw new Error(`${list}: a response no walk asked for (a page number is the response's own)`);
+  if (!Number.isSafeInteger(read.limit) || read.limit < 1)
+    throw new Error(`${list}: a page size of ${read.limit} rows`);
+  const pooled = poolRowsOf(list, read.data);
+  if (pooled > 0 && at.cursor !== undefined)
+    throw new Error(
+      `${list}: the pool’s rows on a page asked at a cursor (${at.cursor}): they stand on page one alone`
+    );
+  const rows = read.data.length - pooled;
+  if (rows > read.limit)
+    throw new Error(
+      `${list}: ${rows} rows on a page of ${read.limit}${pooled ? ` (besides the pool’s ${pooled})` : ''}`
+    );
+  const total = read.total === undefined || read.total === null ? null : read.total;
+  const pages = total === null ? null : pageCount(list, total, read.limit);
+  if (read.hasMore && !read.nextCursor)
+    throw new Error(`${list}: a page with more rows after it and no next cursor`);
+  if (read.hasMore && read.nextCursor === at.cursor)
+    throw new Error(
+      `${list}: the next cursor repeats the cursor page ${at.page} was asked with (${at.cursor})`
+    );
+  const kept =
+    Boolean(at.kept) ||
+    at.page !== walk.page ||
+    at.cursor !== walk.cursor ||
+    at.size !== walk.size ||
+    at.list !== walk.list;
+  return {
+    page: at.page,
+    /** The page's committed rows: the pool's rows of page one are not rows of the page. */
+    rows,
+    total,
+    pages,
+    onPrevious: walk.hasPrevious && (!kept || at.page > 1) ? walk.goToPrevious : undefined,
+    onNext: read.hasMore && !kept ? () => walk.goToNext(read) : undefined,
+  };
+}
+
+/** Where a page of a ranked list stands, as the pager's `pages` mode draws it. */
+export interface RankedPage {
+  /** The page whose rows are drawn: the one its response was asked for. */
+  page: number;
+  /** The page size the response served. */
+  pageSize: number;
+  /**
+   * The rows the page shows, counted from 1; null where the list moved under the reader (an empty
+   * page past the first, rows past the count, a page past the pages).
+   */
+  rows: { from: number; to: number } | null;
+  /** The rows in all and the pages they fill, where the page's own response counts them. */
+  count: { total: number; pages: number } | null;
+  /** A way back, where the walk has one. */
+  onPrevious?: () => void;
+  /** A way on: the response's own "more", on the page the walk stands on (never kept data). */
+  onNext?: () => void;
+}
+
+/**
+ * Where a page of a ranked cursor-paged list stands, for the pager's `pages` mode
+ * (components/ui/pager.tsx), from its response alone (lane cd-fixes-controls, item 1: the page is
+ * the one the response was asked for, which travels with it): the rows before it are the full
+ * pages before it, each the page size the response states, so it shows rows `from`–`to`; where
+ * the response counts the rows, the count and the ⌈total ÷ limit⌉ pages they fill. Null where the
+ * list is one page (the first, with nothing after it): no pager is drawn. Its ways to go are the
+ * walk's: back where it has a way back, on by the response's own "more" where the walk stands on
+ * the response's page (kept data offers no next).
+ *
+ * States live data reaches, not faults: a list whose response counts no rows (an ordered list, a
+ * search) is paged by its rows and its own "more" (lane c2-finish); and a list that moved under
+ * the reader (item 2: an empty page past the first; rows past the count; a page past the pages,
+ * which the arithmetic (page − 1) × size cannot know: it holds only if the list stood still
+ * between the reads) has no rows and no count, its place and its ways. A count is the page's own
+ * response's alone: one read at one tip, never a figure another read supplied.
+ *
+ * `firstRank`, for a list whose route ranks its page (a holders list, `rankedRead`): the rows
+ * count from the rank the route states for the page's first row, not from the pages before it
+ * (lane exactness, part B5); the first page's is 1.
+ */
+export function rankedPageAt(
+  list: string,
+  read: Asked<CursorPageRead>,
+  walk: CursorWalk,
+  firstRank?: number
+): RankedPage | null {
+  const at = readOf(list, read, walk);
+  const n = at.rows;
+  if (at.page === 1 && firstRank !== undefined && firstRank !== 1)
+    throw new Error(`${list}: the first page ranks its first row ${firstRank}`);
+  if (at.page === 1 && !read.hasMore) return null;
+  if (at.page === 1 && n === 0)
+    throw new Error(`${list}: an empty first page with more rows after it`);
+  const ways = { onPrevious: at.onPrevious, onNext: at.onNext };
+  const moved = { page: at.page, pageSize: read.limit, rows: null, count: null, ...ways };
+  if (n === 0) return moved;
+  const from = firstRank ?? (at.page - 1) * read.limit + 1;
+  const to = from + n - 1;
+  if (at.total !== null && (to > at.total || at.page > at.pages!)) {
+    // the first page's rows are its own count's first rows: past it, the response contradicts
+    // itself, at one tip
+    if (at.page === 1)
+      throw new Error(`${list}: rows ${from}–${to} on the first page of ${at.total}`);
+    return moved;
+  }
+  return {
+    page: at.page,
+    pageSize: read.limit,
+    rows: { from, to },
+    count: at.total === null ? null : { total: at.total, pages: at.pages! },
+    ...ways,
+  };
+}
+
+/** Where a page of a list in time stands, as the pager's `time` mode draws it. */
+export interface TimePage {
+  /** The page whose rows are drawn: the one its response was asked for. */
+  page: number;
+  /** The pages in all, where the response counts the rows and the page lies within them. */
+  pages?: number;
+  /** Toward the newest end, where the walk has a way back. */
+  onNewer?: () => void;
+  /** Toward the oldest end: the response's own "more", on the page the walk stands on. */
+  onOlder?: () => void;
+}
+
+/**
+ * Where a page of a cursor-paged list in time stands, for the pager's `time` mode, from its
+ * response alone: the page it was asked for and, where the response counts the rows, the
+ * ⌈total ÷ limit⌉ pages they fill (none where the page lies past them: the list moved under the
+ * reader). Null where the list is one page (the first, with nothing after it): no pager is drawn.
+ */
+export function timePageAt(
+  list: string,
+  read: Asked<CursorPageRead>,
+  walk: CursorWalk
+): TimePage | null {
+  const at = readOf(list, read, walk);
+  if (at.page === 1 && !read.hasMore) return null;
+  const within = at.pages !== null && at.page <= at.pages;
+  return {
+    page: at.page,
+    ...(within ? { pages: at.pages! } : {}),
+    onNewer: at.onPrevious,
+    onOlder: at.onNext,
+  };
+}
+
+/**
+ * A page of a ranked list as its route states it (lane exactness, part B5): the route's
+ * `firstRank` is the 1-based rank of the page's first row in the read view that served the page
+ * (a holders list's: `/tokens/{type_hash}/holders`, a collection's and a cluster's). A response
+ * without it is refused by name, as an API older than this page; a value that is no rank too.
+ * The page computed a row's rank as (page − 1) × size + its place, which holds only if the list
+ * stood still between the reads that walked to the page.
+ */
+export function rankedRead<P extends { firstRank: number }>(read: P, list: string): P {
+  const v: unknown = (read as { firstRank?: unknown }).firstRank;
+  if (v === undefined)
+    throw new Error(`${list}: the API sends no firstRank: it is older than this page`);
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1)
+    throw new Error(`${list}: firstRank ${JSON.stringify(v)} is not a rank`);
+  return read;
+}
+
+/** A row's rank on a ranked page: the route's `firstRank` and the row's place (`rankedRead`). */
+export function rankOf<T>(
+  read: { firstRank: number; data: readonly T[] },
+  row: T,
+  list: string
+): number {
+  const at = read.data.indexOf(row);
+  if (at < 0) throw new Error(`${list}: a row that is not on its page`);
+  return read.firstRank + at;
+}

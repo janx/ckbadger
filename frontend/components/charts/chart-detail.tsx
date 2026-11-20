@@ -1,15 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { RetryAction } from '@/components/ui/retry-action';
+import { useMemo, useState, type ReactNode } from 'react';
 import { BlocksOfDay } from '@/components/charts/blocks-of-day';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { Chart, type ChartMarker, type ChartPoint } from '@/components/ui/chart';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { ClassMark } from '@/components/ui/class-mark';
+import { RangeSelect, type RangeOption } from '@/components/ui/range-select';
+import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
+import { HelpPopover } from '@/components/ui/help-popover';
 import {
   CHART_BY_SLUG,
   chartApiPath,
@@ -28,16 +33,19 @@ import {
   formatChartHead,
   formatChartHover,
   formatEpochLabel,
+  type AxisStyle,
   type ChartModel,
   type SubChart,
 } from '@/components/charts/chart-model';
+import { chartDrawing, chartHead, type ChartHead } from '@/components/charts/chart-head';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
-import { exactSignedDecimalRatio } from '@/lib/exact-integer';
+import { useFromSm } from '@/hooks/useFromMd';
 import { apiBaseFor } from '@/lib/active-network';
 import { unitText } from '@/components/ui/units';
+import { cn } from '@/lib/utils';
 
 export type ChartRange = '30d' | '90d' | '1y' | 'all';
 
@@ -84,10 +92,47 @@ export function chartHardforkMarkers(
   });
 }
 
+/** The one spelling of a span (the controls board): the range of a dated chart. */
+const RANGES: readonly RangeOption<ChartRange>[] = [
+  { key: '30d', label: '30 d' },
+  { key: '90d', label: '90 d' },
+  { key: '1y', label: '1 y' },
+  { key: 'all', label: 'all' },
+];
+
+type Scale = 'linear' | 'log';
+/** The scale of a series that can be drawn on a log axis: one of two, so a filter of two chips. */
+const SCALES: readonly FilterValue<Scale>[] = [
+  { key: 'linear', label: 'linear' },
+  { key: 'log', label: 'log' },
+];
+
+/**
+ * What a plot's name says after its unit (rule 4): the span its points cover, in the page's words —
+ * `every complete day since 2019-11-16`, `every completed epoch since #0`.
+ */
+function spanWords(points: readonly ChartPoint[], style: AxisStyle): string {
+  const first = points[0]?.label;
+  if (first === undefined) return 'no points';
+  switch (style) {
+    case 'date':
+      return `every complete day since ${first}`;
+    case 'epoch':
+      return `every completed epoch since #${formatEpochLabel(first, 'chart span')}`;
+    case 'month':
+      return `every first-seen month since ${first}`;
+    case 'model-year':
+      return `year ${first} to year ${points.at(-1)!.label}`;
+    case 'bucket':
+      return chartSpan(points, 'bucket');
+  }
+}
+
 /**
  * A ranking, one row per entry (CH-03): the rank, the entry's name or shortened address as its
  * link, and its value at the row's right end — one line where the width holds it, else the value
  * under the name, still at the right. A miner known only by its lock hash is said once, under it.
+ * The ranking is the table of every entry the page's stacks merge (rule 5).
  */
 function RankedDetail({ model, definition }: { model: ChartModel; definition: ChartDefinition }) {
   const rows = model.rankedRows ?? [];
@@ -106,7 +151,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                   {!row.remainder && `${index + 1}. `}
                   {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
                   {row.href ? (
-                    <Link href={row.href} title={row.title} className="text-jade hover:underline">
+                    <Link href={row.href} title={row.title} look="key">
                       {unitText(row.label)}
                     </Link>
                   ) : (
@@ -125,7 +170,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
         })}
       </ol>
       {rows.some((row) => row.lockHashOnly) && (
-        <p className="text-text-dim text-small mt-4">
+        <p className="text-text text-small max-w-measure mt-4">
           A row beginning 0x is a miner known only by its lock hash.
         </p>
       )}
@@ -134,30 +179,16 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
 }
 
 /**
- * One big reading of the chart head: a small label over its figure in the head's form
- * (`formatChartHead`: a CKB amount cut to the summary form, a rate at two decimals), exact on hover.
+ * A sub-chart's reading (CH-05): a small label over its figure in the head's form, exact on hover.
  */
-function Reading({
-  label,
-  raw,
-  unit,
-  quiet = false,
-}: {
-  label: string;
-  raw: string;
-  unit: string;
-  quiet?: boolean;
-}) {
+function Reading({ label, raw, unit }: { label: string; raw: string; unit: string }) {
   return (
     <div className="flex flex-col items-end" title={withUnit(formatChartExact(raw, unit), unit)}>
       <span className="text-text-dim text-meta">{unitText(label)}</span>
       <span className="flex items-baseline">
-        <span
-          className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
-        >
+        <span className="text-section text-text-bright font-medium tabular-nums">
           {formatChartHead(raw, unit)}
         </span>
-        {/* One form per quantity (CH-14): 2.55%, 10.43 s — the unit never wraps away. */}
         <span className="text-text-dim text-meta whitespace-pre">{unitAfter(unit, '\u00a0')}</span>
       </span>
     </div>
@@ -165,14 +196,14 @@ function Reading({
 }
 
 /**
- * The head of a chart under the main one: one dim line saying what it counts (CH-06) and its
- * figure under the label the page's head figure carries (CH-05).
+ * The head of a chart under the main one: one line saying what it counts (CH-06) and its figure
+ * under the label the page's head figure carries (CH-05).
  */
 function SubChartHead({ sub }: { sub: SubChart }) {
   const key = sub.series[0].key;
   return (
     <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-2">
-      <p className="text-text-dim text-small min-w-0 max-w-[62ch]">{sub.note}</p>
+      <span className="text-text text-small max-w-measure min-w-0">{sub.note}</span>
       {sub.reading && (
         // keeps the right edge when a narrow width puts it under the note
         <div role="group" aria-label={`${sub.title} reading`} className="ml-auto">
@@ -183,23 +214,75 @@ function SubChartHead({ sub }: { sub: SubChart }) {
   );
 }
 
+/**
+ * The figure (the chart-hero board, rules 1 and 3): an eyebrow that names it in words and says where
+ * it is read, the figure at 40 px from 640 (26 below), its unit a step quieter; the DAO's in gold,
+ * as on /dao (rule 7). Its exact value is its title.
+ */
+function HeroFigure({ head, gold }: { head: ChartHead; gold: boolean }) {
+  const figure = head.figure;
+  return (
+    <section data-role="chart-figure" aria-label="figure" className="min-w-0">
+      <div data-testid="figure-eyebrow" className="eyebrow text-text-dim text-meta mb-1.5">
+        {head.eyebrow}
+        {/* the date the figure is read at is the datum: the reading ink at 13 px (the ink and size
+            roles, finished); the eyebrow's words a label */}
+        {head.at && (
+          <>
+            {' · '}
+            <span data-role="eyebrow-date" className="text-text text-small">
+              {head.at}
+            </span>
+          </>
+        )}
+      </div>
+      {figure && (
+        <div
+          data-testid="figure-value"
+          title={figure.title}
+          className={cn(
+            // a long unit's words wrap under the figure on a phone ("16.37% of circulating CKB" is
+            // 342 px at 26 px, the 360 px phone's line 328); the figure keeps the unit's first word:
+            // the % against its digits, else a no-break space
+            'text-index sm:text-display tabular-nums',
+            gold ? 'text-gold' : 'text-text-bright'
+          )}
+        >
+          {figure.display}
+          <span className="text-hero text-text-dim font-normal">
+            {figure.unit.startsWith('%') ? figure.unit : `\u00a0${figure.unit}`}
+          </span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DetailBody({
   definition,
   model,
+  head,
   events,
 }: {
   definition: ChartDefinition;
   model: ChartModel;
+  head: ChartHead;
   events: readonly HardforkEvent[];
 }) {
   const network = useActiveNetwork();
+  const fromSm = useFromSm();
   const [range, setRange] = useState<ChartRange>('all');
-  const [logScale, setLogScale] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
   const points = useMemo(() => rangePoints(model.points, range), [model.points, range]);
-  const secondaryPoints = useMemo(
-    () => (model.secondary ? rangePoints(model.secondary.points, range) : []),
-    [model.secondary, range]
+  // The default scale is the one in which the series has shape (CH-08): the catalogue's log where
+  // a series spans orders of magnitude, else linear with its outliers named (rule 6). The index
+  // card draws the same (chartDrawing, the D1 hand-back's item 3).
+  const [scale, setScale] = useState<Scale | undefined>(undefined);
+  const { supportsLog, yScale, axisCap } = chartDrawing(
+    definition,
+    model,
+    points,
+    model.series,
+    scale
   );
   const markers = chartHardforkMarkers(definition, points, events);
   // Every activated hardfork the full history crosses, linked from the evidence (CH-23).
@@ -207,7 +290,6 @@ function DetailBody({
     events.filter((event) => event.shortName === marker.label)
   );
   const style = axisStyle(definition);
-  const distribution = definition.visual === 'ranked' || style === 'bucket';
   const hasDatedHistory =
     (model.points.length > 0 &&
       model.points.every((point) => /^\d{4}-\d{2}-\d{2}$/.test(point.label))) ||
@@ -215,16 +297,6 @@ function DetailBody({
       (history) =>
         history.points.length > 0 &&
         history.points.every((point) => /^\d{4}-\d{2}-\d{2}$/.test(point.label))
-    );
-  const supportsLog =
-    model.kind === 'line' &&
-    model.points.length > 0 &&
-    model.points.every((point) =>
-      model.series.every(
-        (series) =>
-          exactSignedDecimalRatio(point.values[series.key], `${definition.slug} log scale`)[0] >
-          BigInt(0)
-      )
     );
   const description = getChartDescription(definition.queryKey, {
     yAxisLabel: model.series[0]?.label,
@@ -245,327 +317,302 @@ function DetailBody({
       : style === 'bucket'
         ? bucketName(label, xUnit)
         : label;
-  // Method and evidence are the quieter developer tier, after related charts (CH-20).
-  const method = (
-    <DetailSection title="How it is computed / Evidence">
-      <div className="text-small grid min-w-0 gap-4 md:grid-cols-2">
-        <div className="border-base-border min-w-0 border-t pt-3">
-          <div className="text-text-dim mb-2">Calculation scope</div>
-          <Prose>
-            <p>{description.overview}</p>
-          </Prose>
-          <ul className="text-text-dim mt-3 space-y-2">
-            {description.legendItems.map((item) => (
-              <li key={item.label}>
-                <span className="text-text-bright">{item.label}:</span> {item.description}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="border-base-border min-w-0 border-t pt-3">
-          <div className="text-text-dim mb-2">Evidence path</div>
-          <Prose>
-            <p>
-              Values come from the local index of canonical chain {definition.source}. The chart
-              returns observations at its own recorded dates or buckets; gaps are not interpolated.
-            </p>
-          </Prose>
-          <div className="mt-3 flex flex-col gap-1">
-            {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
-            {definition.source === 'blocks' &&
-              model.latest &&
-              /^\d{4}-\d{2}-\d{2}$/.test(model.latest.label) && (
-                <BlocksOfDay date={model.latest.label} />
-              )}
-            {/* Lane L: every chart links the topic page its numbers come from. */}
-            <Link href={definition.evidenceHref} className="text-jade hover:underline">
-              Explore {definition.evidenceLabel} →
-            </Link>
-            {crossed.length > 0 && (
-              <Link href="/hardforks" className="text-jade hover:underline">
-                Hardforks:{' '}
-                {crossed
-                  .map(
-                    (event) =>
-                      `${event.shortName}, epoch ${formatEpochLabel(String(event.activationEpoch), definition.slug)}`
-                  )
-                  .join(' · ')}{' '}
-                →
-              </Link>
-            )}
-          </div>
-          {model.evidence?.map((fact) => (
-            <div key={fact.label} className="text-text-dim mt-2">
-              {fact.label}: <span className="text-text">{fact.value}</span>
-            </div>
-          ))}
-          <div className="text-text-dim mt-2">
-            Raw series:{' '}
-            <a
-              href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
-              className="text-jade break-all hover:underline"
-            >
-              <code>{chartApiPath(definition)}</code>
-            </a>
-          </div>
-        </div>
-      </div>
-    </DetailSection>
+  const ranked = model.kind === 'ranked';
+  // Rule 8: one controls row of the controls library. The range and the scale stand at the title
+  // row's right end from 640 and with the chart below it; a ranking's range belongs to its
+  // histories. The help mark keeps the title row at every width.
+  const rangeControl = hasDatedHistory && (
+    <RangeSelect label="range" options={RANGES} value={range} onChange={setRange} />
   );
-  // The head reads the latest value and the API's peak, rates at the board's two decimals (CH-02,
-  // CH-21); a semantic summary (leader, protocol total) stays a fact under it.
-  const readings = model.latest && (
-    <div
-      role="group"
-      aria-label={`${definition.title} readings`}
-      className="flex flex-wrap items-baseline justify-end gap-7"
-    >
-      <Reading
-        label={
-          style === 'bucket'
-            ? `most common, ${pointLabel(model.latest.label)}`
-            : pointLabel(model.latest.label)
-        }
-        raw={model.latest.raw}
-        unit={model.unit}
-      />
-      {model.peak && (
-        <Reading
-          label={`peak, ${pointLabel(model.peak.label)}`}
-          raw={model.peak.raw}
-          unit={model.unit}
-          quiet
-        />
-      )}
+  const scaleControl = supportsLog && (
+    <FilterChips label="scale" values={SCALES} value={yScale} onChange={setScale} />
+  );
+  const controls = (rangeControl || scaleControl) && (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {rangeControl}
+      {scaleControl}
     </div>
   );
-  const facts = [
-    // A named leader is the bright part of its value, never broken (CH-03, CH-18).
-    ...(model.facts ?? []).map((fact) => ({
-      label: fact.label,
-      value: fact.name ? (
-        <>
-          <span className="whitespace-nowrap">{fact.name}</span> · {fact.value}
-        </>
+  const help = (
+    <HelpPopover label="How to read and zoom this chart" align="end">
+      {/* C10: the readout row under the chart already says "tap or hover". */}
+      The line under the chart reads one {style === 'date' ? 'day' : 'point'}: select it to keep it
+      there, select it again to let it go. Or focus the chart and use ← and → to step through; Esc
+      returns to the latest reading.
+      {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
+      {supportsLog && ' Log spreads a series that grew by orders of magnitude.'}
+    </HelpPopover>
+  );
+  const titleRow = (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {fromSm && !ranked && controls}
+      {help}
+    </div>
+  );
+  const plotName = (unit: string, shown: readonly ChartPoint[], shownStyle: AxisStyle) =>
+    `${unit} · ${spanWords(shown, shownStyle)}`;
+  // Method and evidence are the quieter developer tier, after related charts (CH-20).
+  const method = (
+    <div id="how-it-is-computed" className="scroll-mt-4">
+      <DetailSection title="How it is computed / Evidence">
+        <div className="text-small grid min-w-0 gap-4 md:grid-cols-2">
+          <div className="border-base-border min-w-0 border-t pt-3">
+            <div className="text-text-dim mb-2">Calculation scope</div>
+            <Prose>
+              <p>{description.overview}</p>
+            </Prose>
+            {/* Rule 10 (CH-15): one formula line in the fields the page reads. */}
+            <p data-role="formula" className="text-text max-w-measure mt-3">
+              {description.formula}
+            </p>
+            {description.legendItems.length > 0 && (
+              <ul className="text-text max-w-measure mt-3 space-y-2">
+                {description.legendItems.map((item) => (
+                  <li key={item.label}>
+                    <span className="text-text-bright">{item.label}:</span> {item.description}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="border-base-border min-w-0 border-t pt-3">
+            <div className="text-text-dim mb-2">Evidence path</div>
+            <Prose>
+              <p>
+                Values come from the local index of canonical chain {definition.source}. The chart
+                returns observations at its own recorded dates or buckets; gaps are not
+                interpolated.
+              </p>
+            </Prose>
+            {/* Rule 10: one real instance, the head's figure exactly, where the page reads it */}
+            {head.figure && (
+              <p data-role="instance" className="text-text max-w-measure mt-3">
+                <span className="text-text-dim">The figure, exactly:</span> {head.figure.title}
+                {head.at && ` · ${head.at}`}
+              </p>
+            )}
+            <div className="mt-3 flex flex-col gap-1">
+              {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
+              {definition.source === 'blocks' &&
+                model.latest &&
+                /^\d{4}-\d{2}-\d{2}$/.test(model.latest.label) && (
+                  <BlocksOfDay date={model.latest.label} />
+                )}
+              {/* Lane L: every chart links the topic page its numbers come from. */}
+              <Link href={definition.evidenceHref} look="onward">
+                Explore {definition.evidenceLabel}
+              </Link>
+              {crossed.length > 0 && (
+                <Link href="/hardforks" look="onward">
+                  Hardforks:{' '}
+                  {crossed
+                    .map(
+                      (event) =>
+                        `${event.shortName}, epoch ${formatEpochLabel(String(event.activationEpoch), definition.slug)}`
+                    )
+                    .join(' · ')}
+                </Link>
+              )}
+            </div>
+            {/* The facts the head's sentence does not carry, and the developer facts (CH-18). */}
+            {[...(model.facts ?? []), ...(model.evidence ?? [])].map((fact) => (
+              <div key={fact.label} className="text-text-dim mt-2">
+                {fact.label}:{' '}
+                <span className="text-text">
+                  {fact.name ? `${fact.name} · ${fact.value}` : fact.value}
+                </span>
+              </div>
+            ))}
+            <div className="mt-2">
+              <span className="text-text-dim">Raw series:</span>{' '}
+              <ExternalLink
+                look="inline"
+                href={
+                  new URL(
+                    `${apiBaseFor(network)}${chartApiPath(definition)}`,
+                    window.location.origin
+                  ).href
+                }
+                className="break-all"
+              >
+                <code>{chartApiPath(definition)}</code>
+              </ExternalLink>
+            </div>
+          </div>
+        </div>
+      </DetailSection>
+    </div>
+  );
+  const sub = (
+    history: SubChart,
+    shown: readonly ChartPoint[],
+    shownStyle: AxisStyle,
+    kind: 'line' | 'bars' | 'stacked',
+    height: number,
+    extra: { actions?: ReactNode } = {}
+  ) => (
+    <DetailSection
+      key={history.title}
+      title={history.title}
+      args={chartSpan(shown, shownStyle)}
+      actions={extra.actions}
+    >
+      <SubChartHead sub={history} />
+      {history.points.length ? (
+        <Chart
+          title={history.title}
+          subtitle={`${history.caption} · ${chartSpan(shown, shownStyle)}`}
+          reading={history.reading?.point}
+          hideCaption
+          data={shown}
+          series={history.series}
+          unit={history.unit}
+          kind={kind}
+          height={height}
+          formatValue={(value) => formatChartHover(value, history.unit)}
+          xTicks={axisTicks(shown, shownStyle, 8, shownStyle === 'bucket' ? xUnit : undefined)}
+          formatAxis={chartAxisFormat(history.unit)}
+          formatLabel={shownStyle === 'date' ? undefined : pointLabel}
+          pointDots
+          slotBars={shownStyle === 'bucket' || shownStyle === 'month'}
+          categoricalX={shownStyle === 'bucket' && categoricalAxis(definition)}
+          pinnedReadout={readout(history.title)}
+          // Rule 4: ticks inside the plot, the unit once in its name; rule 7: a quiet line.
+          plotName={plotName(history.caption, shown, shownStyle)}
+          insideYTicks
+          bareTicks
+          quiet
+          // Rule 5: a ranked history's five and the rest, named at their right ends.
+          bandEnds={kind === 'stacked' ? history.bandEnds : undefined}
+          solidBands={kind === 'stacked'}
+        />
       ) : (
-        fact.value
-      ),
-    })),
-    ...(model.delta
-      ? [
-          {
-            label: 'Last change',
-            value: withUnit(formatChartHover(model.delta, model.unit), model.unit),
-          },
-        ]
-      : []),
-  ];
+        <p className="text-text text-small max-w-measure py-8">
+          No indexed observations for this scope.
+        </p>
+      )}
+    </DetailSection>
+  );
   return (
     <>
       <nav aria-label="Breadcrumb" className="text-small mb-3">
-        <Link
-          href={`/charts#${chartSectionId(definition.section)}`}
-          className="text-text-dim hover:text-jade"
-        >
-          Charts / {definition.section}
+        <Link href="/charts" look="inline">
+          charts
+        </Link>{' '}
+        <span className="text-text-dim">/</span>{' '}
+        <Link href={`/charts#${chartSectionId(definition.section)}`} look="inline">
+          {definition.section.toLowerCase()}
         </Link>
       </nav>
       <DetailLayout
+        kind="topic"
         title={definition.title}
         documentTitle={[definition.title, 'chart']}
-        identity={definition.subtitle}
-        actions={readings}
-        facts={facts.length ? facts : undefined}
+        actions={titleRow}
+        // Rule 2: one sentence says what the series did, in place of the line of figures.
+        lede={
+          <p data-role="chart-sentence" className="text-text text-body">
+            <span data-role="sentence-words">{head.sentence}</span>{' '}
+            <Link href="#how-it-is-computed" look="onward">
+              How it is computed
+            </Link>
+          </p>
+        }
         tier2={method}
       >
-        {/* The command runs on what it draws (rubbing × Song print, phase 5): `full history 1,204
-            days`, `distribution 24 buckets`; a ranked chart counts nothing here. */}
-        <DetailSection
-          // A model curve is a model of its years, not a history (CH-19).
-          title={distribution ? 'Distribution' : style === 'model-year' ? 'Model' : 'Full history'}
-          args={model.kind !== 'ranked' ? chartSpan(points, style) : undefined}
-        >
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <div role="group" aria-label="Chart range" className="flex flex-wrap gap-1">
-              {hasDatedHistory &&
-                (
-                  [
-                    ['30d', '30 d'],
-                    ['90d', '90 d'],
-                    ['1y', '1 y'],
-                    ['all', 'All'],
-                  ] as const
-                ).map(([option, label]) => (
-                  <button
-                    key={option}
-                    type="button"
-                    aria-pressed={range === option}
-                    onClick={() => setRange(option)}
-                    className={`text-small border px-3 py-1 ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-            </div>
-            <div className="flex gap-1">
-              {supportsLog && (
-                <button
-                  type="button"
-                  aria-pressed={logScale}
-                  onClick={() => setLogScale((current) => !current)}
-                  className={`text-small border px-3 py-1 ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
-                >
-                  Log scale
-                </button>
-              )}
-              {model.kind !== 'ranked' && (
-                <button
-                  type="button"
-                  aria-label="How to read and zoom this chart"
-                  aria-expanded={helpOpen}
-                  onClick={() => setHelpOpen((open) => !open)}
-                  className="border-base-border text-text-dim hover:text-text-bright text-small border px-2 py-1"
-                >
-                  ?
-                </button>
-              )}
-            </div>
+        <div className="min-w-0">
+          <HeroFigure head={head} gold={definition.source === 'dao'} />
+          {!fromSm && !ranked && controls && <div className="mt-4">{controls}</div>}
+          <div className="mt-3.5 min-w-0">
+            {model.latest === null && model.points.length === 0 && !ranked ? (
+              <p className="text-text text-small max-w-measure py-8">
+                No indexed observations for this chart.
+              </p>
+            ) : ranked ? (
+              <RankedDetail model={model} definition={definition} />
+            ) : (
+              <Chart
+                title={definition.title}
+                subtitle={`${definition.subtitle} · ${chartSpan(points, style)}`}
+                data={points}
+                series={model.series}
+                unit={model.unit}
+                kind={model.kind}
+                yScale={yScale}
+                height={360}
+                // The page head names the chart and reads it (visual pass).
+                hideCaption
+                markers={markers}
+                projectedAfter={range === 'all' ? model.projectedAfter : undefined}
+                // A histogram reads its most common bucket, cohorts the last complete one, a model
+                // its today (CH-30, CH-19, CH-03).
+                reading={model.reading ?? model.today}
+                formatValue={(value) => formatChartHover(value, model.unit)}
+                // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
+                xTicks={axisTicks(points, style, 8, xUnit, model.bucketRun)}
+                formatAxis={chartAxisFormat(model.unit)}
+                pointDots
+                slotBars={style === 'bucket' || style === 'month'}
+                categoricalX={categoricalAxis(definition)}
+                hideMarkerLegend
+                yDomain={model.yDomain}
+                referenceLines={model.referenceLines}
+                formatLabel={(label) =>
+                  style === 'epoch' ? `epoch ${pointLabel(label)}` : pointLabel(label)
+                }
+                pinnedReadout={readout(definition.title)}
+                // Rule 4: ticks inside the plot, bare; the unit said once, in the plot's name.
+                plotName={plotName(definition.plotUnit, points, style)}
+                insideYTicks
+                bareTicks
+                // Rule 6: an outlier is named over the plot instead of setting the axis.
+                axisCap={axisCap}
+                // Rule 5: a stack's bands named at their right ends, in solid fills; two lines of
+                // one unit keep their key under the plot.
+                bandEnds={model.kind === 'stacked' ? model.bandEnds : undefined}
+                solidBands={model.kind === 'stacked'}
+                seriesLegend={model.kind !== 'stacked' && model.series.length > 1}
+              />
+            )}
           </div>
-          {helpOpen && (
-            <p className="text-text-dim text-small mb-4 max-w-[62ch] leading-5">
-              {/* C10: the readout row under the chart already says "tap or hover". */}
-              The line under the chart reads one {style === 'date' ? 'day' : 'point'}: select it to
-              keep it there, select it again to let it go. Or focus the chart and use ← and → to
-              step through; Esc returns to the latest reading.
-              {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
-              {supportsLog && ' Log scale spreads a series that grew by orders of magnitude.'}
-            </p>
+          {/* Rule 5: every band a stack merges, at the last point, in a table under the chart. */}
+          {model.table && (
+            <table aria-label={`${definition.title}, every band`} className="text-small mt-5">
+              <thead>
+                <tr className="text-text-dim">
+                  <th className="pr-8 text-left font-normal">band</th>
+                  <th className="text-right font-normal">{`share, ${model.latest?.label ?? ''}`}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {model.table.map((row) => (
+                  <tr key={row.name}>
+                    <td className="text-text pr-8">{unitText(row.name)}</td>
+                    <td className="text-text-bright text-right tabular-nums">{row.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
-          {model.latest === null ? (
-            <p className="text-text-dim text-small py-8">No indexed observations for this chart.</p>
-          ) : model.kind === 'ranked' ? (
-            <RankedDetail model={model} definition={definition} />
-          ) : (
-            <Chart
-              title={definition.title}
-              subtitle={`${definition.subtitle} · ${chartSpan(points, style)}`}
-              data={points}
-              series={model.series}
-              unit={model.unit}
-              kind={model.kind}
-              yScale={supportsLog && logScale ? 'log' : 'linear'}
-              height={360}
-              // The page head already names the chart and reads it (visual pass).
-              hideCaption
-              markers={markers}
-              projectedAfter={range === 'all' ? model.projectedAfter : undefined}
-              // A histogram reads its most common bucket, cohorts the last complete one, a model
-              // its today (CH-30, CH-19, CH-03).
-              reading={model.reading ?? model.today}
-              formatValue={(value) => formatChartHover(value, model.unit)}
-              // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
-              xTicks={axisTicks(points, style, 8, xUnit, model.bucketRun)}
-              formatAxis={chartAxisFormat(model.unit)}
-              pointDots
-              slotBars={style === 'bucket' || style === 'month'}
-              categoricalX={categoricalAxis(definition)}
-              hideMarkerLegend
-              yDomain={model.yDomain}
-              referenceLines={model.referenceLines}
-              formatLabel={(label) =>
-                style === 'epoch' ? `epoch ${pointLabel(label)}` : pointLabel(label)
-              }
-              pinnedReadout={readout(definition.title)}
-              // The caption is hidden, so several bands (the HODL wave's eight) get a swatch key
-              // under the plot: name and value at the reading, latest by default (C#4).
-              seriesLegend={model.series.length > 1}
-            />
+        </div>
+        {model.historicalShares?.map((history, index) =>
+          sub(history, rangePoints(history.points, range), 'date', 'stacked', 260, {
+            // a ranking's range is its histories' (the ranking itself is one day)
+            actions: index === 0 ? controls : undefined,
+          })
+        )}
+        {model.secondary &&
+          model.secondary.points.length > 0 &&
+          sub(
+            model.secondary,
+            rangePoints(model.secondary.points, range),
+            style,
+            definition.visual === 'bars' ? 'bars' : 'line',
+            220
           )}
-        </DetailSection>
-        {model.historicalShares?.map((history) => {
-          const shown = rangePoints(history.points, range);
-          const span = chartSpan(shown, 'date');
-          // Named once, by the command line; the note says what is counted; the chart's caption
-          // is its own quantity and span, for assistive technology (CH-04, CH-06).
-          return (
-            <DetailSection key={history.title} title={history.title} args={span}>
-              <SubChartHead sub={history} />
-              {history.points.length ? (
-                <Chart
-                  title={history.title}
-                  subtitle={`${history.caption} · ${span}`}
-                  data={shown}
-                  series={history.series}
-                  unit={history.unit}
-                  kind="stacked"
-                  height={260}
-                  hideCaption
-                  formatValue={(value) => formatChartHover(value, history.unit)}
-                  xTicks={axisTicks(shown, 'date', 8)}
-                  formatAxis={chartAxisFormat(history.unit)}
-                  pointDots
-                  // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
-                  seriesLegend
-                  pinnedReadout={readout(history.title)}
-                />
-              ) : (
-                <p className="text-text-dim text-small py-8">
-                  No indexed observations for this scope.
-                </p>
-              )}
-            </DetailSection>
-          );
-        })}
-        {/* A chart under the main one is named once, by its command line; one dim line says
-            what it counts; its own title and caption are for assistive technology (CH-06). */}
-        {model.secondary && model.secondary.points.length > 0 && (
-          <DetailSection title={model.secondary.title} args={chartSpan(secondaryPoints, style)}>
-            <SubChartHead sub={model.secondary} />
-            <Chart
-              title={model.secondary.title}
-              reading={model.secondary.reading?.point}
-              subtitle={`${model.secondary.caption} · ${chartSpan(secondaryPoints, style)}`}
-              hideCaption
-              data={secondaryPoints}
-              series={model.secondary.series}
-              unit={model.secondary.unit}
-              kind={definition.visual === 'bars' ? 'bars' : 'line'}
-              height={220}
-              formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
-              xTicks={axisTicks(secondaryPoints, style, 8, xUnit)}
-              formatAxis={chartAxisFormat(model.secondary.unit)}
-              formatLabel={pointLabel}
-              pointDots
-              slotBars={style === 'bucket' || style === 'month'}
-              categoricalX={categoricalAxis(definition)}
-              pinnedReadout={readout(model.secondary.title)}
-            />
-          </DetailSection>
-        )}
-        {model.dailyFlow && model.dailyFlow.points.length > 0 && (
-          <DetailSection
-            title={model.dailyFlow.title}
-            args={chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}
-          >
-            <SubChartHead sub={model.dailyFlow} />
-            <Chart
-              title={model.dailyFlow.title}
-              reading={model.dailyFlow.reading?.point}
-              subtitle={`${model.dailyFlow.caption} · ${chartSpan(rangePoints(model.dailyFlow.points, range), 'date')}`}
-              hideCaption
-              data={rangePoints(model.dailyFlow.points, range)}
-              series={model.dailyFlow.series}
-              unit={model.dailyFlow.unit}
-              kind="line"
-              height={220}
-              formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
-              xTicks={axisTicks(rangePoints(model.dailyFlow.points, range), 'date', 8)}
-              formatAxis={chartAxisFormat(model.dailyFlow.unit)}
-              pointDots
-              pinnedReadout={readout(model.dailyFlow.title)}
-            />
-          </DetailSection>
-        )}
+        {model.dailyFlow &&
+          model.dailyFlow.points.length > 0 &&
+          sub(model.dailyFlow, rangePoints(model.dailyFlow.points, range), 'date', 'line', 220)}
         <DetailSection title="Related charts">
           <div className="grid min-w-0 gap-x-10 gap-y-8 sm:grid-cols-2 xl:grid-cols-4">
             {definition.related.map((slug) => {
@@ -592,11 +639,15 @@ export function ChartDetail({ slug }: { slug: string }) {
   });
   const sync = useQuery({ queryKey: ['network-stats'], queryFn: api.getNetworkStats });
   let model: ChartModel | null = null;
+  let head: ChartHead | null = null;
   let modelError: string | null = null;
   if (data.data) {
     try {
       model = chartModel(definition, data.data);
+      // the head reads the model's points: a payload it cannot read is invalid data too
+      head = chartHead(definition, model);
     } catch (cause) {
+      model = null;
       modelError = cause instanceof Error ? cause.message : String(cause);
     }
   }
@@ -621,41 +672,34 @@ export function ChartDetail({ slug }: { slug: string }) {
           <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
             <div role="alert" className="text-negative break-words">
               Failed to load {definition.title}: {data.error.message}
-              <button
-                type="button"
-                onClick={() => void data.refetch()}
-                className="text-jade ml-2 underline"
-              >
-                Retry
-              </button>
+              <RetryAction words="Retry" onRetry={() => void data.refetch()} className="ml-2" />
             </div>
           </DetailLayout>
         )}
         {modelError && (
           <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
-            <p role="alert" className="text-negative break-words">
+            <p role="alert" className="text-negative max-w-measure break-words">
               Invalid {definition.title} chart data: {modelError}
             </p>
           </DetailLayout>
         )}
         {data.error && model && (
-          <p role="alert" className="text-negative text-small mb-5 break-words">
+          <p role="alert" className="text-negative text-small max-w-measure mb-5 break-words">
             Could not refresh {definition.title}: {data.error.message}. Showing previously loaded
             data.
-            <button
-              type="button"
-              onClick={() => void data.refetch()}
-              className="text-jade ml-2 underline"
-            >
-              Retry
-            </button>
+            <RetryAction words="Retry" onRetry={() => void data.refetch()} className="ml-2" />
           </p>
         )}
-        {model && (
-          <DetailBody definition={definition} model={model} events={hardforks.data?.events ?? []} />
+        {model && head && (
+          <DetailBody
+            definition={definition}
+            model={model}
+            head={head}
+            events={hardforks.data?.events ?? []}
+          />
         )}
         {hardforks.error && (
-          <p role="alert" className="text-negative text-small mt-4">
+          <p role="alert" className="text-negative text-small max-w-measure mt-4">
             Hardfork markers unavailable: {hardforks.error.message}
           </p>
         )}

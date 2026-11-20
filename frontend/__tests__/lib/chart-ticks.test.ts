@@ -200,12 +200,24 @@ describe('clipToCap', () => {
 });
 
 describe('formatCompactSigned', () => {
+  const ckb = (whole: number) => BigInt(whole) * BigInt(100_000_000);
   it('formats a clipped bar label with sign and unit', () => {
-    expect(formatCompactSigned(28.12e6)).toBe('+28.12M');
-    expect(formatCompactSigned(-8.94e6)).toBe(`${MINUS}8.94M`);
-    expect(formatCompactSigned(950_000)).toBe('+950k');
-    expect(formatCompactSigned(12_500)).toBe('+12.5k');
-    expect(formatCompactSigned(0)).toBe('0');
+    expect(formatCompactSigned(ckb(28_120_000))).toBe('+28.12M');
+    expect(formatCompactSigned(-ckb(8_940_000))).toBe(`${MINUS}8.94M`);
+    expect(formatCompactSigned(ckb(950_000))).toBe('+950k');
+    expect(formatCompactSigned(ckb(12_500))).toBe('+12.5k');
+    expect(formatCompactSigned(BigInt(0))).toBe('0');
+  });
+
+  // lane exactness, part B3: the label is the day's change, read from its exact shannons and cut
+  // (it rounded the float the bar is drawn from: 28,129,999.99999999 CKB read +28.13M)
+  it('cuts the exact change, never rounds it', () => {
+    expect(formatCompactSigned(BigInt('2812999999999999'))).toBe('+28.12M');
+    // 999,999.99999999 CKB: 999.99k (half up read 1.00M)
+    expect(formatCompactSigned(-BigInt('99999999999999'))).toBe(`${MINUS}999.99k`);
+    // 999.99999999 CKB: whole CKB under 1,000, cut
+    expect(formatCompactSigned(-BigInt('99999999999'))).toBe(`${MINUS}999`);
+    expect(formatCompactSigned(BigInt('1299999999'))).toBe('+12');
   });
 });
 
@@ -265,9 +277,10 @@ describe('placeXTicks on a time axis', () => {
 
 describe('tickGutter', () => {
   it('sizes the y-axis gutter from the longest tick label, never narrower than 48 px', () => {
-    // Token page (responsive B#17): "10k transactions" needs 16 × 6 + 8 = 104 px; a 100 px gutter
-    // cut its first digit, printing ".0k transactions".
-    expect(tickGutter(['0 transactions', '5k transactions', '10k transactions'])).toBe(104);
+    // Token page (responsive B#17): "10k transactions" needs 16 × 7.2 + 8 = 123.2 px at the 12 px
+    // tick (re-pinned, readability R4: it was 16 × 6 + 8 = 104 at 10 px); a gutter short of it cut
+    // its first digit, printing ".0k transactions".
+    expect(tickGutter(['0 transactions', '5k transactions', '10k transactions'])).toBe(123.2);
     expect(tickGutter(['0', '500', '1k'])).toBe(48);
     expect(tickGutter([])).toBe(48);
   });

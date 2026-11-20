@@ -386,9 +386,39 @@ pub(crate) fn transaction_activity_filter(
 ) -> Result<Option<&str>, ApiRouteError> {
     match filter {
         None | Some("") | Some("all") => Ok(None),
-        Some(value @ ("ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity")) => Ok(Some(value)),
-        Some(value) => Err(ApiError::bad_request(format!("invalid activity_type '{value}'; expected ckb, script, cellbase, dao, token, object, or identity"))),
+        Some(value @ ("user" | "ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity")) => Ok(Some(value)),
+        Some(value) => Err(ApiError::bad_request(format!("invalid activity_type '{value}'; expected user, ckb, script, cellbase, dao, token, object, or identity"))),
     }
+}
+
+/// The user transactions, every committed transaction but the cellbase, newest first, strictly
+/// older than `cursor`: exactly the `activities` rows (which hold no cellbase), each with its
+/// `tx_index` entry. One `activities` walk, then one `tx_index` read for the page.
+fn list_user_transactions_page(
+    store: &ckbadger_store::CkbadgerStore,
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+) -> anyhow::Result<Vec<(TxListEntry, Option<TxActions>)>> {
+    let (rows, entries): (Vec<TxActions>, Vec<_>) = store
+        .list_tx_actions_recent_with_entries(limit, cursor)?
+        .into_iter()
+        .unzip();
+    ckbadger_store::ensure_no_cellbase_activity(&rows)?;
+    Ok(rows
+        .into_iter()
+        .zip(entries)
+        .map(|(actions, entry)| {
+            (
+                (
+                    actions.block_number,
+                    actions.block_hash.clone(),
+                    actions.tx_index,
+                    entry,
+                ),
+                Some(actions),
+            )
+        })
+        .collect())
 }
 
 /// Cellbase has no persisted TxActions row: scan the existing canonical index.
@@ -469,6 +499,9 @@ async fn list_transactions(
                             .map(|row| (row, None))
                             .collect(),
                     );
+                }
+                if filter == "user" {
+                    return list_user_transactions_page(&store, limit as usize + 1, cursor);
                 }
                 let bucket =
                     ckbadger_store::GlobalBucket::from_filter(&filter).ok_or_else(|| {

@@ -5,23 +5,25 @@ import { SCRIPT_ACTIVITY_FAMILIES, scriptActivityLink } from '@/lib/script-activ
 // family get no link — never a guessed one.
 describe('scriptActivityLink', () => {
   it.each([
-    ['nervos-dao', 'dao', 'Activity: Nervos DAO →'],
-    ['spore', 'object', 'Activity: Objects →'],
-    ['spore-cluster', 'object', 'Activity: Objects →'],
-    ['m-nft', 'object', 'Activity: Objects →'],
-    ['m-nft-class', 'object', 'Activity: Objects →'],
-    ['xudt', 'token', 'Activity: Tokens →'],
-    ['simple-udt', 'token', 'Activity: Tokens →'],
-    ['bit-account', 'identity', 'Activity: Identities →'],
-    ['bit-cell', 'identity', 'Activity: Identities →'],
-    ['did-ckb', 'identity', 'Activity: Identities →'],
-    ['dotcell-account', 'identity', 'Activity: Identities →'],
+    ['nervos-dao', 'dao', 'Activity: Nervos DAO'],
+    ['spore', 'object', 'Activity: Objects'],
+    ['spore-cluster', 'object', 'Activity: Objects'],
+    ['m-nft', 'object', 'Activity: Objects'],
+    ['m-nft-class', 'object', 'Activity: Objects'],
+    ['xudt', 'token', 'Activity: Tokens'],
+    ['simple-udt', 'token', 'Activity: Tokens'],
+    ['bit-account', 'identity', 'Activity: Identities'],
+    ['bit-cell', 'identity', 'Activity: Identities'],
+    ['did-ckb', 'identity', 'Activity: Identities'],
+    ['dotcell-account', 'identity', 'Activity: Identities'],
     // The API's `protocol` bucket holds RGB++, Fiber and UTXOSwap together: the label says so.
-    ['rgb', 'protocol', 'Protocol activity →'],
-    ['fiber-funding-lock', 'protocol', 'Protocol activity →'],
-    ['fiber-commitment-lock', 'protocol', 'Protocol activity →'],
-    ['utxoswap-intent-lock', 'protocol', 'Protocol activity →'],
-    ['utxoswap-proxy-lock', 'protocol', 'Protocol activity →'],
+    ['rgb', 'protocol', 'Protocol activity'],
+    ['fiber-funding-lock', 'protocol', 'Protocol activity'],
+    ['fiber-commitment-lock', 'protocol', 'Protocol activity'],
+    ['utxoswap-intent-lock', 'protocol', 'Protocol activity'],
+    ['utxoswap-proxy-lock', 'protocol', 'Protocol activity'],
+    // re-pinned on purpose (lane p-assets): the words alone, the arrow the onward look writes (the
+    // link-look rule: a way onward types no arrow); each label ended in " →"
   ])('maps %s to the %s feed', (familyId, filter, label) => {
     expect(scriptActivityLink(familyId)).toEqual({
       filter,

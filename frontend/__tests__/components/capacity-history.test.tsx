@@ -12,7 +12,12 @@ const history: AssetCapacityHistory = {
   series: [],
   data: Array.from({ length: 14 }, (_, i) => ({
     date: `2023-11-${String(i + 1).padStart(2, '0')}`,
-    values: { used: '6100000000', unused: String(BigInt(3900000000) + BigInt(i)) },
+    values: {
+      occupiedCapacity: '6100000000',
+      freeCapacity: String(BigInt(3900000000) + BigInt(i)),
+      // the whole the day's cells hold, as the route states it (lane p-assets)
+      capacity: String(BigInt(10000000000) + BigInt(i)),
+    },
   })),
 };
 it('preserves single shannons, complete-day cutoff and shared capacity/transfer range', () => {
@@ -36,11 +41,39 @@ it('preserves single shannons, complete-day cutoff and shared capacity/transfer 
   expect(readout).toHaveTextContent('39.00000013');
   // Lane P: the complete-day scope is the hover of the reading's day.
   expect(readout.querySelector('[title^="complete UTC+8 days through 2023-11-14"]')).not.toBeNull();
-  const range = screen.getByRole('group', { name: 'History time range' });
-  fireEvent.click(within(range).getByRole('button', { name: '1W' }));
-  expect(within(range).getByRole('button', { name: '1W' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByText('No data in this range.')).toBeInTheDocument();
+  // re-pinned (lane c2-assets): the range is the controls board's RangeSelect, a radio group whose
+  // spans are spelled "1 w" (was a group of pressed buttons, "1W")
+  const range = screen.getByRole('radiogroup', { name: 'History time range' });
+  fireEvent.click(within(range).getByRole('radio', { name: '1 w' }));
+  expect(within(range).getByRole('radio', { name: '1 w' })).toHaveAttribute('aria-checked', 'true');
+  // re-pinned on purpose (lane P2's third round, item 7): a series of one week is said in words and draws no chart, so the one week of the
+  // series draws no chart at any range, and no empty one either (it said "No data in this range."
+  // under a chart of no bar)
+  expect(screen.queryByRole('img', { name: /per week/ })).toBeNull();
+  expect(screen.queryByText('No data in this range.')).toBeNull();
   expect(readout).toHaveTextContent('100.00000013');
+});
+// lane exactness, part B (the third read's S4): one name for a held point's parts on every route;
+// an API older than this page sent used and unused, and is refused by name, never read as a
+// missing figure
+it('refuses an older API\u2019s used and unused by name', () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Older"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', unused: '1', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow(
+    'Older 2023-11-01: the API sends used and unused, not occupiedCapacity and freeCapacity: it is older than this page'
+  );
+  log.mockRestore();
 });
 it('rejects an incomplete calendar day and missing exact occupied state', () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -59,11 +92,69 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
       <CapacityHistory
         assetClass="objects"
         subject="Broken"
-        history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
+        // re-pinned on purpose (lane p-assets): the day states its capacity, so its missing
+        // occupied part is the fault read (it read occupied first, before capacity was sent)
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { freeCapacity: '1', capacity: '1' } }],
+        }}
         weekly={[]}
       />
     )
   ).toThrow('occupied');
+  // a day without the whole its cells hold, which the route states, fails too: the page sums
+  // nothing in its place
+  expect(
+    () =>
+      render(
+        <CapacityHistory
+          assetClass="objects"
+          subject="Broken"
+          history={{
+            ...history,
+            data: [{ date: '2023-11-01', values: { occupiedCapacity: '1', freeCapacity: '1' } }],
+          }}
+          weekly={[]}
+        />
+      )
+    // re-pinned on purpose (lane P2's fifth round, item 3): the route states each day's capacity from
+    // this plan on; a day without it is from an API older than this page, refused by name (it was
+    // "Broken 2023-11-01: capacity", the number reader's message)
+  ).toThrow('Broken 2023-11-01: the API sends no capacity: it is older than this page');
+  // Lane P2's third round (item 13): the day's free part is the route's `freeCapacity`, read beside the
+  // other two (it was capacity − occupied, in the page): a day without it fails, and parts that do
+  // not make the whole are refused
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { occupiedCapacity: '1', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('Broken 2023-11-01: the API sends no freeCapacity: it is older than this page');
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [
+            {
+              date: '2023-11-01',
+              values: { occupiedCapacity: '1', freeCapacity: '2', capacity: '2' },
+            },
+          ],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('2023-11-01: occupied 1 and free 2 do not make the capacity 2');
   log.mockRestore();
 });
 
@@ -94,9 +185,11 @@ it.each([928, 358])(
       expect(new Set(ticks).size).toBe(ticks.length);
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       expect(errors).not.toHaveBeenCalled();
-      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000120');
+      // re-pinned on purpose (lane P2's follow-up, item 5): a readout writes the exact value, its trailing
+      // zeros dropped (it wrote the column's padded "0.00000120")
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.0000012 CKB');
       fireEvent.keyDown(plot, { key: 'ArrowLeft' });
-      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000100');
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.000001 CKB');
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

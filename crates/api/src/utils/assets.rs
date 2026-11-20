@@ -86,6 +86,19 @@ pub fn resolve_object_collection_composition_tier_override(standard: &str) -> Op
         .map(String::as_str)
 }
 
+/// The free part of a held capacity: what the cells hold less what they occupy (lane exactness, part B5). The one
+/// subtraction behind every free figure the API states (a "CKB held" history's day, a token's day,
+/// a cell version), so a page subtracts nothing; an occupied part under zero or above the whole is
+/// an error naming both, never a clamped free part.
+pub fn free_part(capacity: i128, occupied: i128) -> std::result::Result<i128, String> {
+    if occupied < 0 || occupied > capacity {
+        return Err(format!(
+            "occupied {occupied} is not within the capacity {capacity}"
+        ));
+    }
+    Ok(capacity - occupied)
+}
+
 /// Apply one daily delta to owned capacity/knowledge with strict invariant checks.
 pub fn apply_owned_capacity_delta(
     owned_capacity: i128,

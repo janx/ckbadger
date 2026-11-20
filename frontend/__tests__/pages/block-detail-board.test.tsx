@@ -3,7 +3,6 @@ import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -12,6 +11,11 @@ import { PAGE_SEAL_HEIGHTS } from '@/components/ui/page-seal';
 import { api, type Block, type GlobalActivity, type Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { numberStrings } from '@/__tests__/utils/lede-rule';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -116,7 +120,7 @@ const neighbour = (number: number, over: Record<string, unknown> = {}) => ({
   proposalsCount: 0,
   ...over,
 });
-const neighbours = {
+const neighbours = pagedRead({
   data: [
     neighbour(N + 2, { size: 3917, transactionSizes: [355, 500, 977] }),
     neighbour(N + 1),
@@ -125,21 +129,24 @@ const neighbours = {
     neighbour(N - 2, { proposalsCount: 3 }),
   ],
   total: N + 3,
-  limit: 50,
+  limit: 5,
   hasMore: true,
   nextCursor: String(N - 2),
-};
-const activity = (txIndex: number): GlobalActivity => ({
-  txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
-  blockNumber: N,
-  txIndex,
-  timestamp: block.timestamp,
-  isCellbase: txIndex === 0,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  participants: [],
 });
+const activity = (txIndex: number): GlobalActivity =>
+  activityRead({
+    txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
+    blockNumber: N,
+    txIndex,
+    timestamp: block.timestamp,
+    isCellbase: txIndex === 0,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
+    participants: [],
+  });
 const tx = (index: number): Transaction =>
   ({
     hash: h(`${index}a`),
@@ -198,18 +205,22 @@ beforeEach(() => {
     rawEpoch: '0x5c003e9003b45',
   });
   // R2b-a 3: `order=asc` answers the block in tx order, cellbase first.
-  vi.mocked(api.getGlobalActivities).mockResolvedValue({
-    data: [0, 1, 2, 3].map(activity),
-    limit: 100,
-    hasMore: false,
-    nextCursor: null,
-  });
-  vi.mocked(api.getTransactions).mockResolvedValue({
-    data: [0, 1, 2, 3].map(tx),
-    limit: 100,
-    hasMore: false,
-    nextCursor: null,
-  });
+  vi.mocked(api.getGlobalActivities).mockResolvedValue(
+    pagedRead({
+      data: [0, 1, 2, 3].map(activity),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [0, 1, 2, 3].map(tx),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
   vi.mocked(api.getBlockProposals).mockResolvedValue([
     {
       proposalIndex: 0,
@@ -237,9 +248,46 @@ describe('Block board · first tier', () => {
     expect(screen.getByRole('link', { name: 'Next block, 20,827,933' })).toBeInTheDocument();
     const summary = screen.getByTestId('block-summary');
     expect(summary).toHaveClass('text-body');
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph and lane D2's note: the lede repeated
+    // the miner, the time and the reward the status strip states): the lede says what the block
+    // holds, the uncle it includes and which block's reward its cellbase pays. It was "4
+    // transactions, mined by … on 2026-10-25 at 08:55:37 UTC+8. The miner earns 684.32120795 CKB
+    // for this block, paid 11 blocks later."
     expect(summary).toHaveTextContent(
-      /^4 transactions, mined by .+ on 2026-10-25 at 08:55:37 UTC\+8\. The miner earns 684\.32120795 CKB for this block, paid 11 blocks later\.$/
+      /^4 transactions and 1 uncle, #20,827,931; its cellbase pays the reward for #20,827,921\.$/
     );
+    expect(within(summary).getByRole('link', { name: '#20,827,931' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827932/uncles/0'
+    );
+    expect(within(summary).getByRole('link', { name: '#20,827,921' })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${h('ec')}`
+    );
+  });
+
+  // Lane P1 (said once): the lede states no figure the strip states, and links no miner.
+  it('says in the lede none of the facts the status strip states (P1)', async () => {
+    render(<BlockDetailPage />);
+    const summary = await screen.findByTestId('block-summary');
+    const strip = screen.getByRole('group', { name: 'Block status' });
+    const ledeNumbers = new Set(numberStrings(summary.textContent ?? ''));
+    expect(numberStrings(strip.textContent ?? '').filter((n) => ledeNumbers.has(n))).toEqual([]);
+    expect(within(summary).queryByRole('link', { name: /ckb1/ })).toBeNull();
+    expect(summary).not.toHaveTextContent(/mined|earns|UTC/);
+  });
+
+  it('says a block of no uncle and a cellbase that pays no reward yet in fewer words (P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...block,
+      uncles: [],
+      unclesCount: 0,
+      cellbasePays: null,
+      transactionsCount: 1,
+      transactionSizes: [355],
+    });
+    render(<BlockDetailPage />);
+    expect(await screen.findByTestId('block-summary')).toHaveTextContent(/^1 transaction\.$/);
   });
 
   // The name plate (seals by kind, C10, superseding C7): the height stands first, on the plate's
@@ -259,6 +307,10 @@ describe('Block board · first tier', () => {
       'Next block, 20,827,933',
     ]);
     const [previous, next] = steps;
+    // lane P1 follow-up (the link-look gate): a step link is a block whose mark takes the link's
+    // ink, celadon under the pointer and the focus by the one rule; no ink written on the mark
+    for (const step of steps)
+      expect(step.querySelector('svg')!.getAttribute('class') ?? '').not.toMatch(/\btext-/);
     const height = within(title).getByText('#20,827,932');
     const row = height.parentElement!;
     expect(row.parentElement).toBe(title);
@@ -313,17 +365,19 @@ describe('Block board · first tier', () => {
       rewardFinalizesAt: null,
     };
     vi.mocked(api.getBlock).mockResolvedValue(genesis);
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [
-        { ...genesis, number: 2, hash: h('02'), timestamp: '2019-11-16T06:12:03.871Z' },
-        { ...genesis, number: 1, hash: h('01'), timestamp: '2019-11-16T06:11:53.574Z' },
-        genesis,
-      ],
-      total: 3,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [
+          { ...genesis, number: 2, hash: h('02'), timestamp: '2019-11-16T06:12:03.871Z' },
+          { ...genesis, number: 1, hash: h('01'), timestamp: '2019-11-16T06:11:53.574Z' },
+          genesis,
+        ],
+        total: 3,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     const title = await screen.findByRole('heading', { level: 1 });
     expect(screen.queryAllByRole('link', { name: /^Previous block,/, hidden: true })).toEqual([]);
@@ -375,11 +429,15 @@ describe('Block board · first tier', () => {
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expectBefore(seal, title);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(seal);
-    expect(head).not.toContainElement(screen.getByRole('group', { name: 'Block contents' }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (was a group of buttons)
+    expect(head).not.toContainElement(screen.getByRole('tablist', { name: 'block contents' }));
   });
 
   // The review's item E: the plate's id is the block's copy control; a click writes the WHOLE hash
   // to the clipboard (the test of its class and "Click to copy" title went with the old id line)
+  // Re-pinned (lane c2-finish, item 4: copy has one form): the id is text; the copy button after
+  // it, in the id line, copies the whole hash (the id itself was the click target, its tick over
+  // it).
   it('copies the whole block hash when the plate’s id is clicked', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
@@ -387,6 +445,13 @@ describe('Block board · first tier', () => {
     await screen.findByRole('heading', { level: 1 });
     const id = container.querySelector('[data-sealed-id] [data-head-id]') as HTMLElement;
     fireEvent.click(id);
+    expect(writeText).not.toHaveBeenCalled();
+    const copy = screen.getByRole('button', { name: 'copy block hash' });
+    expect(container.querySelector('[data-sealed-id]')).toContainElement(copy);
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(copy);
+    fireEvent.click(copy);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
     expect(writeText).toHaveBeenCalledTimes(1);
   });
@@ -423,11 +488,21 @@ describe('Block board · first tier', () => {
     const { head, plate, below } = expectNamePlate(container, 'Block');
     expect(head).toContainElement(summary);
     expect(plate).not.toContainElement(summary);
-    expect(below!.children).toHaveLength(1);
-    expect(below!.firstElementChild).toBe(summary);
+    // re-pinned with readability R4 (lane B7): the summary stands in the lede's one holder, which
+    // sets it on the measure (it was below's own child, at no width of its own)
+    // re-pinned on purpose (lane D2): the status strip stands first under the stone and the plate,
+    // the lede's holder after it (the holder was below's one child)
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Block status' }));
+    const holder = below!.lastElementChild!;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder).toHaveClass('max-w-measure');
+    expect(holder.children).toHaveLength(1);
+    expect(holder.firstElementChild).toBe(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
     expectBefore(screen.getByText(block.hash), summary);
-    expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (was a group of buttons)
+    expectBefore(summary, screen.getByRole('tablist', { name: 'block contents' }));
     // The header keeps the 32 px to the content; the summary carries no margin of its own.
     expect(summary).not.toHaveClass('mb-8');
   });
@@ -474,32 +549,48 @@ describe('Block board · first tier', () => {
     }
   });
 
+  // Re-pinned on purpose (lane P1, said once): the pool stands in the status strip, its miner
+  // fact; the lede named it too ("4 transactions, mined by Example Pool on 2026-10-25 …").
   it('says which pool mined the block when pools.toml names it (R-12)', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...block, minerPool: 'Example Pool' });
     render(<BlockDetailPage />);
     const summary = await screen.findByTestId('block-summary');
-    expect(summary).toHaveTextContent(/^4 transactions, mined by Example Pool on 2026-10-25/);
-    expect(within(summary).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${block.minerAddress}`
-    );
+    expect(summary).not.toHaveTextContent('Example Pool');
+    const strip = screen.getByRole('group', { name: 'Block status' });
+    const pool = within(strip).getByRole('link', { name: 'Example Pool' });
+    expect(pool).toHaveAttribute('href', `/mainnet/address/${block.minerAddress}`);
+    // lane P1 follow-up (item 3): a strip's value link is inline, as its block's and its epoch's
+    // are; no ink of MinerLink's own; its title names the pool whole, then the address
+    expect(pool).toHaveClass('underline');
+    expect(pool).not.toHaveClass('text-text-bright');
+    expect(pool).toHaveAttribute('title', `Example Pool · ${block.minerAddress}`);
   });
 
   it('counts both views in quiet 12 px beside 17 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
     render(<BlockDetailPage />);
-    const views = await screen.findByRole('group', { name: 'Block contents' });
-    const [activities, transactions] = within(views).getAllByRole('button');
+    // Re-pinned on purpose (lane c2-chain, the controls board): the views are the library's tab
+    // row, the section's command line (the prompt square, the names lowercase), each name 17 px
+    // from sm and 14 px below it, its count 12 px in the quiet ink (were pressed buttons, the
+    // count 13 px); the section keeps its name for the outline, and the note on where the
+    // transactions came from stands under the row (it stood at the row's right end).
+    const views = await screen.findByRole('tablist', { name: 'block contents' });
+    expect(views.querySelector('.section-mark')).not.toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'Block contents' })).toHaveClass(
+      'sr-only'
+    );
+    const [activities, transactions] = within(views).getAllByRole('tab');
     for (const [tab, name] of [
-      [activities, 'Activities'],
-      [transactions, 'Transactions'],
+      [activities, 'activities'],
+      [transactions, 'transactions'],
     ] as const) {
-      expect(tab).toHaveClass('text-section');
-      expect(tab.firstChild).toHaveTextContent(name);
-      expect(within(tab).getByText('4')).toHaveClass('text-small');
+      expect(tab).toHaveClass('text-body', 'sm:text-section', 'lowercase');
+      expect(tab).toHaveTextContent(new RegExp(`^${name} 4$`));
+      expect(within(tab).getByText('4')).toHaveClass('text-meta', 'text-text-dim');
     }
-    expect(
-      await screen.findByText(fullText("3 committed from #20,827,930's proposals, 2 blocks later"))
-    ).toBeInTheDocument();
+    const note = await screen.findByText(
+      fullText("3 committed from #20,827,930's proposals, 2 blocks later")
+    );
+    expect(screen.getByRole('tabpanel')).toContainElement(note);
   });
 
   it('lists activities in block order, cellbase first, with the tx index instead of the height (BA-12, BA-14)', async () => {
@@ -518,6 +609,9 @@ describe('Block board · first tier', () => {
 
   // Visual finish V5: a feed row's tx link rests as ink with the faint aqua underline (was
   // `text-interactive-dim`); the global a:hover lights it jade.
+  // Re-pinned on purpose (lane P1, the link-look gate: one owner of a link's look): the row's
+  // transaction is its key, the key look's bright ink with no hand-written underline, no aqua and
+  // no hover colour of its own (it was V5's bright ink over a faint aqua underline, by hand).
   it("rests each activity row's tx link as ink, not aqua-dim (V5)", async () => {
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
@@ -527,7 +621,10 @@ describe('Block board · first tier', () => {
       const hash = row.getAttribute('data-feed-row')!;
       const link = row.querySelector(`[data-role="evidence"] a[href$="/tx/${hash}"]`);
       expect(link, hash).not.toBeNull();
-      expectRestingLink(link as HTMLElement);
+      expect(link).toHaveClass('text-text-bright');
+      expect(Array.from((link as HTMLElement).classList)).not.toContainEqual(
+        expect.stringMatching(/^(decoration-aqua|underline$|hover:text-|text-(aqua|interactive))/)
+      );
     }
   });
 });
@@ -571,7 +668,8 @@ describe('Block board · second tier', () => {
     expect((bar.querySelector('[data-segment="overhead"]') as HTMLElement).style.width).toBe(
       `${Math.round((883 / scale) * 120 * 100) / 100}px`
     );
-    expect(facts).toHaveTextContent('0.54% of 597,000 · overhead 883 · transactions 2,322');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 3,205 of 597,000 bytes is 0.5368…%, 0.53% (half up 0.54%)
+    expect(facts).toHaveTextContent('0.53% of 597,000 · overhead 883 · transactions 2,322');
     expect(facts).toHaveTextContent('Miner client');
     expect(facts).toHaveTextContent('decoded from the cellbase message');
   });
@@ -621,7 +719,10 @@ describe('Block board · second tier', () => {
   it('names the uncle as a sibling with the same parent and its delay; counts committed proposals (BA-18)', async () => {
     render(<BlockDetailPage />);
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
-    expect(uncles).toHaveTextContent('1 · counted toward the NC-Max orphan rate');
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a: "NC-Max orphan rate", a term the
+    // reader has to break): the site's word, the forks chart's "uncle rate", one word for one thing
+    expect(uncles).toHaveTextContent('1 · counted toward the uncle rate');
+    expect(uncles).not.toHaveTextContent(/NC-Max|orphan rate/);
     await waitFor(() =>
       expect(uncles).toHaveTextContent(/sibling of #20,827,931 0x.+, same parent #20,827,930/)
     );
@@ -677,17 +778,18 @@ describe('Block board · second tier', () => {
 });
 
 describe('BlockTxs board', () => {
-  it('reads the cellbase row as "cellbase", grey, 0 → 1, under 0 … 1,000 / 0 … 2,000,000 scales (BA-20)', async () => {
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling: a head's ticks are in the
+  // tick form): the scales read "0 … 1k" and "0 … 2M" (renamed: they were "0 … 1,000" and
+  // "0 … 2,000,000").
+  it('reads the cellbase row as "cellbase", grey, 0 → 1, under 0 … 1k / 0 … 2M scales (BA-20)', async () => {
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: /^transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     const ths = Array.from(table.querySelectorAll('th'));
     expect(ths.find((th) => th.textContent?.startsWith('Size, bytes'))).toHaveTextContent(
-      'Size, bytes01,000'
+      'Size, bytes01k'
     );
-    expect(ths.find((th) => th.textContent?.startsWith('Cycles'))).toHaveTextContent(
-      'Cycles02,000,000'
-    );
+    expect(ths.find((th) => th.textContent?.startsWith('Cycles'))).toHaveTextContent('Cycles02M');
     const cellbase = table.querySelectorAll('tbody tr')[0] as HTMLElement;
     expect(cellbase).toHaveTextContent('cellbase');
     expect(cellbase).toHaveTextContent('0→1');
@@ -699,15 +801,54 @@ describe('BlockTxs board', () => {
 
 // F2 blocks visual pass + R2b-a wiring (BA-12, BA-13, BA-14, BA-19).
 describe('Block board · R2b-a fields', () => {
-  it('says which block the cellbase pays (BA-12)', async () => {
+  // Re-pinned on purpose (lane P1, the plan: CellbaseHeadline reads "reward for #N, to …"; review
+  // chain-a block-busy and block-with-uncle: two near-equal rewards, this block's in the strip and
+  // the cellbase's in its row, told apart only by a quiet note): the row says whose reward it
+  // pays and to whom. It read "Cellbase pays the reward of #20,827,921".
+  it('says which block the cellbase pays and to whom (BA-12, P1)', async () => {
+    const payee = seededAddress('ratvu9');
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [0, 1, 2, 3].map((i) =>
+          i === 0
+            ? activityRead({
+                ...activity(0),
+                participants: [
+                  {
+                    address: payee,
+                    lockHash: h('9a'),
+                    lockHashPrefix: null,
+                    roles: [],
+                    ckbDelta: '55951224916',
+                    usedDelta: '6100000000',
+                    itemDeltas: [],
+                    tags: 0,
+                  },
+                ],
+              })
+            : activity(i)
+        ),
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     const row = (await screen.findByText('Cellbase')).closest('[data-feed-row]') as HTMLElement;
     expect(row.querySelector('[data-role="headline"]')).toHaveTextContent(
-      'Cellbase pays the reward of #20,827,921'
+      `Cellbase reward for #20,827,921, to ckb1…${payee.slice(-8)}`
     );
     expect(within(row).getByRole('link', { name: '#20,827,921' }).getAttribute('href')).toMatch(
       new RegExp(`/blocks/${h('ec')}$`)
     );
+    // lane P1 follow-up (item 3): the payee is a name inside the line, the inline look, no ink
+    // written by hand
+    const party = within(row.querySelector('[data-role="headline"]') as HTMLElement).getByRole(
+      'link',
+      { name: `ckb1…${payee.slice(-8)}` }
+    );
+    expect(party).toHaveClass('underline', 'decoration-[color:var(--c-ink-muted)]');
+    expect(party).not.toHaveClass('hover:text-jade');
   });
 
   it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {
@@ -785,12 +926,14 @@ describe('Block board · R2b-a fields', () => {
   });
 
   it('asks the API for the block in tx order and keeps that order (BA-14)', async () => {
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [0, 1, 2, 3].map(activity),
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [0, 1, 2, 3].map(activity),
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
@@ -806,20 +949,72 @@ describe('Block board · R2b-a fields', () => {
     ).toEqual([0, 1, 2, 3].map((i) => activity(i).txHash));
   });
 
-  it('shows no pager for a block that fits one page, in either view', async () => {
+  // Lane c2-chain, written before the block's tabs and pagers became the library's: what they do,
+  // whatever draws them — a block longer than a page pages its activities and its transactions
+  // forward from the API's cursors, each view its own walk.
+  it('pages a long block’s activities and transactions forward from the API’s cursors', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...block, transactionsCount: 150 });
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (p) =>
+      p?.cursor
+        ? pagedRead({ data: [4].map(activity), limit: 100, hasMore: false, nextCursor: null })
+        : pagedRead({
+            data: [0, 1, 2, 3].map(activity),
+            // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+            limit: 4,
+            hasMore: true,
+            nextCursor: 'acts-on',
+          })
+    );
+    vi.mocked(api.getTransactions).mockImplementation(async (p) =>
+      p?.cursor
+        ? pagedRead({ data: [3].map(tx), limit: 100, hasMore: false, nextCursor: null })
+        : // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+          pagedRead({ data: [0, 1, 2].map(tx), limit: 3, hasMore: true, nextCursor: 'txs-on' })
+    );
+    // a view by its name, a tab or a pressed button
+    const view = (name: RegExp) =>
+      screen.queryByRole('tab', { name }) ?? screen.getByRole('button', { name });
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getGlobalActivities).toHaveBeenLastCalledWith(
+        expect.objectContaining({ blockNumber: N, cursor: 'acts-on', order: 'asc' })
+      )
+    );
+    fireEvent.click(view(/^transactions/i));
     await screen.findByRole('table', { name: 'Transactions in this block' });
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ blockNumber: N, cursor: 'txs-on' })
+      )
+    );
+  });
+
+  it('shows no pager for a block that fits one page, in either view', async () => {
+    // re-pinned (lane c2-chain): the library's pager is a nav named for its list, its ways to go
+    // `← prev` and `next →` (was a Previous / Next button pair); none is drawn for one page
+    const pagers = () => [
+      ...screen.queryAllByRole('navigation', { name: /^(activities|transactions)$/ }),
+      ...screen.queryAllByText(/^(← prev|next →)$/),
+    ];
+    render(<BlockDetailPage />);
+    await screen.findByText('Cellbase');
+    expect(pagers()).toEqual([]);
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
+    await screen.findByRole('table', { name: 'Transactions in this block' });
+    expect(pagers()).toEqual([]);
   });
 
   it('stacks an uncle row so it reads at 390 px, with short hashes', async () => {
     render(<BlockDetailPage />);
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
     const row = uncles.querySelector('article')!;
-    expect(row).toHaveClass('flex-col');
+    // re-pinned on purpose (lane D2b): the row leads with its row stone, so the article is the
+    // stone beside a stack, and the stack holds the three lines (the article was the stack)
+    expect(row.firstElementChild).toHaveAttribute('data-seal', 'block');
+    expect(row.lastElementChild).toHaveClass('flex-col');
     await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x95959595…959595,/));
   });
 

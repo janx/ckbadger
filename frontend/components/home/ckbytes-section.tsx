@@ -83,14 +83,15 @@ export function CkbytesSection() {
           <SectionHeading
             id="home-ckbytes-heading"
             command={
-              <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
+              // the heading's command word is its key: the chart of the supply
+              <Link href="/charts/total-supply" look="key">
                 supply
               </Link>
             }
             note={
               view === null ? undefined : (
                 <span data-testid="ckbytes-block" className="tabular-nums">
-                  at <BlockLink number={view.blockNumber} />
+                  at <BlockLink look="inline" number={view.blockNumber} />
                 </span>
               )
             }
@@ -220,10 +221,12 @@ function SupplyNote({ view }: { view: AllocationView }) {
       data-testid="ckbytes-note"
       className="lg:col-start-2 lg:row-start-1 lg:self-start lg:pt-1"
     >
-      <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
+      <Comment lines={supplyComment(view)} />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"
+        // the figure's caption, where it comes from and the block it is read at: the reading ink at
+        // 13 px (BRIEF-ink-size-roles item 3: it was quiet at 12)
+        className="text-small max-w-measure m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>
@@ -325,20 +328,27 @@ function AllocationReady({ view }: { view: AllocationView }) {
         // wrapping row of two items, the figure and its label (A4 Chrome F1): the label goes under
         // the figure, starting its line with no indent, when the line cannot hold both — the
         // figure ≈ 570 px from 640 (14 + 9 characters at 40 px and " CKB" at 20, −0.03 em) and
-        // 314.5 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
+        // 312.78 below it, the gap 12, the label 100.8 (14 characters at 12 px): one line from
         // 682.8 px (1280's 828.8 px column), two at 1024 (649.6), 640 (608), 390 (358), 360 (328).
         className={cn(
           'text-text-bright text-index sm:text-display flex flex-wrap items-center gap-x-3 tabular-nums tracking-[-0.01em]',
           flare
         )}
       >
-        {/* The figure and its unit, one unbreakable unit (PA-19; the scripts pages' rule): below
-            640 the decimals are body, so the integer (14 characters at 26 px, 214.8 px with the
-            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 328 at
-            360; at the integer's size they took 355.2 px and the unit went to the next line. */}
-        <span className="whitespace-nowrap">
-          {total.integer}
-          <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+        {/* The figure, one unbreakable run exact to the shannon (PA-19; the scripts pages' rule),
+            and its unit, which goes under it where they cannot share the line, as a chart head's
+            does on a phone (the lead's final round, item 5: at 320 the pair ran 14 px past the
+            window). Below 640 the decimals are small (13 px; at body, 14 px, the figure was 288.02 px
+            in 288, the third read's T NOTE-6 found by reading the type scale), the tracking an em
+            of the row's 26 px, −0.26 px a glyph: the integer (14 characters, 214.76 px) and the
+            decimals (9, 67.86) are 282.62 px, within a 320 px window's 288; with " CKB" at 13 px
+            (30.16), 312.78, within a 360 px window's 328, where they share
+            it. The pair's one break is the space before the unit. */}
+        <span>
+          <span className="whitespace-nowrap">
+            {total.integer}
+            <span className="text-text-dim max-sm:text-small">.{total.decimal}</span>
+          </span>
           <span className="text-text-dim text-[0.5em]"> CKB</span>
         </span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
@@ -354,7 +364,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       </div>
       <div
         role="img"
-        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
+        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, DAO free ${pct(daoFree)} percent`}
         className="bg-base-surface flex h-2.5 overflow-hidden"
       >
         {knowledge > BigInt(0) && (
@@ -394,9 +404,12 @@ function AllocationReady({ view }: { view: AllocationView }) {
           note={`${pct(free)}%`}
           {...legend('free')}
         />
+        {/* What each DAO figure counts (P3): this one is the DAO cells' free CKB, the part of
+            circulation; beside it the DAO cells' whole capacity; the DAO block below states the
+            CKB in its deposit cells alone */}
         <LegendItem
           swatch="bg-gold"
-          name="Nervos DAO"
+          name="DAO free"
           value={daoFree}
           note={
             <>
@@ -408,7 +421,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
                 tone="inherit"
                 unit={false}
               />{' '}
-              locked
+              in all DAO cells
             </>
           }
           {...legend('dao')}
@@ -483,11 +496,15 @@ interface ChangeView {
   points: SignedPoint[];
   first: string;
   last: { label: string; delta: bigint };
-  min: number;
-  max: number;
+  /** The smallest and the largest change, exact (lane exactness, part B3: floats, rounded). */
+  min: bigint;
+  max: bigint;
 }
 
-/** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
+/**
+ * An exact signed change for the caption, one value in one ink and one size: its 8 decimals with
+ * its whole (BRIEF-ink-size-roles items 1 and 2, with R5: they were quiet at 12 px).
+ */
 function exactSignedReadout(delta: bigint): ReadoutValue {
   const text = formatSignedCkbExact(delta);
   const dot = text.indexOf('.');
@@ -495,7 +512,7 @@ function exactSignedReadout(delta: bigint): ReadoutValue {
     value: (
       <>
         {text.slice(0, dot)}
-        <span className="text-text-dim text-meta">{text.slice(dot)}</span>
+        {text.slice(dot)}
       </>
     ),
     text: `${text} CKB`,
@@ -510,15 +527,15 @@ export function changeView(chart: ChartResponse): ChangeView | null {
     label: dayLabel(d.date),
     value: shannonsToCkbNumber(d.delta),
     readout: exactSignedReadout(d.delta),
+    compact: formatCompactSigned(d.delta),
   }));
-  const values = points.map((p) => p.value);
   const last = deltas[deltas.length - 1];
   return {
     points,
     first: points[0].label,
     last: { label: dayLabel(last.date), delta: last.delta },
-    min: Math.min(...values),
-    max: Math.max(...values),
+    min: deltas.reduce((m, d) => (d.delta < m ? d.delta : m), deltas[0].delta),
+    max: deltas.reduce((m, d) => (d.delta > m ? d.delta : m), deltas[0].delta),
   };
 }
 
@@ -572,7 +589,8 @@ interface DaoView {
   apc: string;
   depositors: number;
   depositorsChange: number | null;
-  activeDeposits: number;
+  /** The deposit cells, "Active deposits" (a withdrawal request is no active deposit). */
+  depositCells: number;
   change: bigint | null;
 }
 
@@ -583,7 +601,9 @@ export function daoView(stats: DaoStatistics): DaoView {
     apc: stats.estimatedApc,
     depositors: stats.totalDepositors,
     depositorsChange: stats.depositorsChange24h ?? null,
-    activeDeposits: stats.activeDeposits,
+    // the figure the term names (lane exactness, part B5): it read the legacy activeDeposits, the
+    // live DAO cells with the withdrawal requests, which the route no longer sends
+    depositCells: stats.depositCellsCount,
     change: stats.depositChange24h === null ? null : parseCkbDecimal(stats.depositChange24h),
   };
 }
@@ -609,7 +629,8 @@ function DaoBlock() {
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">
         <span className="text-text-bright text-body">Nervos DAO</span>
-        <span className="text-text-dim text-small">deposited</span>
+        {/* what its figure counts (P3): the deposit cells; requests under way are apart */}
+        <span className="text-text-dim text-small">in deposit cells</span>
       </div>
       {d.state === 'loading' && (
         <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse" />
@@ -619,13 +640,11 @@ function DaoBlock() {
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
+      {/* an empty-state line, the reading ink (BRIEF-ink-size-roles item 3) */}
+      {d.state === 'empty' && <div className="text-small">{d.message}</div>}
       {d.state === 'ready' && <DaoFigures view={d.view} />}
-      <Link
-        href="/dao"
-        className="text-interactive hover:text-jade text-small w-fit transition-colors"
-      >
-        DAO details →
+      <Link href="/dao" look="onward" className="text-small w-fit">
+        DAO details
       </Link>
     </div>
   );
@@ -664,10 +683,11 @@ function DaoFigures({ view }: { view: DaoView }) {
             </span>
           )}
         </DaoStat>
-        <DaoStat term="Active deposits">{view.activeDeposits.toLocaleString('en-US')}</DaoStat>
+        <DaoStat term="Active deposits">{view.depositCells.toLocaleString('en-US')}</DaoStat>
         <DaoStat term="Change in 24 h">
           {change === null ? (
-            <span className="text-text-dim">—</span>
+            // no change to state: a value's place, the reading ink (BRIEF-ink-size-roles item 1)
+            <span>—</span>
           ) : (
             <span
               data-testid="home-dao-change-24h"

@@ -29,7 +29,8 @@ export function CkbFigure({ shannons }: { shannons: bigint }) {
 
 /**
  * The figure block (R13): a meta eyebrow naming the figure, then the figure and its one companion
- * line on the same baseline row (the companion at body, dim).
+ * line on the same baseline row (the companion at body, in the reading ink: it states the figure's
+ * counts; lane P2's third round, item 10).
  */
 export function HeroFigure({
   label,
@@ -46,7 +47,7 @@ export function HeroFigure({
       <div className="eyebrow text-text-dim text-meta mb-1.5">{label}</div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <CkbFigure shannons={shannons} />
-        <p className="text-body text-text-dim">
+        <p className="text-body text-text max-w-measure">
           <Dotted parts={companion} />
         </p>
       </div>

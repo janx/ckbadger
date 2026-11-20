@@ -1,3 +1,5 @@
+// Re-pinned on purpose (lists lane P3, the link-look gate): the ways on are ways onward, their
+// arrow the look's (they typed "← "), so each is found by its words.
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
@@ -63,7 +65,7 @@ describe('NotFoundPage', () => {
       screen.queryByText(/searched every block|pool|cell_not_found|checked/i)
     ).not.toBeInTheDocument();
     const nav = screen.getByRole('navigation', { name: 'Find another route' });
-    expect(within(nav).getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
+    expect(within(nav).getByRole('link', { name: /^back\ to\ the\ explorer/ })).toHaveAttribute(
       'href',
       '/mainnet'
     );
@@ -77,7 +79,8 @@ describe('NotFoundPage', () => {
     );
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
     expect(screen.queryByRole('contentinfo')).toBeNull();
-    // behind the verse, the newest block's seal: the vitals' tip, its hash read from /blocks/{n}
+    // beside the verse (below it on a narrower screen), the newest block's seal: the vitals' tip,
+    // its hash read from /blocks/{n}
     const seal = await pressedSeal();
     expect(seal.querySelectorAll('[data-seal]')).toHaveLength(1);
     expect(seal.querySelector('[data-seal="block"][data-seal-form="page"] svg')).toHaveAttribute(
@@ -97,6 +100,7 @@ describe('NotFoundPage', () => {
         query: 'block:0xabc',
         searchEndpoint: '/search',
         finding: '/search: this hash is a block',
+        reason: 'this hash is a block’s.',
         alternative: {
           label: 'block #42',
           href: '/blocks/42',
@@ -118,23 +122,26 @@ describe('NotFoundPage', () => {
       </MemoryRouter>
     );
 
-    // the index was asked, so the verse says so; the finding names the alternative
+    // Re-pinned on purpose (lists lane P3): the second line is the concrete reason, in plain words
+    // (it was "the local index was asked; it holds none."); the routes asked are the note's
     const h1 = screen.getByRole('heading', {
       level: 1,
-      name: "no transaction with this hash. the local index was asked; it holds none. honey badger don't care.",
+      name: "no transaction with this hash. this hash is a block’s. honey badger don't care.",
     });
     expect(verseLines(h1)[0]).toBe('no transaction with this hash.');
     expect(screen.queryByText(/the chain was not asked/)).toBeNull();
     expect(screen.getByText('/transactions/0xabc')).toBeInTheDocument();
-    // U-18: what was asked, its answer and what /search said, in one line
+    // U-18: what was asked and its answer in one line, the note. Re-pinned on purpose (lists lane
+    // P3): its routes, the entity's and the search's; what the search said is the verse's line 2;
+    // the way on is a way onward, its arrow the look's (it was "→ open block #42", typed)
     expect(factLines()[0]).toHaveTextContent(
-      /^checked \/transactions\/0xabc → 404 · \/search: this hash is a block → open block #42$/
+      /^checked \/transactions\/0xabc → 404 · and \/search · open block #42/
     );
-    expect(screen.getByRole('link', { name: '→ open block #42' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^open block #42/ })).toHaveAttribute(
       'href',
       '/mainnet/blocks/42'
     );
-    expect(screen.getByRole('link', { name: '← transactions' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^transactions/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
@@ -152,6 +159,7 @@ describe('NotFoundPage', () => {
         query: `block:${HASH}`,
         searchEndpoint: '/search',
         finding: '/search: no block has this hash either',
+        reason: 'no block has this hash either.',
       },
     });
 
@@ -167,22 +175,21 @@ describe('NotFoundPage', () => {
     const short = `${HASH.slice(0, 10)}…${HASH.slice(-6)}`;
     const lines = factLines();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toHaveTextContent(
-      `checked /transactions/${short}/detail → 404 · /search: no block has this hash either`
-    );
+    // re-pinned on purpose (lists lane P3): the routes asked; the reason is the verse's line 2
+    expect(lines[0]).toHaveTextContent(`checked /transactions/${short}/detail → 404 · and /search`);
     expect(document.querySelector('.error-facts')).not.toHaveTextContent(HASH);
     // the words of the line wrap between words; the shortened id is one unit (U-16, re-pinned:
     // it broke anywhere, "0x" / "36528a03...742ce54b")
     const id = within(lines[0]).getByText(short);
     expect(id).toHaveAttribute('data-nobreak');
     expect(lines[0].querySelectorAll('.break-all')).toHaveLength(0);
-    // nothing answered: the same verse as an entity known as something else
+    // re-pinned on purpose (lists lane P3): the concrete reason, in plain words, as line 2
     expect(verseLines(screen.getByRole('heading', { level: 1 }))).toEqual([
       'no transaction with this hash.',
-      'the local index was asked; it holds none.',
+      'no block has this hash either.',
       "honey badger don't care.",
     ]);
-    // the seal pressed behind is the newest block's, never the hash that was asked for
+    // the seal pressed beside the verse is the newest block's, never the hash that was asked for
     const seal = await pressedSeal();
     expect(seal.querySelector('svg')).toHaveAttribute('aria-label', TIP_SEAL_LABEL);
     expect(seal.querySelector('svg')?.getAttribute('aria-label')).not.toContain(HASH.slice(0, 10));
@@ -226,6 +233,7 @@ describe('NotFoundPage', () => {
         query: null,
         searchEndpoint: null,
         finding: null,
+        reason: null,
       },
     });
     render(
@@ -259,7 +267,7 @@ describe('NotFoundPage', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toHaveTextContent(/^Invalid CKB address: parse failed$/);
     expect(useNotFoundEvidence).toHaveBeenLastCalledWith(undefined);
-    expect(screen.getByRole('link', { name: '← activities' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^activities/ })).toHaveAttribute(
       'href',
       '/mainnet/activities'
     );
@@ -324,5 +332,54 @@ describe('NotFoundPage', () => {
     expect(
       entityVerse({ kind: 'script-family', identifier: 'x', checkedEndpoint: '/x' })
     ).not.toContain(ROUTE_VERSE[1]);
+  });
+
+  // The P3 follow-up's 2g: the kinds no /search classifies said only "the local index was asked;
+  // it holds none". Once the vitals' tip is read, the second line says what the index holds none
+  // of against that tip; a block number past it says so, with the tip it was compared to.
+  it('says what the index holds none of against the tip, a block number past it as past it', () => {
+    const second = (kind: Parameters<typeof notAnIdVerse>[0], identifier: string, tip: number) =>
+      entityVerse({ kind, identifier, checkedEndpoint: '/x' }, null, tip)[1];
+    expect(second('block', '21054200', 21_054_163)).toBe(
+      '#21,054,200 is past the tip, #21,054,163.'
+    );
+    expect(second('block', '7', 21_054_163)).toBe(
+      'the tip is #21,054,163, yet the index holds no #7.'
+    );
+    expect(second('uncle', '5000 · uncle 0', 1_000)).toBe('#5,000 is past the tip, #1,000.');
+    expect(second('uncle', '100 · uncle 2', 1_000)).toBe('block #100 has no uncle at index 2.');
+    expect(second('fork', '5000/a9bc1b75', 1_000)).toBe('#5,000 is past the tip, #1,000.');
+    expect(second('fork', '7/a9bc1b75', 1_000)).toBe(
+      'the index saw no fork at this height drop this block.'
+    );
+    expect(second('token', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell carries this type hash as a token.'
+    );
+    expect(second('fiber-channel', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell funds this channel.'
+    );
+    expect(second('object', '0x01', 1_000)).toBe(
+      'to the tip, #1,000, no cell carries this object.'
+    );
+    // a /search finding is the more concrete reason, and stands first
+    expect(
+      entityVerse(
+        { kind: 'block', identifier: HASH, checkedEndpoint: '/x' },
+        'this hash is a transaction’s.',
+        1_000
+      )[1]
+    ).toBe('this hash is a transaction’s.');
+  });
+
+  it('compares a block number with the tip the page reads (the vitals’: #1,000,000)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/blocks/1000001']}>
+        <NotFoundPage
+          entity={{ kind: 'block', identifier: '1000001', checkedEndpoint: '/blocks/1000001' }}
+        />
+      </MemoryRouter>
+    );
+    const h1 = screen.getByRole('heading', { level: 1 });
+    await waitFor(() => expect(verseLines(h1)[1]).toBe('#1,000,001 is past the tip, #1,000,000.'));
   });
 });

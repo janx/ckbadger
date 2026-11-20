@@ -7,17 +7,9 @@ export interface TxCommentInput {
   /** Cells created: the cells section's outputs. */
   outputs: number;
   isCellbase: boolean;
-  /**
-   * The fee as the facts rail prints it (`exactCkbText`, unsigned, no unit: `0.00001647`, `0`);
-   * null for a cellbase, which pays none.
-   */
-  feeCkb: string | null;
   /** Occupied bytes created minus consumed: what the transaction did to common knowledge. */
   knowledgeDeltaBytes: bigint | number;
 }
-
-/** `exactCkbText(shannons, false)`: zero, or grouped whole CKB and all eight decimals. */
-const EXACT_CKB = /^(?:0|[1-9]\d{0,2}(?:,\d{3})*\.\d{8}|0\.\d{8})$/;
 
 function count(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 0)
@@ -26,31 +18,24 @@ function count(value: number, field: string): number {
 }
 
 /**
- * The transaction's comment (rubbing × Song print, phase 5, the Transaction board): three lines,
- * lowercase, each a sentence true by construction from the figures the page draws — the cells, the
- * fee, common knowledge. A cellbase says where its cells come from and has no fee line. Anything
- * that would make a line false (a negative count, a cellbase that consumes a cell, a fee that is
- * not the rail's text, a delta that is not a whole number of bytes) throws.
+ * The transaction's comment (rubbing × Song print, phase 5, the Transaction board): two lines,
+ * lowercase, each a sentence true by construction from the figures the page draws — the cells and
+ * common knowledge. A cellbase says where its cells come from. The fee is not a line of it: a fact
+ * is said once, and the fee stands in the status strip under the id line and in the created sheet's
+ * balance row (lane D2, the board passed at gate D0′; the comment said "0.00064119 ckb to the
+ * miner." between the two). Anything that would make a line false (a negative count, a cellbase
+ * that consumes a cell, a delta that is not a whole number of bytes) throws.
  */
 export function txComment({
   inputs,
   outputs,
   isCellbase,
-  feeCkb,
   knowledgeDeltaBytes,
 }: TxCommentInput): string[] {
   count(inputs, 'inputs');
   count(outputs, 'outputs');
   if (isCellbase && inputs !== 0)
     throw new Error(`txComment: a cellbase consumes no cell, got ${inputs} inputs`);
-  if (isCellbase !== (feeCkb === null))
-    throw new Error(
-      isCellbase
-        ? `txComment: a cellbase has no fee line, got fee ${feeCkb}`
-        : 'txComment: a transaction that is not a cellbase needs its fee'
-    );
-  if (feeCkb !== null && !EXACT_CKB.test(feeCkb))
-    throw new Error(`txComment: fee "${feeCkb}" is not exact CKB as the facts print it`);
   if (typeof knowledgeDeltaBytes === 'number' && !Number.isSafeInteger(knowledgeDeltaBytes))
     throw new Error(`txComment: common knowledge delta ${knowledgeDeltaBytes} is not whole bytes`);
 
@@ -64,5 +49,5 @@ export function txComment({
       : delta < BigInt(0)
         ? `common knowledge shrank by ${formatCount(-delta, 'byte')}.`
         : 'common knowledge unchanged.';
-  return feeCkb === null ? [cells, knowledge] : [cells, `${feeCkb} ckb to the miner.`, knowledge];
+  return [cells, knowledge];
 }

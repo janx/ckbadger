@@ -1,23 +1,24 @@
 'use client';
 
+import { RetryAction } from '@/components/ui/retry-action';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ClassMark } from '@/components/ui/class-mark';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
-import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
+import { chartAxisFormat } from '@/lib/format-unit';
+import { decimalAmountText } from '@/lib/amount-form';
 import {
   axisStyle,
   axisTicks,
   bucketUnit,
   categoricalAxis,
   chartModel,
-  formatChartExact,
   formatChartReadout,
-  type ChartHeadline,
   type ChartModel,
 } from '@/components/charts/chart-model';
+import { chartDrawing, chartHead, type ChartHead } from '@/components/charts/chart-head';
 
 /** A preview bar's width: the model's, from the exact parts (never the printed share). */
 function shareWidth(row: { width: number; label: string }, title: string): number {
@@ -32,17 +33,15 @@ function RankedPreview({ model }: { model: ChartModel }) {
   return (
     <ol className="space-y-2" aria-label={`${model.title} ranked preview`}>
       {model.rankedPreview.rows.map((row) => (
-        <li key={row.title} className="text-meta min-w-0">
+        // a name, a link's words and a share: the reading ink at 13 px (the ink and size roles,
+        // finished; the row was 12 px); the name truncates where the card is narrow
+        <li key={row.title} className="text-small min-w-0">
           <div className="flex justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1.5" title={row.title}>
               {/* The Assets ranking shows each entry's class by its mark (CH-06). */}
               {row.assetClass && <ClassMark kind={row.assetClass} size={12} />}
               {row.href ? (
-                <Link
-                  href={row.href}
-                  title={row.title}
-                  className="hover:text-jade truncate font-mono"
-                >
+                <Link href={row.href} title={row.title} look="key" className="truncate font-mono">
                   {row.label}
                 </Link>
               ) : (
@@ -63,12 +62,30 @@ function RankedPreview({ model }: { model: ChartModel }) {
   );
 }
 
-/** The card's headline: the model's own, else the latest reading under its date. */
-function cardHeadline(model: ChartModel): ChartHeadline | null {
-  if (model.headline !== undefined) return model.headline;
-  return model.latest
-    ? { pre: model.latest.label, display: model.latest.display, unit: model.unit }
-    : null;
+/** Count nouns: on a card the title is the noun, so the figure carries no unit word. */
+const COUNT_NOUNS = new Set([
+  'transactions',
+  'addresses',
+  'activities',
+  'kind counts',
+  'cells',
+  'blocks',
+  'epochs',
+  'holders',
+]);
+
+/**
+ * The card's figure (rule 9, CH-07): the page's own head figure, the same point and quantity; a CKB
+ * amount in the compact form a 278 px card holds (cut, never rounded, its exact value the title),
+ * a share or a rate with its unit's base (`%`, `PH/s`), a count bare under its noun, the title.
+ */
+export function cardFigure(head: ChartHead): { text: string; unit: string } | null {
+  const figure = head.figure;
+  if (!figure) return null;
+  if (figure.unit === 'CKB') return { text: decimalAmountText(figure.raw, 'compact'), unit: 'CKB' };
+  const base = figure.unit.startsWith('%') ? '%' : figure.unit;
+  if (COUNT_NOUNS.has(base)) return { text: figure.display, unit: '' };
+  return { text: figure.display, unit: base };
 }
 
 export function ChartSmallMultiple({ definition }: { definition: ChartDefinition }) {
@@ -79,11 +96,14 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   const { data, error, refetch } = read;
   const style = axisStyle(definition);
   let model: ChartModel | null = null;
+  let head: ChartHead | null = null;
   let ticks: { index: number; label: string }[] = [];
+  let drawing: ReturnType<typeof chartDrawing> | null = null;
   let modelError: string | null = null;
   if (data) {
     try {
       model = chartModel(definition, data);
+      head = chartHead(definition, model);
       // The bucket unit once, on the axis' last label (CH-12); a histogram's round values over the
       // run its model filled, at the tile's own step.
       ticks = axisTicks(
@@ -93,50 +113,64 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         bucketUnit(definition),
         model.bucketRun
       );
+      // the page's default scale and cap, drawn the page's way (the D1 hand-back, item 3)
+      if (model.kind !== 'ranked')
+        drawing = chartDrawing(
+          definition,
+          model,
+          model.card?.points ?? model.points,
+          model.card?.series ?? model.series
+        );
     } catch (cause) {
       model = null;
       modelError = cause instanceof Error ? cause.message : String(cause);
     }
   }
-  const headline = model ? cardHeadline(model) : null;
+  const figure = head ? cardFigure(head) : null;
   const points = model?.card?.points ?? model?.points ?? [];
   return (
     <article className="min-w-0" aria-label={`${definition.title} chart preview`}>
-      {/* The readout keeps the right edge; in a card too narrow for title and readout side by
-          side it drops under the title whole instead of being cut (responsive review 2026-11-01). */}
-      <div className="mb-2 flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-1">
-        <div className="min-w-0">
+      {/* Rule 9 (CH-16): a fixed head of two lines, so every plot of a row of cards starts on one
+          line: the name and the figure with its unit; the caption and the date. Each line is
+          written to fit the narrowest card and is never cut (chart-card-head.test.tsx). */}
+      <div data-role="card-head" className="mb-2.5 min-w-0">
+        <div className="flex min-w-0 items-baseline gap-x-2.5">
           <Link
             href={`/charts/${definition.slug}`}
-            className="text-text-bright hover:text-jade text-body"
+            look="key"
+            className="text-body whitespace-nowrap"
           >
             {definition.title}
           </Link>
-          <div className="text-text-dim text-meta">{definition.cardSubtitle}</div>
-        </div>
-        {model?.latest && headline && (
-          <div
-            className="ml-auto min-w-0 text-right"
-            title={`${model.latest.label}: ${withUnit(formatChartExact(model.latest.raw, model.unit), model.unit)}`}
-          >
-            <div className="text-text-dim text-meta whitespace-nowrap">{headline.pre}</div>
-            <div
+          {figure && head?.figure && (
+            <span
               role="group"
               aria-label={`${definition.title} current readout`}
-              className="min-w-0 overflow-x-auto"
+              title={head.figure.title}
+              className="text-text-bright text-section ml-auto whitespace-nowrap tabular-nums"
             >
-              <div className="flex w-max min-w-full items-baseline justify-end">
-                <span className="text-text-bright text-hero whitespace-nowrap font-medium tabular-nums">
-                  {headline.display}
+              {figure.text}
+              {figure.unit && (
+                <span className="text-text-dim text-meta">
+                  {figure.unit === '%' ? '%' : `\u00a0${figure.unit}`}
                 </span>
-                {/* Every card figure carries its unit, in the one form (CH-14): 2.55%, 10.43 s. */}
-                <span className="text-text-dim text-meta whitespace-pre">
-                  {unitAfter(headline.unit, '\u00a0')}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
+              )}
+            </span>
+          )}
+        </div>
+        <div className="text-meta mt-0.5 flex min-w-0 gap-x-2.5">
+          {/* the caption, what the figure counts: a label, the quiet ink */}
+          <span data-role="card-caption" className="text-text-dim whitespace-nowrap">
+            {definition.cardSubtitle}
+          </span>
+          {head?.at && (
+            // the date is the datum, the reading ink; line 2 keeps the chart-hero board's 12 px
+            // (rule 9: two lines that fit the narrowest card, 278 px; chart-card-head.test.tsx)
+            <span data-role="card-date" className="text-text ml-auto whitespace-nowrap">
+              {head.at}
+            </span>
+          )}
+        </div>
       </div>
       {isAwaited(read) && (
         <div
@@ -147,48 +181,64 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       {error && (
         <div role="alert" className="text-negative text-small break-words">
           {definition.title}: {error.message}
-          <button type="button" onClick={() => void refetch()} className="text-jade ml-2 underline">
-            Retry
-          </button>
+          <RetryAction words="Retry" onRetry={() => void refetch()} className="ml-2" />
         </div>
       )}
       {modelError && (
-        <p role="alert" className="text-negative text-small break-words">
+        <p role="alert" className="text-negative text-small max-w-measure break-words">
           {modelError}
         </p>
       )}
-      {model && !model.latest && (
-        <p className="text-text-dim text-small py-8">No indexed observations for this chart.</p>
+      {model && !model.latest && model.kind !== 'ranked' && (
+        <p className="text-text text-small max-w-measure py-8">
+          No indexed observations for this chart.
+        </p>
       )}
-      {model?.latest &&
+      {model &&
         (model.kind === 'ranked' ? (
           <RankedPreview model={model} />
         ) : (
-          <Chart
-            title={definition.title}
-            subtitle={definition.subtitle}
-            data={points}
-            series={model.card?.series ?? model.series}
-            unit={model.unit}
-            kind={model.kind}
-            height={120}
-            hideCaption
-            projectedAfter={model.projectedAfter}
-            // F2 charts: the board's card grammar — x labels, end dot, targets, share axis.
-            xTicks={ticks}
-            pointDots={model.kind === 'line'}
-            slotBars={style === 'bucket' || style === 'month'}
-            categoricalX={categoricalAxis(definition)}
-            yDomain={model.yDomain}
-            referenceLines={model.referenceLines}
-            formatValue={(value) => formatChartReadout(value, model.unit)}
-            formatAxis={chartAxisFormat(model.unit)}
-          />
+          model.latest && (
+            <Chart
+              title={definition.title}
+              subtitle={definition.subtitle}
+              data={points}
+              series={model.card?.series ?? model.series}
+              unit={model.unit}
+              kind={model.kind}
+              height={130}
+              hideCaption
+              projectedAfter={model.projectedAfter}
+              // F2 charts: the board's card grammar — x labels, end dot, targets, share axis.
+              xTicks={ticks}
+              pointDots={model.kind === 'line'}
+              slotBars={style === 'bucket' || style === 'month'}
+              categoricalX={categoricalAxis(definition)}
+              yDomain={model.yDomain}
+              referenceLines={model.referenceLines}
+              formatValue={(value) => formatChartReadout(value, model.unit)}
+              formatAxis={chartAxisFormat(model.unit)}
+              // The page's default scale and cap (rule 6), the axis saying which: a log scale is
+              // named with the unit, a cut axis names what is above it.
+              yScale={drawing?.yScale}
+              axisCap={drawing?.axisCap}
+              // Rule 4: every plot's left edge on one line; its ticks inside it, bare, its unit
+              // named once; rule 5: a stack in the page's solid bands.
+              // the plot's unit alone, a label (the ink and size roles, finished: a page's name
+              // line is a sentence, a card's is its unit)
+              plotUnit={drawing?.yScale === 'log' ? `${model.unit} · log scale` : model.unit}
+              insideYTicks
+              bareTicks
+              solidBands={model.kind === 'stacked'}
+            />
+          )
         ))}
+      {/* the key: each band's name and its figure, a name and a value, the reading ink at 13 px
+          (the ink and size roles, finished; they were 12 px); it wraps between its entries */}
       {model?.card && model.card.legend.length > 0 && (
         <ul
           aria-label={`${definition.title} legend`}
-          className="text-text-dim text-meta mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
+          className="text-small mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
         >
           {model.card.legend.map((entry) => (
             <li key={entry.key} className="flex items-center gap-1.5">
@@ -197,7 +247,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
                 className="h-[7px] w-[7px]"
                 style={{ backgroundColor: entry.color }}
               />
-              <span>{entry.label}</span>
+              <span className="text-text">{entry.label}</span>
               <span className="text-text tabular-nums">{entry.value}</span>
             </li>
           ))}

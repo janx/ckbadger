@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, type RefObject } from 'react';
+import type { RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api, type NetworkMap } from '@/lib/api';
@@ -14,14 +14,33 @@ import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
-import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx, wrapPhrases } from '@/lib/chart-type';
+import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 type Point = NetworkMap['points'][number];
 
 const DOT_R = 3.6;
 const RING_R = 6.2;
-/** Hierarchy v3 (R13): the band above the clusters that holds the map's name, inside the plot. */
-const NAME_BAND = 24;
+/**
+ * Hierarchy v3 (R13): the band above the clusters that holds the map's name, inside the plot: its
+ * label lines 2 px under the top and 7 px over the clusters (24 px for one line). The name, 8 px
+ * in from the svg's sides, breaks after "verified nodes" where it does not fit (a 320 px window's
+ * 270 px svg; review F-B, logic finding 2), and the band grows a line at a time.
+ */
+const NAME_PAD = 2;
+const NAME_Y = NAME_PAD + lineAscentPx(SVG_TEXT.label);
+const NAME_LINE = tightLinePx(SVG_TEXT.label);
+const nameBand = (lines: number) => NAME_PAD + lines * NAME_LINE + 7;
+const NAME_PHRASES = ['verified nodes', 'approximate GeoIP place'] as const;
+/**
+ * A country's label (the tick size) stands a pixel under its cluster's reach: its baseline that and
+ * its line's ascent under the cluster's radius, its line's foot a tight line under the pixel
+ * (readability plan 2026-11-18, lane F3: the baseline was 11 px under the radius, its line 0.4 px
+ * over it, and the band kept under a cluster, 14 px, 0.6 px short of the line).
+ */
+const PLACE_GAP = 1;
+const PLACE_Y = PLACE_GAP + lineAscentPx(SVG_TEXT.tick);
+const PLACE_FOOT = PLACE_GAP + tightLinePx(SVG_TEXT.tick);
 /** The map's own floor: with its name band the picture is at least 280 px tall on a phone. */
 const MIN_MAP_HEIGHT = 256;
 
@@ -32,8 +51,8 @@ const LAT_BOTTOM = -48;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 /**
  * Below this map width a country with a single verified node is not labelled on the map: its
- * "XX 1" labels crowd the dense regions (390 px: CN, TW, MO, IN, HK, SG, ID ran together). Those
- * countries are named in a line under the map instead, so every country stays readable.
+ * "XX 1" labels crowd the dense regions (390 px: CN, TW, MO, IN, HK, SG, ID ran together). Every
+ * country, those too, is named in the ranked list beside the map (`CountryList`).
  */
 export const NARROW_MAP_WIDTH = 480;
 
@@ -45,11 +64,42 @@ export interface CountryLabel {
 }
 
 /**
+ * The map's points by country: the one grouping the map's clusters, its place labels and the
+ * ranked list beside it read their counts from, so the list and the map never disagree.
+ */
+function byCountry(points: readonly Point[]): Map<string, Point[]> {
+  const groups = new Map<string, Point[]>();
+  for (const point of points)
+    groups.set(point.country, [...(groups.get(point.country) ?? []), point]);
+  return groups;
+}
+
+/** Every country of the map with its verified nodes, most first, a tie by its code. */
+export function rankCountries(points: readonly Point[]): { country: string; count: number }[] {
+  return [...byCountry(points)]
+    .map(([country, peers]) => ({ country, count: peers.length }))
+    .sort((a, b) => b.count - a.count || a.country.localeCompare(b.country));
+}
+
+const REGION_NAMES = new Intl.DisplayNames(['en'], { type: 'region' });
+
+/**
+ * A country's English name from its ISO 3166 code (the API's GeoIP label), or null where the
+ * runtime has none for it (a code it does not know; a label that is not a two-letter code): the
+ * row then says the code alone, as the map does.
+ */
+export function countryName(code: string): string | null {
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  const name = REGION_NAMES.of(code);
+  return name === undefined || name === code ? null : name;
+}
+
+/**
  * The Network board's layout: one cluster per country at the mean GeoIP position of its peers
  * (lat 72…−48 band), clusters pushed apart until they and their labels no longer touch and pulled
  * gently back to their place, peers on a sunflower inside — ringed first, then reachable. Visual
  * displacement only: the readout keeps the source coordinates. Deterministic. On a narrow map
- * the single-node countries are `listed` for the line under the map instead of labelled on it.
+ * the single-node countries are `listed`, not labelled on it (the ranked list names them).
  */
 export function layoutCountryClusters(
   points: Point[],
@@ -65,16 +115,14 @@ export function layoutCountryClusters(
     ((lon + 180) / 360) * width,
     ((LAT_TOP - Math.max(LAT_BOTTOM, Math.min(LAT_TOP, lat))) / (LAT_TOP - LAT_BOTTOM)) * height,
   ];
-  const byCountry = new Map<string, Point[]>();
-  for (const point of points)
-    byCountry.set(point.country, [...(byCountry.get(point.country) ?? []), point]);
-  const countries = [...byCountry.keys()].sort();
+  const groups = byCountry(points);
+  const countries = [...groups.keys()].sort();
   const radius = (n: number) => SPACING * (0.6 + Math.sqrt(n) * 0.62);
   const labelled = (country: string) =>
-    width >= NARROW_MAP_WIDTH || byCountry.get(country)!.length >= 2;
+    width >= NARROW_MAP_WIDTH || groups.get(country)!.length >= 2;
   const home = new Map(
     countries.map((country) => {
-      const peers = byCountry.get(country)!;
+      const peers = groups.get(country)!;
       return [
         country,
         proj(
@@ -87,12 +135,12 @@ export function layoutCountryClusters(
   const centre = new Map(countries.map((country) => [country, [...home.get(country)!]]));
   /** A cluster's footprint: its dots plus the label under it, when it has one. */
   const extent = (country: string) => {
-    const r = radius(byCountry.get(country)!.length);
+    const r = radius(groups.get(country)!.length);
     if (!labelled(country)) return { r, half: r, below: r };
-    // a place's label, at the tick size, measured as a label kept clear of its neighbours
-    const label = `${country} ${byCountry.get(country)!.length}`;
-    const half = Math.max(r, (label.length * labelAdvancePx(SVG_TEXT.tick)) / 2);
-    return { r, half, below: r + 14 };
+    // a place's label, at the tick size
+    const label = `${country} ${groups.get(country)!.length.toLocaleString('en-US')}`;
+    const half = Math.max(r, textPx(label.length, SVG_TEXT.tick) / 2);
+    return { r, half, below: r + PLACE_FOOT };
   };
   for (let round = 0; round < 400; round++) {
     for (let i = 0; i < countries.length; i++)
@@ -130,7 +178,7 @@ export function layoutCountryClusters(
   const listed: { country: string; count: number }[] = [];
   for (const country of countries) {
     const [cx, cy] = centre.get(country)!;
-    const peers = [...byCountry.get(country)!].sort(
+    const peers = [...groups.get(country)!].sort(
       (a, b) =>
         Number(b.localSessionObserved) - Number(a.localSessionObserved) ||
         Number(b.reachable) - Number(a.reachable) ||
@@ -145,27 +193,104 @@ export function layoutCountryClusters(
       });
     });
     if (labelled(country))
-      labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + 11 });
+      labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + PLACE_Y });
     else listed.push({ country, count: peers.length });
   }
   dots.sort((a, b) => a.point.peerId.localeCompare(b.point.peerId));
   return { dots, labels, listed };
 }
 
-/** The map's counts, one derivation for the key, the reading row and the notes. */
+/**
+ * The name both routes give a located node whose GeoIP record names no country (lane exactness, part A2, the pages
+ * review's NOTE 3: the map sent "", the distributions "Unknown").
+ */
+const NO_COUNTRY = 'Unknown';
+
+/**
+ * The map's counts, one derivation for the key, the reading row and the notes. A located node with
+ * no country is in none: it is not counted as a country, and `noCountry` says how many there are.
+ */
 export function mapCounts(map: NetworkMap): {
   reachable: number;
   before: number;
   ringed: number;
   countries: number;
+  noCountry: number;
 } {
   const reachable = map.points.filter((point) => point.reachable).length;
+  const groups = byCountry(map.points);
   return {
     reachable,
     before: map.points.length - reachable,
     ringed: map.points.filter((point) => point.localSessionObserved).length,
-    countries: new Set(map.points.map((point) => point.country)).size,
+    countries: [...groups.keys()].filter((country) => country !== NO_COUNTRY).length,
+    noCountry: groups.get(NO_COUNTRY)?.length ?? 0,
   };
+}
+
+/**
+ * The located nodes and their countries in words, one sentence for the reading row and the notes
+ * ("4 verified nodes in 2 countries"; ", 2 with no country known" where there are such).
+ */
+function locatedWords(map: NetworkMap): string {
+  const { countries, noCountry } = mapCounts(map);
+  return `${map.located.toLocaleString('en-US')} verified nodes in ${countries.toLocaleString('en-US')} countries${
+    noCountry ? `, ${noCountry.toLocaleString('en-US')} with no country known` : ''
+  }`;
+}
+
+/**
+ * The countries ranked beside the map (readability plan 2026-11-18, P4: on the map a country is a
+ * code and a count under its cluster, and a phone map labels only the countries of two or more, so
+ * ranking them meant scanning every label): every country of the map, most verified nodes first, a
+ * tie by its code — the counts its place labels state, from the one grouping (`rankCountries`).
+ * A row is the country's code (its key, as the map writes it, bright), its English name (the reading
+ * ink; it wraps between its words, and inside one where a word is wider than its room: a name is the
+ * runtime's text, up to 38 characters in Node's, "South Georgia & South Sandwich Islands") and its
+ * count (a value, the reading ink, right-aligned in tabular figures). It stands in the panel with
+ * the key until a node is named there; in the panel's 290 px at lg (a 320 px rail less its border
+ * and 14 px each side) a row is the code's 2ch (15.6 px at 13 px), 8 px, the name's room and 8 px
+ * before the count's own width, "99" 15.6 px: the name keeps 242.8 px, 31 characters; under the map
+ * below lg the rows run in two columns from 640 (608 px less 30 is 578, two of 277 px with 24 px
+ * between them) and in one on a phone (358 less 30, 328 px; 298 at 360).
+ */
+function CountryList({ countries }: { countries: readonly { country: string; count: number }[] }) {
+  return (
+    <div className="mt-3">
+      <div className="text-text-dim text-meta">verified nodes by country</div>
+      <ol
+        aria-label="Countries by verified nodes"
+        className="mt-1 gap-x-6 sm:columns-2 lg:columns-1"
+      >
+        {countries.map(({ country, count }) => {
+          const name = countryName(country);
+          return (
+            <li
+              key={country}
+              data-country-row={country}
+              className="grid break-inside-avoid grid-cols-[2ch_minmax(0,1fr)_auto] items-baseline gap-x-2"
+            >
+              {/^[A-Z]{2}$/.test(country) ? (
+                <>
+                  <span className="text-text-bright">{country}</span>
+                  <span className="text-text min-w-0 [overflow-wrap:anywhere]">{name ?? ''}</span>
+                </>
+              ) : (
+                // a label that is not a code (the API's own words) takes the code's and the
+                // name's room, as the map writes it
+                <span className="text-text-bright col-span-2 min-w-0 [overflow-wrap:anywhere]">
+                  {country}
+                </span>
+              )}
+              <span className="text-text text-right tabular-nums">
+                {count.toLocaleString('en-US')}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 /**
@@ -208,7 +333,8 @@ function Legend({
       `heard of, never verified · ${neverVerified}`,
     ],
   ];
-  const ROW = 20;
+  // a row: its words' tight line at the head size and 4 px (20 px), the glyph on its middle
+  const ROW = tightLinePx(SVG_TEXT.head) + 4;
   return (
     <svg
       role="img"
@@ -220,7 +346,7 @@ function Legend({
       {rows.map(([glyph, words], i) => (
         <g key={words} transform={`translate(0 ${i * ROW + ROW / 2})`}>
           {glyph}
-          <text x="22" y="4" fontSize={SVG_TEXT.head} fill="var(--c-text)">
+          <text x="22" y={centreShift(SVG_TEXT.head)} fontSize={SVG_TEXT.head} fill="var(--c-text)">
             {words}
           </text>
         </g>
@@ -276,7 +402,7 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   ];
   return (
     <>
-      <p className="text-text-bright text-body [overflow-wrap:anywhere]">
+      <p className="text-text-bright text-body max-w-measure [overflow-wrap:anywhere]">
         {point.alias ? (
           point.alias.address
         ) : (
@@ -356,6 +482,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
   const layout = placed?.dots ?? [];
   const countryLabels = placed?.labels ?? [];
   const counts = ready ? mapCounts(ready) : null;
+  const nameLines = wrapPhrases(NAME_PHRASES, SVG_TEXT.label, width - 16);
+  const band = nameBand(nameLines.length);
   return (
     <div className="min-w-0">
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -365,16 +493,16 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
           <TerminalPanelContent padding="sm">
             <div ref={ref} className="flex min-w-0 flex-col gap-3">
               {awaited ? (
-                <p className="text-text-dim text-small">Loading crawler locations…</p>
+                <p className="text-text text-small">Loading crawler locations…</p>
               ) : !ready ? (
-                <p role="alert" className="text-negative text-small">
+                <p role="alert" className="text-negative text-small max-w-measure">
                   Crawler locations unavailable: {String(error)}
                 </p>
               ) : (
                 <svg
                   width={width}
-                  height={height + NAME_BAND}
-                  viewBox={`0 0 ${width} ${height + NAME_BAND}`}
+                  height={height + band}
+                  viewBox={`0 0 ${width} ${height + band}`}
                   role="img"
                   aria-label="Approximate GeoIP locations of retained verified CKB peers"
                   className="block"
@@ -385,8 +513,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       key={'lon' + k}
                       x1={(width * k) / 8}
                       x2={(width * k) / 8}
-                      y1={NAME_BAND}
-                      y2={height + NAME_BAND}
+                      y1={band}
+                      y2={height + band}
                       stroke="var(--c-grid-faint)"
                     />
                   ))}
@@ -395,26 +523,31 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       key={'lat' + k}
                       x1="0"
                       x2={width}
-                      y1={NAME_BAND + (height * k) / 6}
-                      y2={NAME_BAND + (height * k) / 6}
+                      y1={band + (height * k) / 6}
+                      y2={band + (height * k) / 6}
                       stroke={k === 3 ? 'var(--c-base-border-subtle)' : 'var(--c-grid-faint)'}
                     />
                   ))}
                   <text
                     data-role="chart-name"
                     x="8"
-                    y="14"
+                    y={NAME_Y}
                     fontSize={SVG_TEXT.label}
                     fill="var(--c-text-dim)"
                   >
-                    verified nodes · approximate GeoIP place
+                    {nameLines[0]}
+                    {nameLines.slice(1).map((line, i) => (
+                      <tspan key={`${i}:${line}`} x="8" dy={NAME_LINE}>
+                        {line}
+                      </tspan>
+                    ))}
                   </text>
                   {countryLabels.map(({ country, count, x, y }) => (
                     <text
                       key={country}
                       data-country-label
                       x={x}
-                      y={y + NAME_BAND}
+                      y={y + band}
                       textAnchor="middle"
                       fontSize={SVG_TEXT.tick}
                       fill="var(--c-text-dim)"
@@ -426,7 +559,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                     </text>
                   ))}
                   {layout.map(({ point, x, y: mapY }) => {
-                    const y = mapY + NAME_BAND;
+                    const y = mapY + band;
                     return (
                       <g
                         key={point.peerId}
@@ -484,15 +617,20 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
             aria-live="polite"
             className={`border-base-border-subtle text-small min-w-0 self-start border px-3.5 py-3 ${STICKY_RAIL}`}
           >
+            {/* At rest the panel is the map's key and its countries ranked; a named node takes
+                the whole panel, so nothing in it moves under a pointer that names nodes. */}
             {selected ? (
               <PeerReadout point={selected} roundId={ready.roundId} />
             ) : (
-              <Legend
-                reachable={counts!.reachable}
-                before={counts!.before}
-                ringed={counts!.ringed}
-                neverVerified={map.neverVerified}
-              />
+              <>
+                <Legend
+                  reachable={counts!.reachable}
+                  before={counts!.before}
+                  ringed={counts!.ringed}
+                  neverVerified={map.neverVerified}
+                />
+                <CountryList countries={rankCountries(ready.points)} />
+              </>
             )}
           </aside>
         )}
@@ -502,45 +640,24 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
 }
 
 /**
- * The lines under the map: the reading of the named node, the single-node countries a phone map
- * does not label, the never-verified peers as a strip (data, so it stays with the picture), and
- * the map's notes.
+ * The lines under the map: the reading of the named node, the never-verified peers as a strip
+ * (data, so it stays with the picture), and the map's caption. The countries a phone map leaves
+ * unlabelled are named in the ranked list beside it (`CountryList`), once.
  */
 export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
-  const { readout, width, ready, placed, selected, neverVerified } = map;
+  const { readout, width, ready, selected, neverVerified } = map;
   if (!ready) return null;
-  const listedCountries = placed?.listed ?? [];
   const perRow = Math.max(8, Math.floor(width / 14));
   return (
     <div className="mt-3 flex min-w-0 flex-col gap-3">
-      <ReadoutRow
-        label="Node readout"
-        pinned={readout.showingPin}
-        idle={`${ready.located.toLocaleString()} verified nodes in ${mapCounts(ready).countries} countries`}
-      >
+      <ReadoutRow label="Node readout" pinned={readout.showingPin} idle={locatedWords(ready)}>
         {selected ? peerLine(selected) : null}
       </ReadoutRow>
-      {listedCountries.length > 0 && (
-        <p
-          aria-label="Countries with one verified node"
-          className="text-text-dim text-small leading-relaxed"
-        >
-          One verified node each, not labelled on the map:{' '}
-          {listedCountries.map(({ country, count }, i) => (
-            <Fragment key={country}>
-              {i > 0 && ' · '}
-              <span data-country-listed className="whitespace-nowrap">
-                <span className="text-text">{country}</span> {count.toLocaleString('en-US')}
-              </span>
-            </Fragment>
-          ))}
-        </p>
-      )}
       {neverVerified > 0 && (
         <div className="flex flex-col gap-1.5">
-          <span className="text-text-dim text-small">
-            {neverVerified.toLocaleString()} more peers were only heard of: never verified, so their
-            place is unknown
+          <span className="text-text text-small">
+            {neverVerified.toLocaleString('en-US')} more peers were only heard of: never verified,
+            so their place is unknown
           </span>
           <svg
             role="img"
@@ -563,7 +680,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
         </div>
       )}
       {/* One caption (R3); the coverage, displacement and no-centre notes are tier 2's. */}
-      <p data-role="caption" className="text-text text-body max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure">
         Every node this crawler verified, at its approximate GeoIP place; no links are drawn,
         because no one can see them from outside.
       </p>
@@ -586,7 +703,7 @@ export function NetworkMapNotes() {
   if (isAwaited(read)) return null;
   if (error || !data)
     return (
-      <p role="alert" className="text-negative text-small">
+      <p role="alert" className="text-negative text-small max-w-measure">
         Crawler locations unavailable: {String(error)}
       </p>
     );
@@ -594,15 +711,13 @@ export function NetworkMapNotes() {
   // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
     <p>
-      {data.located.toLocaleString()} verified nodes in {counts.countries} countries · ringed: the{' '}
-      {counts.ringed} this node had a session with in the latest round.{' '}
-      {data.located.toLocaleString()} of {data.verifiedRetained.toLocaleString()} retained verified
-      peers have approximate GeoIP coordinates; {data.locationUnavailable.toLocaleString()}{' '}
-      locations are unavailable. Dots with close coordinates are displaced to keep them selectable.
-      There is no centre: every node keeps a handful of connections of its own, and that mesh cannot
-      be observed from outside, so no links are drawn. Each node keeps its own handful of
-      connections to others. Those links cannot be seen from outside, so none are drawn: not even
-      this node&apos;s, which would make it look like a centre.
+      {locatedWords(data)} · ringed: the {counts.ringed} this node had a session with in the latest
+      round. {data.located.toLocaleString('en-US')} of{' '}
+      {data.verifiedRetained.toLocaleString('en-US')} retained verified peers have approximate GeoIP
+      coordinates; {data.locationUnavailable.toLocaleString('en-US')} locations are unavailable.
+      Dots with close coordinates are displaced to keep them selectable. There is no centre: every
+      node keeps a handful of connections of its own, and that mesh cannot be observed from outside,
+      so no links are drawn, not even this node&apos;s, which would make it look like a centre.
     </p>
   );
 }

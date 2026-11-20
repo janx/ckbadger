@@ -19,12 +19,16 @@ describe('EpochTimeLengthPage', () => {
   it('places activated hardforks on their exact epoch observations', async () => {
     chartMock.mockClear();
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      // the API's consensus target (the page's sentence reads it)
+      target: { seconds: 14400, hours: '4.00' },
       title: 'Epoch Time Length',
-      yAxisLabel: 'hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1):
+      // 4 h, 4.1 h and 3.9 h
+      yAxisLabel: 'Milliseconds',
       data: [
-        { date: '5413', value: '4' },
-        { date: '5414', value: '4.1' },
-        { date: '12293', value: '3.9' },
+        { date: '5413', value: '14400000' },
+        { date: '5414', value: '14760000' },
+        { date: '12293', value: '14040000' },
       ],
     });
     vi.mocked(api.getHardforks).mockResolvedValue({

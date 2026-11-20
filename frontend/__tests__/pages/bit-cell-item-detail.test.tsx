@@ -8,6 +8,10 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 let query = '';
 const replace = vi.fn();
@@ -65,12 +69,14 @@ it('keeps recycled identity history while showing no live capacity', async () =>
 });
 it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
   query = 'activity_cursor=100:0';
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...itemActivityFeedProducer,
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   render(<Page identityId={evidence.itemId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
@@ -78,7 +84,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
       cursor: '100:0',
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
       limit: 20,
@@ -99,7 +105,7 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
     })),
   });
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
   // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
   // count is not shown at all rather than as "Not computed".
@@ -115,14 +121,18 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
   });
 });
 it('starts a new identity on its own first cursor page', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender } = render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
       limit: 20,

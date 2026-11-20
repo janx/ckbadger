@@ -2,9 +2,29 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 import { VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
 import producer from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
+import {
+  PALETTE,
+  PALETTE_KEYS,
+  THEMES,
+  apcaLc,
+  contrastRatio,
+  inkOnFill,
+  overGround,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
+import { resetThemeForTests } from '@/lib/theme';
 
 // F2 charts group (CH-40, CH-41): the Hardforks board's VM lanes.
 
@@ -64,11 +84,18 @@ describe('VmLaneTimeline', () => {
     const svg = screen.getByRole('img');
     expect(svg).toHaveAttribute('width', '358');
     // Lane names over full-width bars, epoch-only edition labels, numbers in each lane's header.
+    // Re-pinned (readability plan P4: a lane is named in plain words, its hash type second): the
+    // words are the lane's first line, its hash type and count its second (was "type · the newest
+    // VM" beside the count).
     for (const label of [
-      'type · the newest VM',
-      'data1 · pinned to VM1',
-      'data2 · pinned to VM2',
-      'data · pinned to VM0',
+      'follows the newest VM',
+      'hash_type type',
+      'pinned to VM1',
+      'hash_type data1',
+      'pinned to VM2',
+      'hash_type data2',
+      'pinned to VM0',
+      'hash_type data',
       'epoch 5,414',
       'epoch 12,293',
       '1,830,780 · 59\u00a0versions',
@@ -101,7 +128,9 @@ describe('VmLaneTimeline', () => {
       Number(meepo.getAttribute('x')) + 12 * 6.5 <= 358 ||
         meepo.getAttribute('text-anchor') === 'end'
     ).toBe(true);
-    // Versions with no registered reference sit on the strip, sharing the plot's insets.
+    // Versions with no registered reference sit on the strip, sharing the plot's insets
+    // (re-pinned, readability plan P4: the strip opens on demand under its count).
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     expect(strip).toHaveStyle({ left: '8px', right: '8px' });
     expect(within(strip).getAllByRole('button')).toHaveLength(2);
@@ -136,8 +165,9 @@ describe('VmLaneTimeline', () => {
     expect(meepoEpoch.y).toBeGreaterThan(meepo.y);
     // A clear gap separates Mirana's block from Meepo's: name baselines 18 px below the epoch.
     expect(meepo.y - miranaEpoch.y).toBeGreaterThanOrEqual(18);
-    // The lanes start under the last label row.
-    expect(Number(node('type · the newest VM').getAttribute('y'))).toBeGreaterThan(
+    // The lanes start under the last label row (re-pinned, P4: the first lane's first line is its
+    // plain words, "follows the newest VM"; it was "type · the newest VM").
+    expect(Number(node('follows the newest VM').getAttribute('y'))).toBeGreaterThan(
       meepoEpoch.y + 12
     );
   });
@@ -163,10 +193,21 @@ describe('VmLaneTimeline', () => {
     expect(onLane('data1')).toEqual(['Omni Lock', 'xUDT']);
     expect(onLane('data')).toEqual(['Old Lock']);
     expect(onLane('data2')).toEqual([]);
-    // Only the unregistered version stays on the strip below.
+    // Only the unregistered version stays off the lanes: re-pinned (readability plan P4), it is
+    // one count under them, its strip on demand (the strip's label was "no registered reference ·
+    // 1"; the count is a sentence now, the strip's label "no hash type · 1").
+    expect(
+      screen.getByText(
+        (_, el) =>
+          el?.tagName === 'P' &&
+          el.textContent!.replace(/\u00a0/g, ' ') ===
+            '1 known script version is registered under no hash type, so no lane holds it.'
+      )
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     expect(within(strip).getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByText(/no registered reference · 1/)).toBeInTheDocument();
+    expect(screen.getByText('no hash type · 1')).toBeInTheDocument();
     // A lane dot and a strip dot share one evidence panel.
     fireEvent.focus(svg.querySelector('[data-lane-dot="data1"]')!);
     const evidence = screen.getByRole('complementary', {
@@ -219,6 +260,10 @@ describe('VmLaneTimeline', () => {
     fireEvent.click(xudt);
     expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
     expect(xudt).toHaveAttribute('aria-pressed', 'true');
+    // re-pinned (readability plan P4): the strip of the versions under no hash type opens on
+    // demand; opening it keeps the pin
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
+    expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     const unregistered = within(strip).getByRole('button');
     fireEvent.mouseEnter(unregistered);
@@ -248,26 +293,31 @@ describe('VmLaneTimeline', () => {
     // The page's display element (no defining number): at least 280 px tall.
     expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
     const name = svg.querySelector('[data-role="chart-name"]')!;
-    expect(name).toHaveTextContent(
-      /^which VM runs a script, over time · dots: when each known script version was deployed$/
-    );
+    // re-pinned (readability plan P4): the name is the plot's title; what a dot is, it said as a
+    // hint ("… · dots: when each known script version was deployed"), is the key's first row
+    expect(name).toHaveTextContent(/^which VM runs a script, over time$/);
     expect(name.querySelectorAll('tspan')).toHaveLength(0);
     expect(name.getAttribute('x')).toBe('0');
-    expect(name.getAttribute('font-size')).toBe('11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(name.getAttribute('font-size')).toBe('12');
     expect(name.getAttribute('fill')).toBe('var(--c-text-dim)');
     const nameY = Number(name.getAttribute('y'));
-    // Edition names (12.5 px) and the edition rules start under the name band.
+    // Edition names (the title role, 13.5 px since R4, was 12.5) and the edition rules start under
+    // the name band.
     const y = (text: string) =>
       Number(
         [...svg.querySelectorAll('text')].find((t) => t.textContent === text)!.getAttribute('y')
       );
     for (const label of ['genesis', 'Mirana', 'Meepo'])
-      expect(y(label) - 12.5).toBeGreaterThanOrEqual(nameY + 8);
+      expect(y(label) - 13.5).toBeGreaterThanOrEqual(nameY + 8);
     for (const rule of Array.from(svg.querySelectorAll('line[data-edition]')))
       expect(Number(rule.getAttribute('y1'))).toBeGreaterThanOrEqual(nameY + 8);
   });
 
-  it('wraps the in-plot name into two lines at phone width, both inside the plot', () => {
+  // Re-pinned (readability plan P4; it was "wraps the in-plot name into two lines at phone width,
+  // both inside the plot"): the name lost its hint to the key over the figure, and its title alone,
+  // 33 characters, 237.6 px at 12 px, is one line on a 390 phone's 358 px and a 360 phone's 326.
+  it('keeps the in-plot name on one line at phone width, inside the plot', () => {
     stubChartWidth(358);
     render(
       <VmLaneTimeline
@@ -282,16 +332,13 @@ describe('VmLaneTimeline', () => {
     const svg = screen.getByRole('img');
     expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
     const name = svg.querySelector('[data-role="chart-name"]')!;
-    const lines = [...name.querySelectorAll('tspan')];
-    expect(lines.map((t) => t.textContent)).toEqual([
-      'which VM runs a script, over time',
-      'dots: when each known script version was deployed',
-    ]);
-    // 11 px mono advances ~0.64 em: each line fits the 358 px plot.
-    for (const line of lines) expect(line.textContent!.length * 11 * 0.64).toBeLessThanOrEqual(358);
-    const lastY = Number(name.getAttribute('y')) + Number(lines[1].getAttribute('dy'));
+    expect(name.querySelectorAll('tspan')).toHaveLength(0);
+    expect(name.textContent).toBe('which VM runs a script, over time');
+    // 12 px at 0.6 em: the line fits the 358 px plot (237.6 px) and a 360 phone's 326
+    expect(name.textContent!.length * 12 * 0.6).toBeLessThanOrEqual(326);
+    const lastY = Number(name.getAttribute('y'));
     const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
-    expect(Number(genesis.getAttribute('y')) - 12.5).toBeGreaterThanOrEqual(lastY + 8);
+    expect(Number(genesis.getAttribute('y')) - 13.5).toBeGreaterThanOrEqual(lastY + 8);
   });
 
   it.each([358, 1200])(
@@ -342,4 +389,194 @@ describe('VmLaneTimeline', () => {
       )
     ).toThrow(/between genesis and the tip/);
   });
+});
+
+// Readability page lane P4 (PAGE-LANE-NOTES, F1 follow-up): "VM2" on its bar, jade at 0.55, read
+// 3.81 : 1 by night in the bright ink (and 4.13 : 1 in the well's ink: no ink reads on that step),
+// written in `text-bright` by hand. A word on a VM bar takes the ink its fill calls for (inkOnFill:
+// the well or the bright ink, whichever reads stronger on the fill as the eye sees it over the
+// page) and every step of the VM ramp reads at 4.5 : 1 or more in both themes, by night at Lc 60
+// or more too (the night grade of a word ink that is not the reading ink): the step moves, the
+// palette does not.
+function inTheme(theme: ThemeName) {
+  localStorage.setItem('ckbadger.theme', theme);
+  resetThemeForTests();
+  document.documentElement.setAttribute('data-theme', theme);
+}
+const paletteKey = (ref: string | null): PaletteKey => {
+  const key = /^var\(--c-([a-z0-9-]+)\)$/.exec(ref ?? '')?.[1];
+  if (!key || !(PALETTE_KEYS as string[]).includes(key))
+    throw new Error(`${ref} is not a palette colour`);
+  return key as PaletteKey;
+};
+
+describe('VmLaneTimeline: a word on a VM bar reads on its fill (P4, F1 follow-up)', () => {
+  afterEach(() => {
+    localStorage.clear();
+    resetThemeForTests();
+    document.documentElement.setAttribute('data-theme', 'dark');
+    vi.restoreAllMocks();
+  });
+
+  it.each(THEMES.flatMap((theme) => [1232, 358].map((width) => [theme, width] as const)))(
+    'in the %s theme at %i px',
+    (theme, width) => {
+      inTheme(theme);
+      stubChartWidth(width);
+      render(
+        <VmLaneTimeline
+          editions={editions}
+          lanes={lanes}
+          deployments={laned}
+          genesisMs={genesisMs}
+          tipMs={tipMs}
+          tipEpoch={15203}
+        />
+      );
+      const svg = screen.getByRole('img');
+      const words = [...svg.querySelectorAll('[data-lane] g')].filter((g) =>
+        /^VM\d$/.test(g.querySelector('text')?.textContent ?? '')
+      );
+      expect(words.length).toBe(6);
+      const short: string[] = [];
+      for (const g of words) {
+        const rect = g.querySelector('rect')!;
+        const text = g.querySelector('text')!;
+        const fill = overGround(
+          theme,
+          paletteKey(rect.getAttribute('fill')),
+          Number(rect.getAttribute('fill-opacity'))
+        );
+        const ink = paletteKey(text.getAttribute('fill'));
+        const ratio = contrastRatio(PALETTE[theme][ink], fill);
+        const lc = Math.abs(apcaLc(PALETTE[theme][ink], fill));
+        const what = `${text.textContent} at ${rect.getAttribute('fill-opacity')} in ${ink}`;
+        if (ratio < 4.5) short.push(`${what}: ${ratio.toFixed(2)} : 1`);
+        if (theme === 'dark' && lc < 60) short.push(`${what}: Lc ${lc.toFixed(1)}`);
+        // the ink its fill calls for, not one picked by hand
+        const called = inkOnFill(
+          theme,
+          paletteKey(rect.getAttribute('fill')),
+          Number(rect.getAttribute('fill-opacity'))
+        ).ink;
+        if (ink !== called) short.push(`${what}: its fill calls for ${called}`);
+      }
+      expect(short).toEqual([]);
+    }
+  );
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the lanes stands whole inside the svg and clear of every other word — the plot's name, each
+// edition's name over its epoch, each lane's head over its note (or its header line on a phone),
+// the VM inside its bar, the column head, the years and "now" — measured by the type modules
+// (0.6 em a glyph; a tight line over its baseline, its descent under it). The real case is the
+// mainnet board's: two editions, 1,830,780 live references on `type`, an empty lane, at the
+// hardforks column at 1280 (1232), at 640 (608), and on phones (358, 326).
+describe('VmLaneTimeline: every word in its place (readability F3)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([1232, 608, 358, 326])('at %i px', (width) => {
+    stubChartWidth(width);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const svg = screen.getByRole('img');
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the lanes', 'flush');
+    expectApart(lines, `the lanes at ${width}`);
+    // a VM's name inside its bar: three on `type`, one on each other lane
+    const bars = [...svg.querySelectorAll('[data-lane] g')].filter((g) =>
+      /^VM\d$/.test(g.querySelector('text')?.textContent ?? '')
+    );
+    expect(bars.length).toBe(6);
+    for (const bar of bars)
+      for (const line of textLines(bar.querySelector('text')!))
+        expectInside(line, rectBox(bar.querySelector('rect')!), `${line.text} in its bar`);
+  });
+});
+
+// Readability plan 2026-11-18, P4 ("the hardforks rows are named in plain words with hash_type
+// second"; the review: the rows were named "hash_type type / data1 / data2 / data", what they mean
+// in 11 px dim under them). A lane says first what it is, in the protocol's terms (RFC 0032 /
+// 0051: `type` runs on the newest VM the chain runs, `data` pins VM0, `data1` VM1, `data2` VM2), in
+// the lane head's ink and size; its hash type is the quiet label under it. On a phone the head is
+// a line of its own, and the hash type stands with the lane's count on the line under it.
+describe('VmLaneTimeline: each lane named in plain words, its hash type second (P4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const WORDS = {
+    type: 'follows the newest VM',
+    data1: 'pinned to VM1',
+    data2: 'pinned to VM2',
+    data: 'pinned to VM0',
+  } as const;
+  const COUNTS = {
+    type: '1,830,780 · 59 versions',
+    data1: '98,551 · 19 versions',
+    data2: '0 · no known script yet',
+    data: '472 · 1 version',
+  } as const;
+  const draw = (width: number) => {
+    stubChartWidth(width);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    return screen.getByRole('img');
+  };
+  /** A word the lane writes itself (a child of its group), not one of its bars or dots. */
+  const own = (lane: Element, text: string) =>
+    [...lane.children].find((t) => t.tagName.toLowerCase() === 'text' && t.textContent === text);
+
+  it('on the desktop: the words as the lane head, its hash type the quiet note under them', () => {
+    const svg = draw(1232);
+    for (const [hashType, words] of Object.entries(WORDS)) {
+      const lane = svg.querySelector(`[data-lane="${hashType}"]`)!;
+      const head = own(lane, words);
+      const note = own(lane, `hash_type ${hashType}`);
+      expect(head, `${hashType}: ${words}`).toBeDefined();
+      expect(note, `${hashType}: hash_type ${hashType}`).toBeDefined();
+      expect(head).toHaveAttribute('font-size', '13');
+      expect(head).toHaveAttribute('fill', 'var(--c-text-bright)');
+      expect(note).toHaveAttribute('font-size', '12');
+      expect(note).toHaveAttribute('fill', 'var(--c-text-dim)');
+      expect(Number(head!.getAttribute('x'))).toBe(0);
+      expect(Number(note!.getAttribute('x'))).toBe(0);
+      expect(Number(note!.getAttribute('y'))).toBeGreaterThan(Number(head!.getAttribute('y')));
+    }
+  });
+
+  it.each([358, 326])(
+    'on a phone (%i px): the words a line of their own, the hash type with the count under them',
+    (width) => {
+      const svg = draw(width);
+      for (const [hashType, words] of Object.entries(WORDS)) {
+        const lane = svg.querySelector(`[data-lane="${hashType}"]`)!;
+        const head = own(lane, words);
+        const note = own(lane, `hash_type ${hashType}`);
+        const count = own(lane, COUNTS[hashType as keyof typeof COUNTS]);
+        expect(head, `${hashType}: ${words}`).toBeDefined();
+        expect(note, `${hashType}: hash_type ${hashType}`).toBeDefined();
+        expect(count, `${hashType}: its count`).toBeDefined();
+        expect(head).toHaveAttribute('fill', 'var(--c-text-bright)');
+        expect(note).toHaveAttribute('fill', 'var(--c-text-dim)');
+        // the head stands alone on its line; the hash type and the count share the next one
+        expect(Number(note!.getAttribute('y'))).toBeGreaterThan(Number(head!.getAttribute('y')));
+        expect(count!.getAttribute('y')).toBe(note!.getAttribute('y'));
+      }
+    }
+  );
 });

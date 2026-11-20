@@ -70,6 +70,7 @@ describe('Script page · who can change immutable code (table-rows L1-3)', () =>
         requireFirstN: null,
         keyHashes: [],
         verifiedByTx: null,
+        verifiedCodeCell: null,
         witnessState: 'not_applicable',
       },
     };

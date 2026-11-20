@@ -69,7 +69,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             <span className="text-text">none</span>
           )}
           {handleFrom > 0 && (
-            <span className="text-text-dim text-small">
+            <span className="text-text text-small">
               was{' '}
               <span className="text-text">
                 {docs[handleFrom - 1].handles.length
@@ -93,7 +93,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             >
               {s.endpoint} ↗
             </a>
-            <span className="text-text-dim text-small">
+            <span className="text-text text-small">
               {s.type}
               {s.type === 'AtprotoPersonalDataServer'
                 ? ' · where its posts and data are kept, off chain'
@@ -110,7 +110,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
               field={`verificationMethods.${k.name}`}
             >
               <span className="text-text-bright [overflow-wrap:anywhere]">{k.key}</span>
-              <span className="text-text-dim text-small">
+              <span className="text-text text-small">
                 {unitNode(
                   from === 0
                     ? 'unchanged since creation'
@@ -122,7 +122,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         })}
       </dl>
       {current.unreadable.length > 0 && (
-        <p className="text-text-dim text-small">
+        <p className="text-text text-small max-w-measure">
           Not read here: {current.unreadable.join(', ')} — the document as stored is in the raw
           evidence below.
         </p>
@@ -176,9 +176,13 @@ export function AmongDidCkb({
     <section aria-label="Among did:ckb" className="min-w-0 space-y-3">
       <PromptHeading
         command="Among did:ckb"
-        note={<AppLink href={collectionHref}>All {total.toLocaleString('en-US')} →</AppLink>}
+        note={
+          <AppLink look="onward" href={collectionHref}>
+            All {total.toLocaleString('en-US')}
+          </AppLink>
+        }
       />
-      <p>
+      <p className="max-w-measure">
         {total.toLocaleString('en-US')} did:ckb identities live on CKB. By the personal data server
         their documents name:
       </p>
@@ -210,7 +214,7 @@ export function AmongDidCkb({
         ))}
       </ul>
       {named !== total && (
-        <p className="text-text-dim text-small">
+        <p className="text-text text-small max-w-measure">
           An identity can name more than one server, so the servers add up to{' '}
           {named.toLocaleString('en-US')}.
         </p>

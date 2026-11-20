@@ -1,4 +1,7 @@
 // F2 group `objects` (round 2): a Spore cluster against the approved Collection board — the
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 // Objects section is one allele gel + a Newest list with mini gels and row ↔ genotype linking
 // (OB-C1 P0 page height, OB-C2, OB-C3), board section order (OB-C5), header (OB-C4), history line
 // (OB-C6), holder bars (OB-C7), rail (OB-C8), coverage out of tier 1 (OB-C11) and the blueprint
@@ -9,7 +12,7 @@ import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
-import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
+import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
@@ -25,6 +28,8 @@ import {
   nervape3xInsights,
   nervape3xOtherTraits,
 } from '@/__tests__/fixtures/objects/nervape3x';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
 const template = collectionGalleryFilteredProducer.data[0];
@@ -86,21 +91,26 @@ beforeEach(() => {
     },
     title: 'Collection capacity',
     data: [
-      { date: '2026-10-21', values: { used: '0', unused: '0' } },
-      { date: '2026-10-22', values: { used: '2892000000000', unused: '0' } },
+      { date: '2026-10-21', values: { occupiedCapacity: '0', freeCapacity: '0', capacity: '0' } },
+      {
+        date: '2026-10-22',
+        values: { occupiedCapacity: '2892000000000', freeCapacity: '0', capacity: '2892000000000' },
+      },
     ],
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   });
-  vi.spyOn(api, 'getCollectionGallery').mockResolvedValue({
-    data: rows,
-    total: 90,
-    limit: 8,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.spyOn(api, 'getCollectionGallery').mockResolvedValue(
+    pagedRead({
+      data: rows,
+      total: 90,
+      limit: 8,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -148,7 +158,13 @@ it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9
     within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-  ).toEqual(['Object', 'Background', 'Color', 'Made of', 'Owner', 'Minted']);
+    // re-pinned on purpose (lane P2's follow-up, item 3): the eight newest objects of the captured
+    // page share one owner and one minting day (a batch mint), so neither is a column: both are said
+    // once over the list (it listed Owner and Minted, the same on every row)
+  ).toEqual(['Object', 'Background', 'Color', 'Made of']);
+  expect(objects.querySelector('[data-role="said-once"]')).toHaveTextContent(
+    /^every one of the 8\sobjects listed · held by \S+ · minted on \d{4}-\d{2}-\d{2}$/
+  );
   expect(within(table).getAllByRole('row')).toHaveLength(9);
   expect(within(table).getAllByText('BTC+CKB')).toHaveLength(8);
   // C10: one hint in the section — the readout row's.
@@ -199,9 +215,20 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
 });
 
 // Main.dc.html: the history is the hero's picture; then Objects; then who holds it beside the
-// recent activity.
-it('orders sections as the board: History in the hero, Objects, Who holds it beside Recent activity', async () => {
+// recent activity. Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "… History
+// in the hero, …"): the history left the hero for tier 1's body, after the metrics, 160 px under
+// one sentence its points give; the order of the sections stands.
+it('orders sections as the board: History after the metrics, Objects, Who holds it beside Recent activity', async () => {
   await page();
+  const history = screen.getByRole('region', { name: 'History' });
+  expect(document.querySelector('[data-role="hero"]')).not.toContainElement(history);
+  expect(
+    screen.getByRole('region', { name: 'Metrics' }).compareDocumentPosition(history) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(within(history).getByTestId('history-sentence')).toHaveTextContent(
+    'CKB held: rose from 0 CKB on 2026-10-21 to 28,920 CKB.'
+  );
   // Phase 5: a tier-1 heading is a command line; its command is the section's word.
   const heads = screen
     .getAllByRole('heading', { level: 2 })
@@ -229,7 +256,15 @@ it('opens Recent activity with five rows and two links that open the full feed i
   }));
   await page();
   const recent = screen.getByRole('region', { name: 'Recent activity' });
-  await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(5));
+  // B4 (re-pinned on purpose): the five rows say the same thing (one fixture activity five times),
+  // so they are one run, folded, its count the five rows it holds (was five articles)
+  await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(1));
+  expect(within(recent).getByRole('article')).toHaveAttribute('data-run-count', '5');
+  // re-pinned on purpose (the lead's finding, the exactness lane's B9): the five newest of a feed
+  // with more, so the run's count is so far (it said "all 5 transactions ↓")
+  expect(
+    within(recent).getByRole('button', { name: /^5\stransactions so far ↓$/ })
+  ).toBeInTheDocument();
   expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('spore', NERVAPE3X_CLUSTER, {
     limit: 5,
   });
@@ -237,15 +272,23 @@ it('opens Recent activity with five rows and two links that open the full feed i
   // Phase 5 (A10): the activity, run on the rows it shows; the two links are the note.
   const heading = within(recent).getByRole('heading', { name: 'Activity --last 5' });
   expectPrompt(heading, 'Activity', '--last 5');
-  const note = promptNote(heading);
-  expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
-  expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
-  fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
-  expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+  // re-pinned on purpose (lane P2's follow-up, item 10): the newest rows open into the whole feed in place, a fold, by the one disclosure control (FoldToggle): "all 184
+  // transactions ↓" under the rows (it was two buttons in the heading's note, "All activity →"
+  // and "184 transactions →", arrows that said another page); the same button folds them back
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  const fold = screen.getByRole('button', { name: /^all 184\stransactions ↓$/ });
+  expect(fold).toHaveAttribute('aria-expanded', 'false');
+  fold.focus();
+  fireEvent.click(fold);
+  expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
   expect(screen.queryByRole('region', { name: 'Recent activity' })).toBeNull();
+  expect(fold).toHaveAccessibleName('fewer ↑');
+  expect(document.activeElement).toBe(fold);
+  fireEvent.click(fold);
+  expect(await screen.findByRole('region', { name: 'Recent activity' })).toBeInTheDocument();
 });
 
 // Consistency round (Main.dc.html): the lede is the kind and what every object is made of; the
@@ -401,12 +444,12 @@ it('marks every collection activity row as an object row, as the board does', as
   vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue({
     ...collectionActivityFeedProducer,
     data: [
-      {
+      activityRead({
         ...row,
         protocolActions: [
           { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
         ],
-      },
+      }),
     ],
   });
   await page();

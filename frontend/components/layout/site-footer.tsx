@@ -31,22 +31,22 @@ export function SiteFooter() {
     <footer className="border-base-border bg-base-void/95 border-t">
       <div className="text-small container mx-auto flex flex-wrap items-center gap-x-6 gap-y-2 py-[18px] font-mono leading-relaxed">
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-1">
-          <Link href="/hardforks" className={LINK}>
+          <Link look="nav" href="/hardforks" className={LINK}>
             Hardforks
           </Link>
-          <Link href="/network" className={LINK}>
+          <Link look="nav" href="/network" className={LINK}>
             Network
           </Link>
-          <Link href="/fiber/channels" className={LINK}>
+          <Link look="nav" href="/fiber/channels" className={LINK}>
             Fiber channels
           </Link>
-          <ExternalLink href="https://dashboard.fiber.channel/" className={LINK}>
+          <ExternalLink look="nav" href="https://dashboard.fiber.channel/" className={LINK}>
             Fiber dashboard
           </ExternalLink>
-          <ExternalLink href="https://cknerv.web5.info" className={LINK}>
+          <ExternalLink look="nav" href="https://cknerv.web5.info" className={LINK}>
             cknerv
           </ExternalLink>
-          <ExternalLink href="https://web5.info" className={LINK}>
+          <ExternalLink look="nav" href="https://web5.info" className={LINK}>
             Web5
           </ExternalLink>
           <button
@@ -80,9 +80,9 @@ function Token({ name, title, children }: { name: string; title?: string; childr
  * the status line's wide form and the `?` help say from md, so a phone does not lose them. The
  * release is the status line's (resolveBuildVersion, releaseOf; the whole build string in its
  * title), the zone the clock's (localZone). Quiet text in the footer's lowercase, on a line of its
- * own: at 360 the links take two lines (256.0 and 263.2 of 328 px at 7.2 px a character) and this
- * one, "ckbadger 0.8.2 · asia/shanghai", 216.0. It breaks only between its two tokens (a zone of
- * more than 28 characters at 360): the row is drawn 2ch to the left in a box that clips its left
+ * own: at 360 the links take two lines (274.0 and 281.8 of 328 px at 7.8 px a character) and this
+ * one, "ckbadger 0.8.2 · asia/shanghai", 234.0. It breaks only between its two tokens (a zone of
+ * more than 25 characters at 360): the row is drawn 2ch to the left in a box that clips its left
  * edge only, 0.75ch out as the separated list's (clip-path, never overflow-hidden, which would also
  * cut a token on the right), so the "·" leading the first token of each line is never seen and the
  * others read "a · b".
@@ -94,7 +94,7 @@ function ReleaseAndZone() {
   return (
     <p
       data-testid="footer-about"
-      className="text-text-dim m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_-0.75ch)] md:hidden"
+      className="text-text m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_-0.75ch)] md:hidden"
     >
       <span className="-ml-[2ch] flex flex-wrap gap-x-[1ch]">
         <Token name="release" title={`ckbadger ${build}`}>{`ckbadger ${releaseOf(build)}`}</Token>

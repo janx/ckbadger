@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { BlockContents, ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 
 describe('block evidence visuals', () => {
@@ -14,6 +15,27 @@ describe('block evidence visuals', () => {
     expect(Number(squares[1].getAttribute('width')) ** 2).toBe(
       Number(squares[0].getAttribute('width')) ** 2 * 4
     );
+  });
+  // The ink and size round (the shared lane): a count is a value, the reading ink at 13 px; its word
+  // ("tx", "tiles", "proposed") a unit, quiet at 12 px
+  it('writes its counts as values and their words as units', () => {
+    render(
+      <BlockContents
+        transactionSizes={[100, 100, 100, 100, 100, 100, 100, 100, 100, 100]}
+        proposalsCount={40}
+        unclesCount={0}
+      />
+    );
+    for (const count of ['10', '+2', '40']) {
+      const figure = screen.getByText(count);
+      expect(figure).toHaveClass('text-small');
+      expect(inkOf(figure)).toBe(READING);
+    }
+    for (const word of ['tx', 'tiles', 'proposed']) {
+      const unit = screen.getByText(word);
+      expect(unit).toHaveClass('text-meta');
+      expect(inkOf(unit)).toBe(QUIET);
+    }
   });
   it('labels overhead and user bytes without replacing the block total', () => {
     render(<ResourceBar label="Size, bytes" value={3205} overhead={883} scale={4000} />);
@@ -39,7 +61,18 @@ describe('block evidence visuals', () => {
     expect(container.querySelectorAll('[data-aligned-bar]')).toHaveLength(2);
   });
   it('draws a stacked bar’s overhead in the CKB mark’s slate, a named ink (V11)', () => {
-    render(<ResourceBar label="Size, bytes" value={3205} overhead={883} scale={4000} stacked />);
+    // re-pinned on purpose (readability F3-e, the coordinator's ruling): a stacked bar draws on its
+    // column's track, which it is given (it was a fixed 80 px under heads whose ticks ran 120)
+    render(
+      <ResourceBar
+        label="Size, bytes"
+        value={3205}
+        overhead={883}
+        scale={4000}
+        stacked
+        trackWidth={48}
+      />
+    );
     const [overhead, user] = Array.from(
       screen.getByRole('img', { name: /^Size, bytes: 3,205, 883 overhead/ }).children
     ) as HTMLElement[];
@@ -50,8 +83,12 @@ describe('block evidence visuals', () => {
     expect(user).toHaveClass('bg-jade', 'scan-fill');
   });
   it('uses stacked resource bars without shortening an exact cycle count', () => {
-    render(<ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked />);
+    // re-pinned on purpose (F3-e): given its column's track
+    render(
+      <ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked trackWidth={48} />
+    );
     const bar = screen.getByRole('img', { name: 'Cycles: 3,500,000,000' });
+    expect(bar.style.width).toBe('48px');
     expect(bar.parentElement).toHaveClass('flex-col', 'items-end');
     expect(screen.getByText('3,500,000,000')).toHaveClass('order-first');
     expect(bar.lastElementChild).toHaveStyle({ width: '87.5%' });
@@ -62,6 +99,10 @@ describe('block evidence visuals', () => {
     ).toThrow('exact positive size');
     expect(() => ResourceBar({ label: 'bytes', value: 100, overhead: 101, scale: 1000 })).toThrow(
       'overhead'
+    );
+    // a stacked bar without its column's track is refused, not drawn at a width of its own
+    expect(() => ResourceBar({ label: 'bytes', value: 100, scale: 1000, stacked: true })).toThrow(
+      "a stacked bar needs its column's track"
     );
     expect(() => resourceScale([NaN])).toThrow('exact integers');
   });

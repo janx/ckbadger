@@ -7,6 +7,11 @@ import { api } from '@/lib/api';
 // on eleven pages ("Live cells  2026-11-13 · 1,381,545 cells", "Most common 0.8 · 1.04 %", "Today
 // year 7.00 · 2.33 %"), put developer facts in tier 1 ("Frozen phase-1 overlap 92,655,192.17 CKB")
 // and hid the interesting fact in a dim label ("Largest script: Default Lock").
+//
+// Re-pinned for lane D1 (the chart-hero board, rule 2): the fact row itself goes — one sentence
+// under the title says what the series did (its change, its peak), the figure is named in words in
+// its eyebrow, and the facts the sentence does not carry stand in the evidence tier. Each test
+// keeps its intent: the head figure is said once, a leader is named, developer facts are tier 2.
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -27,12 +32,9 @@ vi.mock('@/components/ui/chart', () => ({
   Chart: (props: { title: string }) => <div role="img" aria-label={props.title} />,
 }));
 
-/** The fact row under the lede, as `label → value` pairs. */
-const facts = () =>
-  [...screen.getByRole('banner').querySelectorAll('dl > div')].map((row) => [
-    row.querySelector('dt')!.textContent,
-    row.querySelector('dd')!.textContent,
-  ]);
+/** The head's sentence, its spaces plain. */
+const sentence = () =>
+  document.querySelector('[data-role="sentence-words"]')!.textContent!.replace(/\u00a0/g, ' ');
 
 describe('the fact row under the lede (CH-18)', () => {
   beforeEach(() => {
@@ -44,7 +46,7 @@ describe('the fact row under the lede (CH-18)', () => {
     >);
   });
 
-  it('does not repeat the head figure: live cells keeps only its change', async () => {
+  it('does not repeat the head figure: live cells says only its change, in the sentence', async () => {
     vi.mocked(api.getCellCountChart).mockResolvedValue({
       title: 'Cell Count',
       series: [
@@ -58,8 +60,9 @@ describe('the fact row under the lede (CH-18)', () => {
       ],
     });
     render(<ChartDetail slug="cell-count" />);
-    await screen.findByRole('group', { name: 'Live cells readings' });
-    expect(facts()).toEqual([['Last change', '+6,412 cells']]);
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('1,381,545 cells');
+    expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
+    expect(sentence()).toBe('6,412 cells up on the day before.');
   });
 
   it('draws no fact row where the only fact was the head figure again', async () => {
@@ -70,9 +73,15 @@ describe('the fact row under the lede (CH-18)', () => {
         { date: '0.7', value: '0.9' },
         { date: '0.8', value: '1.04' },
       ],
+      // the window the route counts (lane D1's third round, S4)
+      epochs: 42,
+      intervals: 75_000,
+      beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: [675, 780],
     });
     const view = render(<ChartDetail slug="block-time-distribution" />);
-    await screen.findByRole('group', { name: 'Block intervals readings' });
+    await screen.findByTestId('figure-value');
     expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     view.unmount();
     vi.mocked(api.getNominalApcChart).mockResolvedValue({
@@ -87,11 +96,11 @@ describe('the fact row under the lede (CH-18)', () => {
       today: { blockNumber: 1, date: '2026-11-13', year: '7', value: '2.33' },
     });
     render(<ChartDetail slug="nominal-apc" />);
-    await screen.findByRole('group', { name: 'Nominal APC readings' });
+    await screen.findByTestId('figure-value');
     expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
   });
 
-  it("writes a leader's name as the bright value", async () => {
+  it('names the leader in words over its figure, the fact in the evidence tier', async () => {
     const share = {
       title: 'Share',
       series: [
@@ -101,8 +110,19 @@ describe('the fact row under the lede (CH-18)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { top0: '5919046400000000', others: '17958953600000000' },
+          values: {
+            top0: '5919046400000000',
+            others: '17958953600000000',
+            // the day's whole, the route's (the D1 hand-back, item 2)
+            total: '23878000000000000',
+            // the one rank drawn as its own band, the route's (lane D1's third round, M2)
+            drawnTotal: '5919046400000000',
+          },
         },
+      ],
+      bands: [
+        { key: 'top0', label: 'Default Lock', members: ['top0'] },
+        { key: 'others', label: 'Others', members: ['others'] },
       ],
     };
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
@@ -111,14 +131,23 @@ describe('the fact row under the lede (CH-18)', () => {
       capacityShare: share,
     });
     render(<ChartDetail slug="most-utilized-scripts" />);
-    await screen.findByRole('group', { name: 'Scripts readings' });
-    expect(facts()).toEqual([['Largest script', 'Default Lock · 59,190,464 CKB · 24.79%']]);
-    const dd = screen.getByRole('banner').querySelector('dd')!;
-    expect(dd).toHaveClass('text-text-bright');
-    expect(within(dd).getByText('Default Lock')).toHaveClass('whitespace-nowrap');
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent(
+      'Default Lock, the largest script · 2026-11-13'
+    );
+    const figure = screen.getByTestId('figure-value');
+    expect(figure).toHaveTextContent('59,190,464 CKB');
+    expect(figure).toHaveClass('text-text-bright');
+    expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
+    const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
+    // re-pinned for the D1 hand-back, item 1: 24.7887…% cut (was half up, 24.79%)
+    expect(within(tier2).getByText(/^Largest script:/)).toHaveTextContent(
+      'Largest script: Default Lock · 59,190,464 CKB · 24.78%'
+    );
   });
 
-  it('moves the frozen phase-1 overlap to the evidence tier', async () => {
+  // Re-pinned for lane D1's third round (S1): the frozen phase-1 compensation is a part of the unclaimed
+  // compensation, no difference between two wholes (was "Frozen phase-1 overlap").
+  it('moves the frozen phase-1 compensation to the evidence tier', async () => {
     vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue({
       title: 'Secondary Issuance',
       series: [
@@ -134,34 +163,50 @@ describe('the fact row under the lede (CH-18)', () => {
       })),
     });
     render(<ChartDetail slug="secondary-issuance" />);
-    await screen.findByRole('group', { name: 'Secondary issuance readings' });
-    expect(facts()).toEqual([['Last change', '+1 CKB']]);
+    await screen.findByTestId('figure-value');
+    expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(within(tier2).getByText(/Frozen phase-1 overlap/)).toHaveTextContent(
-      'Frozen phase-1 overlap: 92,655,192.1727796 CKB'
+    expect(within(tier2).getByText(/Frozen phase-1 compensation/)).toHaveTextContent(
+      'Frozen phase-1 compensation: 92,655,192.1727796 CKB'
     );
   });
 
-  it('names the largest age band beside its share', async () => {
+  // Re-pinned for lane D1 (rule 3): the figure is the answer the chart is asked, named in words,
+  // its share cut, never rounded (27.375 is 27.37; was "Largest age band > 3 y · 27.38%").
+  it('names the oldest age band in words over its share', async () => {
     const keys = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
     vi.mocked(api.getHodlWaveChart).mockResolvedValue({
       title: 'CKB HODL Wave',
-      series: keys.map((key) => ({ key, label: key === 'gt3y' ? '> 3y' : key, color: '#000' })),
+      series: keys.map((key) => ({
+        key,
+        label: key === 'gt3y' ? '3 years or more' : key,
+        color: '#000',
+      })),
       data: [
         {
           date: '2026-11-13',
           values: {
             ...Object.fromEntries(keys.map((key) => [key, '10.375'])),
             gt3y: '27.375',
+            '1m6m': '20.75',
+            lt1m: '31.125',
             holderCount: '367704',
           },
         },
       ],
+      bands: [
+        { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+        { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+        { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+        { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+        { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
+      ],
     });
     render(<ChartDetail slug="hodl-wave" />);
-    await screen.findByRole('group', { name: 'HODL wave readings' });
-    const [[label, value]] = facts();
-    expect(label).toBe('Largest age band');
-    expect(value).toMatch(/^> 3 ?y · 27\.38%$/);
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent(
+      'unmoved for 3 years or more · 2026-11-13'
+    );
+    expect(screen.getByTestId('figure-value')).toHaveTextContent('27.37% of all CKB');
+    expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
   });
 });

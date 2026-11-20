@@ -7,6 +7,10 @@ import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils'
 import { PeersTable } from '@/app/network/nodes-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
+import { http, HttpResponse } from 'msw';
+import { server } from '../msw/server';
+import { containerContentPx, insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { NARROWEST_LINE_PX } from '@/lib/control-row-fit';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -41,7 +45,9 @@ describe('PeersTable', () => {
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
-    fireEvent.change(screen.getByLabelText('Filter by crawler dial state'), {
+    // re-pinned (lane C2 topics): the controls board's select, named by the label it stands after
+    // (it was a bare select named "Filter by crawler dial state")
+    fireEvent.change(screen.getByLabelText('crawler dial state'), {
       target: { value: 'advertisedUnverified' },
     });
 
@@ -54,7 +60,11 @@ describe('PeersTable', () => {
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
 
-    const select = screen.getByLabelText('Filter by address observation');
+    // re-pinned (lane C2 topics): the select after its label "address observation", its first
+    // choice the board's "all" (it was a bare select named "Filter by address observation",
+    // opening on "All address observations")
+    const select = screen.getByLabelText('address observation');
+    expect(within(select).getAllByRole('option')[0]).toHaveTextContent(/^all$/);
     expect(
       within(select)
         .getAllByRole('option')
@@ -78,6 +88,146 @@ describe('PeersTable', () => {
     expect(screen.queryByText(rowId(REACHABLE_PEER_ID))).not.toBeInTheDocument();
   });
 
+  // Lane C2 (topics), written before "Load more" and the filters are replaced: five peers first,
+  // then fifty more a load by the cursor the API served, under the ones shown; a filter starts the
+  // list again from its first five.
+  it('loads more peers by the served cursor under the first, and a filter starts again from the first five', async () => {
+    const asked: { cursor: string | null; limit: string | null; state: string | null }[] = [];
+    const peer = (id: string) => ({
+      peerId: id.repeat(64),
+      crawlerDialState: 'reachable',
+      participation: {
+        discoveryAdvertised: false,
+        directSessionObserved: false,
+        crawlerIdentified: true,
+      },
+      sessionInitiators: [],
+      primaryAddr: '/ip4/1.2.3.4/tcp/8115',
+      version: '0.114.0',
+      country: 'United States',
+      asn: null,
+      lastAdvertisedAt: 1751500800,
+      lastDialObservedAt: 1751500800,
+      latestPositiveObservedAt: 1751500800,
+      lastReachableAt: 1751500800,
+      rttMs: 42,
+    });
+    server.use(
+      http.get('/api/:network/v1/network/peers', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        asked.push({
+          cursor: params.get('cursor'),
+          limit: params.get('limit'),
+          state: params.get('state'),
+        });
+        return params.get('cursor') === 'after-d'
+          ? HttpResponse.json({ items: [peer('e')], nextCursor: null })
+          : HttpResponse.json({ items: [peer('d')], nextCursor: 'after-d' });
+      })
+    );
+    // re-pinned (lane C2 topics): the controls board's short-list form, "next 50 ↓", and the
+    // select after its label (they were the button "Load more" and a bare select named "Filter by
+    // crawler dial state")
+    const more = () => screen.getByRole('button', { name: 'next 50 ↓' });
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(asked).toEqual([{ cursor: null, limit: '5', state: null }]);
+    fireEvent.click(more());
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
+    expect(asked.at(-1)).toEqual({ cursor: 'after-d', limit: '50', state: null });
+    // the first page's peer stays, the next one under it, and the list has no more to load
+    const [first, next] = screen.getAllByTestId('peer-row');
+    expect(within(first).getByText(rowId('d'.repeat(64)))).toBeInTheDocument();
+    expect(within(next).getByText(rowId('e'.repeat(64)))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'next 50 ↓' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('crawler dial state'), {
+      target: { value: 'reachable' },
+    });
+    await waitFor(() =>
+      expect(asked.at(-1)).toEqual({ cursor: null, limit: '5', state: 'reachable' })
+    );
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(screen.queryByText(rowId('e'.repeat(64)))).toBeNull();
+  });
+
+  // The coordinator's Chrome check (lane C2 topics): a native select is as wide as its widest
+  // option and, where its well is narrower, clips its value without a mark, and a clipped state is
+  // another state. Every choice of both filters holds the 328 px line of a 360 px phone alone in
+  // its well, well and all (where the pair does not fit, the select wraps under its label): the
+  // well's border, the select's padding and the glyphs of lib/type-metrics.ts at the select's
+  // 13 px, 291 px for the words, 37 glyphs.
+  it('fits every choice of both filters in a 360 px phone’s line, alone in its well', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const over: string[] = [];
+    for (const name of ['crawler dial state', 'address observation']) {
+      const select = screen.getByLabelText<HTMLSelectElement>(name);
+      const chrome = insetsPx(select.parentElement!, 360).box + insetsPx(select, 360).box;
+      expect(chrome, name).toBe(2 + 35);
+      for (const option of Array.from(select.options)) {
+        const px = Math.round((chrome + textRunPx(option.textContent!, select, 360)) * 100) / 100;
+        if (px > NARROWEST_LINE_PX) over.push(`${name}: "${option.textContent}" ${px} px`);
+      }
+    }
+    expect(over).toEqual([]);
+  });
+
+  // Lane c2-finish, rulings round 1, item 3: the filter panel's 16 px side padding left its
+  // content 296 px of a 360 px phone's 328, and both wells are wider (310 and 302.2 px), so they
+  // stood 14 and 6.2 px into the padding. Below md the panel's content takes the page's line, its
+  // own side padding 0 (16 px from md, where the panel stands beside nothing else in the box).
+  it('gives the filters the page’s line below md: each well whole inside it at 360', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const wells: Record<string, number> = {};
+    for (const name of ['crawler dial state', 'address observation']) {
+      const select = screen.getByLabelText<HTMLSelectElement>(name);
+      const panel = select.parentElement!.parentElement!.parentElement!;
+      expect(
+        [360, 390, 640, 768, 1280].map((w) => insetsPx(panel, w).box),
+        name
+      ).toEqual([0, 0, 0, 32, 32]);
+      const line = containerContentPx(360) - insetsPx(panel, 360).box;
+      expect(line).toBe(NARROWEST_LINE_PX);
+      const chrome = insetsPx(select.parentElement!, 360).box + insetsPx(select, 360).box;
+      wells[name] = Math.max(
+        ...Array.from(
+          select.options,
+          (o) => Math.round((chrome + textRunPx(o.textContent!, select, 360)) * 100) / 100
+        )
+      );
+      expect(wells[name], name).toBeLessThanOrEqual(line);
+    }
+    // the widest choices: 'Aliases exhausted · verified before' (35 glyphs), 'Authenticated, no
+    // Identify in time' (34), at 7.8 px a glyph and 37 px of frame and padding
+    expect(wells).toEqual({ 'crawler dial state': 310, 'address observation': 302.2 });
+  });
+
+  // A filter says what the rows say: the dial-state filter names a state as the row's badge does,
+  // the observation filter an observation as the evidence does, so a reader finds the choice by
+  // the words in the row.
+  it('names a dial state as the row’s badge does, an observation as the evidence does', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const choices = (name: string) =>
+      Array.from(screen.getByLabelText<HTMLSelectElement>(name).options, (o) => o.textContent);
+    const badges = Array.from(document.querySelectorAll('[data-row-tag]'), (t) => t.textContent);
+    expect(badges).toEqual([
+      'Same-network Identify',
+      'Aliases exhausted',
+      'Not dialed by this crawler',
+    ]);
+    for (const badge of badges) expect(choices('crawler dial state')).toContain(badge);
+    fireEvent.click(
+      screen.getByRole('button', { name: `Show evidence for ${UNVERIFIED_PEER_ID}` })
+    );
+    // the last round's observations: each address, then its result in the evidence's words
+    const round = (await screen.findByText('Last completed round #5')).parentElement!;
+    const observed = Array.from(round.querySelectorAll('li > span > span'), (s) => s.textContent);
+    expect(observed.length).toBeGreaterThan(0);
+    for (const words of observed) expect(choices('address observation')).toContain(words);
+  });
+
   it('expands a peer into address-level probe evidence', async () => {
     render(<PeersTable />);
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
@@ -88,12 +238,16 @@ describe('PeersTable', () => {
 
     expect(await screen.findByText('Last completed round #5')).toBeInTheDocument();
     const evidence = screen.getByTestId('peer-evidence-row');
-    expect(
-      within(evidence).getByText('No authenticated session before deadline')
-    ).toBeInTheDocument();
+    // re-pinned (lane C2 topics): the observation in words that hold a phone's select, which
+    // offers the same words (it was "No authenticated session before deadline", 40 glyphs)
+    expect(within(evidence).getByText('No authenticated session in time')).toBeInTheDocument();
     expect(within(evidence).getByText('2 consecutive exhausted rounds')).toBeInTheDocument();
     expect(within(evidence).getByText(/first advertised/)).toHaveTextContent(/last advertised/);
     expect(within(evidence).getByText('Advertised by')).toBeInTheDocument();
+    // P4 topics (the ink-role gate's work list): a round's outcome is a value, in the reading ink
+    expect(within(evidence).getByText('2 consecutive exhausted rounds').closest('p')).toHaveClass(
+      'text-text'
+    );
   });
 
   // Lane E4: every age the table writes (a row's latest evidence, last dial and last verified; the
@@ -179,6 +333,10 @@ describe('PeersTable', () => {
     ).toBeInTheDocument();
     expect(within(evidence).getByText(/not used as crawler dial aliases/)).toBeInTheDocument();
     expect(within(evidence).getByText('No completed probe observation.')).toBeInTheDocument();
+    // P4 topics (the ink-role gate's work list): an empty state and a sentence that explains read
+    // in the reading ink
+    expect(within(evidence).getByText('No completed probe observation.')).toHaveClass('text-text');
+    expect(within(evidence).getByText(/not used as crawler dial aliases/)).toHaveClass('text-text');
   });
 
   // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
@@ -332,6 +490,10 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(value('Version')).toHaveTextContent('0.114.0');
     expect(value('Country')).toHaveTextContent('United States');
     expect(value('RTT')).toHaveTextContent('42 ms');
+    // P4 topics (readability R4: 12 px is for labels, ticks and notes): each value at 13 px, its
+    // label at 12
+    for (const dd of pairs.querySelectorAll('dd')) expect(dd).toHaveClass('text-small');
+    for (const dt of pairs.querySelectorAll('dt')) expect(dt).toHaveClass('text-meta');
     // The retained evidence still loads under the pairs.
     expect(await screen.findByText('Retained verification')).toBeInTheDocument();
   });
@@ -357,9 +519,12 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(button).toHaveAttribute('aria-expanded', 'false');
     const panel = document.getElementById(button.getAttribute('aria-controls')!)!;
     expect(panel).toHaveClass('hidden', 'md:flex');
+    // re-pinned (lane C2 topics): the two selects are named by the labels they stand after (they
+    // were "Filter by crawler dial state" and "Filter by address observation"); the two fields
+    // keep their names, the board's text field has no visible label
     for (const label of [
-      'Filter by crawler dial state',
-      'Filter by address observation',
+      'crawler dial state',
+      'address observation',
       'Filter by country',
       'Filter by version',
     ])

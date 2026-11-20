@@ -91,16 +91,22 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     // the step's one caption, at caption width (R14)
     expect(screen.getByText('One side posted the commitment.')).toHaveClass(
       'text-body',
-      'max-w-[640px]'
+      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+      'max-w-measure'
     );
     // script groups stay out of tier 1 (FF-C5)
     expect(screen.queryByText('Script groups')).toBeNull();
-    // Visual finish V11: the tx link in the link cyan through --ink (so `a:hover` jade still
-    // wins), the box's dashed edge in the quiet slate; no bracket-hex class
+    // Re-pinned on purpose (lane P4, the link-look gate: a link states its look through
+    // components/ui/link.tsx and writes no ink by hand): the step's transaction is its key, the
+    // bright ink of the `key` look (it was the link cyan through --ink, by hand), its block a link
+    // inside the header's line, and the header's values read in the reading ink (they were quiet);
+    // the box's dashed edge stays in the quiet slate; no bracket-hex class
     const tx = within(step).getByRole('link', { name: /^0x/ });
-    expect(tx).toHaveClass('text-[color:var(--ink)]', 'hover:underline');
-    expect(tx.style.getPropertyValue('--ink')).toBe('var(--c-board-link)');
+    expect(tx).toHaveClass('text-text-bright');
+    expect(tx.style.getPropertyValue('--ink')).toBe('');
     expect(tx.style.color).toBe('');
+    expect(tx.parentElement).toHaveClass('text-text', 'text-small');
+    expect(tx.parentElement).not.toHaveClass('text-text-dim');
     expect(screen.getByText('→ step 3, after 6 epochs').parentElement).toHaveStyle({
       borderColor: 'var(--c-ink-quiet)',
     });

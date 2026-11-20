@@ -50,6 +50,9 @@ describe('a secondary figure says what it reads (CH-05)', () => {
         { date: '100-1k CKB', value: '400', value2: '75000000' },
         { date: '>=1m CKB', value: '1', value2: '1048617' },
       ],
+      // the route's wholes (lane D1)
+      liveCells: '1301',
+      occupiedCapacity: '128048617',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     const reading = await screen.findByRole('group', { name: 'Common knowledge reading' });
@@ -89,9 +92,19 @@ describe('a secondary figure says what it reads (CH-05)', () => {
           date: '2026-11-13',
           values: {
             ...Object.fromEntries(keys.map((key) => [key, '12.5'])),
+            // lane D1: the API's merged bands, beside the eight
+            '1m6m': '25',
+            lt1m: '37.5',
             holderCount: '367704',
           },
         },
+      ],
+      bands: [
+        { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+        { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+        { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+        { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+        { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
       ],
     });
     render(<ChartDetail slug="hodl-wave" />);

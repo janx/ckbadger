@@ -37,6 +37,7 @@ describe('protocolActionMeta', () => {
       channelOutpoint: '0xabc:0',
       btcTxid: null,
       btcOutputIndex: null,
+      owner: null,
     });
   });
 
@@ -112,4 +113,24 @@ it('reads an exact Bitcoin output index without numeric coercion', () => {
       metadata: { btcTxid: '0xabc', outIndex: '4294967295' },
     }).btcOutputIndex
   ).toBe(BigInt('4294967295'));
+});
+
+// lane exactness, part B6: a DAO action's owner, the lock hash of the cell that took the step (metadata.lockHash, the
+// indexer's, sent without 0x), read once and normalised; a malformed one is refused
+describe('protocolActionMeta — the owner of a DAO step', () => {
+  it('reads the owner as a 0x lock hash, sent with or without the prefix', () => {
+    const hash = 'AB'.repeat(32);
+    expect(protocolActionMeta(pa({ capacity: '1', compensation: '1', lockHash: hash })).owner).toBe(
+      `0x${'ab'.repeat(32)}`
+    );
+    expect(
+      protocolActionMeta(pa({ capacity: '1', compensation: '1', lockHash: `0x${hash}` })).owner
+    ).toBe(`0x${'ab'.repeat(32)}`);
+    expect(protocolActionMeta(pa({ capacity: '1', compensation: '1' })).owner).toBeNull();
+  });
+  it('refuses a lock hash that is not 32 bytes of hex', () => {
+    expect(() =>
+      protocolActionMeta(pa({ capacity: '1', compensation: '1', lockHash: '24' }))
+    ).toThrow('dao:withdraw_complete metadata.lockHash "24" is not a lock hash');
+  });
 });

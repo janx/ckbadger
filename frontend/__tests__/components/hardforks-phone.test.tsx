@@ -63,30 +63,40 @@ const textNode = (svg: Element, text: string) =>
   [...svg.querySelectorAll('text')].find((t) => t.textContent === text);
 
 describe('the VM lanes on a phone (PB-02)', () => {
-  it('gives each lane its label and count a line no edition rule crosses', () => {
+  // Re-pinned (readability plan P4: a lane is named in plain words, its hash type second): a
+  // lane's header is two lines, its words alone on the first and its hash type with its count on
+  // the second (it was one line, "type · the newest VM" beside the count); no rule crosses either.
+  it('gives each lane its words, and its hash type and count, lines no edition rule crosses', () => {
     const svg = mount(358);
     const heads = [
-      ['type · the newest VM', '1,765,012 · 60\u00a0versions'],
-      ['data1 · pinned to VM1', '97,771 · 19\u00a0versions'],
-      ['data2 · pinned to VM2', '0 · no known script yet'],
-      ['data · pinned to VM0', '472 · 1\u00a0version'],
+      ['follows the newest VM', 'hash_type type', '1,765,012 · 60\u00a0versions'],
+      ['pinned to VM1', 'hash_type data1', '97,771 · 19\u00a0versions'],
+      ['pinned to VM2', 'hash_type data2', '0 · no known script yet'],
+      ['pinned to VM0', 'hash_type data', '472 · 1\u00a0version'],
     ];
     const rules = [...svg.querySelectorAll('line[data-edition]')];
     expect(rules.length).toBeGreaterThan(0);
-    for (const [label, count] of heads) {
+    for (const [words, label, count] of heads) {
+      const head = textNode(svg, words);
       const name = textNode(svg, label);
       const figure = textNode(svg, count);
+      expect(head, words).toBeDefined();
       expect(name, label).toBeDefined();
       expect(figure, count).toBeDefined();
-      // one line: the label and its count on one baseline
+      // the hash type and its count on one baseline, under the words
       const baseline = Number(name!.getAttribute('y'));
       expect(Number(figure!.getAttribute('y'))).toBe(baseline);
-      // an 11 px line's box: ascent 9 above the baseline, descent 3 under it
-      for (const rule of rules) {
-        const [y1, y2] = [Number(rule.getAttribute('y1')), Number(rule.getAttribute('y2'))];
-        const crosses = Math.min(y1, y2) < baseline + 3 && Math.max(y1, y2) > baseline - 9;
-        expect(crosses, `${rule.getAttribute('data-edition')} crosses "${label}"`).toBe(false);
-      }
+      expect(Number(head!.getAttribute('y'))).toBeLessThan(baseline);
+      // a 12 px line's box: its ascent (11.4) above the baseline, its descent (3.6) under it
+      for (const [text, y] of [
+        [words, Number(head!.getAttribute('y'))],
+        [label, baseline],
+      ] as const)
+        for (const rule of rules) {
+          const [y1, y2] = [Number(rule.getAttribute('y1')), Number(rule.getAttribute('y2'))];
+          const crosses = Math.min(y1, y2) < y + 3.6 && Math.max(y1, y2) > y - 11.4;
+          expect(crosses, `${rule.getAttribute('data-edition')} crosses "${text}"`).toBe(false);
+        }
     }
     // the empty lane says so on its own line, not on its dotted lane line
     expect(textNode(svg, 'no known script yet')).toBeUndefined();
@@ -121,6 +131,9 @@ describe.each([358, 1200])('the version dots at %i px (PB-02)', (width) => {
   it('reads the strip of unregistered versions from a hit area at least 24 px tall', () => {
     mount(width);
     const readout = screen.getByRole('status', { name: 'Script version readout' });
+    // re-pinned (readability plan P4): the versions under no hash type are a count; their strip
+    // opens on demand ("all 2 versions ↓")
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const hit = document.querySelector('[data-dot-hit="strip"]') as HTMLElement;
     expect(hit).not.toBeNull();
     expect(Number.parseFloat(hit.style.height)).toBeGreaterThanOrEqual(24);

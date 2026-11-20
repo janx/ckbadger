@@ -3,7 +3,7 @@ import { useState, type Ref } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { formatStandard } from '@/components/activity-event-row';
@@ -20,6 +20,8 @@ import {
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatCount } from '@/lib/format-count';
 import {
+  daoStepsOf,
+  type DaoStep,
   foldEnds,
   ribbonWeight,
   txFlows,
@@ -42,7 +44,7 @@ export type WhatMovedHover =
 export const RIBBON_FORM_MIN_W = 700;
 /** A party end: two row lines (lib/type-metrics.ts, 18 px) and 4 px; the pitch leaves 10 px between neighbours. */
 export const NODE_H = 2 * ROW_LINE_PX + 4;
-const PITCH = NODE_H + 10;
+export const PITCH = NODE_H + 10;
 /** The ribbons stack on the name plate 3 px apart. */
 const STACK_GAP = 3;
 
@@ -162,22 +164,22 @@ function terminalWords(end: FlowEnd): { who: string; role: string } {
 function EndText({
   asset,
   end,
-  lockCodeHashes,
   align,
   size,
+  daoStep,
   onExpand,
 }: {
   asset: FlowAsset;
   end: FlowEnd;
-  lockCodeHashes: ReadonlyMap<string, string>;
   align: 'left' | 'right';
   size: ShortSize;
+  /** A party's Nervos DAO steps here (`daoStepsOf`), each on its own line under its CKB amount. */
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onExpand?: () => void;
 }) {
   const alignClass = align === 'right' ? 'text-right' : 'text-left';
   if (end.t === 'party') {
-    const address = end.party.address;
-    const codeHash = address === null ? null : (lockCodeHashes.get(address) ?? null);
+    const lock = partyLock(end.party);
     return (
       <div className={cn('leading-row min-w-0', alignClass)}>
         {/* One line, never two: the address whole, the lock kind truncated if the column is
@@ -193,17 +195,35 @@ function EndText({
             size={size}
             compact
             quiet
+            look="inline"
             className="shrink-0"
           />
-          {codeHash !== null && (
+          {/* no span (and no gap) where the row names no lock (B4) */}
+          {lock && (
             <span className="min-w-0 truncate">
-              <LockKind lockKind={end.party.lockKind ?? null} lockCodeHash={codeHash} size={size} />
+              <LockWordsView words={lock} size={size} />
             </span>
           )}
         </div>
         <div className="text-small">
           <Amount asset={asset} amount={end.amount} size={size} />
         </div>
+        {/* its Nervos DAO steps, so a ribbon to it is not read as a payment (lane P1 follow-up), in
+            the DAO's gold, as its compensation is; each on a line of its own with the step's own
+            amount, apart from what flowed (the lead's look: a self-deposit read "0.00001124 CKB ·
+            Nervos DAO deposit", the fee beside the step) */}
+        {asset.kind === 'ckb' &&
+          daoStep(end.party)?.map((step, i) => (
+            <div key={i} data-dao-step="" className="text-gold text-small">
+              {step.words}
+              {step.capacity !== null && (
+                <>
+                  {' '}
+                  <CkbAmount form="summary" shannons={step.capacity} signed={false} tone="plain" />
+                </>
+              )}
+            </div>
+          ))}
       </div>
     );
   }
@@ -261,7 +281,7 @@ function Plate({
       <span className="text-text-bright flex items-center gap-1.5 font-medium">
         <ClassMark kind={markOf(asset)} size={12} />
         {href ? (
-          <Link href={href} className="hover:text-jade">
+          <Link look="inline" href={href}>
             {name}
           </Link>
         ) : (
@@ -272,15 +292,13 @@ function Plate({
         )}
       </span>
       {asset.kind === 'object' && (
-        <Link
-          href={getObjectDetailHref(asset.item.objectId)}
-          className="text-text-dim text-meta hover:text-jade"
-        >
+        // the object's id is a link, at the plate's 13 px (lane P1, the ink and size roles: 12)
+        <Link look="inline" href={getObjectDetailHref(asset.item.objectId)}>
           <ShortId value={asset.item.objectId} kind="hash" size={size} />
         </Link>
       )}
       {showTotal && (
-        <span className="text-meta" data-flow-total>
+        <span data-flow-total>
           <Amount asset={asset} amount={flow.total} size={size} />{' '}
           <span className="text-text-dim">in all</span>
         </span>
@@ -308,11 +326,11 @@ function side(ends: FlowEnd[], height: number): Side {
 /** The flow in its ribbon form: givers, the field with the ribbons and the plate, receivers. */
 function RibbonStrip({
   flow,
-  lockCodeHashes,
+  daoStep,
   onHover,
 }: {
   flow: TxFlow;
-  lockCodeHashes: ReadonlyMap<string, string>;
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -401,9 +419,9 @@ function RibbonStrip({
               <EndText
                 asset={flow.asset}
                 end={end}
-                lockCodeHashes={lockCodeHashes}
                 align={which === 'from' ? 'right' : 'left'}
                 size="row"
+                daoStep={daoStep}
                 onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
               />
             </div>
@@ -446,11 +464,11 @@ function RibbonStrip({
 /** The flow in its list form (under 700 px): the givers, a step down through the plate, the receivers. */
 function ListStrip({
   flow,
-  lockCodeHashes,
+  daoStep,
   onHover,
 }: {
   flow: TxFlow;
-  lockCodeHashes: ReadonlyMap<string, string>;
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -474,9 +492,9 @@ function ListStrip({
           <EndText
             asset={flow.asset}
             end={end}
-            lockCodeHashes={lockCodeHashes}
             align="left"
             size={size}
+            daoStep={daoStep}
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
           />
         </li>
@@ -527,19 +545,36 @@ export function WhatMoved({
   activity,
   fee,
   compensation,
-  lockCodeHashes,
   onHover,
 }: {
   hash: string;
   activity: GlobalActivity;
   fee: string;
   compensation: bigint | null;
-  /** Address → lock code hash, from the transaction's cells (`lockCodeHashesByAddress`). */
-  lockCodeHashes: ReadonlyMap<string, string>;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  // the parties' ids at the row size, tight only below sm, as the strips write them
+  const size = useTightBelowSm();
   const flows = txFlows({ hash, activity, fee, compensation });
+  // the owners of a Nervos DAO step who are no end of any flow: their CKB did not change (lane
+  // exactness, part B6)
+  const ends = new Set(
+    flows.flatMap((flow) =>
+      [...flow.from, ...flow.to].flatMap((end) =>
+        end.t === 'party'
+          ? [end.party.lockHash]
+          : end.t === 'more'
+            ? end.ends.flatMap((e) => (e.t === 'party' ? [e.party.lockHash] : []))
+            : []
+      )
+    )
+  );
+  const unmoved = activity.participants.flatMap((party) => {
+    if (party.lockHash === null || ends.has(party.lockHash)) return [];
+    const steps = daoStepsOf(activity, party);
+    return steps ? [{ party, steps }] : [];
+  });
   const form: 'ribbons' | 'list' =
     width === null || width >= RIBBON_FORM_MIN_W ? 'ribbons' : 'list';
   const Strip = form === 'ribbons' ? RibbonStrip : ListStrip;
@@ -555,9 +590,38 @@ export function WhatMoved({
       <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
-            <Strip flow={flow} lockCodeHashes={lockCodeHashes} onHover={onHover} />
+            <Strip flow={flow} daoStep={(party) => daoStepsOf(activity, party)} onHover={onHover} />
           </div>
         ))}
+        {/* The Nervos DAO steps of owners whose CKB did not change (lane exactness, part B6, the
+            pages reader's NOTE 3): such an owner is no end of the CKB flow (a withdrawal request whose fee another
+            party paid), so its step is drawn here, its owner named, in the DAO's gold */}
+        {unmoved.length > 0 && (
+          <div data-dao-steps-unmoved="" className="py-4">
+            {unmoved.map(({ party, steps }) => (
+              <div key={party.lockHash!} className="leading-row min-w-0">
+                <span className="text-text-dim text-small">no CKB moved for </span>
+                <ParticipantRefView participant={party} size={size} compact quiet look="inline" />
+                {steps.map((step, i) => (
+                  <div key={i} data-dao-step="" className="text-gold text-small">
+                    {step.words}
+                    {step.capacity !== null && (
+                      <>
+                        {' '}
+                        <CkbAmount
+                          form="summary"
+                          shannons={step.capacity}
+                          signed={false}
+                          tone="plain"
+                        />
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </TerminalPanel>
   );

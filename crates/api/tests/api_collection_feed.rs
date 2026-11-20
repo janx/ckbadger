@@ -140,6 +140,10 @@ fn seed_dotbit_registrations(store: &Arc<CkbadgerStore>, n: u32) -> Vec<(i64, i3
             protocol_actions: vec![],
         };
         put_feed_tx(&mut batch, &tx);
+        // the account's cell carries the .bit AccountCell type script (`itemTypes` reads it)
+        batch
+            .put_cell_payload_by_outpoint(&tx.hash, 0, &typed_cell([0x96; 32], &[]))
+            .unwrap();
         batch.put_dotbit_account_outpoint(&tx.hash, 0, account);
         batch.put_dotbit_outpoint_by_account_id(account, &tx.hash, 0, AssetAction::Mint);
         batch.put_identity_collection_activity(
@@ -191,6 +195,24 @@ async fn collection_feed_page_reads_do_not_grow_with_collection_history() {
             assert_eq!(page["total"], n, "{route} n={n}");
             reads.push((route, n, store.read_call_counts()));
         }
+    }
+    // the third read's T SHOULD-2: the .bit accounts' rows name their AccountCell code (0x96),
+    // read through the account's own index
+    let store = test_store();
+    seed_dotbit_registrations(&store, 2);
+    let app = quiet_router(store);
+    let (status, feed) = get_json(&app, "/assets/identities/dotbit/activity-feed?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    for row in feed["data"].as_array().unwrap() {
+        assert_eq!(
+            row["itemTypes"],
+            serde_json::json!([{
+                "typeCodeHash": format!("0x{}", "96".repeat(32)),
+                "typeHashType": "type",
+                "scriptName": null,
+            }]),
+            "{row}"
+        );
     }
     for route in ["activity-feed", "transactions"] {
         let counts: Vec<_> = reads
@@ -328,6 +350,18 @@ fn seed_two_cluster_transaction(store: &Arc<CkbadgerStore>) {
             },
         );
     }
+    // the clusters' and the spores' creating transactions (`itemTypes`)
+    seed_creating_tx(
+        &mut batch,
+        0,
+        7,
+        [0x98; 32],
+        [0x4b; 32],
+        &[&NERVAPE, &OTHER_CLUSTER],
+    );
+    let minted: Vec<[u8; 32]> = (0..13u8).map(nervape_spore).chain([OTHER_SPORE]).collect();
+    let minted: Vec<&[u8]> = minted.iter().map(|id| id.as_slice()).collect();
+    seed_creating_tx(&mut batch, 0, 8, [0x99; 32], [0x4a; 32], &minted);
     let mut sender = Vec::new();
     let mut receiver = Vec::new();
     for n in 0..13u8 {

@@ -12,6 +12,8 @@ import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
@@ -40,10 +42,13 @@ describe('ForksPage', () => {
     // R13: one short lede, ≤ 90 characters, with the way down to tier 2; in the reading ink, a
     // sentence that explains (re-pinned with readability ruling R3; it was dim)
     const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
-    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
-    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
+    // one line of the measure with room to spare, as the DAO page's lede: at most 67 characters,
+    // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
+    // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
-    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+    expect(within(lede).getByRole('link', { name: 'How it works' })).toHaveAttribute(
       'href',
       '#evidence'
     );
@@ -58,7 +63,11 @@ describe('ForksPage', () => {
       'text-body'
     );
     // the days are the picture, inside the hero section
-    expect(hero.querySelectorAll('[data-uncles]')).toHaveLength(3);
+    // the days are the picture, inside the hero section; re-pinned (lane P4): each day's bar is its
+    // uncle rate (it was its uncles, three bars), and the fixture's third day made no block, so it
+    // has no rate and no bar
+    expect(hero.querySelectorAll('[data-day]')).toHaveLength(3);
+    expect(hero.querySelectorAll('[data-rate]')).toHaveLength(2);
     // the node's own record (R2b-b): one quiet row under the reading, outside the hero
     await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(3));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
@@ -78,7 +87,9 @@ describe('ForksPage', () => {
       '1 uncle · 1 one block later',
       '1 of 1 · committed in a later block',
     ]);
-    // R11: no coloured text in tier 1 (the glyphs and bars keep their colours)
+    // R11: no coloured text in tier 1 (the glyphs and bars keep their colours). Re-pinned (lane
+    // P4; it was none at all): the one celadon is the lede's way down, the onward look the owner
+    // of the looks draws (components/ui/link.tsx), as on the other topic pages
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     await waitFor(() => expect(table()).toBeInTheDocument());
     const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
@@ -87,7 +98,7 @@ describe('ForksPage', () => {
         .split(/\s+/)
         .some((c) => /^text-(jade|gold|rouge)(\/\d+)?$/.test(c))
     );
-    expect(coloured).toEqual([]);
+    expect(coloured).toEqual([within(lede).getByRole('link', { name: 'How it works' })]);
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
     // the full concept sentence lives in tier 2
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
@@ -97,13 +108,15 @@ describe('ForksPage', () => {
   });
 
   it('claims nothing about orphans before the node has switched at all (visual pass, live empty store)', async () => {
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: [],
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: [],
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     const record = overview().nodeRecord;
     const fates = record.orphanFates!;
     vi.mocked(api.getForkOverview).mockResolvedValue({
@@ -156,7 +169,8 @@ describe('ForksPage', () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     const { container } = render(<ForksPage />);
-    await waitFor(() => expect(container.querySelectorAll('[data-uncles]')).toHaveLength(3));
+    // re-pinned (lane P4): the rate bars of the two days with blocks (it was three uncle bars)
+    await waitFor(() => expect(container.querySelectorAll('[data-rate]')).toHaveLength(2));
     expect(container.querySelectorAll('[data-switches]')).toHaveLength(1);
     // hierarchy v3: the picture has no separate heading
     expect(
@@ -167,8 +181,11 @@ describe('ForksPage', () => {
     const under = reading.closest('[data-role="reading"]') as HTMLElement;
     expect(Array.from(under.children).map((el) => el.tagName)).toEqual(['DIV', 'P']);
     const caption = under.querySelector('p')!;
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     // the paragraph and the scope note moved to tier 2, every sentence kept
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(
@@ -222,7 +239,9 @@ describe('ForksPage', () => {
       'dashed: the block it dropped→ the block that took it as an uncle'
     );
     expect(key.querySelector('.text-jade')).toBeNull();
-    expect(within(table()).getByText('depth 1')).toBeInTheDocument();
+    // re-pinned (lane P4) here and below: a switch's depth in words, "1 block deep" (it was
+    // "depth 1", a term the review found unexplained)
+    expect(within(table()).getByText(fullText('1 block deep'))).toBeInTheDocument();
     // R15 (toward 32–34 px rows): 6 px above and below the 44 px glyph
     for (const cell of within(table()).getAllByRole('cell'))
       expect(cell).toHaveClass('text-body', 'py-1.5');
@@ -230,16 +249,23 @@ describe('ForksPage', () => {
     // its words (R16: a text box is its words)
     for (const head of within(table()).getAllByRole('columnheader'))
       expect(head.firstElementChild?.tagName).toBe('SPAN');
-    expect(within(table()).getByText('depth 1')).toHaveClass('block', 'w-fit');
+    expect(within(table()).getByText(fullText('1 block deep'))).toHaveClass('block', 'w-fit');
     expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
     // Table-rows T5 (was R11's bright ink): the fork point is the row's one bright thing, so the
-    // fate reads in body ink; the glyph's arrow keeps the jade
-    const fate = within(table()).getByText('uncle in #12 (+1)');
+    // fate reads in body ink; the glyph's arrow keeps the jade. Re-pinned (lane P4; it was one link
+    // "uncle in #12 (+1)"): the words in body ink, the block a link inside the line, and "(+1)"
+    // said in words under it (the review: the term was not explained)
+    const fate = within(table()).getByText('uncle in');
     expect(fate).toHaveClass('text-text');
-    expect(fate).not.toHaveClass('text-text-bright');
-    expect(fate).not.toHaveClass('text-jade');
+    const block = within(fate.parentElement!).getByRole('link', { name: '#12' });
+    expect(block).not.toHaveClass('text-text-bright');
+    expect(block).not.toHaveClass('text-jade');
+    expect(within(table()).getByText(fullText('1 block after it'))).toHaveClass(
+      'text-meta',
+      'text-text-dim'
+    );
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
@@ -260,7 +286,12 @@ describe('ForksPage', () => {
   it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {
     const event = list().data[0];
     const rows = Array.from({ length: 18 }, (_, i) => ({ ...event, id: i + 1 }));
-    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 18 });
+    // re-pinned (lane cd-fixes-controls, item 1): the page states the 50 it was asked for (the
+    // producer's page was read at 10, and 18 rows on a page of 10 is a page that disagrees with
+    // itself, which the pager now refuses)
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({ ...list(), data: rows, total: 18, limit: 50 })
+    );
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
@@ -278,9 +309,13 @@ describe('ForksPage', () => {
     const bodyRows = () => table().querySelectorAll('tbody tr');
     // collapsed by default: the first five rows, the expander, no pager yet
     expect(bodyRows()).toHaveLength(5);
-    const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
-    expect(more).toHaveClass('text-small');
-    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // re-pinned (lane C2 topics): the expander is the controls board's short-list form of the
+    // pager, "all 18 branch switches ↓" in celadon words (it was "Show all 18 branch switches ↓"
+    // in the reading ink, a disclosure with aria-expanded; the board's is a way to go, the rest of
+    // the list, and it goes once taken); the count is a unit, held by no-break spaces
+    const more = screen.getByRole('button', { name: 'all 18\u00a0branch\u00a0switches ↓' });
+    expect(more).toHaveClass('text-small', 'text-jade');
+    expect(more).not.toHaveAttribute('aria-expanded');
     expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
     // expanding is the link: every row, every column, in place. Re-pinned on purpose (readability
     // B5): the eighteen are one page, and one page draws no pager (it said "Showing 1–18 of 18
@@ -288,9 +323,114 @@ describe('ForksPage', () => {
     fireEvent.click(more);
     expect(bodyRows()).toHaveLength(18);
     expect(within(table()).getAllByRole('columnheader')).toHaveLength(6);
-    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'branch switches' })).toBeNull();
     expect(screen.queryByText(/18 switches/)).toBeNull();
     expect(heading).toHaveAccessibleName('branch switches 18 · this node');
+  });
+
+  // Lane C2 (topics), written before the expander and the pager are replaced: a list longer than
+  // a page shows its first five, then its first page whole, then pages older by the cursor the API
+  // served and newer back to the page before, a later page always whole.
+  it('pages a list longer than a page by its served cursor once expanded, a later page whole', async () => {
+    // the API answers eight a page (fewer rows keep the test quick): fifteen take two pages
+    const event = list().data[0];
+    const first = Array.from({ length: 8 }, (_, i) => ({ ...event, id: i + 1 }));
+    const second = Array.from({ length: 7 }, (_, i) => ({ ...event, id: 9 + i }));
+    vi.mocked(api.getForks).mockImplementation(async (params) =>
+      params?.cursor === 'after-eight'
+        ? pagedRead({
+            ...list(),
+            data: second,
+            total: 15,
+            limit: 8,
+            hasMore: false,
+            nextCursor: null,
+          })
+        : pagedRead({
+            ...list(),
+            data: first,
+            total: 15,
+            limit: 8,
+            hasMore: true,
+            nextCursor: 'after-eight',
+          })
+    );
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    // re-pinned (lane C2 topics): the controls board's cursor in time, newest first, and its
+    // short-list form (they were the buttons Next and Previous, and "Show all 15 branch
+    // switches ↓")
+    const older = () => screen.getByRole('button', { name: 'older →' });
+    const newer = () => screen.getByRole('button', { name: '← newer' });
+    const pager = () => screen.getByRole('navigation', { name: 'branch switches' });
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    expect(bodyRows()).toHaveLength(5);
+    // re-pinned on purpose (the coordinator's Chrome check, lane C2 topics): the fifteen are longer
+    // than a page, so the short-list form is the rows the click adds to the five shown, "next 3 ↓"
+    // (it was "all 15 branch switches ↓", a click that showed eight)
+    fireEvent.click(screen.getByRole('button', { name: 'next 3 ↓' }));
+    expect(bodyRows()).toHaveLength(8);
+    // the page of the pages the served total makes at the served page size; newer is quiet words
+    expect(pager()).toHaveTextContent('newest first← newerpage 1 of 2older →');
+    expect(within(pager()).queryByRole('button', { name: '← newer' })).toBeNull();
+    fireEvent.click(older());
+    await waitFor(() => expect(bodyRows()).toHaveLength(7));
+    expect(api.getForks).toHaveBeenLastCalledWith({ cursor: 'after-eight', limit: 50 });
+    expect(pager()).toHaveTextContent('newest first← newerpage 2 of 2older →');
+    expect(within(pager()).queryByRole('button', { name: 'older →' })).toBeNull();
+    fireEvent.click(newer());
+    await waitFor(() => expect(bodyRows()).toHaveLength(8));
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
+  });
+
+  // The coordinator's Chrome check (lane C2 topics): the short-list forms are exact, "all N … ↓"
+  // only where the click shows all N, "next K ↓" where it brings K more rows. Every switch on the
+  // first page: all 18; a list longer than a page: the first page's rows less the five that stand.
+  it('says what the click brings: all N when the first page holds them, next K when it does not', async () => {
+    const event = list().data[0];
+    const rows = (n: number, from = 1) =>
+      Array.from({ length: n }, (_, i) => ({ ...event, id: from + i }));
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: rows(18),
+        total: 18,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+    const { unmount } = render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(
+      screen.getByRole('button', { name: 'all 18\u00a0branch\u00a0switches ↓' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^next \d/ })).toBeNull();
+    unmount();
+    // ten a page of 27: the click adds the five rows the first page holds past the five shown
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: rows(10),
+        total: 27,
+        limit: 10,
+        hasMore: true,
+        nextCursor: 'after-ten',
+      })
+    );
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    expect(bodyRows()).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'next 5 ↓' }));
+    expect(bodyRows()).toHaveLength(10);
+    expect(screen.getByRole('navigation', { name: 'branch switches' })).toHaveTextContent(
+      'newest first← newerpage 1 of 3older →'
+    );
   });
 
   it('needs no expander for five switches or fewer', async () => {
@@ -301,7 +441,8 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(table().querySelectorAll('tbody tr')).toHaveLength(5);
-    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    // re-pinned (lane C2 topics): the short-list form's words, "all … ↓" (was "Show all …")
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
     // Re-pinned on purpose (readability B5): five switches are one page, and one page draws no
     // pager (it said "Showing 1–5 of 5 switches"); the count stays in the heading.
     expect(screen.queryByText(/5 switches/)).toBeNull();
@@ -389,13 +530,15 @@ describe('ForksPage', () => {
   });
 
   it('distinguishes no node switches from an overview load failure', async () => {
-    vi.mocked(api.getForks).mockResolvedValue({
-      ...list(),
-      data: [],
-      total: 0,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getForks).mockResolvedValue(
+      pagedRead({
+        ...list(),
+        data: [],
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getForkOverview).mockRejectedValue(new Error('missing daily block stats'));
     render(<ForksPage />);
     await waitFor(() =>
@@ -436,11 +579,16 @@ describe('ForksPage', () => {
     const point = within(row).getByRole('link', { name: '#10' });
     expect(point).toHaveClass('text-text-bright');
     expect(point.closest('td')).toHaveClass('text-body');
-    expect(within(row).getByText('depth 1')).toHaveClass('text-meta', 'text-text-dim');
+    expect(within(row).getByText(fullText('1 block deep'))).toHaveClass(
+      'text-meta',
+      'text-text-dim'
+    );
     const brights = Array.from(row.querySelectorAll('.text-text-bright'));
     expect(brights).toEqual([point]);
     const seen = within(row).getByRole('link', { name: '2025-08-01 06:13:20' });
-    expect(seen).toHaveClass('text-text');
+    // re-pinned (lane P4): a link inside the row takes the inline look, the line's ink underlined
+    // (it was `text-text` by hand)
+    expect(seen).toHaveClass('underline');
     const seenCell = seen.closest('td')!;
     expect(seenCell).toHaveTextContent(/^2025-08-01 06:13:20$/);
     expect(row.getAttribute('title')).toMatch(
@@ -512,6 +660,78 @@ describe('ForksPage: a switch’s age reads the one clock (E4)', () => {
     expect(age()).toBe('1m ago');
     unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Readability F3-e: every column of the branch switches budgeted from the widest value it holds,
+// at 0.6 em a glyph (the row's 14 px, the gap's 13, a meta line's 12) and the 16 px gap after
+// every column but the last. The miners are the flexible column (a pool name has no bound): two
+// unnamed miners on one line at its minimum, the rest of the container beyond the sum.
+describe('ForksPage · branch switches budgeted from what they hold (readability F3-e)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  const budgets = [
+    // when this node saw it, to the second on the UTC+8 clock
+    ceil(at('2026-10-22 22:43:55', 14) + 16),
+    // the fork point, eight digits (its depth on a meta line under it)
+    ceil(at('#99,999,999', 14) + 16),
+    // the fork glyph's 210 px (components/forks/fork-glyph.tsx)
+    ceil(210 + 16),
+    // two unnamed miners at the row size and "vs"
+    ceil(at('ckb1…4s93hhsj vs ckb1…4s93hhsj', 14) + 16),
+    // six digits of milliseconds, wider than the head's words
+    ceil(Math.max(at('999,999 ms', 13), at('apart', 12)) + 16),
+    // the widest fate on its line, or a deep switch's tips on its meta line; the last column
+    ceil(
+      Math.max(
+        at('uncle inclusion still possible', 14),
+        at('indexed #99,999,999 → node #99,999,999', 12)
+      )
+    ),
+  ];
+
+  it('pins every column to its content and changes form at their sum, 1,147 px', async () => {
+    expect(budgets).toEqual([176, 109, 226, 268, 94, 274]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(1147);
+    const { unmount } = render(<ForksPage />);
+    const shown = await screen.findByRole('table', { name: 'Branch switches on this node' });
+    const cols = Array.from(shown.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(shown.style.minWidth)).toBe(sum);
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1147, 'table'],
+      [1146, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.mocked(api.getForks).mockResolvedValue(list());
+      vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+      atContainerWidth(width);
+      const { unmount: drop } = render(<ForksPage />);
+      const listed = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name:
+          form === 'table'
+            ? 'Branch switches on this node'
+            : 'Branch switches on this node, compact',
+      });
+      expect(listed.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 });
 

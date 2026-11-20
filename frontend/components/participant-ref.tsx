@@ -1,7 +1,7 @@
 'use client';
 
 import { Address } from '@/components/ui/address';
-import Link from '@/components/ui/link';
+import Link, { type LinkLook } from '@/components/ui/link';
 import type { ParticipantRef } from '@/lib/api';
 import { ShortId } from '@/components/ui/short-id';
 import type { ShortSize } from '@/lib/shorten';
@@ -32,6 +32,10 @@ import { cn } from '@/lib/utils';
  * In a column too narrow for the address and its roles, the roles wrap under the
  * address rather than being clipped ("ow" for owner_from in a 136 px track).
  * `size` is the size of the row the party stands in (U-09), for its address or lock hash alike.
+ * `look` is where it stands, which its caller says (components/ui/link.tsx), as an `Address`'s: a
+ * row's key (`key`) or a name inside a line (`inline`); the link then draws that look and writes no
+ * ink by hand. A caller that states none draws the inks above (lane P1 follow-up: the chain pages
+ * state theirs; the feeds' call sites are the lists lane's).
  */
 export function ParticipantRefView({
   participant,
@@ -39,10 +43,12 @@ export function ParticipantRefView({
   compact = false,
   quiet = false,
   linked = true,
+  look,
   className,
 }: {
   participant: ParticipantRef;
   size: ShortSize;
+  look?: Extract<LinkLook, 'key' | 'inline'>;
   compact?: boolean;
   quiet?: boolean;
   /** Consistency C3: false writes a compact party as text (the page's own party). */
@@ -55,6 +61,10 @@ export function ParticipantRefView({
   const address = participant.address;
 
   if (address !== null) {
+    // the full form of an address is an Address, which states its look (lane cd-fixes-controls,
+    // review-p-tests SHOULD-4); the compact form's feeds may still state none
+    if (!compact && look === undefined)
+      throw new Error('ParticipantRefView: the full form is an Address, which states its look');
     const isCkbAddr = address.startsWith('ckb1') || address.startsWith('ckt1');
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
@@ -68,13 +78,15 @@ export function ParticipantRefView({
         ) : compact ? (
           <Link
             href={`/address/${address}`}
+            look={look}
             className={cn(
               'text-small shrink-0 font-mono transition-colors',
-              quiet
-                ? 'text-text hover:text-jade'
-                : isCkbAddr
-                  ? 'text-jade-dim hover:text-jade'
-                  : 'text-text hover:text-jade'
+              look === undefined &&
+                (quiet
+                  ? 'text-text hover:text-jade'
+                  : isCkbAddr
+                    ? 'text-jade-dim hover:text-jade'
+                    : 'text-text hover:text-jade')
             )}
             title={address}
             onClick={(e) => e.stopPropagation()}
@@ -82,7 +94,7 @@ export function ParticipantRefView({
             <ShortId value={address} kind="address" size={size} />
           </Link>
         ) : (
-          <Address address={address} size={size} />
+          <Address address={address} size={size} look={look!} />
         )}
         {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
@@ -107,8 +119,10 @@ export function ParticipantRefView({
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
         <Link
           href={`/address/${lockHash}`}
+          look={look}
           className={cn(
-            'text-text hover:text-jade font-mono transition-colors',
+            look === undefined && 'text-text hover:text-jade',
+            'font-mono transition-colors',
             compact ? 'text-small shrink-0' : 'text-body'
           )}
           title={lockHash}

@@ -68,10 +68,14 @@ describe('DetailLayout seal', () => {
     expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // the plate's gap spaces it, so the identity carries no margin of its own
     expect(idLine).not.toHaveClass('mt-2');
-    // the lede is what is below, with no holder of its own
+    // the lede is what is below, in one holder that sets it on the measure (re-pinned with
+    // readability R4, lane B7: the lede was below with no holder, so at no width of its own)
     expect(below!.children).toHaveLength(1);
-    expect(below!.firstElementChild).toBe(screen.getByTestId('lede'));
-    expect(container.querySelector('[data-detail-lede]')).toBeNull();
+    const holder = below!.firstElementChild as HTMLElement;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder.className).toBe('max-w-measure min-w-0');
+    expect(holder.children).toHaveLength(1);
+    expect(holder.firstElementChild).toBe(screen.getByTestId('lede'));
     // the facts and the content stay out of the head; the facts follow it in the header
     expect(head).not.toContainElement(screen.getByText('15,271'));
     expect(header).toContainElement(screen.getByText('15,271'));
@@ -204,7 +208,8 @@ describe('DetailLayout seal', () => {
         '</div><span>legend</span></div>' +
         '<div class="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
         'Reachability and sessions.</div>' +
-        '<div data-detail-lede="" class="mt-4 min-w-0"><p>Two cells became one.</p></div>' +
+        // the lede on the measure (re-pinned with readability R4, lane B7: it had none)
+        '<div data-detail-lede="" class="max-w-measure mt-4 min-w-0"><p>Two cells became one.</p></div>' +
         '<dl class="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">' +
         '<div class="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]">' +
         '<dt class="text-text-dim text-small min-w-0 break-words">Epoch</dt>' +

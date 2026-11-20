@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { COPIED_MS, useCopy } from '@/hooks/useCopy';
+import { ANNOUNCE_GAP_MS, COPIED_MS, useCopy } from '@/hooks/useCopy';
 
 /**
  * A4 review 3: the one copy path. HexCode swallowed a failure, the transaction page's CopyHash and
@@ -37,28 +37,49 @@ describe('useCopy, the one copy path', () => {
     expect(result.current.copied).toBe(false);
   });
 
-  it('shows nothing and does not throw where the clipboard is absent', async () => {
-    setClipboard(undefined);
-    const { result } = renderHook(() => useCopy(TEXT));
-    let done: boolean | undefined;
-    await act(async () => {
-      done = await result.current.copy();
+  // Re-pinned (lane c2-finish, rulings round 1): a copy that could not work claims no copy and
+  // throws nothing, as before, and now says so for COPIED_MS too (`refused`), on the copied
+  // answer's one timer (it set no timer and said nothing: the copy button kept its own word until
+  // the next try, which, drawn over the line under it, would cover that line)
+  for (const [where, clipboard] of [
+    ['is absent', () => undefined],
+    ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) })],
+  ] as const)
+    it(`claims no copy, throws nothing and says it refused for COPIED_MS where the clipboard ${where}`, async () => {
+      setClipboard(clipboard());
+      const { result } = renderHook(() => useCopy(TEXT));
+      let done: boolean | undefined;
+      await act(async () => {
+        done = await result.current.copy();
+      });
+      expect(done).toBe(false);
+      expect(result.current.copied).toBe(false);
+      expect(result.current.refused).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+      act(() => vi.advanceTimersByTime(COPIED_MS - 1));
+      expect(result.current.refused).toBe(true);
+      act(() => vi.advanceTimersByTime(1));
+      expect(result.current.refused).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
     });
-    expect(done).toBe(false);
-    expect(result.current.copied).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-  });
 
-  it('shows nothing and does not throw where the clipboard refuses', async () => {
-    setClipboard({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) });
+  it('answers a copy that works after one that was refused with copied alone, on one timer', async () => {
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('denied'))
+      .mockResolvedValueOnce(undefined);
+    setClipboard({ writeText });
     const { result } = renderHook(() => useCopy(TEXT));
-    let done: boolean | undefined;
     await act(async () => {
-      done = await result.current.copy();
+      await result.current.copy();
     });
-    expect(done).toBe(false);
-    expect(result.current.copied).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(result.current.refused).toBe(true);
+    await act(async () => {
+      await result.current.copy();
+    });
+    expect(result.current.refused).toBe(false);
+    expect(result.current.copied).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('leaves no timer behind when it unmounts while the tick shows', async () => {
@@ -72,7 +93,11 @@ describe('useCopy, the one copy path', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('starts the tick over on a second copy, with one timer', async () => {
+  // Re-pinned (lane cd-fixes-controls, L1 NOTE 13): a second copy within COPIED_MS is announced
+  // again: the answer goes for ANNOUNCE_GAP_MS and comes back, so the live region's text changes
+  // and a screen reader hears the second copy (it stood unchanged, "copied", and said nothing);
+  // it then stands COPIED_MS from its return, on one timer at a time.
+  it('starts the answer over on a second copy, announced again, with one timer', async () => {
     setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
     const { result } = renderHook(() => useCopy(TEXT));
     await act(async () => {
@@ -82,10 +107,32 @@ describe('useCopy, the one copy path', () => {
     await act(async () => {
       await result.current.copy();
     });
+    expect(result.current.copied).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => vi.advanceTimersByTime(ANNOUNCE_GAP_MS));
+    expect(result.current.copied).toBe(true);
     expect(vi.getTimerCount()).toBe(1);
     act(() => vi.advanceTimersByTime(COPIED_MS - 1));
     expect(result.current.copied).toBe(true);
     act(() => vi.advanceTimersByTime(1));
     expect(result.current.copied).toBe(false);
+  });
+
+  it('writes a refused copy after a copied one at once: its words change', async () => {
+    const writeText = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new DOMException('denied'));
+    setClipboard({ writeText });
+    const { result } = renderHook(() => useCopy(TEXT));
+    await act(async () => {
+      await result.current.copy();
+    });
+    await act(async () => {
+      await result.current.copy();
+    });
+    expect(result.current.copied).toBe(false);
+    expect(result.current.refused).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
   });
 });

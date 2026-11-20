@@ -99,7 +99,7 @@ struct BlockResponse {
 struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
-    active_deposits: i64,
+    live_cells_count: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -1309,7 +1309,7 @@ impl Check for DeepForkClear {
     }
 }
 
-/// F6: GET /dao/statistics → totalDeposited > 0, estimatedApc > 0, activeDeposits > 0.
+/// F6: GET /dao/statistics → totalDeposited > 0, estimatedApc > 0, liveCellsCount > 0.
 pub struct DaoStatisticsSane;
 
 impl Check for DaoStatisticsSane {
@@ -1317,7 +1317,7 @@ impl Check for DaoStatisticsSane {
         "dao_statistics_sane"
     }
     fn description(&self) -> &'static str {
-        "DAO statistics: deposits > 0, APC > 0, active deposits > 0"
+        "DAO statistics: deposits > 0, APC > 0, live DAO cells > 0"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
@@ -1366,10 +1366,10 @@ impl Check for DaoStatisticsSane {
             });
         }
 
-        if dao.active_deposits <= 0 {
+        if dao.live_cells_count <= 0 {
             findings.push(Finding {
                 entity: "dao_statistics".to_string(),
-                details: vec![format!("activeDeposits = {}", dao.active_deposits)],
+                details: vec![format!("liveCellsCount = {}", dao.live_cells_count)],
             });
         }
 
@@ -1378,7 +1378,7 @@ impl Check for DaoStatisticsSane {
                 1,
                 format!(
                     "deposited={}, apc={}%, deposits={}",
-                    dao.total_deposited, dao.estimated_apc, dao.active_deposits
+                    dao.total_deposited, dao.estimated_apc, dao.live_cells_count
                 ),
             ))
         } else {
@@ -2253,7 +2253,7 @@ impl Check for ChartCellCountConsistency {
     }
 }
 
-/// S6: GET /charts/total-supply → values never decrease across dates.
+/// S6: GET /charts/total-supply → its five bands, which make C, never decrease across dates.
 pub struct ChartTotalSupplyMonotonic;
 
 impl Check for ChartTotalSupplyMonotonic {
@@ -2261,7 +2261,7 @@ impl Check for ChartTotalSupplyMonotonic {
         "chart_total_supply_monotonic"
     }
     fn description(&self) -> &'static str {
-        "Total supply chart: values never decrease"
+        "Total supply chart: its five bands (C) never decrease"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2279,7 +2279,14 @@ impl Check for ChartTotalSupplyMonotonic {
         for point in &chart.data {
             let mut total = 0i128;
             let mut valid = true;
-            for key in ["circulating", "nervosdao", "burnt"] {
+            // the five bands that make C (lane exactness, part B1)
+            for key in [
+                "outsideDao",
+                "daoDeposited",
+                "daoWithdrawing",
+                "unclaimedCompensation",
+                "burnt",
+            ] {
                 match point
                     .values
                     .get(key)
@@ -2333,8 +2340,19 @@ impl Check for ChartTotalSupplyMonotonic {
     }
 }
 
-/// S7: GET /charts/block-time-distribution → buckets/ratios sane and sum ≈ 100%.
+/// S7: GET /charts/block-time-distribution → buckets/ratios sane and, with the intervals beyond the
+/// drawn range, sum ≈ 100%.
 pub struct ChartBlockTimeDistributionSane;
+
+/// The block-intervals chart: its buckets and the window's whole, of which the intervals beyond
+/// the drawn range are in no bucket (lane D1's third round).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockTimeDistributionWrapper {
+    data: Vec<ChartDataPoint>,
+    intervals: u64,
+    beyond_range: u64,
+}
 
 impl Check for ChartBlockTimeDistributionSane {
     fn name(&self) -> &'static str {
@@ -2347,10 +2365,15 @@ impl Check for ChartBlockTimeDistributionSane {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/block-time-distribution")?;
+        let chart: BlockTimeDistributionWrapper = api_get(ctx, "charts/block-time-distribution")?;
         let mut findings = vec![];
         let mut prev_bucket: Option<f64> = None;
-        let mut ratio_sum = 0.0;
+        // the intervals beyond the drawn range are in the whole, in no bucket
+        let mut ratio_sum = if chart.intervals > 0 {
+            chart.beyond_range as f64 * 100.0 / chart.intervals as f64
+        } else {
+            0.0
+        };
         let mut has_non_zero = false;
 
         if chart.data.is_empty() {
@@ -2517,7 +2540,7 @@ impl Check for ChartEpochTimeLengthSane {
         "chart_epoch_time_length_sane"
     }
     fn description(&self) -> &'static str {
-        "Epoch time length chart: epoch numbers ordered, hours/blocks positive"
+        "Epoch time length chart: epoch numbers ordered, durations (ms) and blocks positive"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2556,11 +2579,11 @@ impl Check for ChartEpochTimeLengthSane {
                 }),
             }
 
-            match point.value.parse::<f64>() {
-                Ok(hours) if hours > 0.0 => {}
-                Ok(hours) => findings.push(Finding {
+            match point.value.parse::<i64>() {
+                Ok(ms) if ms > 0 => {}
+                Ok(ms) => findings.push(Finding {
                     entity: point.date.clone(),
-                    details: vec![format!("epoch duration hours must be > 0, got {}", hours)],
+                    details: vec![format!("epoch duration must be > 0 ms, got {}", ms)],
                 }),
                 Err(_) => findings.push(Finding {
                     entity: point.date.clone(),
@@ -2602,6 +2625,8 @@ impl Check for ChartEpochTimeLengthSane {
 /// the regression the bound exists for — a milliseconds value reported as
 /// seconds, which lands three orders of magnitude too high.
 const MAX_AVERAGE_BLOCK_TIME_SECONDS: f64 = 1800.0;
+/// The same bound in the whole ms the route sends (lane D1's third round).
+const MAX_AVERAGE_BLOCK_TIME_MS: i64 = (MAX_AVERAGE_BLOCK_TIME_SECONDS as i64) * 1000;
 
 /// S10: GET /charts/average-block-time → positive values within a sane bound.
 pub struct ChartAverageBlockTimeSane;
@@ -2640,16 +2665,13 @@ impl Check for ChartAverageBlockTimeSane {
             }
             prev_date = point.date.clone();
 
-            match point.value.parse::<f64>() {
-                Ok(seconds)
-                    if seconds.is_finite()
-                        && seconds > 0.0
-                        && seconds <= MAX_AVERAGE_BLOCK_TIME_SECONDS => {}
-                Ok(seconds) => findings.push(Finding {
+            match point.value.parse::<i64>() {
+                Ok(ms) if ms > 0 && ms <= MAX_AVERAGE_BLOCK_TIME_MS => {}
+                Ok(ms) => findings.push(Finding {
                     entity: point.date.clone(),
                     details: vec![format!(
-                        "average block time must be finite and in (0, {}]s: {}s",
-                        MAX_AVERAGE_BLOCK_TIME_SECONDS, seconds
+                        "average block time must be in (0, {}] ms: {} ms",
+                        MAX_AVERAGE_BLOCK_TIME_MS, ms
                     )],
                 }),
                 Err(_) => findings.push(Finding {
@@ -7324,7 +7346,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/average-block-time"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "data": [{ "date": "20200522", "value": "311.43" }]
+                    // whole ms since lane D1's third round (was "311.43" s)
+                    "data": [{ "date": "20200522", "value": "311430" }]
                 })))
                 .mount(&server)
                 .await;
@@ -7668,29 +7691,30 @@ mod tests {
         );
     }
 
-    /// The upper bound exists to catch unit regressions (milliseconds reported
-    /// as seconds). Without it the check accepted any finite positive number.
+    /// The upper bound exists to catch unit regressions. Without it the check
+    /// accepted any finite positive number. Re-pinned for lane D1's third round:
+    /// the route sends whole ms, so 8,000 s is "8000000", and a rounded second
+    /// ("8.00") is no whole ms at all.
     #[test]
-    fn average_block_time_rejects_milliseconds_as_seconds() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let server = runtime.block_on(MockServer::start());
-        runtime.block_on(async {
-            Mock::given(method("GET"))
-                .and(path("/api/v1/charts/average-block-time"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "data": [{ "date": "20260720", "value": "8000" }]
-                })))
-                .mount(&server)
-                .await;
-        });
+    fn average_block_time_rejects_a_value_off_its_unit() {
+        for value in ["8000000", "8.00"] {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            runtime.block_on(async {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/charts/average-block-time"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "data": [{ "date": "20260720", "value": value }]
+                    })))
+                    .mount(&server)
+                    .await;
+            });
 
-        let result = ChartAverageBlockTimeSane
-            .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-        assert!(
-            !result.passed(),
-            "8000s per block must fail the sanity bound"
-        );
+            let result = ChartAverageBlockTimeSane
+                .run(&mock_ctx(&server), &ProgressReporter::new(None))
+                .unwrap();
+            assert!(!result.passed(), "{value} must fail the sanity bound");
+        }
     }
 
     #[test]
@@ -8646,13 +8670,13 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"date": "2024-01-01", "values": {"circulating": "1", "nervosdao": "1", "burnt": "8400000000"}}]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "1", "burnt": "8400000000"}}]})))
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/dao/statistics"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "totalDeposited": "1000000000", "estimatedApc": "2.0", "activeDeposits": 1,
+                    "totalDeposited": "1000000000", "estimatedApc": "2.0", "liveCellsCount": 1,
                     "miningReward": "900000000000", "depositCompensation": "900000000000", "burnt": "900000000000"
                 })))
                 .mount(&server)
@@ -8687,7 +8711,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1.00000001", "mining": "2.00000002", "burnt": "3.00000003"}, "protocolTotalShannons": "600000006", "phase1CompensationShannons": "100000000"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8708,7 +8732,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "0", "mining": "3", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "0"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8728,7 +8752,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "100000001"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8749,7 +8773,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "phase1CompensationShannons": "0"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8771,7 +8795,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([row.clone(), row]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8877,25 +8901,74 @@ mod tests {
 
     #[test]
     fn total_supply_monotonic_detects_one_shannon_decrease_above_f64_precision() {
+        // lane exactness, part B (the third read's M1): the five bands the route sends, so the two
+        // totals are compared (on four keys every point was refused for a missing daoWithdrawing
+        // and the decrease was never read); the finding is the decrease, by its words
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "9007199254740992.00000001", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+            {"date": "2024-01-02", "values": {"outsideDao": "9007199254740992", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}}
+        ]));
+        assert!(
+            !result.passed(),
+            "one-shannon decrease must remain visible above f64 precision"
+        );
+        let details: Vec<&String> = result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .collect();
+        assert_eq!(details.len(), 1, "{details:?}");
+        assert!(
+            details[0].starts_with(
+                "total supply decreased: 900719925474099200000001 → 900719925474099200000000 shannons"
+            ),
+            "{details:?}"
+        );
+    }
+
+    /// The positive control (the third read's M1): a five-band series whose total rises passes.
+    #[test]
+    fn total_supply_monotonic_passes_a_rising_five_band_series() {
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "100", "daoDeposited": "20", "daoWithdrawing": "3", "unclaimedCompensation": "1", "burnt": "50"}},
+            {"date": "2024-01-02", "values": {"outsideDao": "99", "daoDeposited": "21", "daoWithdrawing": "3", "unclaimedCompensation": "1.00000001", "burnt": "50"}}
+        ]));
+        assert!(result.passed(), "{:?}", result.findings);
+    }
+
+    /// Lane D1's four bands, without the withdrawing band, are refused by its name (the tests
+    /// reader's MUST-1).
+    #[test]
+    fn total_supply_monotonic_refuses_a_four_band_chart_by_the_missing_band() {
+        let result = run_total_supply_check(json!([
+            {"date": "2024-01-01", "values": {"outsideDao": "100", "daoDeposited": "20", "unclaimedCompensation": "1", "burnt": "50"}}
+        ]));
+        assert!(!result.passed());
+        let details: Vec<&String> = result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .collect();
+        assert_eq!(
+            details,
+            vec!["missing or invalid total-supply daoWithdrawing value"],
+            "{details:?}"
+        );
+    }
+
+    fn run_total_supply_check(data: serde_json::Value) -> CheckResult {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"circulating": "9007199254740992.00000001", "nervosdao": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"circulating": "9007199254740992", "nervosdao": "0", "burnt": "0"}}
-                ]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": data })))
                 .mount(&server)
                 .await;
         });
-        let result = ChartTotalSupplyMonotonic
+        ChartTotalSupplyMonotonic
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-        assert!(
-            !result.passed(),
-            "one-shannon decrease must remain visible above f64 precision"
-        );
+            .unwrap()
     }
 
     #[test]
@@ -8906,8 +8979,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"circulating": "1", "nervosdao": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"circulating": "broken", "nervosdao": "0", "burnt": "0"}}
+                    {"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"outsideDao": "broken", "daoDeposited": "0", "daoWithdrawing": "0", "unclaimedCompensation": "0", "burnt": "0"}}
                 ]})))
                 .mount(&server)
                 .await;
@@ -8920,7 +8993,7 @@ mod tests {
             .findings
             .iter()
             .flat_map(|finding| &finding.details)
-            .any(|detail| detail.contains("invalid total-supply circulating")));
+            .any(|detail| detail.contains("invalid total-supply outsideDao")));
     }
 
     #[test]

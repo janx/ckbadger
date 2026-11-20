@@ -7,11 +7,15 @@ import type {
   Activity,
   AddressTransaction,
 } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
   'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq83503v79qrpczf2e6wdgf6jj8am56udwsgxzykc';
 export const fixtureHash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
+/** JoyID's lock code hash (mainnet), the lock `addressText` spells. */
+const JOYID_CODE_HASH = '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323';
 /**
  * The mainnet type scripts the cell fixtures carry (each typed cell has its type script, as on
  * chain, so its seal has a type to draw): the code hashes of docs/metadata/scripts/ and the Nervos
@@ -30,13 +34,15 @@ export const addressFixture: Address = {
   liveCellsCount: 40,
   transactionsCount: 1021,
   pendingSummary: null,
+  // the lock the address spells (lane P1 follow-up: the lock's words read the lock off the address
+  // and check the two; the code hash was fixtureHash(100), a lock this JoyID address does not spell)
   lockScript: {
-    codeHash: fixtureHash(100),
+    codeHash: JOYID_CODE_HASH,
     hashType: 'type',
     args: '0x0001e347c59e28061c092ace9cd4275291fbba6b8d74',
   },
   lockScriptInfo: {
-    codeHash: fixtureHash(100),
+    codeHash: JOYID_CODE_HASH,
     name: 'JoyID',
     scriptKind: 'lock',
     deprecated: false,
@@ -67,8 +73,11 @@ export const holdingsFixture: AddressHoldings = {
   lockScriptHash: addressHash,
   balance: addressFixture.balance,
   occupiedCapacity: '712700000000',
-  freeCapacity: '5457135338057',
-  daoFreeCapacity: '958948000000000',
+  // the balance in the route's three parts (lane P1, third round): its five DAO cells whole, the
+  // bytes of its other cells, and the rest of those
+  daoCellsCapacity: '959000000000000',
+  otherCellsOccupiedCapacity: '660700000000',
+  otherCellsFreeCapacity: '5457135338057',
   liveCellsCount: 40,
   holdings: { dao: 5, token: 9, object: 14, identity: 1 },
   classes: {
@@ -119,7 +128,7 @@ export const addressDaoFixture: DaoDeposit[] = [5240000, 3500000, 600000, 200000
     txHash: fixtureHash(400 + i),
     outputIndex: 0,
     lockScriptHash: addressHash,
-    lockCodeHash: fixtureHash(100),
+    lockCodeHash: JOYID_CODE_HASH,
     capacity: (BigInt(v) * BigInt(100000000)).toString(),
     depositBlockNumber: 16381488 + i,
     depositTimestamp: '2025-06-06T00:00:00Z',
@@ -201,7 +210,7 @@ export const addressIdentitiesFixture: AddressCell[] = [
   },
 ];
 export const addressActivitiesFixture: Activity[] = [
-  {
+  activityRead({
     txHash: fixtureHash(800),
     blockNumber: 18672923,
     txIndex: 1,
@@ -212,11 +221,13 @@ export const addressActivitiesFixture: Activity[] = [
     itemDeltas: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     protocolActions: [],
     participants: [],
     roles: [],
     tags: 0,
-  },
+  }),
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [
   {
@@ -235,13 +246,19 @@ export const addressTransactionsFixture: AddressTransaction[] = [
     scriptLabels: ['Spore'],
   },
 ];
-export const pageFixture = <T>(data: T[], total?: number) => ({
-  data,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
-  ...(total === undefined ? {} : { total }),
-});
+/**
+ * A page of an address list as the API sends it. Re-pinned (lane c2-chain): its `limit` is the
+ * twenty the address page asks for, which the API states back, since the pager reads its page size
+ * from the response (lib/pagination.ts); it said 50, a size the page never asks.
+ */
+export const pageFixture = <T>(data: T[], total?: number) =>
+  pagedRead({
+    data,
+    limit: 20,
+    hasMore: false,
+    nextCursor: null,
+    ...(total === undefined ? {} : { total }),
+  });
 
 export const addressDaoCellsFixture: AddressCell[] = addressDaoFixture.map((d) => ({
   txHash: d.txHash,

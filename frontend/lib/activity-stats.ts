@@ -2,42 +2,31 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
+import { sentField } from '@/lib/api-fields';
 import type {
   ActivitySummary24h,
   ScriptCountEntry,
   DailyActivityStats,
   GlobalActivityFilter,
-  TxStatsResponse,
 } from '@/lib/api';
 import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 
-/** The activity-type counters a summary or a daily row carries. */
+/**
+ * The activity-type counters a summary or a daily row carries, with the two the API counts for
+ * the page (lists lane P3: a page sums no count): its kind occurrences (categories overlap; never a
+ * transaction total) and its DAO actions.
+ */
 export type ActivityCounts = Pick<
   ActivitySummary24h,
   | 'transferCount'
-  | 'daoDepositCount'
-  | 'daoWithdrawRequestCount'
-  | 'daoWithdrawCompleteCount'
+  | 'daoCount'
   | 'tokenCount'
   | 'objectCount'
   | 'identityCount'
   | 'scriptCallCount'
+  | 'kindOccurrences'
 >;
-
-/** Typed activity occurrences: categories can overlap. Never use as a transaction total. */
-export function totalActivities(c: ActivityCounts): number {
-  return (
-    c.transferCount +
-    c.daoDepositCount +
-    c.daoWithdrawRequestCount +
-    c.daoWithdrawCompleteCount +
-    c.tokenCount +
-    c.objectCount +
-    c.identityCount +
-    c.scriptCallCount
-  );
-}
 
 export interface ShareRow {
   key: string;
@@ -47,9 +36,9 @@ export interface ShareRow {
   share: number;
 }
 
-/** Each activity type's share of `totalActivities`, largest first; types with no activity are left out. */
+/** Each activity type's share of the kind occurrences, largest first; types with no activity are left out. */
 export function activityTypeShares(c: ActivityCounts): ShareRow[] {
-  const total = totalActivities(c);
+  const total = c.kindOccurrences;
   if (total === 0) return [];
   return [
     { key: 'script', label: 'Script call', count: c.scriptCallCount },
@@ -57,11 +46,7 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
     { key: 'token', label: 'Token', count: c.tokenCount },
     { key: 'object', label: 'Object', count: c.objectCount },
     { key: 'identity', label: 'Identity', count: c.identityCount },
-    {
-      key: 'dao',
-      label: 'DAO',
-      count: c.daoDepositCount + c.daoWithdrawRequestCount + c.daoWithdrawCompleteCount,
-    },
+    { key: 'dao', label: 'DAO', count: c.daoCount },
   ]
     .filter((row) => row.count > 0)
     .map((row) => ({ ...row, share: row.count / total }))
@@ -90,26 +75,41 @@ export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>):
   return name ? name : shortenHash(entry.codeHash, 'tight');
 }
 
-/** Script calls ranked by count: the `limit` largest, then everything else as one row. */
-export function scriptShares(entries: ScriptCountEntry[], limit = 5): ScriptShares {
-  const ranked = entries.filter((e) => e.count > 0).sort((a, b) => b.count - a.count);
-  const total = ranked.reduce((sum, e) => sum + e.count, 0);
+/** How many scripts the route names before its rest (`scriptRest`): its `SCRIPT_TOP`. */
+const SCRIPT_TOP = 5;
+
+/**
+ * Script calls as the route ranks and counts them (the page-phase review's SHOULD 5): its five
+ * largest by calls, in its order, then its rest as one row; the total is its `scriptCalls`. The
+ * page sums nothing: a route whose named rows and rest do not make its total is refused.
+ */
+export function scriptShares(
+  summary: Pick<ActivitySummary24h, 'scriptCounts' | 'scriptCalls' | 'scriptRest'>
+): ScriptShares {
+  // the route's fields this plan added, refused by name where an older API sends none (the third
+  // read's La N6: it read BigInt(undefined))
+  const total = sentField(summary.scriptCalls, 'the 24 h activity summary', 'scriptCalls');
+  const rest = sentField(summary.scriptRest, 'the 24 h activity summary', 'scriptRest');
+  const named = summary.scriptCounts.slice(0, SCRIPT_TOP);
+  const parts = [...named.map((e) => e.count), rest?.calls ?? 0];
+  if (BigInt(total) !== parts.reduce((sum, n) => sum + BigInt(n), BigInt(0)))
+    throw new Error(`script calls: the route's ${total} is not its five named and its rest`);
   if (total === 0) return { total: 0, top: [], others: null };
-  const top = ranked.slice(0, limit).map((e) => ({
-    key: e.codeHash,
-    label: scriptLabel(e),
-    count: e.count,
-    share: e.count / total,
-    codeHash: e.codeHash,
-    name: e.name,
-  }));
-  const rest = ranked.slice(limit);
-  const restCount = rest.reduce((sum, e) => sum + e.count, 0);
   return {
     total,
-    top,
-    others:
-      rest.length > 0 ? { scripts: rest.length, count: restCount, share: restCount / total } : null,
+    top: named.map((e) => ({
+      key: e.codeHash,
+      label: scriptLabel(e),
+      count: e.count,
+      share: e.count / total,
+      codeHash: e.codeHash,
+      name: e.name,
+    })),
+    others: summary.scriptRest && {
+      scripts: summary.scriptRest.scripts,
+      count: summary.scriptRest.calls,
+      share: summary.scriptRest.calls / total,
+    },
   };
 }
 
@@ -131,29 +131,6 @@ export function completedYesterdayActivities(
   const yesterday = previousChainDay(now);
   return days.find((day) => day.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') === yesterday);
 }
-/** Reads only the matching, explicitly complete canonical transaction-count bucket. */
-export function completedYesterdayTransactions(
-  stats: TxStatsResponse,
-  now = Date.now()
-): number | undefined {
-  const label = previousChainDay(now).slice(5).replace('-', '/');
-  const bucket = stats.dailyData.find((day) => day.complete && day.label === label);
-  if (!bucket) return undefined;
-  if (!Number.isSafeInteger(bucket.value) || bucket.value < 0)
-    throw new Error(`Invalid transaction count for ${label}: ${bucket.value}`);
-  return bucket.value;
-}
-/** The global activity stream is exactly canonical transactions minus cellbase. */
-export function nonCellbaseCount(transactions: number, cellbase: number, date: string): number {
-  if (
-    !Number.isSafeInteger(transactions) ||
-    !Number.isSafeInteger(cellbase) ||
-    cellbase < 0 ||
-    transactions < cellbase
-  )
-    throw new Error(`Invalid transaction/cellbase counts on ${date}: ${transactions}/${cellbase}`);
-  return transactions - cellbase;
-}
 /** Per-kind occurrences, with All supplied independently as an exact unique count. */
 export function activityFilterCounts(
   summary: ActivityCounts,
@@ -165,8 +142,7 @@ export function activityFilterCounts(
     token: summary.tokenCount,
     object: summary.objectCount,
     identity: summary.identityCount,
-    dao:
-      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
+    dao: summary.daoCount,
     script: summary.scriptCallCount,
   };
 }

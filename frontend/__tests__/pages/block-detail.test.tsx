@@ -6,8 +6,14 @@ import { onlineManager } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { factsOf } from '@/__tests__/utils/facts';
+import { textPx } from '@/lib/type-metrics';
+import { expectOneRowSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const BLOCK_ID = '8775638';
 const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
@@ -82,12 +88,14 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_ID;
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
     // F2 blocks: the blocks list around the block (neighbour tiles, the bars' list scale).
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [mockBlock],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [mockBlock],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getBlockUncle).mockRejectedValue(new Error('no uncle detail in this fixture'));
     vi.mocked(api.getBlockProposalFees).mockResolvedValue({
       number: mockBlock.number,
@@ -99,36 +107,40 @@ describe('BlockDetailPage', () => {
       committedIn: [],
       transactions: [],
     });
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [],
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [
-        {
-          hash: `0x${'11'.repeat(32)}`,
-          blockNumber: mockBlock.number,
-          blockHash: mockBlock.hash,
-          index: 0,
-          inputsCount: 1,
-          outputsCount: 1,
-          fee: '1000',
-          value: '100000000',
-          txSize: 226,
-          cycles: 5000000,
-          cyclesStatus: 'complete',
-          outputCapacity: '100000000',
-          proposalOrigin: { blockNumber: mockBlock.number - 3, distance: 3, uncle: null },
-          isCellbase: false,
-          timestamp: mockBlock.timestamp,
-        },
-      ],
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [],
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            hash: `0x${'11'.repeat(32)}`,
+            blockNumber: mockBlock.number,
+            blockHash: mockBlock.hash,
+            index: 0,
+            inputsCount: 1,
+            outputsCount: 1,
+            fee: '1000',
+            value: '100000000',
+            txSize: 226,
+            cycles: 5000000,
+            cyclesStatus: 'complete',
+            outputCapacity: '100000000',
+            proposalOrigin: { blockNumber: mockBlock.number - 3, distance: 3, uncle: null },
+            isCellbase: false,
+            timestamp: mockBlock.timestamp,
+          },
+        ],
+        limit: 100,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     vi.mocked(api.getBlockFeeStats).mockResolvedValue({
       blockNumber: mockBlock.number,
       totalSize: 1200,
@@ -150,6 +162,80 @@ describe('BlockDetailPage', () => {
       tipTimestampMs: null,
       events: [],
     });
+  });
+
+  // Lane D2 (PA-13; gate D0′'s strip, with the block's own four facts): the facts aside beside the
+  // block's contents becomes the status strip under the id line — its state, its time, who mined
+  // it and its reward — and the contents take the whole measure. The fees stay in the evidence
+  // tier's facts; the paying cellbase stays in the reward breakdown's head.
+  it('states status, time, miner and reward in one strip under the id line (lane D2)', async () => {
+    const { container } = render(<BlockDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Block status' });
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'time', 'miner', 'reward']);
+    expect(facts[0][1]).toBe('canonical · 12 confirmations');
+    // re-pinned on purpose (lane D2b): the time's note is its age alone; "10 s after its parent"
+    // stands in the evidence tier's facts, so the strip is one row at 1280
+    expect(facts[1][1]).toMatch(/^2026-02-22 08:00:00 UTC\+8 · \S+ ago$/);
+    expect(facts[2][1]).toBe('ckb1…ysf30a0g');
+    expect(facts[3][1]).toBe('100 CKB · paid in #8,775,649');
+    expect(within(strip).getByRole('link', { name: '#8,775,649' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/8775649'
+    );
+    // under the stone and the plate, before the summary
+    const below = container.querySelector('[data-sealed-below]') as HTMLElement;
+    expect(below.firstElementChild).toBe(strip);
+    expect(below.lastElementChild).toContainElement(screen.getByTestId('block-summary'));
+    // the fees stand in the evidence tier's facts
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Fees').parentElement).toHaveTextContent(
+      /^Fees0\.00012345 CKB$/
+    );
+  });
+
+  // Lane D2b: the block's strip stands in one row at 1280 (its content is 1,232 px): the note "N s
+  // after its parent" made it 1,327.6 px and two rows; it is a fact of the evidence tier now. The
+  // arithmetic, from the strip as drawn, with the widest real values: a 20,000,000-confirmation
+  // block, the widest age ("6y 363d ago"), a miner at the row size, a four-digit reward paid at
+  // #21,000,011. A value is counted at 14 px (its unit too, which is 12), a note at 13 px with the
+  // separator list's 33.6 px before it, the state's dot 13 px, 44 px between facts.
+  it('states its strip in one row at 1280: the parent interval is an evidence fact (lane D2b)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      confirmations: 20_000_000,
+      rewardPaidAtBlock: 21_000_011,
+    });
+    render(<BlockDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Block status' });
+    expect(strip).not.toHaveTextContent('after its parent');
+    const widest = factsOf(strip).map(([label, text]) => {
+      const [drawn, ...notes] = text.split(' · ');
+      // the widest age, and a four-digit reward to the shannon (the fixture's is 100 CKB)
+      const value = label === 'reward' ? '1,234.56789012 CKB' : drawn;
+      const shownNotes = label === 'time' ? ['6y 363d ago'] : notes;
+      const line =
+        (label === 'status' ? 13 : 0) +
+        textPx(value.length, 14) +
+        shownNotes.reduce((w, note) => w + 33.6 + textPx(note.length, 13), 0);
+      return Math.max(textPx(label.length, 12), line);
+    });
+    const row = widest.reduce((s, w) => s + w, 0) + 44 * (widest.length - 1);
+    expect(row).toBeLessThanOrEqual(1232);
+    // the interval stands in the evidence tier's facts, as it was written
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Interval').parentElement).toHaveTextContent(
+      /^Interval10 s after its parent$/
+    );
+  });
+
+  it('lets the block’s contents take the whole measure: no facts aside beside them (lane D2)', async () => {
+    const { container } = render(<BlockDetailPage />);
+    await screen.findByRole('group', { name: 'Block status' });
+    expect(screen.queryByRole('complementary', { name: 'Block facts' })).toBeNull();
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('aside')).toBeNull();
+    expect(tier1.innerHTML).not.toMatch(/_240px\]/);
   });
 
   it('routes only a true block 404 to typed identifier evidence', async () => {
@@ -245,13 +331,25 @@ describe('BlockDetailPage', () => {
     expect(resources.lastElementChild).toHaveClass('text-text-dim', 'normal-case');
     expect(screen.getByRole('region', { name: 'Hardfork resources' })).toContainElement(resources);
 
-    const resourceLinks = screen.getAllByTestId('block-hardfork-resource-link');
+    // Re-pinned on purpose (lane P1 follow-up, the link-look gate): each resource is a way out of
+    // the site, ExternalLink in the onward look ("CKB2021 ↗", a new tab), not a raw <a> inked by
+    // hand (text-interactive) with its own test id
+    const resourceLinks = within(
+      screen.getByRole('region', { name: 'Hardfork resources' })
+    ).getAllByRole('link');
     expect(resourceLinks).toHaveLength(2);
-    expect(screen.getByRole('link', { name: 'CKB2021' })).toHaveAttribute(
+    for (const link of resourceLinks) {
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveClass('text-jade');
+      expect(link).not.toHaveClass('text-interactive');
+      // its arrow held to its last word (the matcher reads the no-break space as a space)
+      expect(link).toHaveTextContent(/\s↗$/);
+    }
+    expect(screen.getByRole('link', { name: /^CKB2021\s↗$/ })).toHaveAttribute(
       'href',
       'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md'
     );
-    expect(screen.getByRole('link', { name: 'Migration Guide' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^Migration Guide\s↗$/ })).toHaveAttribute(
       'href',
       'https://github.com/jordanmack/nervos-ckb2021-hard-fork-migration-guide'
     );
@@ -277,6 +375,24 @@ describe('BlockDetailPage', () => {
     expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number - 1}`);
     expect(pushMock).toHaveBeenNthCalledWith(3, `/blocks/${mockBlock.number + 1}`);
     expect(pushMock).toHaveBeenNthCalledWith(4, `/blocks/${mockBlock.number + 1}`);
+  });
+
+  // Lane c2-chain: the block's contents open on the library's tab row, whose ← and → move between
+  // its views (WAI-ARIA tabs); a key the row took is not also the page's step to another block.
+  it('moves between the views with ← and → on the tab row without leaving the block', async () => {
+    render(<BlockDetailPage />);
+    const activities = await screen.findByRole('tab', { name: /^activities/ });
+    const transactions = screen.getByRole('tab', { name: /^transactions/ });
+    act(() => activities.focus());
+    fireEvent.keyDown(activities, { key: 'ArrowRight' });
+    expect(transactions).toHaveAttribute('aria-selected', 'true');
+    expect(transactions).toHaveFocus();
+    fireEvent.keyDown(transactions, { key: 'ArrowLeft' });
+    expect(activities).toHaveAttribute('aria-selected', 'true');
+    expect(pushMock).not.toHaveBeenCalled();
+    // away from the row the keys still step through the chain
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(pushMock).toHaveBeenCalledWith(`/blocks/${mockBlock.number + 1}`);
   });
 
   it('loads hardfork resources from timeline when block payload has no resources', async () => {
@@ -322,7 +438,8 @@ describe('BlockDetailPage', () => {
     render(<BlockDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
+      // re-pinned (lane P1 follow-up): an ExternalLink, its name ends in its ↗
+      expect(screen.getByRole('link', { name: /^CKB2023\s↗$/ })).toHaveAttribute(
         'href',
         'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md'
       );
@@ -420,6 +537,24 @@ describe('BlockDetailPage', () => {
     );
   });
 
+  // Lane D2b (U-03, R8; the owner's ruling of 2026-11-19): an included uncle's row leads with its
+  // row stone, the block stone without rods (the chain keeps no transactions for an uncle), in the
+  // dead ink, as the fork page's dropped block leads with its stone.
+  it('leads every included uncle’s row with its row stone, without rods, in the dead ink (lane D2b)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, unclesCount: 1, uncles: [carrier] });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+    render(<BlockDetailPage />);
+    const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest(
+      'section'
+    ) as HTMLElement;
+    const row = within(uncles)
+      .getByRole('link', { name: /#8,775,637/ })
+      .closest('article')!;
+    expectOneRowSeal(row, { kind: 'block', hash: carrier.hash, txs: 'not kept' }, 'ink');
+    // the stone leads the row, its words beside it
+    expect(row.firstElementChild).toHaveAttribute('data-seal', 'block');
+  });
+
   it('names an uncle the block read does not list yet as text, without crashing (#6)', async () => {
     // Block and proposals are two reads; a reorg between them is timing, not a broken invariant.
     vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 1, unclesCount: 0 });
@@ -438,6 +573,8 @@ describe('BlockDetailPage', () => {
     ) as HTMLElement;
     expect(row).toHaveTextContent('uncle #8,775,637');
     expect(within(row).queryByRole('link', { name: /uncle #8,775,637/ })).not.toBeInTheDocument();
+    // lane P1, the ink and size roles: the uncle's height is a value, the reading ink (it was quiet)
+    expect(inkOf(within(row).getByText('uncle #8,775,637'))).toBe(READING);
   });
 
   it('says there are no proposals when the block and its uncles proposed nothing', async () => {
@@ -484,8 +621,9 @@ describe('BlockDetailPage', () => {
 
   it('shows block activities first and puts exact developer evidence below the shared tier boundary', async () => {
     render(<BlockDetailPage />);
-    expect(await screen.findByRole('button', { name: /^Activities/ })).toHaveAttribute(
-      'aria-pressed',
+    // re-pinned (lane c2-chain): the views are the library's tab row (were pressed buttons)
+    expect(await screen.findByRole('tab', { name: /^activities/ })).toHaveAttribute(
+      'aria-selected',
       'true'
     );
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
@@ -507,7 +645,7 @@ describe('BlockDetailPage', () => {
         name: 'Size, bytes: 1,200, 974 overhead, 226 user transactions',
       })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
@@ -565,16 +703,25 @@ describe('BlockDetailPage', () => {
         timestamp: new Date(T0 - 20_000).toISOString(),
       });
       const { unmount } = render(<BlockDetailPage />);
-      const facts = () => screen.queryByRole('complementary', { name: 'Block facts' });
+      // re-pinned on purpose (lane D2): the time is the status strip's fact, its age one unit of
+      // its own (Utc8Age), the interval to the parent another note after it (the aside wrote the
+      // age and the interval as one line, "20s ago · 10 s after its parent")
+      const facts = () => screen.queryByRole('group', { name: 'Block status' });
       await loadUnderStillClock(() => facts() !== null);
-      const age = () => within(facts()!).getByText(/ ago/).textContent;
-      expect(age()).toMatch(/^20s ago · /);
+      const age = () => within(facts()!).getByText(/ ago$/).textContent;
+      expect(age()).toBe('20s ago');
       tick(1000);
-      expect(age()).toMatch(/^21s ago · /);
+      expect(age()).toBe('21s ago');
       tick(38_000);
-      expect(age()).toMatch(/^59s ago · /);
+      expect(age()).toBe('59s ago');
       tick(1000);
-      expect(age()).toMatch(/^1m ago · /);
+      expect(age()).toBe('1m ago');
+      // re-pinned on purpose (lane D2b): the age is the time's one note; the interval to the
+      // parent is the evidence tier's fact (it followed the age here)
+      expect(facts()).not.toHaveTextContent('after its parent');
+      expect(screen.getByTestId('block-tier2-facts')).toHaveTextContent(
+        /[\d,.]+ s after its parent/
+      );
       unmount();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -590,13 +737,78 @@ describe('BlockDetailPage', () => {
       client.setQueryData(['block', BLOCK_ID], mockBlock)
     );
     expect(await screen.findByText('Loading activities…')).toHaveAttribute('role', 'status');
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
     resume();
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Activities/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^activities/ }));
     expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
+  });
+
+  // Lane P1, the ink and size roles round (items 1 to 3): the block's values, its empty and
+  // loading lines and its notes read in the reading ink; a label, a unit, a column head and a hint
+  // stay quiet. Each of these stood in the quiet ink.
+  it('reads its facts, its empty lines and its notes in the reading ink (lane P1)', async () => {
+    render(<BlockDetailPage />);
+    expect(inkOf(await screen.findByText('No uncles in this block.'))).toBe(READING);
+    expect(inkOf(await screen.findByText('No proposals in this block.'))).toBe(READING);
+    expect(inkOf(await screen.findByText('No activities in this block.'))).toBe(READING);
+    const facts = await screen.findByTestId('block-tier2-facts');
+    expect(inkOf(within(facts).getByText('123,456'))).toBe(READING);
+    expect(inkOf(within(facts).getByText(/ · overhead /))).toBe(READING);
+    expect(inkOf(within(facts).getByText(/ of 3,500,000,000$/))).toBe(READING);
+    expect(inkOf(within(facts).getByText('decoded from the cellbase message'))).toBe(READING);
+  });
+
+  it('says its proposals are loading in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 3 });
+    vi.mocked(api.getBlockProposals).mockReturnValue(new Promise(() => {}));
+    render(<BlockDetailPage />);
+    expect(inkOf(await screen.findByText('Loading proposals…'))).toBe(READING);
+  });
+
+  it('says its uncle’s sibling being read, its time and count, and its uncle count in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      proposalsCount: 2,
+      unclesCount: 1,
+      uncles: [carrier],
+    });
+    vi.mocked(api.getBlockUncle).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0x00112233445566778899',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: null,
+      },
+    ]);
+    render(<BlockDetailPage />);
+    const reading = await screen.findByText('reading its sibling…');
+    expect(inkOf(reading)).toBe(READING);
+    const article = reading.closest('article')!;
+    // the word between the uncle's height and its hash names it: a label, quiet
+    expect(inkOf(within(article).getByText('uncle'))).toBe(QUIET);
+    const last = reading.parentElement!.lastElementChild!;
+    expect(last).toHaveTextContent(/1\s+proposal$/);
+    expect(inkOf(last)).toBe(READING);
+    expect(inkOf(screen.getByText('1 · counted toward the uncle rate'))).toBe(READING);
+    expect(inkOf(await screen.findByText('1 · none committed yet'))).toBe(READING);
+  });
+
+  it('says its bars’ scale being read in the reading ink at 13 px, and what its transactions were committed from (lane P1)', async () => {
+    vi.mocked(api.getBlocks).mockReturnValue(new Promise(() => {}));
+    render(<BlockDetailPage />);
+    const pending = await screen.findAllByText('reading the list scale…');
+    expect(pending.length).toBeGreaterThan(0);
+    for (const el of pending) {
+      expect(inkOf(el)).toBe(READING);
+      expect(typeStepOf(el)).toBe('small');
+    }
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
+    expect(inkOf(await screen.findByText(/^1 committed from #/))).toBe(READING);
   });
 });

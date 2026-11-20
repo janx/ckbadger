@@ -19,6 +19,7 @@ import {
   type ThemeName,
 } from '@/lib/palette';
 import { resetThemeForTests } from '@/lib/theme';
+import { withGroupings } from '@/__tests__/utils/network-distributions';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -113,33 +114,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const DAO_GROUPS = [
-  { label: 'largest', value: BigInt(823) },
+/** The DAO's four groups with a largest one of 11 %, whose words fit its segment at 1,232 px. */
+const DAO_GROUPS_INSIDE = [
+  { label: 'largest', value: BigInt(1100) },
   { label: 'next 9', value: BigInt(1783) },
   { label: 'next 90', value: BigInt(3091) },
-  { label: 'the other 16,495', value: BigInt(4303) },
+  { label: 'the other 16,495', value: BigInt(4026) },
 ];
 
 describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)', (theme) => {
   it('reads every group of the DAO concentration bar at 4.5:1 or more', () => {
     inTheme(theme);
-    stubChartWidth(1408);
+    // Re-pinned (review-fb-tests finding 3): the bar was drawn 1,480 px wide (1,408 before R4) so
+    // that mainnet's largest group, 8.23 %, held its words, a width no page gives it (the DAO
+    // page's column is at most 1,232 px; at mainnet's shares the largest group's words stand in the
+    // legend row there, dao-board.test.tsx). The bar is drawn at the page's widest, 1,232 px, with
+    // a largest group of 11 %: "largest 11.00%" is 14 glyphs at 13 px and 2 × 10 px of padding,
+    // 129.2 px of the segment's 135.5, so every group's words are inside and their ink is read.
+    stubChartWidth(1232);
     render(
       <ConcentrationBar
         label="Share of deposits"
         assetClass="dao"
         total={BigInt(10000)}
-        groups={DAO_GROUPS}
+        groups={DAO_GROUPS_INSIDE}
         labelsInside
       />
     );
     const bar = screen.getByRole('img', { name: /^Share of deposits/ });
     const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
     expect(words.map((w) => w.text)).toEqual([
-      'largest 8.23%',
+      'largest 11.00%',
       'next 9 · 17.83%',
       'next 90 · 30.91%',
-      'the other 16,495 · 43.03%',
+      'the other 16,495 · 40.26%',
     ]);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
   });
@@ -149,30 +157,70 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     stubChartWidth(1232);
     server.use(
       http.get('/api/:network/v1/network/distributions', () =>
-        HttpResponse.json({
-          verifiedRetained: 78,
-          sameNetworkReachable: 57,
-          verifiedUnavailable: 21,
-          versions: [],
-          countries: [{ label: 'United States', count: 40 }],
-          asns: [
-            { label: 'AS16509 Amazon.com, Inc.', count: 48 },
-            { label: 'AS24940 Hetzner Online GmbH', count: 5 },
-            { label: 'AS14061 DigitalOcean, LLC', count: 5 },
-            { label: 'AS16276 OVH SAS', count: 5 },
-            { label: 'AS63949 Akamai Connected Cloud', count: 4 },
-            { label: 'AS1 a', count: 4 },
-            { label: 'AS2 b', count: 4 },
-            { label: 'AS3 c', count: 3 },
-          ],
-          protocols: [],
-        })
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 78,
+            sameNetworkReachable: 57,
+            verifiedUnavailable: 21,
+            versions: [],
+            countries: [{ label: 'United States', count: 40 }],
+            asns: [
+              { label: 'AS16509 Amazon.com, Inc.', count: 48 },
+              { label: 'AS24940 Hetzner Online GmbH', count: 5 },
+              { label: 'AS14061 DigitalOcean, LLC', count: 5 },
+              { label: 'AS16276 OVH SAS', count: 5 },
+              { label: 'AS63949 Akamai Connected Cloud', count: 4 },
+              { label: 'AS1 a', count: 4 },
+              { label: 'AS2 b', count: 4 },
+              { label: 'AS3 c', count: 3 },
+            ],
+            protocols: [],
+          })
+        )
       )
     );
     render(<HostingBar />);
     const bar = await screen.findByRole('img', { name: 'Verified nodes by hosting network' });
     const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
-    expect(words.length).toBeGreaterThanOrEqual(5);
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part
+    // whose segment cannot hold its name, share and count writes nothing in it and is named on its
+    // own line under the bar, so on this crawl only the leader's words stand on a fill (it was
+    // `words.length >= 5`: the shares alone, "6.41%", in segments of 78 px). The fills of the other
+    // steps keep their words in the case below, where every segment holds them.
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 48 of 78 nodes is 61.538…%, 61.53% (half up 61.54%)
+    expect(words.map((w) => w.text)).toEqual(['Amazon.com, Inc. 61.53% · 48 nodes']);
+    expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
+  });
+
+  // Every opacity step of the hosting bar (PROVIDER_OPACITY, 0.9 to 0.2) with words on it: five
+  // networks of 12 nodes and "other networks" of 20 in 1,232 px (1,222 less the gaps, 15.275 px
+  // a node): each of the five, 183.3 px, holds "a 15.00% · 12 nodes" (19 characters at 13 px,
+  // 148.2 px, and 20 of padding); the other networks, 305.5 px, hold their 32 (249.6 and 20).
+  it('reads the words on every step of the hosting bar at 4.5:1 or more', async () => {
+    inTheme(theme);
+    stubChartWidth(1232);
+    server.use(
+      http.get('/api/:network/v1/network/distributions', () =>
+        HttpResponse.json(
+          withGroupings({
+            verifiedRetained: 80,
+            sameNetworkReachable: 80,
+            verifiedUnavailable: 0,
+            versions: [],
+            countries: [{ label: 'United States', count: 80 }],
+            asns: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((org, i) => ({
+              label: `AS${i + 1} ${org}`,
+              count: i < 5 ? 12 : 10,
+            })),
+            protocols: [],
+          })
+        )
+      )
+    );
+    render(<HostingBar />);
+    const bar = await screen.findByRole('img', { name: 'Verified nodes by hosting network' });
+    const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
+    expect(words).toHaveLength(6);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
   });
 
@@ -193,6 +241,8 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
       totalCompensationPaid: '100000000',
       unclaimedCompensation: '200000000',
       burnt: '300000000',
+      // the whole, the route's: 1 + 3 + 3 CKB (lane exactness, part A, A5 ii)
+      secondaryIssuance: '700000000',
       tipSecondaryPool: '500000000',
       totalDeposited: '50000000000',
       totalDepositedCkb: '500',

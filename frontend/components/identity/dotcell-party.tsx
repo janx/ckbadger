@@ -20,7 +20,6 @@ export interface PartyDisplay {
   hashPrefix: string | null;
   lockHash: string | null;
   address: string | null;
-  scriptName?: string | null;
 }
 
 interface DotCellPartyProps {
@@ -41,7 +40,6 @@ export function DotCellParty({ party, size, testId, className }: DotCellPartyPro
       className={cn('inline-flex min-w-0 flex-wrap items-center gap-2', className)}
     >
       <PartyIdentity party={party} size={size} />
-      {party.scriptName && <Badge variant="gray">{party.scriptName}</Badge>}
     </span>
   );
 }
@@ -50,9 +48,9 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
   // An address is the most specific thing the lock resolves to.
   if (party.address) {
     return size ? (
-      <Address address={party.address} size={size} />
+      <Address look="inline" address={party.address} size={size} />
     ) : (
-      <Address address={party.address} truncate={false} />
+      <Address look="inline" address={party.address} truncate={false} />
     );
   }
 
@@ -60,7 +58,9 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
   // to no address (an unencodable lock).
   if (party.lockHash) {
     return (
-      <Link href={`/address/${party.lockHash}`} className="hover:underline">
+      // the lock hash is the link to its address, not a copy target (lane c2-finish, rulings
+      // round 1): a block look, the hex drawing its own inks
+      <Link href={`/address/${party.lockHash}`} look="block">
         {size ? (
           <HexDisplay value={party.lockHash} size={size} textSize="sm" />
         ) : (
@@ -83,5 +83,5 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
     );
   }
 
-  return <span className="text-text-dim text-body font-mono">Unavailable</span>;
+  return <span className="text-text text-body font-mono">Unavailable</span>;
 }

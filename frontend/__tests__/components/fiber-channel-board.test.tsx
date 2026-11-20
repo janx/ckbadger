@@ -10,6 +10,7 @@ import producerDetail from '../fixtures/fiber-open-detail.json';
 import producerEvidence from '../fixtures/fiber-evidence-open.json';
 import c07e from '../fixtures/fiber-channel-c07e.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
 
 vi.mock('@/components/fiber/fiber-channel-step', () => ({
   FiberChannelStep: (props: {
@@ -113,14 +114,29 @@ describe('FiberChannelBoard', () => {
       'text-entity'
     );
     expect(within(hero).getByText('force-closed · settled')).toBeInTheDocument();
-    expect(within(hero).getByText(channel.channelId)).toHaveClass('w-fit', 'max-w-full');
+    // Re-pinned on purpose (lane P4, review fiber-channel: "the full channel id at 11 px dim under
+    // the title"): an id is a value, so the id line reads in the reading ink at the small step, set
+    // in the head's designed lines (HeadId: one line where it fits, else the two halves, 0x and 32
+    // digits over 32), with the head's copy after it. It was a quiet paragraph broken anywhere on
+    // the measure (w-fit, max-w-measure, text-text-dim).
+    const idLine = within(hero).getByTestId('channel-id');
+    expect(idLine).toHaveClass('text-small', 'text-text');
+    expect(idLine).not.toHaveClass('text-text-dim');
+    expect(idLine.querySelector('[data-head-id]')).toHaveAttribute('title', channel.channelId);
+    expect(idLine).toHaveTextContent(channel.channelId);
+    expect(within(idLine).getByRole('button', { name: 'copy channel id' })).toBeInTheDocument();
     expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(
       'Force-closed 8d 3h after it opened; settled after 6 epochs.'
     );
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
-    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
+    // one line of the measure with room to spare, as the DAO page's lede: at most 67 characters,
+    // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
+    // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run
     // (readability R5, re-pinned on purpose: was "1,062.00000000", its decimals a hero-sized dim
@@ -152,9 +168,16 @@ describe('FiberChannelBoard', () => {
     // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
     expect(summary.closest('[data-prose]')).toHaveClass('prose-tier2');
     expect(summary).not.toHaveClass('text-body', 'text-text-dim');
+    // Re-pinned on purpose (lane P4, readability R5: a sentence takes the summary form, its exact
+    // value in its title; it was "1,000.00000569" and "62.00000351", the column form in prose)
     expect(summary).toHaveTextContent(
-      'ckb1…7sppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1…rc5eyy6y 62.00000351 CKB.'
+      'ckb1…7sppedrr put 1,000 CKB net into the opening transaction and ckb1…rc5eyy6y 62 CKB.'
     );
+    expect(
+      Array.from(summary.querySelectorAll('[data-ckb-amount]')).map((el) =>
+        el.getAttribute('title')
+      )
+    ).toEqual(['1,000.00000569 CKB', '62.00000351 CKB']);
     expect(summary).toHaveTextContent(
       '8d 3h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
     );
@@ -209,11 +232,16 @@ describe('FiberChannelBoard', () => {
     const section = screen.getByRole('heading', { name: 'What moved inside the channel' })
       .parentElement!.parentElement!;
     const caption = section.querySelector('p[data-role="caption"]')!;
+    // re-pinned with the measure (lane B7, the fix round): one line of 74 characters (it said "at
+    // the open and at the close", 77, and wrapped)
     expect(caption).toHaveTextContent(
-      'The chain sees no Fiber payment, only the split at the open and at the close.'
+      'The chain sees no Fiber payment, only the split at the open and the close.'
     );
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(close.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -222,8 +250,10 @@ describe('FiberChannelBoard', () => {
     expect(screen.getByTestId('step-1')).toHaveAttribute('data-epoch', '11590+1185/1305');
     expect(screen.getByTestId('step-2')).toHaveAttribute('data-epoch', '11639+836/1434');
     expect(screen.getByTestId('step-3')).toHaveAttribute('data-epoch', '11645+1005/1710');
-    expect(screen.getByTestId('step-3')).toHaveTextContent('ppedrr received 899.99998733 CKB net');
-    expect(screen.getByTestId('step-3')).toHaveTextContent('5eyy6y received 161.99999545 CKB net');
+    // Re-pinned on purpose (lane P4, readability R5: a step's box line is a sentence, the summary
+    // form with the exact value in its title; it was the column form, "899.99998733")
+    expect(screen.getByTestId('step-3')).toHaveTextContent('ppedrr received 899.99 CKB net');
+    expect(screen.getByTestId('step-3')).toHaveTextContent('5eyy6y received 161.99 CKB net');
   });
 
   it('times the wait in tier 2 from the stages’ epochs and says where each fee came from (FF-C5)', () => {
@@ -367,9 +397,12 @@ describe('FiberChannelBoard', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the producer’s open channel: one step, still open, opening flows in tier 2', () => {
+  // Re-pinned on purpose (lane P4, the plan's P4 sentence: per-party in, back and net in tier 1;
+  // renamed, it said "opening flows in tier 2"): the opening transaction's flows stand in tier 1, in
+  // the exact form of the page of the thing itself (they were the column form, "1,000.00000000")
+  it('renders the producer’s open channel: one step, still open, opening flows in tier 1', () => {
     expect(producerDetail.channelId).toBe(producerEvidence.channelId);
-    render(
+    const { container } = render(
       <FiberChannelBoard
         channel={producerDetail as FiberChannelDetail}
         evidence={producerEvidence as FiberChannelEvidence}
@@ -385,19 +418,170 @@ describe('FiberChannelBoard', () => {
     const amounts = Array.from(document.querySelectorAll('[data-ckb-amount]')).map(
       (el) => el.textContent
     );
-    expect(amounts).toEqual(
-      expect.arrayContaining(['1,000.00000000 CKB', '699.00000000 CKB', '+301.00000000 CKB'])
-    );
+    expect(amounts).toEqual(expect.arrayContaining(['1,000 CKB', '699 CKB', '+301 CKB']));
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(
+      within(tier1).getByRole('heading', { name: 'Opening transaction, per party' })
+    ).toBeInTheDocument();
     expect(screen.getByText(/output-only lock did not necessarily sign/)).toBeInTheDocument();
     expect(screen.getByText(/not a proven channel balance or payment/)).toBeInTheDocument();
     // Responsive fix plan 2026-11-01 (A3, report C#20): "net" never breaks from its value.
     const flow = screen.getByText((_, el) => el?.getAttribute('data-flow') === 'net');
-    expect(flow).toHaveTextContent(/^net \+301\.00000000 CKB$/);
+    expect(tier1).toContainElement(flow);
+    expect(flow).toHaveTextContent(/^net \+301 CKB$/);
     expect(flow).toHaveClass('whitespace-nowrap');
     for (const kind of ['in', 'back'])
       expect(screen.getByText((_, el) => el?.getAttribute('data-flow') === kind)).toHaveClass(
         'whitespace-nowrap'
       );
+  });
+
+  // The readability plan's P4 sentence: "the Fiber channel page states what moved in a sentence
+  // and shows per-party in, back and net in tier 1" (review fiber-channel: two near-identical bars
+  // of eight-decimal figures left the reader to work out what changed sides). The sentence is the
+  // stages' own party flows (the API's figures: what each put in at the open and got back at the
+  // close), in the summary form with the exact value in each figure's title; nothing is added or
+  // subtracted in the page.
+  it('states what moved in one sentence over the two splits, from the stages’ party flows (P4)', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const moved = within(tier1).getByTestId('what-moved');
+    expect(moved).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and got back 899.99 CKB; ckb1…rc5eyy6y put in 62 CKB and got back 161.99 CKB.'
+    );
+    expect(
+      Array.from(moved.querySelectorAll('[data-ckb-amount]')).map((el) => el.getAttribute('title'))
+    ).toEqual(['1,000.00000569 CKB', '899.99998733 CKB', '62.00000351 CKB', '161.99999545 CKB']);
+    // a sentence that explains, in the reading ink, before the figure it reads
+    expect(moved).toHaveClass('text-text', 'text-body', 'max-w-measure');
+    const bar = container.querySelector('[data-split-bar]')!;
+    expect(moved.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // not a prose block of tier 1 (under 140 characters)
+    expect(moved.textContent!.length).toBeLessThan(140);
+  });
+
+  // lane exactness, part A2 (the pages review's NOTE 4): each party's figures as the chain shows them, a zero said in
+  // words, not only where both parties have one (a single-funded channel stated nothing, and a
+  // close that paid one side read as if nothing were known of it)
+  const withFlows = (stage: string, amounts: readonly [string, string]) => ({
+    ...evidence,
+    stages: evidence.stages.map((s) =>
+      s.stage === stage
+        ? {
+            ...s,
+            partyFlows: s.partyFlows.map((flow, i) => ({ ...flow, netReceived: amounts[i] })),
+          }
+        : s
+    ),
+  });
+  it('says what a single-funded channel’s parties put in, a party with nothing in words', () => {
+    render(
+      <FiberChannelBoard
+        channel={{
+          ...channel,
+          state: 'forceClosed',
+          settlementTxHash: null,
+          settlementBlock: null,
+          settlementTimestamp: null,
+        }}
+        evidence={{
+          ...withFlows('opening', ['-100000000569', '0']),
+          stages: withFlows('opening', ['-100000000569', '0']).stages.filter(
+            (s) => s.stage !== 'settlement'
+          ),
+        }}
+      />
+    );
+    expect(screen.getByTestId('what-moved')).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and ckb1…rc5eyy6y nothing; nothing has been paid out yet.'
+    );
+    // a split of one side is no split: no bar is drawn
+    expect(document.querySelector('[data-split-bar]')).toBeNull();
+  });
+  it('says a close that paid everything to one side, the other side’s nothing in words', () => {
+    render(
+      <FiberChannelBoard
+        channel={channel}
+        evidence={withFlows('settlement', ['106199998278', '0'])}
+      />
+    );
+    expect(screen.getByTestId('what-moved')).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and got back 1,061 CKB; ckb1…rc5eyy6y put in 62 CKB and got back nothing.'
+    );
+  });
+  it('says what a waiting channel’s parties put in, and that nothing is paid out yet (P4)', () => {
+    render(
+      <FiberChannelBoard
+        channel={{
+          ...channel,
+          state: 'forceClosed',
+          settlementTxHash: null,
+          settlementBlock: null,
+          settlementTimestamp: null,
+        }}
+        evidence={{ ...evidence, stages: evidence.stages.filter((s) => s.stage !== 'settlement') }}
+      />
+    );
+    expect(screen.getByTestId('what-moved')).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and ckb1…rc5eyy6y 62 CKB; nothing has been paid out yet.'
+    );
+  });
+
+  it('shows each party’s in, back and net of the opening transaction in tier 1 (P4)', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const section = within(tier1).getByRole('heading', { name: 'Opening transaction, per party' })
+      .parentElement!.parentElement!;
+    const flows = (kind: string) =>
+      Array.from(section.querySelectorAll(`[data-flow="${kind}"]`)).map((el) => el.textContent);
+    // the API's openingPartyFlows, exact: the page of the thing itself
+    expect(flows('in')).toEqual(['in 1,500 CKB', 'in 1,500 CKB']);
+    expect(flows('back')).toEqual(['back 499.99999431 CKB', 'back 1,437.99999649 CKB']);
+    expect(flows('net')).toEqual(['net +1,000.00000569 CKB', 'net +62.00000351 CKB']);
+    // each party is the row's key, out of the quiet ink
+    const parties = within(section).getAllByRole('link', { name: /^ckb1…/ });
+    expect(parties).toHaveLength(2);
+    for (const link of parties) expect(link.closest('.text-text-dim')).toBeNull();
+    // its caveat in one line under it; the whole caveat is tier 2's
+    const caption = section.querySelector('p[data-role="caption"]')!;
+    expect(caption).toHaveTextContent(
+      'Net input includes the fee and any unrelated outputs: not a proven balance.'
+    );
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).toHaveTextContent(/An output-only lock did not necessarily sign it/);
+  });
+
+  it('keeps the timeline in tier 1 and steps the transaction cards back to tier 2 (P4)', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(
+      within(tier1).getByRole('img', { name: /^Opened, force-closed 8d 3h later/ })
+    ).toBeInTheDocument();
+    for (const n of [1, 2, 3]) expect(tier2).toContainElement(screen.getByTestId(`step-${n}`));
+    expect(
+      within(tier2).getByRole('heading', { name: 'Each step, as a transaction' })
+    ).toBeInTheDocument();
+  });
+
+  it('states a waiting channel’s live commitment in tier 1: the cell, what it holds, the wait (P4)', () => {
+    const { container } = render(
+      <FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={waitingEvidence} />
+    );
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const live = within(tier1).getByTestId('live-commitment');
+    // re-pinned for lane exactness, part A (A5 iv): how the CKB divides between the two is not on chain while the
+    // commitment is live (its lock holds only the settlement's 20-byte hash; the settlement's
+    // witness and outputs show the amounts when it spends the cell), so the page says what the
+    // chain holds (it said the cell holds "the last split both signed")
+    expect(live).toHaveTextContent(
+      'The live commitment 0x55555555…555555:1 holds 1,000 CKB. How it divides between the two is not on chain: the lock holds only a 20-byte hash of the split both last signed, and the settlement that spends this cell shows the amounts. The payout waits 1 epoch after the commitment.'
+    );
+    expect(within(live).getByRole('link', { name: /^0x55555555…555555:1$/ })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${waitingEvidence.currentCommitment!.txHash}-1`
+    );
   });
 
   it('shows a token-funded channel’s token amount beside its CKB capacity (FF-C7)', () => {

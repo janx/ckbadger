@@ -1,9 +1,12 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
@@ -11,7 +14,7 @@ vi.mock('@/lib/api', () => ({
 
 const tx = '0x' + 'a'.repeat(64);
 const party = (n: number, ckbDelta: string, usedDelta: string) => ({
-  address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfzyg3zyg3zyg3zyg3zyg3zyg3zygssparty${n}`,
+  address: seededAddress(`party${n}`),
   lockHash: '0x' + String(n).repeat(64),
   lockHashPrefix: null,
   lockKind: 'Default Lock',
@@ -22,7 +25,7 @@ const party = (n: number, ckbDelta: string, usedDelta: string) => ({
   tags: 16,
 });
 /** A withdrawal request as the board draws it: the request, the fee payer, and a zero-delta party. */
-const activity = {
+const activity = activityRead({
   txHash: tx,
   txIndex: 2,
   blockNumber: 123,
@@ -36,6 +39,15 @@ const activity = {
   ],
   typeCalls: [],
   lockCalls: [],
+  // the Nervos DAO's type script, the code a DAO step carries (the P3 follow-up's itemTypes)
+  itemTypes: [
+    {
+      typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
+      typeHashType: 'type',
+      scriptName: 'Nervos DAO',
+    },
+  ],
+  itemTypesUnread: null,
   protocolActions: [
     {
       protocol: 'dao',
@@ -44,23 +56,44 @@ const activity = {
       metadata: { capacity: '2605000000000', depositBlock: '19695550' },
     },
   ],
-};
-const three = Array.from({ length: 3 }, (_, i) => ({
-  ...activity,
-  txHash: '0x' + String(i + 1).repeat(64),
-  blockNumber: 123 - i,
-}));
+});
+// B4 (re-pinned): three requests by three depositors. Re-pinned on purpose (Gate B's rule, lists
+// lane P3): rows that did the same thing and called the same code fold whoever the parties are, so
+// three requests running are one run; the newest three here are a request, a deposit and a
+// request, which do not (the run is pinned below)
+const request = (i: number) =>
+  activityRead({
+    ...activity,
+    txHash: '0x' + String(i + 1).repeat(64),
+    blockNumber: 123 - i,
+    participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
+  });
+const deposit = (i: number) =>
+  activityRead({
+    ...request(i),
+    protocolActions: [
+      {
+        protocol: 'dao',
+        protocolName: 'Nervos DAO',
+        action: 'deposit',
+        metadata: { capacity: '2605000000000' },
+      },
+    ],
+  });
+const three = [request(0), deposit(1), request(2)];
 
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: three,
-      limit: 3,
-      total: null,
-      hasMore: true,
-      nextCursor: 'next',
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: three,
+        limit: 3,
+        total: null,
+        hasMore: true,
+        nextCursor: 'next',
+      }) as any
+    );
   });
 
   it('loads the three newest DAO activities under one heading, with no tabs, no pager and no note (R15)', async () => {
@@ -84,8 +117,10 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(note).toHaveAttribute('data-prompt-note');
     expect(heading).not.toContainElement(note);
     expect(Array.from(note.firstElementChild!.children).map((c) => c.textContent)).toEqual([
-      'All DAO activity →',
-      'DAO transactions →',
+      // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+      // its last word by a no-break space (it was typed into the words)
+      'All DAO activity\u00a0→',
+      'DAO transactions\u00a0→',
     ]);
     await waitFor(() => expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(3));
     // Tight rows: 10 px above and below each (the shared row keeps its 2 px between party lines).
@@ -99,27 +134,58 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(api.getTransactions).not.toHaveBeenCalled();
   });
 
+  it('folds three requests running into one run, whoever made them (Gate B)', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [request(0), request(1), request(2)],
+        limit: 3,
+        total: null,
+        hasMore: true,
+        nextCursor: 'next',
+      }) as any
+    );
+    render(<DaoSources />);
+    const section = screen.getByRole('region', { name: 'Recent DAO activity' });
+    await waitFor(() =>
+      expect(section.querySelector('[data-role="activity-run"]')).toHaveAttribute(
+        'data-run-count',
+        '3'
+      )
+    );
+    // three depositors, and the two parties every request shares; re-pinned on purpose (the
+    // lead's finding, the exactness lane's B9): the three newest, older DAO activity unread (the
+    // route has more), so the run's counts are so far (it said "all 3 … · 5 participants")
+    expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^3 transactions so far ↓ · 5 participants so far$/
+    );
+    expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
+  });
+
   it('links all DAO activity and DAO transactions on their list pages', () => {
     render(<DaoSources />);
     const section = screen.getByRole('region', { name: 'Recent DAO activity' });
-    expect(within(section).getByRole('link', { name: 'All DAO activity →' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(within(section).getByRole('link', { name: 'All DAO activity' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=dao'
     );
-    expect(within(section).getByRole('link', { name: 'DAO transactions →' })).toHaveAttribute(
+    expect(within(section).getByRole('link', { name: 'DAO transactions' })).toHaveAttribute(
       'href',
       '/mainnet/transactions?kind=dao'
     );
   });
 
   it('draws each row with the shared activity row, every participant shown (DAO-13)', async () => {
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [activity],
-      limit: 3,
-      total: null,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [activity],
+        limit: 3,
+        total: null,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
     render(<DaoSources />);
     const row = await screen.findByText(/withdraw request/i);
     const article = row.closest('article[data-feed-row]')!;
@@ -129,9 +195,13 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(article).toHaveTextContent('26,050');
     // ACTIVITY_DESIGN "Show All Layers": all three parties, the zero-delta one included.
     expect(article.querySelectorAll('[data-role="participant"]')).toHaveLength(3);
-    for (const n of [1, 2, 3]) expect(article).toHaveTextContent(`party${n}`);
-    // The lock kind sits in its own column (one line per party), as on the activities page.
-    expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(3);
+    // B4 (re-pinned): real addresses, each written `ckb1…` and its last 8 characters (R9)
+    for (const p of activity.participants)
+      expect(article).toHaveTextContent(`ckb1…${p.address.slice(-8)}`);
+    // The lock kind sits in its own place on each party's line, as on the activities page; on the
+    // default lock it is not written at all (B4, re-pinned: it was "Default Lock" three times).
+    expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(0);
+    expect(article).not.toHaveTextContent('Default Lock');
     // R11: no gold text in a DAO row; the vault ring is the graphic that carries the colour.
     const gold = Array.from(article.querySelectorAll('[class]')).filter((el) =>
       /(^|\s)text-gold/.test(el.getAttribute('class')!)

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { formatSpan } from '@/lib/format-age';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
 import { NetworkShareHistory, NetworkTrendNotes, NetworkTrends } from '@/app/network/trends';
@@ -21,13 +22,14 @@ import { Prose } from '@/components/ui/prose';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText } from '@/components/ui/utc8-date';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import Link from '@/components/ui/link';
 
 const PAGE_TITLE = 'Where the nodes are';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto py-4">{children}</main>
+      <main className="container mx-auto pb-4 pt-8">{children}</main>
     </div>
   );
 }
@@ -48,7 +50,7 @@ function LoadingSkeleton() {
 function ReachabilityCaveat({ className }: { className?: string }) {
   return (
     <div className={`border-base-border bg-base-surface border px-4 py-3 ${className ?? ''}`}>
-      <p className="text-text-dim text-body font-mono">
+      <p className="text-text text-body max-w-measure font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
@@ -68,7 +70,7 @@ function PeersOnboarding({
     <div className="space-y-4">
       {enabled && (
         <div className="border-info/30 bg-info/10 border px-4 py-3">
-          <p className="text-info text-body font-mono">
+          <p className="text-info text-body max-w-measure font-mono">
             {activeRound?.blockedReason
               ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
               : activeRound
@@ -85,7 +87,7 @@ function PeersOnboarding({
           args={enabled ? 'enabled' : 'disabled'}
           className="mb-2 font-mono"
         />
-        <p className="text-text-dim text-body mb-4 leading-relaxed">
+        <p className="text-text text-body max-w-measure mb-4 leading-relaxed">
           The peer crawler performs whole-network CKB L1 node discovery: starting from bootnodes it
           dials outward across the p2p network and records each same-network peer this observer
           verifies. It is <span className="text-text">local-first</span> — you run the crawl, and
@@ -95,7 +97,7 @@ function PeersOnboarding({
         <ReachabilityCaveat className="mb-4" />
 
         <h3 className="text-text-bright text-body mb-2 font-mono font-bold">How to enable</h3>
-        <p className="text-text-dim text-body mb-2">
+        <p className="text-text text-body max-w-measure mb-2">
           Set the crawler to enabled in{' '}
           <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
@@ -106,7 +108,7 @@ enabled = true
 # geoip_city_path = "/path/to/GeoLite2-City.mmdb"
 # geoip_asn_path  = "/path/to/GeoLite2-ASN.mmdb"`}
         </pre>
-        <p className="text-text-dim text-small mt-3 leading-relaxed">
+        <p className="text-text text-body max-w-measure mt-3 leading-relaxed">
           Note: enabling performs outbound whole-network crawling from your host. Geo / ASN columns
           stay empty unless the optional MaxMind GeoLite2 databases are configured.
         </p>
@@ -137,7 +139,9 @@ function MaxMindAttribution() {
   if (!data || !hasGeoData(data.countries)) return null;
 
   return (
-    <p className="text-text-dim border-base-border/60 text-meta mt-8 border-t pt-3 font-mono">
+    // the data's source, a statement: the reading ink at 13 px (lane cd-fixes-controls, the ink and
+    // size round: it was quiet at 12 px)
+    <p className="text-text border-base-border/60 text-small mt-8 border-t pt-3 font-mono">
       Geo/ASN data © MaxMind (GeoLite2)
     </p>
   );
@@ -161,8 +165,10 @@ function Metric({ label, children, note }: { label: string; children: ReactNode;
  * no alarm red, because "not reachable now" is not "gone" (CH-53). Reachable now is the hero's figure.
  */
 function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
-  const minutes = Math.round((lastRound.finishedAt - lastRound.startedAt) / 60);
-  if (!(minutes >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
+  // the round's seconds in the site's one span form, cut (lane exactness, part A, A8: it was its
+  // minutes rounded, so a round of 869 s read 14 and one of 870 s read 15)
+  const seconds = lastRound.finishedAt - lastRound.startedAt;
+  if (!(seconds >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
   return (
     <dl
       role="group"
@@ -170,17 +176,17 @@ function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
       className="mt-7 grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3"
     >
       <Metric label="Verified before, not now">
-        {lastRound.verifiedUnavailablePeers.toLocaleString()}
+        {lastRound.verifiedUnavailablePeers.toLocaleString('en-US')}
       </Metric>
       <Metric
         label="Heard of"
-        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString()} never verified`}
+        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString('en-US')} never verified`}
       >
-        {lastRound.candidatePeers.toLocaleString()}
+        {lastRound.candidatePeers.toLocaleString('en-US')}
       </Metric>
       <Metric
         label="Latest round"
-        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString()} dials`}
+        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${formatSpan(seconds)} · ${lastRound.addressAttempts.toLocaleString('en-US')} dials`}
       >
         #{lastRound.roundId}
       </Metric>
@@ -196,11 +202,12 @@ function NetworkHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 function NetworkLede() {
   return (
-    <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
+    <p data-role="lede" className="text-text text-body max-w-measure mt-1.5">
       Nodes find each other by word of mouth; unreachable is not gone.{' '}
-      <a href="#evidence" className="hover:text-text-bright hover:underline">
-        How it works<span className="whitespace-nowrap"> ↓</span>
-      </a>
+      {/* the way down to tier 2: its look's arrow, "↓" to a place on this page, is the link's */}
+      <Link href="#evidence" look="onward">
+        How it works
+      </Link>
     </p>
   );
 }
@@ -232,7 +239,8 @@ function Hero({
       <section aria-label={PAGE_TITLE} className="min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
           <NetworkHeading />
-          <p className="text-text-dim text-small">
+          {/* the round, its age and a round in progress are values: the reading ink */}
+          <p className="text-text text-small max-w-measure">
             Round #{lastRound.roundId} · updated {updatedAgo}
             {activeRound &&
               (activeRound.blockedReason
@@ -247,12 +255,16 @@ function Hero({
           </p>
         )}
         {activeRound?.blockedReason && (
-          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
-            Active crawler round blocked: {activeRound.blockedReason}
-          </p>
+          // the banner's frame spans the column; its sentence stands on the measure (R4)
+          <div className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
+            <p className="max-w-measure">
+              Active crawler round blocked: {activeRound.blockedReason}
+            </p>
+          </div>
         )}
         <div data-role="figure" className="mt-9 min-w-0">
-          <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
+          {/* the figure's label: the eyebrow every topic hero gives its figure (lane D2, U-11) */}
+          <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">Reachable now</div>
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
             {/* The display line box (40 px) holds the figure and its scale as one line. */}
             <span className="text-index sm:text-display whitespace-nowrap">
@@ -260,12 +272,12 @@ function Hero({
                 data-role="reachable"
                 className="text-jade text-index sm:text-display tabular-nums"
               >
-                {lastRound.reachablePeers.toLocaleString()}
+                {lastRound.reachablePeers.toLocaleString('en-US')}
               </span>
               {/* Its scale, dim, as the DAO figure's fraction: of the verified nodes retained. */}
               <span data-role="reachable-of" className="text-hero text-text-dim tabular-nums">
                 {' '}
-                of {lastRound.verifiedRetainedPeers.toLocaleString()}
+                of {lastRound.verifiedRetainedPeers.toLocaleString('en-US')}
               </span>
             </span>
             <span className="text-text-dim text-body">answered as CKB {network} nodes</span>
@@ -339,12 +351,14 @@ function PeersDashboard({
           <div className="flex min-w-0 flex-col gap-8">
             <HowTheCrawlerSees />
             <DetailSection title="Crawler round evidence">
-              <p className="text-text-dim text-small leading-relaxed">
-                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
-                attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
-                observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates
-                · {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
-                {lastRound.newVerifiedPeers.toLocaleString()} newly verified
+              {/* the round's counts are values, in the reading ink */}
+              <p className="text-text text-small max-w-measure leading-relaxed">
+                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString('en-US')}{' '}
+                address attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString('en-US')}{' '}
+                non-successful observations ·{' '}
+                {lastRound.exhaustedCandidates.toLocaleString('en-US')} exhausted candidates ·{' '}
+                {lastRound.foreignPeers.toLocaleString('en-US')} foreign peers ·{' '}
+                {lastRound.newVerifiedPeers.toLocaleString('en-US')} newly verified
               </p>
               <ReachabilityCaveat className="mt-3" />
             </DetailSection>
@@ -386,7 +400,7 @@ export function NetworkClientPage() {
   if (error) {
     content = (
       <DetailLayout title={PAGE_TITLE} kind="topic">
-        <p role="alert" className="text-negative">
+        <p role="alert" className="text-negative max-w-measure">
           Crawler summary unavailable: {String(error)}
         </p>
       </DetailLayout>

@@ -4,8 +4,17 @@
  * giver, mint and burn terminals; the fold beyond six parties; ribbon weights.
  */
 import { describe, expect, it } from 'vitest';
-import { flowKey, foldEnds, ribbonWeight, txFlows, type FlowEnd } from '@/lib/tx-flows';
+import {
+  daoStepsOf,
+  flowKey,
+  foldEnds,
+  onlyFeeMoved,
+  ribbonWeight,
+  txFlows,
+  type FlowEnd,
+} from '@/lib/tx-flows';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 
 const HASH = `0x${'91'.repeat(32)}`;
 const ICKB = `0x${'1c'.repeat(32)}`;
@@ -35,8 +44,12 @@ const token = (delta: string): ItemDelta => ({
   symbol: 'iCKB',
   decimals: 8,
 });
-const activity = (participants: ParticipantInfo[]): Pick<GlobalActivity, 'participants'> => ({
+// re-pinned (lane P1, third round): an activity with no protocol step, as onlyFeeMoved reads it
+const activity = (
+  participants: ParticipantInfo[]
+): Pick<GlobalActivity, 'participants' | 'protocolActions'> => ({
   participants,
+  protocolActions: [],
 });
 const amounts = (ends: readonly FlowEnd[]) =>
   ends.map((e) => [e.t, e.t === 'party' ? e.party.address!.slice(-6) : e.t, e.amount.toString()]);
@@ -201,6 +214,106 @@ describe('txFlows', () => {
     ).toThrow(`${HASH}: participant ckbDelta "1.5"`);
   });
 
+  // Lane P1 (the plan's P1 paragraph: the summary states the amount from the totals the figure's
+  // flows already carry): what reached the receiving parties and what left the giving parties, each
+  // a flow's party ends alone — the miner's fee, a burn, a mint and Nervos DAO compensation are
+  // terminals, not parties.
+  it('counts what reached the receiving parties and what left the giving parties', () => {
+    const swap = txFlows({
+      hash: HASH,
+      activity: activity([
+        party('rvxmvg', '-3070091791503', [token('2544240236569')]),
+        party('0q3akl', '3070091760805', [token('-2544240236569')], 'UDT Limit Order'),
+      ]),
+      fee: '30698',
+      compensation: null,
+    });
+    // CKB: 0q3akl received 3,070,091,760,805 shannons; the miner's 30,698 are not a party's
+    expect([swap[1].sent, swap[1].received]).toEqual([
+      BigInt('3070091791503'),
+      BigInt('3070091760805'),
+    ]);
+    expect([swap[0].sent, swap[0].received]).toEqual([
+      BigInt('2544240236569'),
+      BigInt('2544240236569'),
+    ]);
+    const burn = txFlows({
+      hash: HASH,
+      activity: activity([party('aaaaaa', '-5', [token('-700')])]),
+      fee: '5',
+      compensation: null,
+    });
+    expect([burn[0].sent, burn[0].received]).toEqual([BigInt(700), BigInt(0)]);
+    const mint = txFlows({
+      hash: HASH,
+      activity: activity([
+        party('aaaaaa', '-5', [token('-100')]),
+        party('bbbbbb', '0', [token('900')]),
+      ]),
+      fee: '5',
+      compensation: null,
+    });
+    expect([mint[0].sent, mint[0].received]).toEqual([BigInt(100), BigInt(900)]);
+    const dao = txFlows({
+      hash: HASH,
+      activity: activity([party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')]),
+      fee: '936',
+      compensation: BigInt('17530634165'),
+    });
+    expect([dao[0].sent, dao[0].received]).toEqual([
+      BigInt('2605000000000'),
+      BigInt('2622530633229'),
+    ]);
+  });
+
+  // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"): its flows are
+  // the CKB flow alone, from parties to the miner and to no party, with no compensation entering.
+  // Re-pinned on purpose (lane P1, third round; review p-logic-chain MUST 2): the one decision reads
+  // the activity's protocol steps too, so it takes the activity beside its flows
+  it('tells a transaction that moved only its fee', () => {
+    const only = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) => {
+      const a = activity(participants);
+      return onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee, compensation }));
+    };
+    expect(only([party('aaaaaa', '-64119')], '64119', null)).toBe(true);
+    expect(only([party('aaaaaa', '-60000'), party('bbbbbb', '-4119')], '64119', null)).toBe(true);
+    // a party received CKB
+    expect(only([party('aaaaaa', '-100'), party('bbbbbb', '90')], '10', null)).toBe(false);
+    // an item moved
+    expect(
+      only(
+        [party('aaaaaa', '-5', [token('-700')]), party('bbbbbb', '0', [token('700')])],
+        '5',
+        null
+      )
+    ).toBe(false);
+    // compensation entered
+    expect(
+      only(
+        [party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')],
+        '936',
+        BigInt('17530634165')
+      )
+    ).toBe(false);
+    // nothing moved at all: no fee either, so not "only the fee"
+    expect(only([party('aaaaaa', '0')], '0', null)).toBe(false);
+  });
+
+  // Lane P1, third round (review p-logic-chain MUST 2): a Nervos DAO deposit or withdrawal request
+  // from the owner's own address leaves its one party −fee and no item, and it took a step: a
+  // transaction that takes a protocol step did not move only its fee.
+  it('does not call a protocol step "only the fee"', () => {
+    for (const action of ['deposit', 'withdraw_request']) {
+      const a = {
+        ...activity([{ ...party('aaaaaa', '-1000'), tags: 8 }]),
+        protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata: {} }],
+      };
+      expect(
+        onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee: '1000', compensation: null }))
+      ).toBe(false);
+    }
+  });
+
   it('keys objects and identities by what they are', () => {
     expect(flowKey({ kind: 'object', objectId: '0xo1', delta: 1 })).toBe('object:0xo1');
     expect(flowKey({ kind: 'identity', standard: 'dotbit', identityId: 'a.bit', delta: -1 })).toBe(
@@ -270,5 +383,100 @@ describe('ribbonWeight', () => {
     expect(ribbonWeight(BigInt(0), BigInt(5))).toBe(2);
     expect(() => ribbonWeight(BigInt(1), BigInt(0))).toThrow('total 0');
     expect(() => ribbonWeight(BigInt(3), BigInt(2))).toThrow('not within');
+  });
+});
+
+// Lane P1 follow-up (review chain-b tx-dao-deposit): a party's Nervos DAO step, from the activity's
+// own kind: its DAO tag and the transaction's DAO actions, each named once.
+// Re-pinned on purpose (lane P1, third round; review p-logic-chain SHOULD 2): the activity's
+// parties ride along, since whose step a step is depends on how many the activity tags DAO.
+// Re-pinned on purpose (lane P1, the lead's look after the third round; renamed, it was daoStepOf,
+// one string): a step is its words and its own amount, the action's capacity, where the activity
+// says it is the party's one step of the kind, so the figure says the step's amount apart from
+// what flowed (a self-deposit's end read "0.00001124 CKB · Nervos DAO deposit", the fee beside it).
+describe('daoStepsOf', () => {
+  // lane exactness, part B6: each DAO action names the owner of the cell that took it (metadata.lockHash, the
+  // indexer's, sent without 0x); a party's steps are the actions it owns, each with its own amount
+  const A = '0x' + 'a1'.repeat(32);
+  const B = '0x' + 'b2'.repeat(32);
+  const META: Record<string, Record<string, string>> = {
+    deposit: { capacity: '5000000000000' },
+    withdraw_request: { capacity: '2605000000000', depositBlock: '19695550' },
+    withdraw_complete: { capacity: '2605000000000', compensation: '17530634165' },
+    merge: {},
+  };
+  const step = (action: string, owner: string) => ({
+    protocol: 'dao',
+    protocolName: 'Nervos DAO',
+    action,
+    metadata: { ...META[action], lockHash: owner.slice(2) },
+  });
+  const tx = (...steps: ReturnType<typeof step>[]) => ({
+    txHash: '0xdao',
+    participants: [{ lockHash: A }, { lockHash: B }],
+    protocolActions: steps,
+  });
+  it('names the steps a party owns, each with its own amount', () => {
+    expect(daoStepsOf(tx(step('deposit', A)), { lockHash: A })).toEqual([
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
+    ]);
+    expect(daoStepsOf(tx(step('deposit', A)), { lockHash: B })).toBeNull();
+    expect(daoStepsOf(tx(), { lockHash: A })).toBeNull();
+    expect(
+      daoStepsOf(tx(step('withdraw_complete', A), step('deposit', A)), { lockHash: A })
+    ).toEqual([
+      { words: 'Nervos DAO withdrawal', capacity: BigInt('2605000000000') },
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
+    ]);
+    // several steps of a kind: their count, and no total (the API states none, the page sums none)
+    expect(daoStepsOf(tx(step('deposit', A), step('deposit', A)), { lockHash: A })).toEqual([
+      { words: '2 Nervos DAO deposits', capacity: null },
+    ]);
+  });
+  // the mixed transaction (red before part B6: each party read "a Nervos DAO step")
+  it('gives each party its own step in a transaction where one deposits and another withdraws', () => {
+    const mixed = tx(step('deposit', A), step('withdraw_complete', B));
+    expect(daoStepsOf(mixed, { lockHash: A })).toEqual([
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
+    ]);
+    expect(daoStepsOf(mixed, { lockHash: B })).toEqual([
+      { words: 'Nervos DAO withdrawal', capacity: BigInt('2605000000000') },
+    ]);
+  });
+  it('reads the owner on the live feed: a withdrawal by the second of two parties', () => {
+    const row = live.feeds.dao.find((r) => r.txHash.startsWith('0x86bae6863c29'))!;
+    const [first, second] = row.participants;
+    expect(daoStepsOf(row as never, first)).toBeNull();
+    expect(daoStepsOf(row as never, second)).toEqual([
+      {
+        words: 'Nervos DAO withdrawal',
+        capacity: BigInt(row.protocolActions.find((a) => a.protocol === 'dao')!.metadata.capacity!),
+      },
+    ]);
+  });
+  it('refuses a step whose owner is missing, malformed or no participant, naming the transaction', () => {
+    const stranger = '0x' + 'cc'.repeat(32);
+    expect(() => daoStepsOf(tx(step('deposit', stranger)), { lockHash: A })).toThrow(
+      `0xdao: a Nervos DAO deposit names the owner ${stranger}, no participant of the transaction`
+    );
+    const ownerless = {
+      ...tx(),
+      protocolActions: [{ ...step('deposit', A), metadata: META.deposit }],
+    };
+    expect(() => daoStepsOf(ownerless, { lockHash: A })).toThrow(
+      '0xdao: a Nervos DAO deposit names no owner'
+    );
+    const malformed = {
+      ...tx(),
+      protocolActions: [{ ...step('deposit', A), metadata: { ...META.deposit, lockHash: '24' } }],
+    };
+    expect(() => daoStepsOf(malformed, { lockHash: A })).toThrow(
+      'dao:deposit metadata.lockHash "24" is not a lock hash'
+    );
+  });
+  it('refuses a DAO step it has no words for', () => {
+    expect(() => daoStepsOf(tx(step('merge', A)), { lockHash: A })).toThrow(
+      '0xdao: a Nervos DAO step "merge"'
+    );
   });
 });

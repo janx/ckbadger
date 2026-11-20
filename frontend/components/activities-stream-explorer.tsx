@@ -1,16 +1,14 @@
 'use client';
 
+import { RetryAction } from '@/components/ui/retry-action';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
-import { ActivityRow } from '@/components/activity/activity-row';
-import { ClassMark } from '@/components/ui/class-mark';
-import {
-  CLASS_COLORS,
-  cssVars,
-  DATA_COLOR,
-  STREAM_COLORS,
-  type AssetClass,
-} from '@/lib/design-tokens';
-import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
+import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
+import { cssVars, STREAM_COLORS } from '@/lib/design-tokens';
+import { KIND_FILTER_LABEL, kindColor, kindFilterValues, kindWords } from '@/lib/kind-filter';
+import { activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -33,30 +31,28 @@ const POLL_INTERVAL_MS = 10_000;
 const NEAR_TOP_THRESHOLD_PX = 120;
 const ROW_HIGHLIGHT_DURATION_MS = 2_000;
 
-/** The Activities board's chips, in its order and words (TX-30), shared with Transactions. */
-const FILTER_OPTIONS: Array<{
-  label: string;
-  value: GlobalActivityFilter;
-  swatch?: string;
-  mark?: AssetClass;
-}> = [
-  { label: 'All', value: 'all' },
-  { label: 'CKB transfers', value: 'ckb', swatch: DATA_COLOR },
-  { label: 'Script calls', value: 'script', swatch: CLASS_COLORS.ckb },
-  { label: 'Nervos DAO', value: 'dao', mark: 'dao' },
-  { label: 'Tokens', value: 'token', mark: 'tokens' },
-  { label: 'Objects', value: 'object', mark: 'objects' },
-  { label: 'Identities', value: 'identity', mark: 'identities' },
-  { label: 'Protocols', value: 'protocol' },
+/**
+ * The Activities board's kinds, in its order (TX-30): the kind filter's values (lib/kind-filter.ts,
+ * the words and marks the transactions list's filter shares, PA-15).
+ */
+const ACTIVITY_KINDS: readonly GlobalActivityFilter[] = [
+  'all',
+  'ckb',
+  'script',
+  'dao',
+  'token',
+  'object',
+  'identity',
+  'protocol',
 ];
 
 /**
  * The filter a URL names (`/activities?filter=dao`, the DAO page's "All DAO activity →"): a known
- * chip value, else All (hierarchy D11).
+ * kind, else All (hierarchy D11).
  */
 function filterFromUrl(raw: string | null): GlobalActivityFilter {
-  const known = FILTER_OPTIONS.find((option) => option.value === raw);
-  return known ? known.value : 'all';
+  const known = ACTIVITY_KINDS.find((kind) => kind === raw);
+  return known ?? 'all';
 }
 
 const STREAM_KEYFRAMES = `
@@ -138,6 +134,57 @@ function getActivityDayLabel(timestamp: string, now: number): string {
   }).format(new Date(`${day}T00:00:00Z`));
 }
 
+/**
+ * The stream's rows by day, in order: consecutive rows of one UTC+8 date are one group under one
+ * divider. A group is keyed by the rows it was first drawn with (lane B4 fix rounds): a row keeps
+ * the key of the group it was first drawn in (`anchors`, the stream remembers them), and a group
+ * takes the key of the first of its rows that has one; a group none of whose rows was drawn yet is
+ * keyed by its date and its first row. Its label ("Today", "Yesterday", "Nov 13") is the
+ * reader's, relative to `now`, and is no part of its key. So a row arriving at the top, an older
+ * page at the bottom, the turn of the day, and a new row whose date already stands lower (a
+ * block's time may be earlier than its parent's, so near midnight a day can come again after the
+ * next) leave every drawn group's key as it was, and no group is remounted under the reader.
+ */
+export function dayGroups(
+  items: readonly GlobalActivity[],
+  now: number,
+  anchors: ReadonlyMap<string, string>
+): { key: string; label: string; items: GlobalActivity[] }[] {
+  const groups: { date: string; label: string; items: GlobalActivity[] }[] = [];
+  for (const activity of items) {
+    const date = formatUtc8Date(toActivityDate(activity.timestamp).getTime());
+    const last = groups[groups.length - 1];
+    if (last && last.date === date) last.items.push(activity);
+    else
+      groups.push({ date, label: getActivityDayLabel(activity.timestamp, now), items: [activity] });
+  }
+  const taken = new Set<string>();
+  return groups.map(({ date, label, items: rows }) => {
+    const key =
+      rows
+        .map((row) => anchors.get(itemKey(row)))
+        .find((anchor) => anchor !== undefined && !taken.has(anchor)) ??
+      `${date}:${itemKey(rows[0])}`;
+    taken.add(key);
+    return { key, label, items: rows };
+  });
+}
+
+/**
+ * The anchors the next render's `dayGroups` reads: each row drawn now and the group key it was first
+ * drawn in (a row new to the page takes its group's). A row the feed no longer draws is not kept, so
+ * a live feed holds anchors for the rows on the page, never for every row it ever drew.
+ */
+export function drawnAnchors(
+  groups: readonly { key: string; items: readonly GlobalActivity[] }[],
+  previous: ReadonlyMap<string, string>
+): Map<string, string> {
+  const next = new Map<string, string>();
+  for (const group of groups)
+    for (const row of group.items) next.set(itemKey(row), previous.get(itemKey(row)) ?? group.key);
+  return next;
+}
+
 function mergeUniqueActivities(
   incoming: GlobalActivity[],
   existing: GlobalActivity[]
@@ -206,53 +253,32 @@ function ActivityStreamToolbar({
   totalCount,
 }: {
   selectedFilter: GlobalActivityFilter;
-  onFilterChange: (value: string | number | undefined) => void;
+  onFilterChange: (value: GlobalActivityFilter) => void;
   summary?: DailyActivityStats;
   totalCount?: number;
 }) {
   const counts = summary ? activityFilterCounts(summary, totalCount) : null;
-  const occurrences = summary ? totalActivities(summary) : 0;
+  const occurrences = summary ? summary.kindOccurrences : 0;
   return (
     <div
       data-testid="activities-stream-toolbar"
       className="bg-base-bg border-row-rule border-b py-3"
     >
-      <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
-        {FILTER_OPTIONS.map((option) => (
-          <button
-            type="button"
-            key={option.value}
-            aria-label={option.label}
-            aria-pressed={selectedFilter === option.value}
-            onClick={() => onFilterChange(option.value)}
-            className={cn(
-              'text-small flex items-center gap-2 border px-3 py-2 transition-colors',
-              selectedFilter === option.value
-                ? 'border-base-border text-text-bright bg-base-surface'
-                : 'text-text-dim hover:text-text border-transparent'
-            )}
-          >
-            {option.mark && <ClassMark kind={option.mark} />}
-            {option.swatch && (
-              <span
-                aria-hidden="true"
-                data-swatch
-                className="h-[9px] w-[9px]"
-                style={{ backgroundColor: option.swatch }}
-              />
-            )}
-            {option.label}
-            {counts && counts[option.value] !== undefined && (
-              <span className="text-text-dim text-meta tabular-nums">
-                {counts[option.value]!.toLocaleString('en-US')}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* The controls board's kind filter (PA-15: the transactions list's, the same control) */}
+      <FilterChips
+        label={KIND_FILTER_LABEL}
+        values={kindFilterValues(ACTIVITY_KINDS, counts ?? {})}
+        value={selectedFilter}
+        onChange={onFilterChange}
+        counted
+      />
+      {/* the counts' period, said with them (lists lane P3: they are yesterday's, the list below
+          is the latest, which its own line says) */}
       {summary && (
-        <p className="text-text-dim text-meta mt-2">
-          Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
+        // a note that is a sentence, the reading ink at 13 px and the prose measure
+        // (BRIEF-ink-size-roles item 3: it was quiet at 12)
+        <p className="text-small max-w-measure mt-2">
+          Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions.
         </p>
       )}
       {counts && occurrences > 0 && (
@@ -261,15 +287,15 @@ function ActivityStreamToolbar({
           aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
           className="mt-3 flex h-2 overflow-hidden"
         >
-          {FILTER_OPTIONS.filter(
-            (o) => o.value !== 'all' && counts[o.value] !== undefined && counts[o.value]! > 0
-          ).map((o) => (
+          {ACTIVITY_KINDS.filter(
+            (kind) => kind !== 'all' && counts[kind] !== undefined && counts[kind]! > 0
+          ).map((kind) => (
             <span
-              key={o.value}
-              title={`${o.label}: ${counts[o.value]}`}
+              key={kind}
+              title={`${kindWords(kind)}: ${counts[kind]}`}
               style={{
-                width: `${(counts[o.value]! / occurrences) * 100}%`,
-                backgroundColor: o.mark ? CLASS_COLORS[o.mark] : (o.swatch ?? CLASS_COLORS.other),
+                width: `${(counts[kind]! / occurrences) * 100}%`,
+                backgroundColor: kindColor(kind),
               }}
             />
           ))}
@@ -293,7 +319,7 @@ function ActivityDayDivider({ label }: { label: string }) {
 function LoadingRows() {
   return (
     <>
-      <p role="status" className="text-text-dim text-small py-3">
+      <p role="status" className="text-text text-small py-3">
         Reading activities…
       </p>
       <SkeletonRows />
@@ -467,8 +493,7 @@ export function ActivitiesStreamExplorer({
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, visibleItems.length]);
 
-  const handleFilterChange = (value: string | number | undefined) => {
-    const nextFilter = (value as GlobalActivityFilter | undefined) ?? 'all';
+  const handleFilterChange = (nextFilter: GlobalActivityFilter) => {
     startTransition(() => {
       setSelectedFilter(nextFilter);
     });
@@ -494,6 +519,14 @@ export function ActivitiesStreamExplorer({
     scheduleHighlightReset();
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
+
+  // each drawn row's day group key, as first drawn (`dayGroups`): a prepend or an older page never
+  // re-keys a group that already holds a drawn row; only the rows drawn now are kept (`drawnAnchors`)
+  const groupAnchors = useRef<ReadonlyMap<string, string>>(new Map());
+  const groups = dayGroups(visibleItems, now, groupAnchors.current);
+  useEffect(() => {
+    groupAnchors.current = drawnAnchors(groups, groupAnchors.current);
+  });
 
   const initialError = !awaited && !!error && visibleItems.length === 0;
   const emptyState = !awaited && !error && visibleItems.length === 0;
@@ -555,50 +588,64 @@ export function ActivitiesStreamExplorer({
         ) : initialError ? (
           <div role="alert" className="text-small flex flex-col gap-1 py-4">
             <p className="text-text">Could not read activities</p>
-            <p className="text-text-dim break-words">
+            <p className="text-text max-w-measure break-words">
               {error instanceof Error ? error.message : String(error)}
             </p>
           </div>
         ) : emptyState ? (
-          <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
+          // an empty-state sentence, the reading ink and the prose measure (BRIEF-ink-size-roles
+          // item 3)
+          <p className="max-w-measure py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
-            {visibleItems.map((activity, index) => {
-              const key = itemKey(activity);
-              const previousLabel =
-                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp, now) : null;
-              const currentLabel = getActivityDayLabel(activity.timestamp, now);
-              const showDayDivider = currentLabel !== previousLabel;
-
-              return (
-                <div key={key}>
-                  {showDayDivider && <ActivityDayDivider label={currentLabel} />}
-                  {/* The lock kind gets its own column so it never wraps under the address. */}
-                  <ActivityRow
-                    activity={activity}
-                    fresh={highlightedKeys.has(key)}
-                    lockColumn
-                    age
-                  />
-                </div>
-              );
-            })}
+            {/* the list's period, as the counts' above (lists lane P3): the latest activities, as
+                they arrive, under each day's divider */}
+            <div data-role="list-period" className="text-text-dim text-small pt-3">
+              the latest · newest first · by day (UTC+8)
+            </div>
+            {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
+                folds within its day and across the older pages appended to it. */}
+            {groups.map(({ key, label, items }, at) => (
+              // under the filter too: another filter shows another set of rows, and its runs'
+              // state starts anew (a run the reader never opened under it is never drawn open)
+              <div key={`${selectedFilter}:${key}`}>
+                <ActivityDayDivider label={label} />
+                <ActivityRuns
+                  age
+                  // the last day's last run, older pages unread, is not final
+                  more={hasNextPage === true && at === groups.length - 1}
+                  rows={items.map((activity) => {
+                    const key = itemKey(activity);
+                    return {
+                      key,
+                      subject: runSubject(activity, activityTitleText(activity)),
+                      activity,
+                      title: <ActivityTitle activity={activity} />,
+                      fresh: highlightedKeys.has(key),
+                      row: <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} age />,
+                    };
+                  })}
+                />
+              </div>
+            ))}
 
             <div ref={sentinelRef} data-testid="activities-stream-sentinel" className="h-4" />
+            {/* The controls board's pager for a stream that grows downward: the next page's rows,
+                as many as the stream's pages hold (the size the API answered with). */}
             {hasNextPage && !isFetchingNextPage && (
-              <div className="flex justify-center py-4">
-                <button
-                  type="button"
-                  onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright text-small border px-5 py-2"
-                >
-                  Older
-                </button>
+              <div className="py-4">
+                <Pager
+                  mode="more"
+                  next={{
+                    count: data!.pages[data!.pages.length - 1].limit,
+                    onShow: () => void fetchNextPage(),
+                  }}
+                />
               </div>
             )}
 
             {isFetchingNextPage && (
-              <p role="status" className="text-text-dim text-small py-3 text-center">
+              <p role="status" className="text-text text-small py-3 text-center">
                 Reading older activities…
               </p>
             )}
@@ -606,13 +653,11 @@ export function ActivitiesStreamExplorer({
             {isFetchNextPageError && (
               <div className="border-row-rule border-t px-3 py-3 text-center">
                 <p className="text-text text-small">Could not read older activities</p>
-                <button
-                  type="button"
-                  className="text-jade hover:text-jade-dim text-small mt-1 cursor-pointer underline transition-colors"
-                  onClick={() => void fetchNextPage()}
-                >
-                  Retry
-                </button>
+                <RetryAction
+                  words="Retry"
+                  onRetry={() => void fetchNextPage()}
+                  className="text-small mt-1"
+                />
               </div>
             )}
           </div>

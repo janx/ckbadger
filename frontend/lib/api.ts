@@ -1,4 +1,5 @@
 import type { CompositionTier } from '@/lib/asset-utils';
+import { sentField } from '@/lib/api-fields';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { color } from '@/lib/palette';
@@ -128,6 +129,16 @@ interface CursorPaginatedResponse<T> {
   nextCursor: string | null;
   /** State of the tx-pool segment. Present only on page one of the address lists. */
   pool?: PoolSummary;
+}
+
+/**
+ * A page of a ranked list (the route's `RankedPage`: the holders of a token, a collection or a
+ * cluster). `firstRank` is the 1-based rank of the page's first row in the read view that served
+ * the page (lane exactness, part A3); a row's rank is it plus the row's place, read by
+ * lib/pagination.ts `rankedRead` / `rankOf` (part B5), which refuse a response without it.
+ */
+interface RankedCursorPage<T> extends CursorPaginatedResponse<T> {
+  firstRank: number;
 }
 
 /**
@@ -297,13 +308,8 @@ interface HardforkActivation {
 }
 
 type TransactionActivityType =
-  | 'ckb'
-  | 'script'
-  | 'cellbase'
-  | 'dao'
-  | 'token'
-  | 'object'
-  | 'identity';
+  /** Every committed transaction but the cellbase (the Transactions page opens on them). */
+  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity';
 
 interface Transaction {
   value: string;
@@ -502,6 +508,8 @@ interface ForkOverview {
   throughDate: string | null;
   days: { date: string; canonicalBlocks: number; uncles: number; nodeSwitches: number }[];
   unclesInWindow: number;
+  /** The window's canonical blocks, the route's (lane exactness, part A). */
+  canonicalBlocksInWindow: number;
   nodeSwitchesInWindow: number;
   nodeSwitchesAllTime: number;
   /** R2b-b: this node's switch history as a whole (FF-L1). */
@@ -1202,9 +1210,14 @@ export interface AddressHoldings {
   lockScriptHash: string;
   balance: string;
   occupiedCapacity: string;
-  /** Ordinary free capacity; DAO free is a disjoint partition. */
-  freeCapacity: string;
-  daoFreeCapacity: string;
+  /**
+   * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
+   * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
+   * is "spendable": a lock, a since or a cellbase's maturity decides that.
+   */
+  daoCellsCapacity: string;
+  otherCellsOccupiedCapacity: string;
+  otherCellsFreeCapacity: string;
   liveCellsCount: number;
   holdings: { dao: number; token: number; object: number; identity: number };
   classes: Record<AddressCellClass, AddressClassTotals>;
@@ -1320,6 +1333,16 @@ type ItemDelta =
     }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
+/** An item's movement in its whole transaction: its net over every party rose, fell, or held. */
+export type ItemMovement = 'mint' | 'burn' | 'transfer';
+
+/**
+ * One item delta of an address's row (the third read's Lb SHOULD 2): the row carries only its
+ * address's deltas, so the route states the item's movement in the whole transaction beside it,
+ * which the page cannot tell from one party's change.
+ */
+export type RowItemDelta = ItemDelta & { movement: ItemMovement };
+
 interface ActivityTypeCall {
   typeCodeHash: string;
   typeHashType: string;
@@ -1328,12 +1351,28 @@ interface ActivityTypeCall {
   scriptName?: string;
 }
 
+/**
+ * A type script a committed activity's items or its Nervos DAO step carry, by its code
+ * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
+ * and the registry's name.
+ */
+interface ActivityItemType {
+  typeCodeHash: string;
+  typeHashType: string;
+  scriptName: string | null;
+}
+
 interface ActivityLockCall {
   lockCodeHash: string;
   lockHashType: string;
   lockArgs: string;
   scriptHash: string;
-  scriptName?: string;
+  /**
+   * The registry's name for the lock's code hash, `lockScriptName` as on a party (the third read's
+   * T SHOULD-5; it was `scriptName`): read through the lock decision's `lockCallFacts`, which
+   * refuses a call of an older API by this field's name.
+   */
+  lockScriptName: string | null;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
   decoded?: LockArgsDecoded | null;
   /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */
@@ -1359,6 +1398,16 @@ interface ActivityProtocolAction {
   /** The protocol's display name from the backend registry (`Fiber`, `RGB++`, …). */
   protocolName: string;
   action: string;
+  /**
+   * The action's facts, free-form JSON with every integer an exact decimal string: the route's type
+   * (`serde_json::Value`) guarantees no key; the indexer writes them (lane exactness, part B6). A
+   * Nervos DAO action (`protocol` `dao`) carries `capacity` (shannons) and `lockHash`, the lock
+   * hash of the cell that took the step, hex without `0x` (a deposit's output deposit cell, a
+   * withdrawal request's output request cell, a completed withdrawal's input request cell); a
+   * withdrawal request `depositBlock` too, a completed withdrawal `compensation` (shannons). Read
+   * it through `protocolActionMeta`, which refuses a malformed value, and whose a step is through
+   * `daoStepOwners`, which refuses an owner missing or no participant of the transaction.
+   */
   metadata: Record<string, ExactJson>;
 }
 
@@ -1382,9 +1431,17 @@ interface Activity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
-  itemDeltas: ItemDelta[];
+  /** This address's item deltas, each with its movement in the whole transaction. */
+  itemDeltas: RowItemDelta[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   protocolActions: ActivityProtocolAction[];
   /** The OTHER parties of this transaction. */
   participants: ParticipantRef[];
@@ -1427,7 +1484,14 @@ interface GlobalActivity {
   isCellbase: boolean;
   protocolActions: ActivityProtocolAction[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   participants: ParticipantInfo[];
 }
 
@@ -1462,6 +1526,18 @@ interface DailyActivityStats {
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /**
+   * The day's activity-kind occurrences, the API's sum of the eight kinds the charts read (lane
+   * D1): kinds overlap, so it is not a count of distinct activities.
+   */
+  kindOccurrences: number;
+  /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
+  daoCount: number;
+  /**
+   * The day's user transactions, the route's count: its committed transactions less its cellbases
+   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
+   */
+  userTransactionCount: number;
 }
 
 interface ActivitySummary24h {
@@ -1481,6 +1557,14 @@ interface ActivitySummary24h {
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
   hoursCovered: number;
+  /** The window's activity-kind occurrences, the API's count (kinds overlap). */
+  kindOccurrences: number;
+  /** The window's Nervos DAO actions, the API's count. */
+  daoCount: number;
+  /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
+  scriptCalls: number;
+  /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
+  scriptRest: { scripts: number; calls: number } | null;
 }
 
 interface GraphNode {
@@ -1582,7 +1666,14 @@ export interface TokenHistory {
   source: 'indexed_chain_time';
   completeThrough: string;
   anchor: { blockNumber: number; blockHash: string };
-  daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
+  /** Each day's held capacity, its occupied part and its free part (`capacity - occupied`). */
+  daily: {
+    date: string;
+    supply: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+  }[];
   /** Transactions (not transfer legs) per complete Monday-start week. */
   weeklyTransactions: { weekStart: string; transactionsCount: number }[];
   mintCount: number;
@@ -1634,6 +1725,8 @@ export interface ItemCellVersion {
   ownerAddress: string;
   capacity: string;
   occupiedCapacity: string;
+  /** The free part, capacity − occupied, the route's (`utils::assets::free_part`; lane exactness, part B5). */
+  freeCapacity: string;
   lock: Script;
   type: Script | null;
   anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };
@@ -1983,7 +2076,7 @@ interface TokenHolder {
   lockKind: string | null;
 }
 
-export interface TokenHoldersResponse extends CursorPaginatedResponse<TokenHolder> {
+export interface TokenHoldersResponse extends RankedCursorPage<TokenHolder> {
   totalSupply: string;
   anchor: { blockNumber: number; blockHash: string } | null;
 }
@@ -2154,9 +2247,11 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
-  activeDeposits: number;
+  /** The deposit cells, the home page's "Active deposits" (a withdrawal request is none). */
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
+  /** The live DAO cells, deposits and withdrawal requests, the route's (lane exactness, part A). */
+  liveCellsCount: number;
   pendingWithdrawalCapacity: string;
   pendingWithdrawalCapacityCkb: string;
   daoCapacity: string;
@@ -2179,6 +2274,8 @@ interface DaoStatistics {
   depositCompensationCkb: string;
   burnt: string;
   burntCkb: string;
+  /** Secondary issuance since genesis, shannons: the three parts' whole, the route's (lane exactness, part A). */
+  secondaryIssuance: string;
   depositChange24h: string | null;
   depositorsChange24h: number | null;
   claimedCompensationChange24h: string | null;
@@ -2567,7 +2664,11 @@ interface DotCellPartyRef {
   hashPrefix: string;
   lockHash: string | null;
   address: string | null;
-  scriptName: string | null;
+  /**
+   * The registry's name for the party's lock code hash (lane P2's third round, item 12: the one
+   * name a lock's registry name has on the wire, `lockScriptName`; it was `scriptName`).
+   */
+  lockScriptName: string | null;
 }
 
 interface DotCellDecodedAddress {
@@ -2778,6 +2879,8 @@ export interface NominalApcTodayF2 {
  */
 interface UncleRateChartResponse extends ChartResponse {
   orphanRateTarget: { numerator: number; denominator: number };
+  /** Each day's uncles and canonical blocks, one per point of `data` in its order (lane exactness, part A). */
+  counts: { date: string; uncles: number; blocks: number }[];
 }
 
 /**
@@ -2785,7 +2888,9 @@ interface UncleRateChartResponse extends ChartResponse {
  * one block (`blockNumber`); every amount is a shannon string. `circulating` = knowledge + daoFree
  * + free exactly. `knowledge` is the occupied capacity of every live cell (DAO cells included),
  * `daoFree` the free capacity of the live NervosDAO cells (deposits and withdraw requests), `free`
- * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part.
+ * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part: the
+ * home page's "in all DAO cells", the Supply chart's deposited + withdrawing at this block
+ * (`/charts/total-supply`, `daoDeposited + daoWithdrawing`: one amount, lane exactness, part B5).
  */
 interface CkbytesAllocation {
   blockNumber: number;
@@ -2838,14 +2943,43 @@ interface MinerDistributionResponse {
   data: MinerDistributionDataPoint[];
   title: string;
   totalBlocks: number;
+  /** The window's blocks found by every miner after the five largest, the card's "Others" (lane exactness, part A). */
+  restBlocks: number;
   windowDays: number;
   fromDate: string;
   toDate: string;
 }
 
+/**
+ * Block intervals: the histogram and the window it counts (lane D1's third round, S4): a share is of every interval
+ * of the window, the ones past the drawn 50 s counted and stated, not drawn.
+ */
+export interface BlockTimeDistributionChartResponse extends ChartResponse {
+  /** The complete epochs the window holds (42, or fewer on a younger chain). */
+  epochs: number;
+  /** Every interval of the window: what each share divides by. */
+  intervals: number;
+  /** The intervals past the drawn range, more than 50 s after their parent. */
+  beyondRange: number;
+  /**
+   * Each bucket's intervals, one per point of `data` (lane exactness, part A2, N5): the most common
+   * interval and a tie are read from these, not from the cut shares.
+   */
+  bucketCounts: number[];
+}
+
+/** Cell size: the histogram and the two wholes its page divides by (lane D1). */
+export interface CellSizeDistributionChartResponse extends ChartResponse {
+  /** The live cells of every bucket. */
+  liveCells: string;
+  /** The CKB those cells occupy. */
+  occupiedCapacity: string;
+}
+
 interface StackedAreaDataPoint {
   date: string;
   values: Record<string, string>;
+  /** Secondary issuance: the one whole, which its three destinations make (lane D1). */
   protocolTotalShannons?: string;
   phase1CompensationShannons?: string;
 }
@@ -2871,6 +3005,19 @@ interface StackedAreaChartResponse {
   // group scripts (F2-4), R2b-b: script capacity histories only — the first day with the
   // greatest used + unused (shannons); null for an empty series.
   totalPeak?: { date: string; value: string } | null;
+  /**
+   * Lane D1 (the chart-hero board): the bands a chart page draws where it draws fewer than the
+   * series (`/charts/hodl-wave`: five ages, young neighbours merged; `/charts/most-utilized-*`:
+   * the five largest and `rest`). Each names the series it merges in stack order, and every point
+   * carries the band's own value under its key, computed by the API from the exact integers.
+   */
+  bands?: StackedAreaBand[];
+}
+
+interface StackedAreaBand {
+  key: string;
+  label: string;
+  members: string[];
 }
 
 export interface AssetCapacityHistory extends StackedAreaChartResponse {
@@ -3000,7 +3147,11 @@ export interface ScriptCodeClassTotalApi {
 
 export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
   classSummary?: ScriptCodeClassTotalApi[];
-  roleCounts?: { all: number; locks: number; types: number };
+  /**
+   * The families by role, the route's: `locks` and `types` each count a family used as both
+   * (`both`); `neither` counts the families with no role (the P3 follow-up, SHOULD 3).
+   */
+  roleCounts?: { all: number; locks: number; types: number; both: number; neither: number };
 }
 
 export interface ScriptCustodyApi {
@@ -3013,6 +3164,8 @@ export interface ScriptCustodyApi {
   requireFirstN: number | null;
   keyHashes: string[];
   verifiedByTx: string | null;
+  /** The code cell `verifiedByTx` spent, `0x<tx hash>:<output index>` (with it, or neither). */
+  verifiedCodeCell: string | null;
   witnessState: 'never_signed' | 'verified' | 'unavailable' | 'not_applicable';
   owners: {
     lockCodeHash: string;
@@ -3246,7 +3399,7 @@ interface MempoolTransaction {
   fee: string;
   size: number;
   cycles: number;
-  /** Shannon per byte, rounded half-up to two decimals. */
+  /** Shannon per byte, cut at two decimals (lane exactness, part B4: it was half up). */
   feeRate: string;
   ancestorsCount: number;
   timestamp: number;
@@ -3284,7 +3437,7 @@ interface PendingProposal {
   fee: string | null;
   size: number | null;
   cycles: number | null;
-  /** Shannon per byte, rounded half-up to two decimal places. */
+  /** Shannon per byte, cut at two decimal places (lane exactness, part B4). */
   feeRate: string | null;
 }
 
@@ -3299,7 +3452,7 @@ interface BlockFeeStats {
   totalSize: number;
   totalCycles: number | null;
   cyclesStatus: 'pending' | 'complete' | 'failed';
-  /** Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples. */
+  /** Shannon per 1000 bytes, cut at two decimals (lane exactness, part B4); null without fee samples. */
   avgFeeRate: string | null;
   minFeeRate: string | null;
   maxFeeRate: string | null;
@@ -3836,6 +3989,7 @@ export type {
   MostUtilizedScriptsChartResponse,
   MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
+  RankedCursorPage,
   PoolSummary,
   PoolStatus,
   AddressPendingSummary,
@@ -3897,6 +4051,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
+  ActivityItemType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,
@@ -4029,6 +4184,17 @@ export interface NetworkDistributions {
   countries: LabelCount[];
   asns: LabelCount[];
   protocols: LabelCount[];
+  /** The verified nodes by hosting organisation: the five largest and the rest (lane exactness, part A). */
+  hosting: { organisations: LabelCount[]; rest: number; restOrganisations: number };
+  /** The client versions by release, each release's nodes and builds, largest first (lane exactness, part A). */
+  releases: ReleaseCount[];
+}
+
+/** A client release and its builds, the route's. */
+export interface ReleaseCount {
+  release: string;
+  count: number;
+  builds: LabelCount[];
 }
 
 export interface NetworkMap {
@@ -4252,6 +4418,29 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
   if (params.limit !== undefined) query.set('limit', String(params.limit));
   if (params.cursor !== undefined) query.set('cursor', params.cursor);
   return query;
+}
+
+/**
+ * A count the daily-activities route states for the chart pages, as the chart reads it. An API
+ * older than the page sends none, and the page refuses it by the field's name (lane D1's third
+ * round, N7: it read `invalid decimal "undefined"`).
+ */
+function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
+  return String(sentField(day[field], `daily activities on ${day.date}`, field));
+}
+
+/**
+ * A day's user transactions, the route's count (the P3 follow-up's 2b), as every page reads it:
+ * the activities lede, the transactions page's "all" chip and lede, the home daily figure. An API
+ * older than the page sends none, refused by name (the third read's La N6: the lede and the chip
+ * were drawn without it, silently, and the home figure threw a TypeError).
+ */
+export function dayUserTransactions(day: DailyActivityStats): number {
+  return sentField(
+    day.userTransactionCount,
+    `daily activities on ${day.date}`,
+    'userTransactionCount'
+  );
 }
 
 export const api = {
@@ -4794,7 +4983,7 @@ export const api = {
   getSporeClusterHolders: (
     clusterId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -4902,7 +5091,7 @@ export const api = {
   getObjectCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -4943,7 +5132,7 @@ export const api = {
   getIdentityCollectionHolders: (
     collectionId: string,
     params: CollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
+  ): Promise<RankedCursorPage<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -5141,7 +5330,7 @@ export const api = {
     return fetchApi('/charts/capacity-turnover-ratio');
   },
 
-  getCellSizeDistributionChart: (): Promise<ChartResponse> => {
+  getCellSizeDistributionChart: (): Promise<CellSizeDistributionChartResponse> => {
     return fetchApi('/charts/cell-size-distribution');
   },
 
@@ -5157,7 +5346,7 @@ export const api = {
     return fetchApi('/charts/most-utilized-assets');
   },
 
-  getBlockTimeDistributionChart: (): Promise<ChartResponse> => {
+  getBlockTimeDistributionChart: (): Promise<BlockTimeDistributionChartResponse> => {
     return fetchApi('/charts/block-time-distribution');
   },
 
@@ -5340,18 +5529,8 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        value: [
-          s.transferCount,
-          s.daoDepositCount,
-          s.daoWithdrawRequestCount,
-          s.daoWithdrawCompleteCount,
-          s.tokenCount,
-          s.objectCount,
-          s.identityCount,
-          s.scriptCallCount,
-        ]
-          .reduce((sum, count) => sum + BigInt(count), BigInt(0))
-          .toString(),
+        // the day's kind occurrences, the route's sum of the eight kinds (lane D1)
+        value: routeCount(s, 'kindOccurrences'),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5361,21 +5540,24 @@ export const api = {
   getActivityTypeBreakdownChart: async (): Promise<StackedAreaChartResponse> => {
     const stats = await api.getDailyActivityStats(0);
     return {
-      data: stats.map((s) => ({
-        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        values: {
-          transfer: String(s.transferCount),
-          dao: (
-            BigInt(s.daoDepositCount) +
-            BigInt(s.daoWithdrawRequestCount) +
-            BigInt(s.daoWithdrawCompleteCount)
-          ).toString(),
-          token: String(s.tokenCount),
-          object: String(s.objectCount),
-          identity: String(s.identityCount),
-          scriptCall: String(s.scriptCallCount),
-        },
-      })),
+      data: stats.map((s) => {
+        // the whole the page's shares divide by, the route's (lane D1)
+        const kindOccurrences = routeCount(s, 'kindOccurrences');
+        // the day's DAO actions, the route's sum of its three counts (lane D1's third round, M2)
+        const dao = routeCount(s, 'daoCount');
+        return {
+          date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+          values: {
+            transfer: String(s.transferCount),
+            dao,
+            token: String(s.tokenCount),
+            object: String(s.objectCount),
+            identity: String(s.identityCount),
+            scriptCall: String(s.scriptCallCount),
+            kindOccurrences,
+          },
+        };
+      }),
       series: [
         { key: 'transfer', label: 'Transfer', color: color('jade') },
         { key: 'dao', label: 'DAO', color: color('gold') },

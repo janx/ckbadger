@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, type KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // The real navigation (setup.ts stubs it with an empty URL), so a router's location reaches the page.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
@@ -51,14 +52,14 @@ function family(name: string, capacity: string, occupied: string): KnownScript {
 const big = family('Big', '4000000000000000000', '5600000000000000');
 const half = family('Half', '400000000000000000', '200000000000000000');
 const none = family('None', '0', '0');
-const response = {
+const response = pagedRead({
   data: [big, half, none],
   total: 3,
   limit: 50,
   hasMore: false,
   nextCursor: null,
-  roleCounts: { all: 3, locks: 3, types: 0 },
-};
+  roleCounts: { all: 3, locks: 3, types: 0, both: 0, neither: 0 },
+});
 
 function renderAt(url: string) {
   const router = createMemoryRouter([{ path: '*', element: <ScriptsPage /> }], {
@@ -133,6 +134,8 @@ describe('Scripts bar: the occupied share alone (readability B5; was the D2 swit
     renderAt('/mainnet/scripts?bar=occupied');
     await screen.findByRole('table', { name: 'Scripts' });
     expect(vi.mocked(api.getScripts).mock.calls.every(([q]) => !('bar' in (q ?? {})))).toBe(true);
-    expect(screen.getByRole('combobox', { name: 'Sort scripts' })).toHaveValue('capacity');
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    expect(screen.getByRole('combobox', { name: 'sorted by' })).toHaveValue('capacity');
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { OWNER_SEAL, OwnerSeal } from '@/components/ui/owner-seal';
-import { RowSeal } from '@/components/ui/row-seal';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { drawSeal } from '@/lib/seal/stones';
 import {
   expectBefore,
@@ -15,7 +15,9 @@ import {
 const LOCK = SEAL_IDS.cell.lock;
 
 describe('OwnerSeal (the seals by kind)', () => {
-  it('stands the 20 px stone of the lock before an address’s text, an image and not a link', () => {
+  // Renamed on purpose (lane D3, Gate B's ruling): the stone is 18 px, as high as the cell's; the
+  // name said "20 px".
+  it('stands the 18 px stone of the lock before an address’s text, an image and not a link', () => {
     render(
       <p data-testid="who">
         <OwnerSeal lockHash={LOCK} />
@@ -35,15 +37,19 @@ describe('OwnerSeal (the seals by kind)', () => {
     expect(owner).toHaveClass('inline-flex', 'align-middle');
   });
 
-  it('is a script’s row stone 20 px high and 15 wide for every lock, 5 px before the address', () => {
-    expect(OWNER_SEAL).toEqual({ height: 20, width: 15, gap: 5 });
+  // Re-pinned on purpose (lane D3; ruled at Gate B, 2026-11-19): the owner's stone in a tile is as
+  // high as the cell's row stone beside it, 18 px, the script stone's proportion kept (13.5 wide).
+  // It was 20 px high and 15 wide; the name said so.
+  it('is a script’s row stone 18 px high and 13.5 wide for every lock, 5 px before the address', () => {
+    expect(OWNER_SEAL).toEqual({ height: 18, width: 13.5, gap: 5 });
+    expect(OWNER_SEAL.height).toBe(ROW_SEAL.cell.height);
     for (let i = 0; i < 24; i++) {
       const lockHash = sealIdsAt(i).cell.lock;
       const { svg } = drawSeal(
         { kind: 'script', hash: lockHash },
         { form: 'row', height: OWNER_SEAL.height, state: 'pressed', ...SEAL_INKS }
       );
-      expect(svg).toMatch(/^<svg width="15" height="20"/);
+      expect(svg).toMatch(/^<svg width="13.5" height="18"/);
       const { container, unmount } = render(<OwnerSeal lockHash={lockHash} />);
       expectOwnerSealOf(container, lockHash);
       unmount();
@@ -92,7 +98,7 @@ describe('OwnerSeal (the seals by kind)', () => {
     expect(container.firstElementChild).toHaveClass('-my-px', 'mr-[5px]');
   });
 
-  // C11: in a cell tile the stone stands alone, centred in the 30 px mark column, the column's
+  // C11: in a cell tile the stone stands alone, centred in the 18 px mark column, the column's
   // 10 px gap its gap; its own 5 px margin would push it 2.5 px off the centre.
   it('keeps no gap of its own when asked, for a stone standing alone in a mark column', () => {
     const { container } = render(<OwnerSeal lockHash={LOCK} gap={false} className="-my-px" />);

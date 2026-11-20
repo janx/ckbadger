@@ -91,9 +91,11 @@ text grade ("The ghost ink" below).
 | the figure scanned first | a page's h1, a hero or display figure, the height that names a block's row                                                                           | bright  |
 | label                    | a `dt`, a column head, a figure's eyebrow, a kind word ("Block"), a prompt heading's args, "occupied" before its bytes, a lock's kind, a `RowTag`    | quiet   |
 | value                    | a hash, an address, an out point, a name, a state ("live", "consumed"), a full id under its h1                                                       | reading |
-| link                     | every link wherever it stands: a block height in a sentence, an out point in a tile, a menu's entry; it turns jade on hover                          | reading |
+| link                     | by job (`components/ui/link.tsx`): a row's key bright, in a line its line's ink underlined muted, onward jade with its arrow; jade on hover, focus   | by job  |
 | date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
-| number                   | a count, a percentage, a size in bytes, a pager's "Showing 1–25 of 1,234" (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
+| number                   | a count, a percentage, a size in bytes, where a pager is (`page 3 of 37`) (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
+| pager                    | where you are (`page 3 of 37`) reading; a way to go (`next →`) jade; the count line (`41–60 of 727`) and an end that cannot be taken quiet           | by part |
+| tab row                  | its names, the current one bright on the celadon line, its counts quiet; 17 px from 640 as its section's heading, else 14 px                         | by part |
 | unit                     | the "CKB" after each amount, "B", a display figure's unit                                                                                            | quiet   |
 | separator                | the "·" between the parts of a line, JSON's braces and commas, "→"                                                                                   | quiet   |
 | note                     | a line under a figure that says how to read it or what it leaves out, a figure's sub-line, a hint ("tap or hover"), the word "selected" before a pin | quiet   |
@@ -103,6 +105,17 @@ text grade ("The ghost ink" below).
 A note and an explaining sentence differ by where they stand: a note qualifies the figure right
 above it and is read with it; a sentence that explains stands on its own (the head's lede, a
 section's paragraph, a banner). A link stays a link inside a quiet line: it takes the reading ink.
+
+A link names its job, never its classes (the controls board, item "links"; `look` on `Link`,
+`ExternalLink`, `BlockLink`, `Address`): `key`, `inline`, `onward`, and two that draw no link ink of
+their own, `block` (a tile, a card, a mark) and `nav` (the shell's navigation). A way onward writes
+its own arrow and wraps between its words like any line, its arrow glued to its last word by a
+no-break space, so it never stands alone on a line and a long one never runs out of the page. A link inside a line keeps the line's ink and is underlined, 1 px and 3 px under the
+text, in the muted ink (`ink-muted`, a shape: the ruling of 2026-11-19, the board's `slate-other`
+line being 1.37–1.66 : 1 by night and 1.50–1.84 : 1 by day): 5.40–6.57 : 1 on the four grounds by
+night and 3.84–4.70 : 1 by day, pinned at 3 : 1 in `palette.test.ts`, and quieter than its words.
+Under hover and focus the line follows its words into the celadon.
+`__tests__/lib/link-look-gate.test.ts` holds every link to a look.
 
 `__tests__/lib/ink-role-gate.test.ts` holds the rule where the source shows it: a link renderer
 (`<a>`, `Address`, a `…Link`), a CKB or token amount that takes its parent's ink, a table cell (a
@@ -241,6 +254,10 @@ cell, a script); `text-dim`, the dead ink, for a consumed cell or an uncle; and 
 committed (a pool transaction and the cells it would create) a dashed stone in `mark`, its field at
 half strength. A row stone's text is cut in `base-bg`, the page ground. `Seal` passes no other
 paint, and the library refuses one that is not a palette reference or a hex (`assertPaint`).
+A list row's stone is small, as the home pipeline's (readability ruling R6, `ROW_SEAL`): 16 px
+high for a block, a transaction and a script, 18 for a cell, so a column of rows keeps each
+state's ink in less than half the red it had (a block's 16² against 26²); a page head keeps its
+large seal.
 
 The grounds step the other way by day: the page is paper (`base-bg`), a surface is a whiter sheet
 (`base-surface`), the well is the whitest (`base-void`, under an inset), and `base-elevated` is a
@@ -374,9 +391,10 @@ none); `vignette` black 18 % / ink 3 % (half the midnight strength); `grain-opac
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
 `well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the
 surface, opaque, in both themes (the vitals strip is the page's own ground drawn solid, so the page
-never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's stone (its page seal) pressed behind the
-404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
-stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
+never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's stone (its page seal) pressed on the
+404 page, beside the verse or below it and clear of every line of text since readability R6 (the
+values are the most each theme allowed while it stood behind the verse, every ink of the verse and
+its facts text-grade across a stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.
 
 By night the scan is a property of a fill, never of a word. An HTML fill takes the class

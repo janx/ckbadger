@@ -107,7 +107,7 @@ export function ScriptByteMap({
   ];
   return (
     <div className="min-w-0 space-y-3">
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta max-w-measure">
         {args === null
           ? 'Script · 33 bytes, then the args each cell sets'
           : `Script · ${total} occupied bytes in every cell it ${kind === 'lock' ? 'locks' : 'types'}`}
@@ -119,8 +119,10 @@ export function ScriptByteMap({
           className="text-small grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5"
         >
           <dt style={{ color: SCRIPT_INKS.codeHash }}>code_hash</dt>
-          <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
-            <AppLink href={href}>{script.codeHash}</AppLink>
+          <dd className="text-text max-w-measure m-0 min-w-0 [overflow-wrap:anywhere]">
+            <AppLink href={href} look="inline">
+              {script.codeHash}
+            </AppLink>
             {name && (
               <span className="text-text-dim">
                 {' · '}
@@ -135,7 +137,7 @@ export function ScriptByteMap({
             {script.hashType} ({hashType.byte}) · {hashType.words}
           </dd>
           <dt style={{ color: SCRIPT_INKS.args }}>args</dt>
-          <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
+          <dd className="text-text max-w-measure m-0 min-w-0 [overflow-wrap:anywhere]">
             {args === 0 ? 'empty: no args' : script.args}
             {argsNote && <span className="text-text-dim"> · {argsNote}</span>}
           </dd>
@@ -214,7 +216,7 @@ export function ScriptNames({ lockHash, address }: { lockHash: string; address: 
         </div>
       )}
       {/* a sentence that explains: the reading ink (R3) */}
-      <p className="text-text text-small mt-3.5">
+      <p className="text-text text-small max-w-measure mt-3.5">
         {address !== null
           ? 'Change one byte of args and both names change; the address is not an account, it is this script spelled out.'
           : 'Change one byte of args and the lock hash changes.'}

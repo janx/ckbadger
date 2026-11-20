@@ -13,7 +13,9 @@ use super::dao_epoch::{next_phase0_boundary, nominal_day_bucket, phase1_ready_ep
 use crate::derived::require_derived;
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::address::{compute_script_hash, resolve_lock_address};
-use crate::utils::exact_ratio::format_percent;
+// every percentage of the DAO evidence is cut at its places, never rounded (lane exactness, part A2, S5),
+// called by its name (part B, the third read's N4)
+use crate::utils::exact_ratio::format_percent_cut;
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -230,7 +232,7 @@ fn share(numerator: i128, denominator: i128) -> anyhow::Result<Option<String>> {
         return Ok(None);
     }
     Ok(Some(
-        format_percent(numerator, denominator, 2).map_err(anyhow::Error::msg)?,
+        format_percent_cut(numerator, denominator, 2).map_err(anyhow::Error::msg)?,
     ))
 }
 
@@ -244,7 +246,7 @@ fn ar_evidence(
     let genesis_ar = dao_fields(&genesis, 0)?[1];
     anyhow::ensure!(tip_ar >= genesis_ar, "DAO accumulated rate regressed from genesis to block {tip_number}: {tip_ar} < {genesis_ar}");
     let since_genesis_growth_percent =
-        format_percent(i128::from(tip_ar - genesis_ar), i128::from(genesis_ar), 4)
+        format_percent_cut(i128::from(tip_ar - genesis_ar), i128::from(genesis_ar), 4)
             .map_err(anyhow::Error::msg)?;
     let chain_span = tip
         .chain_time_ms
@@ -316,7 +318,7 @@ fn ar_evidence(
             anchor_chain_time_ms: anchor.chain_time_ms.to_string(),
             anchor_ar: anchor_ar.to_string(),
             elapsed_chain_time_ms: elapsed.to_string(),
-            observed_growth_percent: format_percent(
+            observed_growth_percent: format_percent_cut(
                 i128::from(tip_ar - anchor_ar),
                 i128::from(anchor_ar),
                 4,
@@ -724,4 +726,17 @@ pub(super) async fn get_depositors(
     .map_err(|error| ApiError::internal(format!("DAO depositors task failed: {error}")))?
     .map_err(|error| ApiError::internal(format!("DAO depositors read failed: {error:#}")))?;
     ok(page?)
+}
+
+#[cfg(test)]
+mod exact_figure_tests {
+    use super::share;
+
+    /// lane exactness, part A2, S5: the DAO evidence's shares are cut at the places the DAO page shows: 2 of 3 is
+    /// 66.66 % (half up 66.67).
+    #[test]
+    fn a_share_is_cut() {
+        assert_eq!(share(2, 3).unwrap().as_deref(), Some("66.66"));
+        assert_eq!(share(1, 0).unwrap(), None);
+    }
 }

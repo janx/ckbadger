@@ -3,8 +3,9 @@
  * of a signed (daily-change) chart. One helper per job, so every chart reads the same numbers.
  */
 
-import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
+import { SVG_TEXT } from '@/lib/chart-type';
 import { advancePx } from '@/lib/type-metrics';
+import { formatCompactRatio } from '@/lib/exact-integer';
 
 /** The typographic minus, used for every negative number the charts print. */
 export const MINUS = '−';
@@ -127,30 +128,54 @@ export function niceTicks(
   return { values, step };
 }
 
-function trimZeros(s: string): string {
-  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+/**
+ * A tick's exact digits, its sign aside, as `[whole, fraction]`, the decimal point moved `shift`
+ * places left: the scale chose the tick on its step's grid (`niceTicks`), so the shortest form of
+ * the number is the value itself, and nothing here rounds or cuts (the lead's ruling of
+ * 2026-11-19: a tick's label is its value).
+ */
+export function exactTickDigits(value: number, shift = 0): [string, string] {
+  assertFinite('exactTickDigits: value', value);
+  const [mantissa, exponentText = '0'] = Math.abs(value).toString().split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  const digits = `${whole}${fraction}`;
+  const point = whole.length + Number(exponentText) - shift;
+  const [w, f] =
+    point <= 0
+      ? ['0', `${'0'.repeat(-point)}${digits}`]
+      : point >= digits.length
+        ? [`${digits}${'0'.repeat(point - digits.length)}`, '']
+        : [digits.slice(0, point), digits.slice(point)];
+  return [w.replace(/^0+(?=\d)/, ''), f.replace(/0+$/, '')];
 }
 
 /**
- * A tick label: thousands as k / M / B (trailing zeros trimmed: 500, 1k, 2.5k, 10k), smaller
- * values with the decimals their step needs (2.4, 2.6 …), micro-token values in scientific
- * notation, negatives with a real minus sign. Exact data readouts remain separate from axis labels.
+ * A tick label, exactly its value (the lead's ruling of 2026-11-19: a rounded or a cut label puts
+ * the line at another number than it says): thousands as k / M / B with every digit the value has
+ * (500, 1k, 2.5k, 1.00001M), smaller values with at least the decimals their step needs (2.40,
+ * 2.60 …), micro-token values in scientific notation, negatives with a real minus sign. Exact data
+ * readouts remain separate from axis labels.
  */
 export function formatTick(value: number, step: number): string {
   assertFinite('formatTick: value', value);
   if (value === 0) return '0';
   const abs = Math.abs(value);
   const sign = value < 0 ? MINUS : '';
-  const units: [number, string][] = [
-    [1e9, 'B'],
-    [1e6, 'M'],
-    [1e3, 'k'],
+  const units: [number, number, string][] = [
+    [1e9, 9, 'B'],
+    [1e6, 6, 'M'],
+    [1e3, 3, 'k'],
   ];
-  for (const [div, suffix] of units) {
-    if (abs >= div) return `${sign}${trimZeros((abs / div).toFixed(3))}${suffix}`;
+  for (const [div, shift, suffix] of units) {
+    if (abs >= div) {
+      const [whole, fraction] = exactTickDigits(abs, shift);
+      return `${sign}${fraction ? `${whole}.${fraction}` : whole}${suffix}`;
+    }
   }
-  const decimal = tickDecimal(abs, stepDecimals(step));
-  return `${sign}${abs < 1e-8 ? Number(decimal).toExponential() : decimal}`;
+  if (abs < 1e-8) return `${sign}${abs.toExponential()}`;
+  const [whole, fraction] = exactTickDigits(abs);
+  const decimals = Math.max(stepDecimals(step), fraction.length);
+  return `${sign}${decimals ? `${whole}.${fraction.padEnd(decimals, '0')}` : whole}`;
 }
 
 /** The smallest 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 / 6 / 8 × 10^k value that is at least `x`. */
@@ -198,22 +223,32 @@ export function clipToCap(values: number[], cap: number): SignedBar[] {
   });
 }
 
-/** A compact signed amount for a clipped bar's label: +28.12M, −8.94M, +950k, +12.5k, −12. */
-export function formatCompactSigned(value: number): string {
-  assertFinite('formatCompactSigned: value', value);
-  const sign = value > 0 ? '+' : value < 0 ? MINUS : '';
-  const abs = Math.abs(value);
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign}${trimZeros((abs / 1e3).toFixed(1))}k`;
-  return `${sign}${abs.toFixed(0)}`;
+function trimZeros(s: string): string {
+  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
 
 /**
- * The advance an x label (set at the tick size) is measured at, for keeping axis labels apart: the
- * face's 0.6 em and a fifth of a pixel (lib/chart-type.ts `labelAdvancePx`), 6.2 px at 10 px.
+ * A signed CKB change, compact, for a clipped bar's label and a chart's range: +28.12M, −8.94M,
+ * +950k, +12.5k, −12. Read from the exact shannons and cut in the unit the value reaches, its
+ * trailing zeros dropped; under 1,000 CKB the whole CKB, cut (lane exactness, part B3: it rounded
+ * the float the bar is drawn from, 28,129,999.99999999 CKB read +28.13M).
  */
-export const AXIS_CHAR_PX = labelAdvancePx(SVG_TEXT.tick);
+export function formatCompactSigned(shannons: bigint): string {
+  const sign = shannons > BigInt(0) ? '+' : shannons < BigInt(0) ? MINUS : '';
+  const abs = shannons < BigInt(0) ? -shannons : shannons;
+  const perCkb = BigInt(100_000_000);
+  if (abs < perCkb * BigInt(1000)) return `${sign}${abs / perCkb}`;
+  const compact = formatCompactRatio(abs, perCkb);
+  const suffix = compact.replace(/^[\d.]+/, '');
+  return `${sign}${trimZeros(compact.slice(0, compact.length - suffix.length))}${suffix}`;
+}
+
+/**
+ * The advance an x label (set at the tick size) is measured at: the face's 0.6 em (7.2 px at
+ * 12 px). It was 0.2 px a glyph wider, a margin that kept labels apart; that margin is the gap
+ * below, in whole pixels between two labels, not a share of each glyph.
+ */
+export const AXIS_CHAR_PX = advancePx(SVG_TEXT.tick);
 /** The clear space kept between two x labels on one row. */
 const X_LABEL_GAP = 6;
 /** A time-axis label this close to a plot edge anchors to that edge instead of centring. */
@@ -309,7 +344,7 @@ export function placeXTicks(
 }
 
 /** The advance of one glyph of a y-axis tick label, set at the tick size (6 px at 10 px). */
-const TICK_CHAR_PX = advancePx(SVG_TEXT.tick);
+export const TICK_CHAR_PX = advancePx(SVG_TEXT.tick);
 /** Clear space between a y tick label's end and the plot. */
 const TICK_TO_PLOT = 8;
 

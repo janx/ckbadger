@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { render } from '@testing-library/react';
-import { Dotted } from '@/components/ui/phone-row';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 
 /**
  * PA-25, PB-23 (UI review 2026-11-14): a "·" was left at a line's end ("Script call · .bit Time
@@ -62,6 +63,32 @@ describe('Dotted: the one separator-joined list', () => {
     expect(second.lastElementChild).toHaveClass('indent-0');
   });
 
+  // The 404 seal's caption: two figures after words. Inline, the list is one box on its line, so it
+  // moves to the next line whole and the words before it break before it; inside it the rule above
+  // holds where a line is narrower than the list.
+  it('stands inline after words as one box when asked, with the same separators and clipping', () => {
+    const { container } = render(
+      <p>
+        words before <Dotted inline parts={['a', 'b']} />
+      </p>
+    );
+    const list = container.querySelector('[data-dotted]') as HTMLElement;
+    expect(list).toHaveClass(
+      'inline-flex',
+      'flex-wrap',
+      'items-baseline',
+      'gap-x-[3ch]',
+      'min-w-0',
+      '[clip-path:inset(-1em_-100vw_-1em_-0.75ch)]'
+    );
+    expect(list).not.toHaveClass('flex');
+    expect(list.textContent).toBe('a · b');
+    const [first, second] = items(list);
+    expect(first.querySelector('[data-dotted-separator]')).toBeNull();
+    expect(second.firstElementChild).toHaveAttribute('data-dotted-separator');
+    expect(second).toHaveClass('-ml-[2ch]', 'pl-[2ch]', '-indent-[2ch]');
+  });
+
   it('draws nothing for an empty part, so no separator is left with nothing after it', () => {
     const { container } = render(<Dotted parts={['a', null, false, undefined, '', 'b', null]} />);
     const list = container.firstElementChild as HTMLElement;
@@ -79,5 +106,44 @@ describe('Dotted: the one separator-joined list', () => {
     expect(() => render(<Dotted parts={['a', <Dotted key="b" parts={['b', 'c']} />]} />)).toThrow(
       'a separated list inside another'
     );
+  });
+
+  // The lead's final round, items 2 and 3: a head's names fold behind one control that stays the
+  // same element while the names before it grow ("+3 more locks" → "fewer"). A group's items are
+  // its own (keyed by their place in the group, not in the list), and a group may be joined to the
+  // item before it: no separator, one space's room (the 3ch gap less 2ch).
+  it('keeps a group’s items while the groups before it grow, and joins a group to the item before', () => {
+    function Names() {
+      const [open, setOpen] = useState(false);
+      const names = open ? ['a', 'b', 'c', 'd'] : ['a', 'b'];
+      return (
+        <Dotted
+          parts={[
+            'head',
+            dottedGroup(names, { role: 'names' }),
+            dottedGroup(
+              [
+                <button key="fold" type="button" onClick={() => setOpen(!open)}>
+                  {open ? 'fewer' : '+2 more'}
+                </button>,
+              ],
+              { role: 'fold', joined: true }
+            ),
+          ]}
+        />
+      );
+    }
+    const { container } = render(<Names />);
+    const list = container.firstElementChild as HTMLElement;
+    expect(list.textContent).toBe('head · a · b +2 more');
+    const button = screen.getByRole('button');
+    const joined = button.closest('[data-dotted-item]') as HTMLElement;
+    expect(joined.querySelector('[data-dotted-separator]')).toBeNull();
+    expect(joined).toHaveClass('-ml-[2ch]');
+    expect(joined).not.toHaveClass('pl-[2ch]');
+    fireEvent.click(button);
+    expect(list.textContent).toBe('head · a · b · c · d fewer');
+    // the same element: nothing was unmounted under the reader
+    expect(screen.getByRole('button')).toBe(button);
   });
 });

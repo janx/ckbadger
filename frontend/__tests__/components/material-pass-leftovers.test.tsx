@@ -76,13 +76,16 @@ describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', ()
 });
 
 describe('tier-2 prose: one piece, components/ui/prose.tsx', () => {
-  it('globals.css sets a Prose paragraph at 13 px / 1.7 / 64ch, dim, 14 px apart, em italic', () => {
+  // re-pinned (readability R4): the body step, 14 px (was 13), a 72-character measure (was 64),
+  // the reading ink (was the dim ink); re-pinned (R4, lane B7): the one measure, the class
+  // max-w-measure, 76 characters (was max-width: 72ch)
+  it('globals.css sets a Prose paragraph at 14 px / 1.7 / the measure, reading ink, 14 px apart, em italic', () => {
     const p = css.match(/\.prose-tier2 p\s*\{([^}]*)\}/)!;
     // R12 (re-pinned on purpose): the body step, so the scale has no stylesheet-only size
-    expect(p[1]).toContain('font-size: 13px');
+    expect(p[1]).toContain('font-size: 14px');
     expect(p[1]).toContain('line-height: 1.7');
-    expect(p[1]).toContain('max-width: 64ch');
-    expect(p[1]).toContain('color: var(--c-text-dim)');
+    expect(p[1]).toContain('@apply max-w-measure;');
+    expect(p[1]).toContain('color: var(--c-text)');
     expect(css).toMatch(/\.prose-tier2 p \+ p\s*\{\s*margin-top: 14px;\s*\}/);
     expect(css).toMatch(/\.prose-tier2 em\s*\{\s*font-style: italic;\s*\}/);
   });

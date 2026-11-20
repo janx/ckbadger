@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { Hash } from '@/components/ui/hash';
 
@@ -26,21 +26,11 @@ describe('Hash', () => {
     expect(screen.queryByText(fullHash)).not.toBeInTheDocument();
   });
 
-  it('copies hash to clipboard on click when copyable', async () => {
-    render(<Hash hash={fullHash} size="row" copyable />);
-
-    const element = screen.getByText(/0x12345678/);
-    fireEvent.click(element);
-
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(fullHash);
-
-    await waitFor(() => {
-      expect(screen.getByText('✓')).toBeInTheDocument();
-    });
-  });
-
-  it('uses the full hash as title when copying is disabled', () => {
-    render(<Hash hash={fullHash} size="row" copyable={false} />);
+  // Re-pinned (lane c2-finish, rulings round 1): an id copies nothing on a click; its
+  // click-to-copy (the default of `copyable`) went with its last call site, and its test with it.
+  // A copy is the copy button's, after an id line.
+  it('uses the full hash as title and copies nothing on a click', () => {
+    render(<Hash hash={fullHash} size="row" />);
 
     const element = screen.getByText(/0x12345678/);
     fireEvent.click(element);

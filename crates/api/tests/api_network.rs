@@ -932,3 +932,113 @@ async fn peer_routes_handle_empty_malformed_and_removed_node_contracts() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// lane exactness, part A, A5 (iii): the network page's groupings are the route's: the verified nodes by hosting
+/// organisation (an organisation's several ASNs read as one), the five largest and the rest, and
+/// the client versions by release, each release's nodes counted. Nine nodes: Amazon on AS16509 (2)
+/// and AS14618 (1), then Hetzner 2, OVH 1, DigitalOcean 1, Vultr 1, Linode 1, no ASN 0: the five
+/// largest Amazon 3, Hetzner 2, then DigitalOcean, Linode and OVH at 1 (by name), the rest 1
+/// (Vultr) in one organisation. Versions: 0.119.0 builds a (4) and b (2), 0.118.0 (3).
+#[tokio::test]
+async fn distributions_group_hosting_by_organisation_and_versions_by_release() {
+    let base = test_network_store();
+    let template = base.scan_nodes().unwrap()[0].1.clone();
+    let network =
+        std::sync::Arc::new(ckbadger_store::CkbadgerStore::open_test_network_temp().unwrap());
+    let nodes: [(u32, &str, &str); 9] = [
+        (16509, "Amazon.com", "0.119.0 (aaaaaaa 2026-09-01)"),
+        (16509, "Amazon.com", "0.119.0 (aaaaaaa 2026-09-01)"),
+        (14618, "Amazon.com", "0.119.0 (aaaaaaa 2026-09-01)"),
+        (24940, "Hetzner Online GmbH", "0.119.0 (aaaaaaa 2026-09-01)"),
+        (24940, "Hetzner Online GmbH", "0.119.0 (bbbbbbb 2026-09-10)"),
+        (16276, "OVH SAS", "0.119.0 (bbbbbbb 2026-09-10)"),
+        (14061, "DigitalOcean, LLC", "0.118.0 (ccccccc 2026-06-01)"),
+        (20473, "Vultr", "0.118.0 (ccccccc 2026-06-01)"),
+        (63949, "Linode", "0.118.0 (ccccccc 2026-06-01)"),
+    ];
+    for (i, (number, org, version)) in nodes.into_iter().enumerate() {
+        let mut node = template.clone();
+        node.asn = Some(ckbadger_store::Asn {
+            number,
+            org: org.to_string(),
+        });
+        node.client_version = version.to_string();
+        network
+            .put_node(format!("peer{i}").as_bytes(), &node)
+            .unwrap();
+    }
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, body) = get_json(&app, "/network/distributions").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["verifiedRetained"], 9);
+    assert_eq!(
+        body["hosting"],
+        serde_json::json!({
+            "organisations": [
+                { "label": "Amazon.com", "count": 3 },
+                { "label": "Hetzner Online GmbH", "count": 2 },
+                { "label": "DigitalOcean, LLC", "count": 1 },
+                { "label": "Linode", "count": 1 },
+                { "label": "OVH SAS", "count": 1 }
+            ],
+            "rest": 1,
+            "restOrganisations": 1
+        }),
+        "{body}"
+    );
+    assert_eq!(
+        body["releases"],
+        serde_json::json!([
+            {
+                "release": "0.119.0",
+                "count": 6,
+                "builds": [
+                    { "label": "0.119.0 (aaaaaaa 2026-09-01)", "count": 4 },
+                    { "label": "0.119.0 (bbbbbbb 2026-09-10)", "count": 2 }
+                ]
+            },
+            {
+                "release": "0.118.0",
+                "count": 3,
+                "builds": [{ "label": "0.118.0 (ccccccc 2026-06-01)", "count": 3 }]
+            }
+        ]),
+        "{body}"
+    );
+}
+
+/// lane exactness, part A2 (the pages review's NOTE 3): a located node whose GeoIP record has coordinates and no
+/// country is "Unknown" on the map, as the distributions route names it (the map sent "").
+#[tokio::test]
+async fn map_names_a_located_node_without_a_country_unknown_as_the_distributions_do() {
+    let network = test_network_store();
+    // the located peer, its GeoIP record now with coordinates and no country
+    let (peer, mut node) = network
+        .scan_nodes()
+        .unwrap()
+        .into_iter()
+        .find(|(_, record)| record.geo.is_some())
+        .unwrap();
+    node.geo.as_mut().unwrap().country = String::new();
+    network.put_node(&peer, &node).unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, map) = get_json(&app, "/network/map").await;
+    assert_eq!(status, StatusCode::OK, "{map}");
+    let countries: Vec<&str> = map["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["country"].as_str().unwrap())
+        .collect();
+    assert!(countries.contains(&"Unknown"), "{map}");
+    assert!(!countries.contains(&""), "{map}");
+    let (_, distributions) = get_json(&app, "/network/distributions").await;
+    assert!(
+        distributions["countries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Unknown"),
+        "{distributions}"
+    );
+}

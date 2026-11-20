@@ -35,15 +35,21 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { TraitText } from '@/components/asset/trait-text';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
-import { clipLabel } from '@/lib/shorten';
+import { clipForeignLabel } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
-import { SVG_TEXT } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, foreignTextPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
 const OUTLINE_GAP = 1.5;
 const ROW_GAP = 18;
 const MIN_ROW_BAND = 120;
+/** A band's name, a variant count and a tag are tick lines (readability plan 2026-11-18, lane F3). */
+const TICK_LINE = tightLinePx(SVG_TEXT.tick);
+/** The count of a lane's variants stands 4 px under its bands, and the row ends 5 px under it. */
+const COUNT_GAP = 4;
+const COUNT_FOOT = 5;
 /** The ranked list shows this many genes before its "more genes" control. */
 const LIST_FIRST = 10;
 
@@ -200,7 +206,7 @@ function Gel({
     rows.length === 1 ? bandHeight : Math.max(MIN_ROW_BAND, Math.round(bandHeight / rows.length));
   /** Inside a lane, bands keep this much air on each side; a narrow lane keeps 2 px. */
   const inset = lw >= 28 ? 7 : 2;
-  const rowH = head + 14 + h + 24;
+  const rowH = head + 14 + h + COUNT_GAP + TICK_LINE + COUNT_FOOT;
   const height = rows.length * rowH + (rows.length - 1) * ROW_GAP;
   const slot = new Map<number, { row: number; k: number }>();
   rows.forEach((row, ri) => row.forEach((lane, k) => slot.set(lane, { row: ri, k })));
@@ -231,7 +237,15 @@ function Gel({
   const rowActive = activeOverlay !== null && overlays.some((o) => o.key === activeOverlay);
   const laneOpacity = (gene: string) =>
     activeGene !== null ? (gene === activeGene ? 1 : 0.2) : rowActive ? 0.4 : 1;
-  const labelChars = Math.floor((lw - 2 * inset - 8) / ALLELE_GEL.charWidth);
+  // A band's label (a trait value, the collection creator's text) stands 4 px clear of its
+  // band's sides, cut to that room at whole graphemes by the bound of lib/type-metrics.ts
+  // (review F-B, logic finding 5).
+  const labelRoom = lw - 2 * inset - 8;
+  // One form of the lanes' counts a gel (lane P2's fifth round, NOTE 6): with the noun where every
+  // lane holds its count's words between its insets, else every count bare, which the legend reads
+  const countsWithNoun = lanes.every(
+    (lane) => textPx(formatCount(lane.variants, 'variant').length, SVG_TEXT.tick) <= lw - 2 * inset
+  );
   return (
     <>
       <svg
@@ -277,9 +291,10 @@ function Gel({
                   <text
                     data-gene-caption
                     {...(captions === 'across'
-                      ? { x: r(cx), y: rowTop(ri) + 12, textAnchor: 'middle' }
+                      ? { x: r(cx), y: rowTop(ri) + ALLELE_GEL.captionY, textAnchor: 'middle' }
                       : {
-                          transform: `translate(${r(cx + 3)} ${rowTop(ri) + head - 6}) rotate(-90)`,
+                          // turned on end, its line centred across the lane
+                          transform: `translate(${r(cx + (TICK_LINE - 2 * descentPx(SVG_TEXT.tick)) / 2)} ${rowTop(ri) + head - 6}) rotate(-90)`,
                         })}
                     fontSize={SVG_TEXT.tick}
                     fill={lane.gene === activeGene ? GEL_COLORS.well : GEL_COLORS.heading}
@@ -327,33 +342,46 @@ function Gel({
                         >
                           <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${percentOf(BigInt(b.count), BigInt(total))})`}</title>
                         </rect>
-                        {p.h >= 13 &&
+                        {p.h > TICK_LINE &&
                           lw >= ALLELE_GEL.labelledLane &&
                           !b.isColour &&
                           (() => {
-                            const label = clipLabel(b.label, labelChars);
-                            // words on a fill: the ink the band calls for under the label's run
-                            const half = (label.length * ALLELE_GEL.charWidth) / 2;
-                            const fill = bandLabelInk(
-                              theme,
-                              GEL_INK_KEYS[ink],
-                              r(opacity),
-                              ground,
-                              [r(cx) - half, r(cx) + half],
-                              width
-                            );
-                            return (
-                              <text
-                                x={r(cx)}
-                                y={r(p.y + p.h / 2 + 3.5)}
-                                textAnchor="middle"
-                                fontSize={SVG_TEXT.tick}
-                                pointerEvents="none"
-                                fill={fill}
-                              >
-                                {label}
-                              </text>
-                            );
+                            const label = clipForeignLabel(b.label, SVG_TEXT.tick, labelRoom);
+                            // the band's share of the objects under its value (lane P2's third
+                            // round, item 5: it was in the band's hover title only), where the band
+                            // holds two lines and the lane the figure
+                            const share = percentOf(BigInt(b.count), BigInt(total));
+                            const lines =
+                              p.h > 2 * TICK_LINE &&
+                              foreignTextPx(share, SVG_TEXT.tick) <= labelRoom
+                                ? [label, share]
+                                : [label];
+                            const firstTop = p.y + (p.h - lines.length * TICK_LINE) / 2;
+                            return lines.map((line, k) => {
+                              // words on a fill: the ink the band calls for under the line's run
+                              const half = foreignTextPx(line, SVG_TEXT.tick) / 2;
+                              const fill = bandLabelInk(
+                                theme,
+                                GEL_INK_KEYS[ink],
+                                r(opacity),
+                                ground,
+                                [r(cx) - half, r(cx) + half],
+                                width
+                              );
+                              return (
+                                <text
+                                  key={k}
+                                  x={r(cx)}
+                                  y={r(firstTop + k * TICK_LINE + lineAscentPx(SVG_TEXT.tick))}
+                                  textAnchor="middle"
+                                  fontSize={SVG_TEXT.tick}
+                                  pointerEvents="none"
+                                  fill={fill}
+                                >
+                                  {line}
+                                </text>
+                              );
+                            });
                           })()}
                       </g>
                     );
@@ -361,12 +389,17 @@ function Gel({
                   <text
                     data-variants
                     x={r(cx)}
-                    y={r(top + h + 16)}
+                    y={r(top + h + COUNT_GAP + lineAscentPx(SVG_TEXT.tick))}
                     textAnchor="middle"
                     fontSize={SVG_TEXT.tick}
                     fill={GEL_COLORS.label}
                   >
-                    {lane.variants.toLocaleString('en-US')}
+                    {/* the count with its noun where every lane holds it (lane P2's third round,
+                        item 5: a bare "3", which only the legend explained), one form a gel
+                        (the fifth round, NOTE 6: "3 variants · 12" in one row) */}
+                    {countsWithNoun
+                      ? formatCount(lane.variants, 'variant')
+                      : lane.variants.toLocaleString('en-US')}
                   </text>
                 </g>
               );
@@ -430,7 +463,7 @@ function Gel({
                     {o.persistent && (
                       <text
                         x={LX - 4}
-                        y={r(boxes[0].y + boxes[0].h / 2 + 3.5)}
+                        y={r(boxes[0].y + boxes[0].h / 2 + centreShift(SVG_TEXT.tick))}
                         textAnchor="end"
                         fontSize={SVG_TEXT.tick}
                         fill={GEL_COLORS.overlay}
@@ -459,7 +492,7 @@ function Gel({
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
-      <p className="text-text-dim text-meta mt-1">
+      <p className="text-text-dim text-meta max-w-measure mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
         {unitText(formatCount(total, 'object'))}, common at the top, rare below
       </p>
@@ -609,7 +642,7 @@ function GeneList({
           {moreGenes(rest)} ▾
         </button>
       )}
-      <p className="text-text-dim text-meta mt-1">
+      <p className="text-text-dim text-meta max-w-measure mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
         {unitText(formatCount(total, 'object'))} carry the commonest variant · open a gene for every
         variant
@@ -627,7 +660,8 @@ export function NotGenesNote({ traits }: { traits: readonly string[] }) {
   const names =
     traits.length > 1 ? `${traits.slice(0, -1).join(', ')} and ${traits.at(-1)}` : traits[0];
   return (
-    <p className="text-text-dim text-meta [overflow-wrap:anywhere]">
+    // a sentence: the reading ink at 13 px (lane cd-fixes-controls, the ink and size round)
+    <p className="text-text text-small max-w-measure [overflow-wrap:anywhere]">
       Not drawn: {names}, {traits.length > 1 ? 'outputs' : 'an output'} of the decoder that the
       pattern does not declare as {traits.length > 1 ? 'genes' : 'a gene'}.
     </p>

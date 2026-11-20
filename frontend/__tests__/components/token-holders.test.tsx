@@ -1,11 +1,20 @@
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+
+// B4 fix round: a row reads its lock off its address, so each holder's address spells the lock
+// its row names (JoyID's real code hash, and an unregistered one).
+const JOY_HOLDER = seededAddress('tllakf', JOYID_CODE_HASH);
+const JOY_HOLDER_2 = seededAddress('ax426h', JOYID_CODE_HASH);
+const UNREGISTERED_HOLDER = seededAddress('ax426h', `0x${'43'.repeat(32)}`);
 
 /** A column head's name: its text, or the name over a bar column's scale ticks. */
 const headText = (h: HTMLElement) => h.firstChild?.firstChild?.textContent ?? h.textContent;
@@ -34,16 +43,21 @@ const distribution: TokenDistribution = {
 };
 describe('Token distribution', () => {
   it('uses exact same-response totals and keeps raw bucket boundaries honest', () => {
-    const { rerender } = render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    const { rerender } = render(
+      <TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />
+    );
     // Table-rows L2-4: a bound prints its exact value without trailing zeros ("1", not
     // "1.00000000"), so a range stays on one line.
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
       '1 and above'
     );
-    // the review's item I (re-pinned): a share below the whole reads >99.99%, never 100.00%
-    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder >99\.99%/);
+    // the review's item I (re-pinned): a share below the whole never reads 100.00%; re-pinned for
+    // lane exactness, part B2 (one percentage, cut): 10,000,000,000 of 10,000,000,001 is 99.9999999…%, cut 99.99%,
+    // which is true of it (half up it read 100.00, bounded >99.99%)
+    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder 99\.99%/);
     rerender(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{ ...distribution, unit: 'raw', decimals: null }}
         symbol="T"
       />
@@ -53,8 +67,51 @@ describe('Token distribution', () => {
       '100,000,000 (raw)'
     );
   });
+  // Readability F3-e: the bands' columns budgeted from what they hold, at 0.6 em a glyph (the range
+  // 14 px, the cells 13, ticks 12) and the 16 px gap after every column but the last. The range is
+  // the flexible column: "10,000 – under 100,000" whole at its minimum.
+  // Re-pinned on purpose (lane P2's follow-up, item 7; renamed, it was "… 377 px …"): a range's
+  // holders are at most the token's, whose bound is lib/list-bounds.ts's WIDEST_TOKEN_HOLDERS,
+  // "999,999" (the most of any token is 11,866, RGB++ Protocol, on 2026-11-19; it was "99,999",
+  // kept in the file): 129 px, the table 385 and its rows below
+  it('budgets every band column from what it holds: 385 px, a table from it (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('10,000 – under 100,000', 14) + 16),
+      // the 48 px track (its widest ticks, "0 750M", are 43.2), the 10 px gap, "999,999" holders
+      48 + 10 + ceil(at('999,999', 13)) + 16,
+      // "100.00%", wider than the head's word "supply"; the last column
+      ceil(Math.max(at('100.00%', 13), at('supply', 12))),
+    ];
+    expect(budgets).toEqual([201, 129, 55]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(385);
+    for (const [width, form] of [
+      [1232, 'table'],
+      [385, 'table'],
+      [384, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(
+        <TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />
+      );
+      const list = container.querySelector('[data-list-form]')!;
+      expect(list).toHaveAttribute('data-list-form', form);
+      if (form === 'table') {
+        const table = within(list as HTMLElement).getByRole('table');
+        const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+        expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+        expect(cols[0].width).toBe('auto');
+      }
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('keeps each range on one line so a number never breaks mid-digits (IV-13, L2-4)', () => {
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const table = screen.getByRole('table', { name: 'Holders by balance' });
     const range = within(table).getByText('Under 1');
     expect(range).toHaveClass('whitespace-nowrap');
@@ -63,6 +120,7 @@ describe('Token distribution', () => {
   it('draws holders per range as an 8 px token-blue bar on the table’s scale (L2-4)', () => {
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{
           ...distribution,
           holdersCount: 41,
@@ -92,18 +150,22 @@ describe('Token distribution', () => {
     const scale = resourceScale([36, 5]);
     const [, under, above] = within(table).getAllByRole('row');
     expect(under.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
+    // Re-pinned on purpose (readability F3-e): the track is 48 px, its head's ticks whole over it
+    // under the 48 px a bar keeps at least (it was 40)
     expect(under.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(36, scale, 40),
+      width: barWidth(36, scale, 48),
       backgroundColor: CLASS_COLORS.tokens,
     });
-    expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 40) });
+    expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 48) });
     expect(above).toHaveTextContent('5');
-    expect(above).toHaveTextContent('>99.99%');
+    // lane exactness, part B2: 10,000,000,000 of 10,000,000,001 cut, 99.99% (was >99.99%)
+    expect(above).toHaveTextContent('99.99%');
   });
   it('names a bucket that starts at 0 and has no upper bound "0 and above" (L2-4)', () => {
     // It used to print "Under " with no bound after it.
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{
           ...distribution,
           holdersCount: 1,
@@ -125,6 +187,7 @@ describe('Token distribution', () => {
   it('keeps the holders and the balance bands apart: a gutter with a rule between them (B5)', () => {
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={distribution}
         symbol="T"
         holders={<div data-testid="holders" />}
@@ -142,7 +205,7 @@ describe('Token distribution', () => {
   // Readability B5: a head stands over what it names; in a column of a bar and its figure, the
   // figure (the name ends where the figure ends, the ticks stay over the track).
   it('stands each bar column’s name over its figure (B5)', async () => {
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const table = screen.getByRole('table', { name: 'Holders by balance' });
     const head = within(table).getAllByRole('columnheader')[1];
     const name = within(head).getByText('Holders');
@@ -155,22 +218,36 @@ describe('Token distribution', () => {
     );
   });
 
+  // B4 third round (re-pinned on purpose, the coordinator's item 4, ruling D7): a distribution
+  // that breaks its invariants fails in its place, said with its token, and the holders beside it
+  // stand; it threw, and took the holders' table and their pager with it
   it('rejects missing holders and mismatched aggregate supply', () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() =>
-      render(
-        <TokenDistributionView distribution={{ ...distribution, holdersCount: 3 }} symbol="T" />
-      )
-    ).toThrow('buckets do not equal totals');
-    expect(() =>
-      render(
-        <TokenDistributionView
-          distribution={{ ...distribution, remainingBalance: '1' }}
-          symbol="T"
-        />
-      )
-    ).toThrow('concentration does not equal supply');
-    error.mockRestore();
+    const { rerender } = render(
+      <TokenDistributionView
+        where="token 0xabc"
+        distribution={{ ...distribution, holdersCount: 3 }}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Could not draw the holder distribution \(token 0xabc\): Token distribution buckets do not equal totals$/
+    );
+    expect(screen.getByTestId('holders')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Holders by balance' })).toBeNull();
+    rerender(
+      <TokenDistributionView
+        where="token 0xabc"
+        distribution={{ ...distribution, remainingBalance: '1' }}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Could not draw the holder distribution \(token 0xabc\): Token distribution concentration does not equal supply$/
+    );
+    expect(screen.getByTestId('holders')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).toBeNull();
   });
 });
 
@@ -179,13 +256,13 @@ describe('Token holders (board L5)', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  const holders = {
+  const holders = pagedRead({
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
-        address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+        address: JOY_HOLDER,
         balance: '56299700000000',
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
       {
@@ -203,12 +280,74 @@ describe('Token holders (board L5)', () => {
     // 562,997 of 24,255,256.49 is 2.32 %.
     totalSupply: '2425525649000000',
     anchor: null,
-  };
+    firstRank: 1,
+  });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(holders);
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
   };
+
+  // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
+  // (FoldToggle): one button that stays mounted while the list loads and keeps the focus both ways
+  it('opens and folds its list with one button that keeps the focus', async () => {
+    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) =>
+      pagedRead({
+        ...holders,
+        // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+        limit: holders.data.length,
+        total: 21,
+        hasMore: true,
+        nextCursor: 'page2',
+      })
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const all = await screen.findByRole('table', { name: 'All holders' });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('fewer ↑');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(all);
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    expect(toggle).toHaveAccessibleName(/^all 21\sholders ↓$/);
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  // Review fb-logic 7 (the lead's ruling): the share head writes "0" and its scale in hundredths
+  // of a percent; the widest tick it writes for any page is five glyphs ("0.75%" where the top
+  // ten hold under 1 % each), wider than the "100%" the track was measured from: "0" and five
+  // glyphs a glyph apart at 12 px is 50.4 px.
+  it('measures the share track from the widest tick its head writes, "0.75%": 50.4 px', async () => {
+    const ticks = new Set<string>();
+    for (let v = 0; v <= 10_000; v++) ticks.add(formatShareTick(resourceScale([v])));
+    const widest = Math.max(...[...ticks].map((t) => t.length));
+    expect([widest, ticks.has('0.75%')]).toEqual([5, true]);
+    const track = (1 + 1 + widest) * 7.2;
+    atContainerWidth(1248);
+    // 0.72 % and 0.5 % of the supply: the page's scale is 0.75 %
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      ...holders,
+      data: [
+        { ...holders.data[0], balance: '72000000' },
+        { ...holders.data[1], balance: '50000000' },
+      ],
+      totalSupply: '10000000000',
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const ticksRow = within(table)
+      .getAllByRole('columnheader')[4]
+      .querySelector<HTMLElement>('[data-scale-ticks]')!;
+    expect(Array.from(ticksRow.children).map((t) => t.textContent)).toEqual(['0', '0.75%']);
+    expect(Number.parseFloat(ticksRow.style.width)).toBeCloseTo(track, 10);
+  });
 
   it('draws the five-column table in the token page’s 554 px column at 1280 and the 608 px band', async () => {
     atContainerWidth(554);
@@ -226,16 +365,62 @@ describe('Token holders (board L5)', () => {
     expect(first).toHaveTextContent('JoyID');
     expect(first).toHaveTextContent('2.32%');
     // Table-rows L2-4: the share is an 8 px bar on the page's own scale (the largest share here
-    // is 41.23 %), not a 10 %-is-full hairline.
-    const scale = resourceScale([232, 4123]);
+    // is 41.23 %), not a 10 %-is-full hairline. Re-pinned on purpose (review fb-logic 7): on the
+    // 50.4 px share track, "0" and the widest share tick, "0.75%" (it was 48)
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut: the bars' hundredths are cut, the second holder's 4,122.8 is 4,122
+    // (was half up, 4,123); its bar 34.62 px (was 34.63)
+    const scale = resourceScale([232, 4122]);
     expect(first.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(232, scale, 48),
+      width: barWidth(232, scale, 50.4),
       backgroundColor: CLASS_COLORS.tokens,
     });
     const second = within(table).getAllByRole('row')[2];
     expect(second.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(4123, scale, 48),
+      width: barWidth(4122, scale, 50.4),
     });
+  });
+
+  // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the address
+  // 14 px, the cells 13, tags and ticks 12) and the 16 px gap after every column but the last.
+  // Lock is the flexible column (a name that ends in the ellipsis): its tag holds 12 characters at
+  // its minimum. The table still holds in the token page's 554 px column at 1280. Re-pinned on
+  // purpose (review fb-logic 7, the lead's ruling): the share's track is 50.4 px, "0" and the
+  // widest tick its head writes, "0.75%" (it was measured from "100%", 48), and the column rounds
+  // once, track, gap and figure together (the figure's box was rounded to 55 first, which would
+  // have made it 116 and the table 555): 115, 554 px (renamed: "552 px").
+  // re-pinned on purpose (lane p-assets; renamed, it was "… 554 px, …"): the lock is its words
+  // Re-pinned on purpose (lane P2's follow-up, item 7): a rank is at most the token's holders,
+  // whose bound is WIDEST_TOKEN_HOLDERS (under a million: the most of any token is 11,866), six
+  // digits as the rank is written, 63 px (it was five, 55, kept in the file); the table's budget
+  // re-derived in the 554 px column it has at 1280: the balance gives the 8 px, 11 characters
+  // (its value already ends in the ellipsis, exact in its title), the lock keeps its 12 so the
+  // default lock's name, "Default Lock", stands whole
+  it('budgets every holder column from what it holds: 549 px, a table from it (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a rank of six digits (a token's holders under 1,000,000), as the rank is written
+      ceil(at('999999', 13) + 16),
+      // a holder with no address, its lock hash at the row size (an address is 13 characters)
+      ceil(at('0x11111111…111111', 14) + 16),
+      // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
+      // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
+      ceil(at('x'.repeat(12), 13) + 16),
+      // 11 characters of the balance; a longer one ends in the ellipsis, exact in its title
+      ceil(at('x'.repeat(11), 13) + 16),
+      // the track (its widest tick row, "0 0.75%", 7 glyphs at 12 px), the 10 px gap, "100.00%";
+      // the last column
+      ceil(at('0 0.75%', 12) + 10 + at('100.00%', 13)),
+    ];
+    expect(budgets).toEqual([63, 159, 110, 102, 115]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(549);
+    atContainerWidth(549);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[2].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(549);
   });
 
   // Readability B5: the Share head stands over the share, not over its bar.
@@ -269,9 +454,12 @@ describe('Token holders (board L5)', () => {
     // in the row's hover) — and a lock not indexed is said so in the row's hover, not "lock kind
     // unavailable".
     expect(within(first).getByText('JoyID')).toHaveAttribute('data-lock-kind');
-    expect(within(first).getByText('JoyID')).toHaveClass('text-meta', 'border');
+    // re-pinned on purpose (lane p-assets): a lock is plain words, no chip, the column's value in
+    // the reading ink at the cells' step (it was the row tag's 12 px and border)
+    expect(within(first).getByText('JoyID')).toHaveClass('text-small', 'text-text');
+    expect(within(first).getByText('JoyID')).not.toHaveClass('border');
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
-    expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
+    expect(within(first).getByText('JoyID')).toHaveAttribute('title', JOYID_CODE_HASH);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
     // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was
     // "562,997.00", two places)
@@ -279,11 +467,13 @@ describe('Token holders (board L5)', () => {
     expect(first).not.toHaveTextContent('562,997.00');
     expect(first).toHaveAttribute(
       'title',
-      `#1 · ckb1qrgqep8s${'q'.repeat(40)}tllakf · JoyID · 562,997 RGB++ · 2.32% of supply`
+      `#1 · ${JOY_HOLDER} · JoyID · 562,997 RGB++ · 2.32% of supply`
     );
     expect(second).toHaveAttribute(
       'title',
-      `#2 · 0x${'22'.repeat(32)} · lock not indexed · 10,000,000 RGB++ · 41.23% of supply`
+      // B4 second fix round (re-pinned on purpose): the Lock cell's words, 'not indexed'
+      // lane exactness, part B2: 1,000,000,000,000,000 of 2,425,525,649,000,000 is 41.228…%, 41.22% (half up 41.23%)
+      `#2 · 0x${'22'.repeat(32)} · not indexed · 10,000,000 RGB++ · 41.22% of supply`
     );
   });
 
@@ -294,22 +484,27 @@ describe('Token holders (board L5)', () => {
     const [first] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     expect(phoneLines(first)).toEqual([
+      // Re-pinned on purpose (lane D4, PB-09): the lock left line 1 for the bar line's right edge
+      // and the balance is named by its token's symbol (it was the lock after the address and a
+      // bare balance)
       {
         key: 'holder',
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
-        left: '1ckb1…tllakf JoyID',
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "562,997.00000000")
-        right: '562,997',
+        left: `1ckb1…${JOY_HOLDER.slice(-6)}`,
+        // a phone row's summary form (readability R5: was "562,997.00000000")
+        right: '562,997 RGB++',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
       // mark (41.23 % at most: 60 %, the table's), and the share's number sits right after its
       // fixed track.
       { key: 'axis', tone: 'quiet', left: '060%', right: null },
-      { key: 'share', tone: 'quiet', left: '2.32%', right: null },
+      { key: 'share', tone: 'quiet', left: '2.32%', right: 'JoyID' },
     ]);
     expect(first.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '3.87%');
-    expect(first.querySelector('[data-role="rank"]')).toHaveClass('w-[22px]');
+    // re-pinned on purpose (lane D4): the rank's box is at least 22 px and grows with its digits
+    // (it was a fixed 22 px, which a rank of three digits ran past)
+    expect(first.querySelector('[data-role="rank"]')).toHaveClass('min-w-[22px]');
   });
 });
 
@@ -325,19 +520,24 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     vi.restoreAllMocks();
   });
   const unregistered = `0x${'43'.repeat(32)}`;
-  const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
-  const page = {
+  // B4 second fix round (re-pinned on purpose): the link opens that lock, by the hash type its
+  // address spells, as a lock (the script page sends it to a family only where the family references
+  // the code hash by that hash type)
+  const scriptPage = expect.stringMatching(
+    new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`)
+  );
+  const page = pagedRead({
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
-        address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+        address: JOY_HOLDER,
         balance: '300',
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
       {
         lockScriptHash: `0x${'22'.repeat(32)}`,
-        address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+        address: UNREGISTERED_HOLDER,
         balance: '200',
         lockCodeHash: unregistered,
         lockKind: null,
@@ -356,7 +556,8 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     nextCursor: null,
     totalSupply: '600',
     anchor: null,
-  };
+    firstRank: 1,
+  });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(page);
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -375,9 +576,15 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
       'href',
       scriptPage
     );
-    expect(unnamed).toHaveAttribute('title', expect.stringContaining(` · ${unregistered} · `));
-    expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
-    expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · lock not indexed · '));
+    // B4 second fix round (re-pinned on purpose): the row's title says what its Lock cell says, from the one decision: 'lock 0x43434343…434343' (it was the bare code hash)
+    expect(unnamed).toHaveAttribute(
+      'title',
+      expect.stringContaining(' · lock 0x43434343…434343 · ')
+    );
+    // B4 fix round (the coordinator's ruling, re-pinned on purpose): no cell under "Lock" is
+    // empty: a lock that is not indexed says so in words, quiet (it was an empty cell)
+    expect(notIndexed.querySelector('[data-lock-kind]')).toHaveTextContent(/^not indexed$/);
+    expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · not indexed · '));
     for (const row of [named, unnamed, notIndexed]) {
       expect(row).not.toHaveTextContent(/lock kind unavailable/i);
       expect(row.getAttribute('title')).not.toMatch(/lock kind unavailable/i);
@@ -389,8 +596,11 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     atViewportWidth(390);
     mount();
     const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
-    expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
-    expect(phoneLines(unnamed)[0].left).toMatch(/ lock 0x4343…4343$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock stands at the bar line's right edge (it was
+    // after the address on line 1)
+    expect(phoneLines(named).at(-1)!.right).toBe('JoyID');
+    expect(phoneLines(unnamed)[0].right).toBe('200 T');
+    expect(phoneLines(unnamed).at(-1)!.right).toBe('lock 0x4343…4343');
     expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
       'href',
       scriptPage
@@ -401,43 +611,135 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
   });
 });
 
+// Lane D4 (the phone-rows board; PB-09): a holder's row had two shapes by the length of its
+// strings: the lock's name stood on line 1 after the address, and where "lock 0x4343…4343" and the
+// balance did not fit beside them the balance dropped under, so in one list some rows were two lines
+// and some three, and where the balance stood depended on what came before it. One shape now: line
+// 1 the rank, the holder and the balance named by its token's symbol, the figure the list sorts by;
+// the bar's line its share and, at its right edge, the lock where it is not the default lock.
+describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const unregistered = `0x${'43'.repeat(32)}`;
+  const mount = () => {
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: JOY_HOLDER,
+            balance: '300',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+          {
+            lockScriptHash: `0x${'22'.repeat(32)}`,
+            address: UNREGISTERED_HOLDER,
+            balance: '200',
+            lockCodeHash: unregistered,
+            lockKind: null,
+          },
+        ],
+        total: 2,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '600',
+        anchor: null,
+        firstRank: 1,
+      })
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+  };
+
+  // Re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4; renamed, it was "…, whatever
+  // its length"): the bar and its share are 206.6 px that cannot wrap (202.4 with the share at 12
+  // px, before the ink and size roles round); a lock beside them on a 328 px line holds the right
+  // edge up to 109.4 px of words (113.6), 14 glyphs at 13 px either way, and a longer one
+  // ("UTXOSwap Proxy Lock", 148.2 px) goes under the bar at the right edge, where it was drawn under
+  // the share figure
+  it('keeps the balance on line 1 and the lock at the bar line’s right where it fits, else under the bar', async () => {
+    atContainerWidth(358);
+    atViewportWidth(390);
+    mount();
+    const [named, unnamed] = await screen.findAllByTestId('holder-row-mobile');
+    expect(phoneLines(named).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['holder', `1ckb1…${JOY_HOLDER.slice(-6)}`, '300 T'],
+      ['axis', '060%', null],
+      ['share', '50.00%', 'JoyID'],
+    ]);
+    expect(phoneLines(unnamed).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['holder', `2ckb1…${UNREGISTERED_HOLDER.slice(-6)}`, '200 T'],
+      ['share', '33.33%', 'lock 0x4343…4343'],
+    ]);
+    // the page lane notes (B1): a phone row's value reads in the reading ink, its labels quiet:
+    // the share beside the bar is a value (it was the quiet ink); the lock's words stay quiet
+    const share = within(named.querySelector('[data-line="share"]') as HTMLElement).getByText(
+      '50.00%'
+    );
+    expect(share).toHaveClass('text-text');
+    expect(share).not.toHaveClass('text-text-dim');
+    // the ink and size roles round: the share is a value, at 13 px (it was 12, text-meta)
+    expect(share).toHaveClass('text-small');
+    expect(share).not.toHaveClass('text-meta');
+    // the bar's line holds its right part where it fits beside the bar, by the row's own rule
+    for (const row of [named, unnamed])
+      expect(row.querySelector('[data-line="share"] > [data-part="left"]')).toHaveClass(
+        'basis-0',
+        'min-w-min'
+      );
+    // a rank of three digits widens its box; it never runs into the address (it was a 22 px box)
+    expect(named.querySelector('[data-role="rank"]')).toHaveClass('min-w-[22px]');
+    expect(named.querySelector('[data-role="rank"]')).not.toHaveClass('w-[22px]');
+  });
+});
+
 // The review's item I: a holder's share is the one percentage, never a false 0.00% or 100.00%
 describe('Token holders’ shares at the extremes', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it('writes <0.01% for a holder above nothing and >99.99% for one below the whole', async () => {
+  // re-pinned for lane exactness, part B2: cut, a holder below the whole reads at most 99.99%, true of it (half up
+  // 999,999 of 1,000,000 read 100.00, bounded >99.99%); a holder above nothing still <0.01%
+  it('writes <0.01% for a holder above nothing and 99.99% for one below the whole', async () => {
     atContainerWidth(1248);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
-          balance: '999999',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
-          lockKind: 'JoyID',
-        },
-        {
-          lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
-          balance: '1',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 2,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '1000000',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: JOY_HOLDER,
+            balance: '999999',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+          {
+            lockScriptHash: `0x${'22'.repeat(32)}`,
+            address: JOY_HOLDER_2,
+            balance: '1',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 2,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '1000000',
+        anchor: null,
+        firstRank: 1,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const [, whale, dust] = within(table).getAllByRole('row');
-    expect(whale).toHaveTextContent('>99.99%');
+    expect(whale).toHaveTextContent('99.99%');
+    expect(whale).not.toHaveTextContent('>99.99%');
     expect(whale).not.toHaveTextContent('100.00%');
     expect(dust).toHaveTextContent('<0.01%');
     expect(dust).not.toHaveTextContent('0.00%');
@@ -455,23 +757,26 @@ describe('Token holders name a holder whose lock has no address form by its lock
   });
   const lockHash = `0x${'88'.repeat(32)}`;
   const mount = () => {
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: lockHash,
-          address: null,
-          balance: '100',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
-          lockKind: 'SECP256K1/blake160',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '100',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: lockHash,
+            address: null,
+            balance: '100',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '100',
+        anchor: null,
+        firstRank: 1,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
   };
@@ -483,11 +788,8 @@ describe('Token holders name a holder whose lock has no address form by its lock
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const [, row] = within(table).getAllByRole('row');
     expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
-    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
-    expect(row).toHaveAttribute(
-      'title',
-      expect.stringContaining(`${lockHash} · SECP256K1/blake160`)
-    );
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('JoyID');
+    expect(row).toHaveAttribute('title', expect.stringContaining(`${lockHash} · JoyID`));
     expect(row.getAttribute('title')).not.toMatch(/not indexed/);
   });
 
@@ -496,7 +798,9 @@ describe('Token holders name a holder whose lock has no address form by its lock
     mount();
     const [row] = await screen.findAllByTestId('holder-row-mobile');
     expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
-    expect(phoneLines(row)[0].left).toMatch(/ SECP256K1\/blake160$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock at the bar line's right edge (it was after
+    // the holder on line 1)
+    expect(phoneLines(row).at(-1)!.right).toBe('JoyID');
     expect(row).not.toHaveTextContent(/not indexed/);
   });
 });
@@ -508,23 +812,26 @@ describe('Token holders where the table does not fit (L5)', () => {
   });
   it('falls back to the two-line row just below the 548 px table', async () => {
     atContainerWidth(546);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: null,
-          balance: '100',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '1000',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: null,
+            balance: '100',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '1000',
+        anchor: null,
+        firstRank: 1,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');
@@ -534,10 +841,12 @@ describe('Token holders where the table does not fit (L5)', () => {
     // R9 (re-pinned): a container just under the table is a desktop column (the holders beside the
     // balance bands from 1280, 545 px), so at jsdom's 1024 px viewport the holder takes the row
     // size, 10…6 for a lock hash (it was the tight 6…4)
+    // Re-pinned on purpose (lane D4, PB-09): the lock at the bar line's right edge and the balance
+    // named by its symbol (it was "… JoyID" on line 1 beside a bare "100")
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x11111111…111111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x11111111…111111', right: '100 T' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
-      { key: 'share', tone: 'quiet', left: '10.00%', right: null },
+      { key: 'share', tone: 'quiet', left: '10.00%', right: 'JoyID' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });
@@ -550,11 +859,89 @@ describe('Holders by balance phone row', () => {
   });
   it('folds a range into two lines where its three columns do not fit', () => {
     atContainerWidth(300);
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const rows = screen.getAllByTestId('holder-bucket-row-mobile');
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['range', '1 and above', '1 holder'],
-      ['share', '', '>99.99% of supply'],
+      // lane exactness, part B2: 10,000,000,000 of 10,000,000,001 cut, 99.99% (was >99.99%)
+      ['share', '', '99.99% of supply'],
     ]);
+  });
+});
+
+// Lane exactness, part B5: a row's rank is the route's (`firstRank`, the rank of the page's first
+// row in the read view that served it, plus the row's place). The page computed (page − 1) × size
+// + its place, which holds only if the list stood still between the reads that walked to the page.
+describe('Token holders rank each row from the route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const holder = (n: number) => ({
+    lockScriptHash: `0x${n.toString(16).padStart(64, '0')}`,
+    address: null,
+    balance: '1',
+    lockCodeHash: null,
+    lockKind: null,
+  });
+  /** The rows from the `from`th holder on, each holding 1 of a supply of 100. */
+  const rows = (from: number, n: number) => ({
+    data: Array.from({ length: n }, (_, i) => holder(from + i)),
+    totalSupply: '100',
+    anchor: null,
+  });
+
+  it('reads the rank of a page whose list moved between the reads: 23, not 21', async () => {
+    atContainerWidth(1248);
+    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) =>
+      p?.cursor
+        ? // page two, read after two holders came in above it: its first row is the 23rd
+          pagedRead({
+            ...rows(23, 2),
+            limit: 20,
+            total: 24,
+            hasMore: false,
+            nextCursor: null,
+            firstRank: 23,
+          })
+        : pagedRead({
+            ...rows(1, p!.limit!),
+            limit: p!.limit!,
+            total: 22,
+            hasMore: true,
+            nextCursor: 'page2',
+            firstRank: 1,
+          })
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    fireEvent.click(screen.getByRole('button', { name: /^all 22\sholders ↓$/ }));
+    await screen.findByRole('table', { name: 'All holders' });
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('23–24 of 24')
+    );
+    const table = screen.getByRole('table', { name: 'All holders' });
+    const [, first, second] = within(table).getAllByRole('row');
+    expect(within(first).getAllByRole('cell')[0]).toHaveTextContent(/^23$/);
+    expect(within(second).getAllByRole('cell')[0]).toHaveTextContent(/^24$/);
+    expect(first.getAttribute('title')).toMatch(/^#23 · /);
+  });
+
+  it('refuses an API that sends no firstRank, by name', async () => {
+    // a page as an API older than this page sends it: no firstRank
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({ ...rows(1, 2), limit: 10, total: 2, hasMore: false, nextCursor: null }) as never
+    );
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    expect(
+      await screen.findByText(
+        'Could not load holders: the holders of token 0xabc: the API sends no firstRank: it is older than this page.'
+      )
+    ).toHaveAttribute('role', 'alert');
+    expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
   });
 });

@@ -11,11 +11,7 @@ import {
 } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import {
-  dailyActivities,
-  activitySummary24h,
-  dailyTransactionCountChart,
-} from '@/__tests__/msw/fixtures/home';
+import { dailyActivities, activitySummary24h } from '@/__tests__/msw/fixtures/home';
 import { ActivityStats, dailyActivityView } from '@/components/home/activity-stats';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 
@@ -38,7 +34,8 @@ describe('ActivityStats', () => {
     expect(command).toHaveTextContent(/^activity$/);
     expect(args).toHaveTextContent(/^--24 h$/);
     expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
-    const link = screen.getByRole('link', { name: 'charts →' });
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    const link = screen.getByRole('link', { name: /^charts/ });
     expect(link).toHaveAttribute('href', '/mainnet/charts');
     const note = link.closest('[data-prompt-note]') as HTMLElement;
     expect(note).toHaveClass('ml-auto');
@@ -103,7 +100,8 @@ describe('ActivityStats', () => {
     );
     expect(labels).toEqual(['script', 'transfer', 'identity', 'dao']);
     // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
-    expect(types).toHaveTextContent('Script call81.45%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,795 script calls of 7,115 kind occurrences is 81.447…%, 81.44% (half up 81.45%)
+    expect(types).toHaveTextContent('Script call81.44%');
     expect(types).not.toHaveTextContent('Token');
     expect(within(types).getByRole('link', { name: /Script call/ })).toHaveAttribute(
       'href',
@@ -117,8 +115,10 @@ describe('ActivityStats', () => {
     expect(scripts).toHaveTextContent('By script, share of 11,300 calls');
     const rows = [...scripts.querySelectorAll('[data-rank-row]')];
     expect(rows).toHaveLength(6);
-    expect(rows[0]).toHaveTextContent('.bit Time Index State48.50%');
-    expect(rows[5]).toHaveTextContent('3 others0.10%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,480 of 11,300 calls is 48.495…%, 48.49% (half up 48.50%)
+    expect(rows[0]).toHaveTextContent('.bit Time Index State48.49%');
+    // and the rest's 11 calls of 11,300 0.0973…%, 0.09% (half up 0.10%)
+    expect(rows[5]).toHaveTextContent('3 others0.09%');
     expect(rows[5].querySelector('a')).toBeNull();
     expect(within(scripts).getByRole('link', { name: /Bitcoin SPV Type Lock/ })).toHaveAttribute(
       'href',
@@ -154,24 +154,33 @@ describe('ActivityStats', () => {
   });
 });
 
+// Re-pinned on purpose (the P3 follow-up's 2b): a day's bar is the route's count of its user
+// transactions (userTransactionCount); it was the transaction-count chart's day less the day's
+// cellbases, joined and subtracted here.
 describe('dailyActivityView', () => {
-  it('counts each daily non-cellbase transaction once despite overlapping kinds', () => {
-    const view = dailyActivityView([dailyActivities[0]], {
-      title: 'Transactions',
-      yAxisLabel: 'Transactions',
-      data: [{ date: '2026-09-25', value: '9807' }],
-    });
+  it('draws each day the route’s user transactions, not its overlapping kinds', () => {
+    const view = dailyActivityView([{ ...dailyActivities[0], userTransactionCount: 7 }]);
     expect(view?.last.value).toBe(7);
-    expect(() =>
-      dailyActivityView([dailyActivities[0]], { ...dailyTransactionCountChart, data: [] })
-    ).toThrow('Missing daily transaction count for 20260925');
   });
-  it('counts canonical non-cellbase transactions per day and rejects days out of order', () => {
-    const view = dailyActivityView(dailyActivities, dailyTransactionCountChart);
+  it('draws the days oldest first and rejects days out of order', () => {
+    const view = dailyActivityView(dailyActivities);
     expect(view?.last).toEqual({ label: '10/23', value: 6691 });
-    expect(() =>
-      dailyActivityView([dailyActivities[1], dailyActivities[0]], dailyTransactionCountChart)
-    ).toThrow(/out of order/);
-    expect(dailyActivityView([], dailyTransactionCountChart)).toBeNull();
+    expect(() => dailyActivityView([dailyActivities[1], dailyActivities[0]])).toThrow(
+      /out of order/
+    );
+    expect(dailyActivityView([])).toBeNull();
+  });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('dailyActivityView on an older API', () => {
+  // it drew a TypeError on the day's count
+  it('refuses a day without userTransactionCount by name', () => {
+    const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+    expect(() => dailyActivityView([older as (typeof dailyActivities)[0]])).toThrow(
+      `daily activities on ${dailyActivities[0].date}: the API sends no userTransactionCount: it is older than this page`
+    );
   });
 });

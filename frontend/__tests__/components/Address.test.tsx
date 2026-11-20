@@ -7,14 +7,14 @@ describe('Address', () => {
 
   describe('rendering', () => {
     it('renders an address link', () => {
-      render(<Address address={testAddress} size="row" />);
+      render(<Address look="key" address={testAddress} size="row" />);
       const link = screen.getByRole('link');
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute('href', `/mainnet/address/${testAddress}`);
     });
 
     it('sets title attribute for full address on hover', () => {
-      render(<Address address={testAddress} size="row" />);
+      render(<Address look="key" address={testAddress} size="row" />);
       const link = screen.getByRole('link');
       expect(link).toHaveAttribute('title', testAddress);
     });
@@ -24,14 +24,14 @@ describe('Address', () => {
     // U-09 (re-pinned): a shortened address names its size; there is no default length. R9
     // (re-pinned): the head size keeps the network and the last 8 characters, as the row does
     it('shortens a long address at its size with the one ellipsis', () => {
-      render(<Address address={testAddress} size="head" />);
+      render(<Address look="key" address={testAddress} size="head" />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe('ckb1…d9wj5clj');
       expect(link.textContent).not.toContain('...');
     });
 
     it('shows full address when truncate is false', () => {
-      render(<Address address={testAddress} truncate={false} />);
+      render(<Address look="key" address={testAddress} truncate={false} />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe(testAddress);
       expect(link.textContent).not.toContain('...');
@@ -39,7 +39,7 @@ describe('Address', () => {
 
     // U-09 (re-pinned, the lead's ruling): a tight address is 4…6 (it was 8…6)
     it('writes the tight size, 4…6 for an address (no length is passed)', () => {
-      render(<Address address={testAddress} size="tight" />);
+      render(<Address look="key" address={testAddress} size="tight" />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe('ckb1…wj5clj');
     });
@@ -47,9 +47,45 @@ describe('Address', () => {
     it('does not shorten an address no longer than its shortened form', () => {
       // 11 characters, the tight form's 4 + 1 + 6 (it was 14 against 8…6's 15)
       const shortAddress = 'ckb1qzda0cr';
-      render(<Address address={shortAddress} size="tight" />);
+      render(<Address look="key" address={shortAddress} size="tight" />);
       const link = screen.getByRole('link');
       expect(link.textContent).toBe(shortAddress);
+    });
+  });
+
+  // Lane c2-links: an address's look is where it stands, which its caller says.
+  describe('its look', () => {
+    const inks = (el: Element) =>
+      [...el.classList].filter((c) => /^text-text|underline|decoration/.test(c));
+
+    // Re-pinned with the coordinator's ruling: inline was "no ink of its own"; it is the line's
+    // ink with the muted underline now.
+    it('is a row’s key in the bright ink, or a name inside a line in its ink, underlined', () => {
+      render(
+        <>
+          <Address address={testAddress} size="row" look="key" />
+          <Address address={testAddress} size="row" look="inline" />
+        </>
+      );
+      const [key, inline] = screen.getAllByRole('link');
+      expect(inks(key)).toEqual(['text-text-bright']);
+      expect(inks(inline)).toEqual([
+        'underline',
+        'decoration-1',
+        'underline-offset-[3px]',
+        'decoration-[color:var(--c-ink-muted)]',
+      ]);
+      // a look sets no size: the address keeps its own step and face
+      expect(key).toHaveClass('text-body', 'font-mono');
+    });
+
+    // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): every caller states
+    // its look, which is required; the look it had before, for a caller that stated none, went (it
+    // was "keeps the look it had before for a caller that states none")
+    it('states its look: a caller that states none does not type-check', () => {
+      // @ts-expect-error an address's link states its look
+      render(<Address address={testAddress} size="row" />);
+      expect(inks(screen.getByRole('link'))).toEqual([]);
     });
   });
 });

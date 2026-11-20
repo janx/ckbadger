@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Cell } from '@/lib/api';
 import { cellInventoryItem, type CellInventoryItem } from '@/lib/cell-inventory';
@@ -11,7 +11,10 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
-import { CkbAmount } from '@/components/ui/ckb-amount';
+import Link from '@/components/ui/link';
+import { kindOf } from '@/components/transaction/transaction-cell-tiles';
+import { formatCount } from '@/lib/format-count';
+import { unitText } from '@/components/ui/units';
 import { ShortId } from '@/components/ui/short-id';
 
 /**
@@ -40,11 +43,11 @@ function Line({
   return (
     <p
       data-testid="cell-inventory"
-      className="text-section text-text min-w-0 font-normal [overflow-wrap:anywhere]"
+      className="text-section text-text max-w-measure min-w-0 font-normal [overflow-wrap:anywhere]"
     >
       <ClassMark kind={mark} size={16} className="mr-2 align-[-1px]" />
       {lead}{' '}
-      <AppLink href={href} className="text-text-bright hover:text-jade">
+      <AppLink look="key" href={href}>
         {name}
       </AppLink>
       {tail}
@@ -236,24 +239,112 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
   );
 }
 
+/** The sentence's frame, the inventory line's own: its class mark, then its words. */
+function KindSentence({ mark, children }: { mark: AssetClass; children: ReactNode }) {
+  return (
+    <p
+      data-testid="cell-kind"
+      className="text-section text-text max-w-measure min-w-0 font-normal [overflow-wrap:anywhere]"
+    >
+      <ClassMark kind={mark} size={16} className="mr-2 align-[-1px]" />
+      {children}
+    </p>
+  );
+}
+
+/**
+ * What a cell that is no inventory item is (lane P1, the plan: "one sentence of what the cell is
+ * for every kind"; review chain-b cell-plain): by its scripts and its data, from what the page has
+ * read — the code it holds for the scripts the API names (`codeCellOf`, its Type ID version), a
+ * dep group's members (the API's list), the registry's name for its type (`typeName`: undefined
+ * while the registry is read, null when it names none), or no type at all. Its capacity, its state
+ * and the block that made it are the status strip's; its lock the facts'.
+ */
+function CellKindLine({ cell, typeName }: { cell: Cell; typeName: string | null | undefined }) {
+  if (cell.codeCellOf?.length) {
+    const version = cell.codeCell?.typeIdVersions.find(
+      (item) => item.codeCellTxHash === cell.txHash && item.codeCellOutputIndex === cell.outputIndex
+    );
+    return (
+      <KindSentence mark={kindOf(cell)}>
+        This cell holds the code of{' '}
+        {cell.codeCellOf.map((script, i) => (
+          <Fragment key={`${script.codeHash}:${script.hashType}`}>
+            {i > 0 && (i === cell.codeCellOf!.length - 1 ? ' and ' : ', ')}
+            <Link look="inline" href={`/script/${script.codeHash}?hashType=${script.hashType}`}>
+              {script.name}
+            </Link>
+          </Fragment>
+        ))}
+        {version && `, v${version.ordinal}`}
+      </KindSentence>
+    );
+  }
+  if (cell.isDepGroup) {
+    if (!cell.depGroupItems)
+      throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} is a dep group without its members`);
+    return (
+      <KindSentence mark={kindOf(cell)}>
+        This cell is a dep group of {unitText(formatCount(cell.depGroupItems.length, 'cell'))}
+      </KindSentence>
+    );
+  }
+  if (cell.type)
+    return (
+      <KindSentence mark={kindOf(cell)}>
+        {typeName === undefined
+          ? 'This cell carries a type script'
+          : typeName === null
+            ? 'This cell carries a type script the registry does not name'
+            : `This cell carries the type script ${typeName}`}
+      </KindSentence>
+    );
+  // a cell with no type script that holds data says so (lane P1, third round; review p-logic-chain
+  // NOTE 3: a contract binary no registered script references read "holds plain CKB")
+  return (
+    <KindSentence mark={kindOf(cell)}>
+      {cell.dataSize > 0 ? (
+        <>
+          This cell holds {unitText(formatCount(cell.dataSize, 'byte'))} of data, with no type
+          script
+        </>
+      ) : (
+        'This cell holds plain CKB, with no type script'
+      )}
+    </KindSentence>
+  );
+}
+
 /**
  * Lane U (U6): the cell page hero's one line naming the inventory item the cell is — the first line
- * under the stone and the name plate (seals by kind, C10). A cell of an unhandled protocol, or a
- * plain cell, gets no line; a handled cell whose data does not name its item says so in place,
- * never a guess.
+ * under the stone and the name plate (seals by kind, C10); a handled cell whose data does not name
+ * its item says so in place, never a guess. Lane P1: a cell that is no inventory item (an unhandled
+ * protocol, a plain cell, a code cell, a dep group) is said by its scripts (`CellKindLine`), so
+ * every cell's page opens on one sentence of what it is.
  */
-export function CellInventoryLine({ cell }: { cell: Cell }) {
+export function CellInventoryLine({
+  cell,
+  typeName,
+}: {
+  cell: Cell;
+  /** The registry's name for the cell's type script: undefined while read, null for none. */
+  typeName: string | null | undefined;
+}) {
   let item: CellInventoryItem | null;
   try {
     item = cellInventoryItem(cell, 'row');
   } catch (error) {
     return (
-      <p role="alert" data-testid="cell-inventory-error" className="text-rouge text-small">
+      <p
+        role="alert"
+        data-testid="cell-inventory-error"
+        className="text-rouge text-small max-w-measure"
+      >
         {(error as Error).message}
       </p>
     );
   }
-  if (!item) return null;
+  if (!item) return <CellKindLine cell={cell} typeName={typeName} />;
   switch (item.kind) {
     case 'spore':
       return <SporeLine item={item} />;
@@ -290,18 +381,13 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
         />
       );
     case 'dao':
+      // lane P1 (said once): the cell's capacity is the status strip's, exact
       return (
         <Line
           mark="dao"
           lead="This cell is a"
           href={item.href}
           name={item.stage === 'deposit' ? 'Nervos DAO deposit' : 'Nervos DAO withdrawal request'}
-          tail={
-            <>
-              {item.stage === 'deposit' ? ' of ' : ' for '}
-              <CkbAmount form="column" shannons={item.capacity} signed={false} tone="plain" />
-            </>
-          }
         />
       );
   }

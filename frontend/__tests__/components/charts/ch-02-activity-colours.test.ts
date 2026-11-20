@@ -23,6 +23,8 @@ const payload = {
         object: '2',
         identity: '22',
         scriptCall: '6317',
+        // the day's kind occurrences, the route's (the D1 hand-back, item 2)
+        kindOccurrences: '7693',
       },
     },
   ],

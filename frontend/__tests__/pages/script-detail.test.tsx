@@ -10,6 +10,7 @@ import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   // the error class itself: the page's failed-read line reads a gateway status off it
@@ -234,28 +235,32 @@ const mockUsage = {
 const mockCapacityChart = {
   title: 'SECP256K1_BLAKE160 Capacity History',
   series: [
-    { key: 'used', label: 'Used', color: '#f59e0b' },
-    { key: 'unused', label: 'Unused', color: '#00c389' },
+    { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+    { key: 'freeCapacity', label: 'Free', color: '#00c389' },
   ],
   data: [
     {
       date: '2024-01-15',
-      values: { used: '6000000000', unused: '4000000000' },
+      values: {
+        occupiedCapacity: '6000000000',
+        freeCapacity: '4000000000',
+        capacity: '10000000000',
+      },
     },
   ],
   totalPeak: { date: '2024-01-15', value: '10000000000' },
 };
 
-const emptyCells = {
+const emptyCells = pagedRead({
   data: [],
   total: 0,
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 const sharedVersionUsageCellsByRef = {
-  type: {
+  type: pagedRead({
     data: [
       {
         txHash: '0x4444444444444444444444444444444444444444444444444444444444444444',
@@ -271,8 +276,8 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
-  firstData: {
+  }),
+  firstData: pagedRead({
     data: [
       {
         txHash: '0x5555555555555555555555555555555555555555555555555555555555555555',
@@ -288,8 +293,8 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
-  secondData: {
+  }),
+  secondData: pagedRead({
     data: [
       {
         txHash: '0x6666666666666666666666666666666666666666666666666666666666666666',
@@ -305,7 +310,7 @@ const sharedVersionUsageCellsByRef = {
     limit: 50,
     hasMore: false,
     nextCursor: null,
-  },
+  }),
 };
 
 function hasTextContent(element: HTMLElement, text: string): boolean {
@@ -326,7 +331,7 @@ function setViewportWidth(width: number): void {
  * no other reference lists it), and its detail for lane S's "Newest cells" row.
  */
 function serveBurnCell(cell: Cell) {
-  const page = { data: [cell], total: 1, limit: 50, hasMore: false, nextCursor: null };
+  const page = pagedRead({ data: [cell], total: 1, limit: 50, hasMore: false, nextCursor: null });
   vi.mocked(api.getCellsByScriptRef).mockImplementation(
     byScript(({ codeHash, hashType }) =>
       codeHash === sharedVersionCodeHash && hashType === 'type' ? page : emptyCells
@@ -513,20 +518,29 @@ describe('ScriptDetailPage', () => {
     }
   });
 
-  it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
+  // Re-pinned on purpose (readability R7, lane p-assets; renamed, it was "… the hero with its
+  // history, …"): the history left the hero for a History section of its own after the hero's
+  // figures, in tier 1 (it was the hero's picture, under the figure, with no heading).
+  it('follows the board order: the hero, its figures, the history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
     expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
     const tier1 = document.querySelector('[data-tier="1"]')!;
     const tier2 = document.querySelector('[data-tier="2"]')!;
-    // Hierarchy v3 (R13): the history is the hero's picture, under the figure, with no heading.
-    expect(within(tier1 as HTMLElement).queryByRole('heading', { name: 'History' })).toBeNull();
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(tier1).toContainElement(history);
+    expect(within(history).getByRole('heading', { name: 'History' })).toBeInTheDocument();
+    expect(await within(history).findByTestId('script-history')).toBeInTheDocument();
     expect(
-      await within(screen.getByRole('region', { name: 'SECP256K1_BLAKE160' })).findByTestId(
+      within(screen.getByRole('region', { name: 'SECP256K1_BLAKE160' })).queryByTestId(
         'script-history'
       )
-    ).toBeInTheDocument();
+    ).toBeNull();
+    expect(
+      screen.getByLabelText('Script figures').compareDocumentPosition(history) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     // Phase 5 (A18, A19): the versions run on their count, the cells on the live count.
     expect(
       within(tier1 as HTMLElement).getByRole('heading', { name: 'Versions 2' })
@@ -701,6 +715,21 @@ describe('ScriptDetailPage', () => {
     // Table-rows L1-4: the version hash is the one-line row's title.
     expect(row.getAttribute('title')).toContain(sharedVersionCodeHash);
     expect(row).toHaveTextContent('No deployment observed');
+    // BRIEF-ink-size-roles item 1: a cell's content is the reading ink, its state where there is no
+    // deployment and the dash for a date or block it has not, as the values beside them (they were
+    // the quiet ink)
+    for (const state of within(row).getAllByText(/^(No deployment observed|—)$/))
+      expect(state).not.toHaveClass('text-text-dim');
+  });
+
+  // BRIEF-ink-size-roles item 3: an empty-state line is a sentence, the reading ink and the prose
+  // measure (it was the quiet ink)
+  it('says a family with no capacity history in a sentence, in the reading ink', async () => {
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue({ ...mockCapacityChart, data: [] });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const empty = await screen.findByText('No capacity history.');
+    expect(empty).not.toHaveClass('text-text-dim');
+    expect(empty).toHaveClass('max-w-measure');
   });
 
   it('shows failed version usage as unavailable, never zero', async () => {
@@ -745,7 +774,8 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getCellsByScriptRef).mockImplementation(async (params) => {
       const page = await oneReference(params);
       return params.codeHash === sharedVersionCodeHash && params.hashType === 'type'
-        ? { ...page, hasMore: true, nextCursor: 'older' }
+        ? // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+          pagedRead({ ...page, limit: page.data.length, hasMore: true, nextCursor: 'older' })
         : page;
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
@@ -753,7 +783,15 @@ describe('ScriptDetailPage', () => {
     expect(within(cells).getByText('Owner')).toBeInTheDocument();
     expect(within(cells).getByText('Also guarded by')).toBeInTheDocument();
     expect(within(cells).getByText('Occupied')).toBeInTheDocument();
-    await waitFor(() => expect(document.body.textContent).toMatch(/of 8\s*cells/));
+    // re-pinned on purpose (lane c2-chain): the library's pager writes its range as the board does,
+    // `1–1 of 8 · 5 a page` (was "Showing 1–1 of 8 cells · 5 per page"), still of the family total.
+    // Re-pinned again (lane c2-finish, 1c): the family's 8 live cells are another read, at another
+    // tip than the merged page, which counts no rows; the pager draws `1–1 · 5 a page` and
+    // `page 1`, and the 8 stands where the page states the family's live cells.
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'cells' })).toHaveTextContent(/^1–1 · 5 a page/)
+    );
+    expect(screen.getByRole('navigation', { name: 'cells' })).not.toHaveTextContent(/ of 8/);
     for (const [codeHash, hashType] of [
       [sharedVersionCodeHash, 'type'],
       [sharedObservedData1Reference, 'data1'],
@@ -764,13 +802,15 @@ describe('ScriptDetailPage', () => {
   });
 
   it('says so when no live cell uses the script', async () => {
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
-      data: [],
-      total: 0,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(
+      pagedRead({
+        data: [],
+        total: 0,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByText('No live cells use SECP256K1_BLAKE160')).toBeInTheDocument();
   });

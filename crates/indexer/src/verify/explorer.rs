@@ -1798,11 +1798,10 @@ impl Check for ExplorerCirculatingSupply {
             &explorer_locked,
             &dates,
         )?;
-        let our_data = fetch_our_stacked_chart_sum_shannons(
-            ctx,
-            "charts/total-supply",
-            &["circulating", "nervosdao"],
-        )?;
+        // the route's protocol circulation, C − genesis burnt − S (it was the band outside the
+        // DAO plus the DAO's deposits, the same amount)
+        let our_data =
+            fetch_our_stacked_chart_sum_shannons(ctx, "charts/total-supply", &["circulating"])?;
         Ok(run_i128_relative_tolerance_explorer_check(
             &our_data,
             &explorer_data,
@@ -2105,10 +2104,11 @@ impl Check for BlockTimeDistributionConsistency {
 
         let mut sum_ms = 0.0f64;
         let mut count = 0usize;
+        // the route sends each day's average in whole ms (lane D1's third round)
         for point in &recent_days {
-            if let Ok(seconds) = point.value.parse::<f64>() {
-                if seconds > 0.0 {
-                    sum_ms += seconds * 1000.0;
+            if let Ok(ms) = point.value.parse::<f64>() {
+                if ms > 0.0 {
+                    sum_ms += ms;
                     count += 1;
                 }
             }
@@ -3247,11 +3247,11 @@ mod tests {
                     "data": [
                         {
                             "date": older,
-                            "values": { "circulating": "800", "nervosdao": "200" }
+                            "values": { "circulating": "1000" }
                         },
                         {
                             "date": newer,
-                            "values": { "circulating": "801", "nervosdao": "200" }
+                            "values": { "circulating": "1001" }
                         }
                     ]
                 })))

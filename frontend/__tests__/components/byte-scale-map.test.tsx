@@ -61,7 +61,9 @@ describe('ByteScaleMap (lane E, C5 / C6)', () => {
     const widths = parts.map((p) => Number.parseFloat(p.style.width));
     // 3 gaps of 2 px, a 4 px sliver, the two short parts as wide as their byte counts
     expect(widths[3]).toBe(4);
-    expect(widths[0]).toBeCloseTo(2 * 6.6 + 8);
+    // a two-digit label at text-meta and 4 px each side: 7.2 px a glyph at 12 px (re-pinned,
+    // readability R4: 6.6 at 11 px)
+    expect(widths[0]).toBeCloseTo(2 * 7.2 + 8);
     expect(widths.reduce((a, b) => a + b, 0) + 3 * 2).toBeCloseTo(600);
     expect(widths[2]).toBeGreaterThan(widths[0] * 20);
     // labels: the description has room for its name, the short parts for their byte counts

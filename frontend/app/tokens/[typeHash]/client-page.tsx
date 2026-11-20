@@ -2,12 +2,12 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { ENTITY_PAGE_SIZE, timePageAt } from '@/lib/pagination';
+import { Pager } from '@/components/ui/pager';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
-import { ReadFailure } from '@/components/read-failure';
+import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -17,8 +17,9 @@ import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { formatCkbAmount } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
@@ -67,12 +68,14 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryFn: () => api.getTokenHistory(typeHash),
   });
   // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
-  const supplyPages = useCursorPagination();
   const supplyPageSize = usePageSize(ENTITY_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const supplyPages = useCursorPagination(supplyPageSize);
   const supplyEvents = useQuery({
     queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
-    queryFn: () =>
-      api.getTokenSupplyEvents(typeHash, { limit: supplyPageSize, cursor: supplyPages.cursor }),
+    queryFn: supplyPages.ask((cursor) =>
+      api.getTokenSupplyEvents(typeHash, { limit: supplyPageSize, cursor })
+    ),
     // keep the open list on screen while the next page loads
     placeholderData: keepPreviousData,
   });
@@ -84,6 +87,14 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryKey: ['token-distribution', typeHash],
     queryFn: () => api.getTokenDistribution(typeHash),
   });
+  // where the open page of supply events stands (the route always counts them)
+  const supplyAt = supplyEvents.data
+    ? timePageAt(
+        'supply changes',
+        { ...supplyEvents.data, total: supplyEventsTotal(supplyEvents.data) },
+        supplyPages
+      )
+    : null;
   const t = token.data;
   if (!t && isNotFoundApiError(token.error)) {
     return (
@@ -110,6 +121,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       </AssetDetailShell>
     );
   }
+  // the issuer's lock beside its address, or null where none is written (the one decision, B4);
+  // a lock the decision refuses fails the note's part in its place, not the page (D7)
+  const issuerLock = t.issuer ? readPart(() => rowLock(t.issuer!, 'inline')) : null;
   const held =
     t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
   const occupied =
@@ -163,27 +177,23 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           {/* C7: the type hash the rail listed names the token under its title, as an id does;
               the head's full id on a line of its own (A4 Chrome F3): one line from 435.6 px
               (66 characters at 11 px), else the two halves */}
-          <HeadId value={t.typeScriptHash} kind="hash" copyable />
+          <HeadId value={t.typeScriptHash} kind="hash" copy="copy type hash" />
         </>
       }
       intro={
         <div className="text-small space-y-3">
           <AssetReadState error={token.error} label="token" retained />
           {t.description && (
-            <p className="text-text-dim">
+            // the token's description explains: the reading ink (R3)
+            <p className="text-text max-w-measure">
               {t.description}
               {t.operatorWebsite && (
                 <>
                   {' '}
                   ·{' '}
-                  <a
-                    href={t.operatorWebsite}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-jade break-all"
-                  >
-                    {t.operatorWebsite} ↗
-                  </a>
+                  <ExternalLink href={t.operatorWebsite} look="inline" className="break-all">
+                    {t.operatorWebsite}
+                  </ExternalLink>
                 </>
               )}
             </p>
@@ -194,16 +204,16 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <>
               <AssetReadState error={latest.error} label="last token movement" retained />
               {latest.data.data[0] ? (
-                <p>
+                <p className="max-w-measure">
                   {/* Lane P: the day it moved; how long ago is the date's hover. */}
                   It last moved on{' '}
-                  <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
+                  <AppLink look="inline" href={`/tx/${latest.data.data[0].txHash}`}>
                     <Utc8Date timestamp={latest.data.data[0].timestamp} />
                   </AppLink>
                   : {activityHeadline(latest.data.data[0])}.
                 </p>
               ) : (
-                <p className="text-text-dim">No recorded token movements.</p>
+                <p className="text-text">No recorded token movements.</p>
               )}
             </>
           ) : (
@@ -211,7 +221,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           )}
           {t.metadata?.conflict && t.metadata.chain && (
             // F2 objects (IV-26): a relabelled token says what the chain calls it.
-            <p className="text-text-dim">
+            <p className="text-text max-w-measure">
               Its name comes from a CKBadger label. On chain it calls itself{' '}
               <span className="text-text-bright">
                 {t.metadata.chain.symbol ?? t.metadata.chain.name ?? 'nothing'}
@@ -220,23 +230,18 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             </p>
           )}
           {t.sameSymbolTokens === undefined ? (
-            <p className="text-text-dim">Same-symbol comparison unavailable.</p>
+            <p className="text-text">Same-symbol comparison unavailable.</p>
           ) : (
             t.sameSymbolTokens.length > 0 && (
-              <p className="border-token/40 border-l-2 pl-3">
+              <p className="border-token/40 max-w-measure border-l-2 pl-3">
                 {t.sameSymbolTokens.length === 1
                   ? `Another token also calls itself ${t.symbol}: `
                   : `Other tokens also call themselves ${t.symbol}: `}
                 {t.sameSymbolTokens.map((other, i) => (
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
-                    <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash
-                        hash={other.typeScriptHash}
-                        size="row"
-                        copyable={false}
-                        className="text-small"
-                      />
+                    <AppLink look="inline" href={`/tokens/${other.typeScriptHash}`}>
+                      <Hash hash={other.typeScriptHash} size="row" className="text-small" />
                     </AppLink>
                     , {unitNode(formatCount(other.holdersCount, 'holder'))}
                   </span>
@@ -278,7 +283,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               label: 'Issuer',
               size: 'body',
               value: t.issuer ? (
-                <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
+                <AppLink look="key" href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
                   <ShortId
                     value={t.issuer.address ?? t.issuer.lockHash}
                     kind={t.issuer.address ? 'address' : 'hash'}
@@ -290,17 +295,25 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               ) : (
                 <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
               ),
-              // U-15: a lock the registry does not name reads "lock <code hash>"; a lock that is
-              // not indexed has no kind to write, so the note is the proof alone.
+              // U-15: a lock the registry does not name reads "lock <code hash>". A lock named
+              // nowhere beside its party (the default lock, a lock not indexed) is no part of the
+              // note: the note is the proof alone, one separator (B4)
               note: t.issuer
                 ? [
-                    t.issuer.lockCodeHash !== null && (
-                      <LockKind
-                        lockKind={t.issuer.lockKind}
-                        lockCodeHash={t.issuer.lockCodeHash}
-                        size="row"
-                        className="text-text-dim text-small"
+                    issuerLock?.error !== undefined ? (
+                      <PartReadError
+                        what="the issuer’s lock"
+                        where={`issuer ${t.issuer!.lockHash}`}
+                        error={issuerLock.error}
                       />
+                    ) : (
+                      issuerLock?.value && (
+                        <LockWordsView
+                          words={issuerLock.value}
+                          size="row"
+                          className="text-text-dim text-small"
+                        />
+                      )
                     ),
                     'owner lock proven by token script',
                   ]
@@ -312,7 +325,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 held !== null ? (
                   <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
                 ) : (
-                  <span className="text-text-dim">Capacity unavailable</span>
+                  <span className="text-text">Capacity unavailable</span>
                 ),
               note:
                 held !== null && occupied !== null && held > BigInt(0) ? (
@@ -334,7 +347,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           mark="tokens"
           loadActivities={(p) => api.getTokenActivityFeed(typeHash, p)}
           loadTransactions={(p) => api.getTokenTransactions(typeHash, p)}
-          token={{ typeHash, symbol: t.symbol, decimals: t.decimals }}
+          // the token as the API names it (its rows carry that hash), not the address's spelling
+          token={{ typeHash: t.typeScriptHash, symbol: t.symbol, decimals: t.decimals }}
         />
       }
       tier2={
@@ -355,7 +369,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <>
                     the lock hash of the owner that can mint (
                     {t.issuer.address ? (
-                      <AppLink href={`/address/${t.issuer.address}`} className="hover:text-jade">
+                      <AppLink look="inline" href={`/address/${t.issuer.address}`}>
                         {t.issuer.address}
                       </AppLink>
                     ) : (
@@ -374,7 +388,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <dd className="text-text m-0 min-w-0">
               {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
               {t.decimals ?? 'Decimals unknown'}
-              <span className="text-text-dim text-meta block">{provenanceText(t.metadata)}</span>
+              {/* where the name comes from, a sentence: the reading ink at the list's 13 px */}
+              <span className="text-text block">{provenanceText(t.metadata)}</span>
             </dd>
             <dt className="text-text-dim">Live cells</dt>
             <dd className="text-text m-0">
@@ -384,6 +399,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         </DetailSection>
       }
     >
+      {/* Readability R7: who holds it first, then the history, 160 px under its sentence (it was
+          the first thing under the metrics, before the holders) */}
+      <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
       <div role="region" aria-label="History" className="min-w-0">
         {history.data ? (
           <>
@@ -403,18 +421,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   : undefined
               }
               supplyPager={
-                supplyEvents.data && (
-                  <CursorPagination
-                    total={supplyEventsTotal(supplyEvents.data)}
-                    totalLabel="supply changes"
-                    pageSize={supplyPageSize}
-                    page={supplyPages.page}
-                    currentCount={supplyEvents.data.data.length}
-                    hasMore={supplyEvents.data.hasMore}
-                    hasPrevious={supplyPages.hasPrevious}
-                    onNext={() => supplyPages.goToNext(supplyEvents.data!.nextCursor)}
-                    onPrevious={supplyPages.goToPrevious}
-                  />
+                supplyAt && (
+                  // the controls board's pager: a list in time, newest first
+                  <div className="mt-3">
+                    <Pager mode="time" label="supply changes" order="newest first" {...supplyAt} />
+                  </div>
                 )
               }
               footnote={
@@ -439,7 +450,6 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           <AssetReadState error={history.error} read={history} label="token history" />
         )}
       </div>
-      <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
     </AssetDetailShell>
   );
 }

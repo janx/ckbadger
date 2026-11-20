@@ -10,28 +10,32 @@ import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
 import { cssVars, SEARCH_RESULT_COLORS } from '@/lib/design-tokens';
 import { fontPx, textPx } from '@/lib/type-metrics';
+import { SEARCH_PLACEHOLDER, SEARCH_PLACEHOLDER_SHORT } from '@/lib/header-fit';
+import { WELL_MATERIAL } from '@/components/ui/text-field';
 
 interface SearchBarProps {
   className?: string;
   variant?: 'default' | 'compact' | 'home';
 }
 
-/** The boards' placeholder (lib.js `header()`, U-01): lowercase, as a command is typed; no dots. */
-const SEARCH_PLACEHOLDER = 'search block / tx / address / cell';
-/** The placeholder of a field whose text box cannot hold the long one: 6 characters, 46.8 px. */
-const SEARCH_PLACEHOLDER_SHORT = 'search';
 /**
+ * The boards' placeholder (lib.js `header()`, U-01: lowercase, as a command is typed; no dots) and
+ * the short one, `search`, of a field whose text box cannot hold it: from lib/header-fit.ts, whose
+ * budget of the header's row floors the field at the short one.
+ *
  * The long placeholder's width in the field's font, the body step (`text-body`): 34 characters,
- * 265.2 px at 13 px (lib/type-metrics.ts). The field draws it
+ * 285.6 px at 14 px (lib/type-metrics.ts). The field draws it
  * only when its measured text box holds all of it (PA-04 follow-up; RESPONSIVE_LAYOUT principle
  * 4, the measured width decides, not the breakpoint). In the header's field that box is the
  * input's width less 1 + 28 px on the left (the border, the prompt square's inset) and 36 + 1 px
  * on the right from md (the `/` key's room), 12 + 1 px below it: the long one needs a field
- * 331.2 px wide from md, and a phone's field (180 px at 360, capped at 288 px) never holds it.
- * At 768–1023 the header leaves the field about 169 px, at 1024 368.6 px (36vw) with one network
- * and about 281 px beside the network switcher, at 1280 460.8 px.
+ * 351.6 px wide from md, and a phone's field (182 px at 360, capped at 288 px) never holds it.
+ * With one network the header leaves the field 144 px at 768–1023, 352 px at 1024 (the long one
+ * with 0.4 px to spare) and 460.8 px at 1280; beside the network switcher 210.5 px at 1024, and
+ * across 768–1023, where the nav goes into the menu, its cap: the long one from 977 px
+ * (`__tests__/components/shell-budget.test.tsx` states each width).
  */
-const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
+export const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
 
 /** The input's horizontal insets, read from its computed style: borders and paddings. */
 const INSETS = ['borderLeftWidth', 'paddingLeft', 'paddingRight', 'borderRightWidth'] as const;
@@ -246,19 +250,22 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               // the text (U-01; a jade ">" before it), a block cursor after it while focused (the
               // native caret is hidden under it), and
               // a jade-tinted border with a soft ring on focus. The "/" key hint stays. The
-              // compact and default fields are wells (material pass v2, move 2: `.well`, dark
-              // glass inset, square corners); the home hero field keeps its approved
-              // jade border and glow. That focus look is the field's one focus line: it opts out
-              // of the global jade outline (visual finish V9, one ring per control).
+              // compact and default fields stand in the well of every field (WELL_MATERIAL,
+              // components/ui/text-field.tsx: the well's ground, the frame line, its inset,
+              // square), the one the controls board's text field and select copy; the field is a
+              // combobox of its own (its cursor, its list), so it keeps its box and its focus. The
+              // home hero field keeps its approved jade border and glow. That focus look is the
+              // field's one focus line: it opts out of the global jade outline (visual finish V9,
+              // one ring per control).
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 md:pr-28'
                 : isCompact
-                  ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key
-                    // from md; below it no key and no room for one (PA-04).
-                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9'
-                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
+                  ? // TX-03 (Main.dc.html): a 36 px field, one "/" key from md; below it no key
+                    // and no room for one (PA-04).
+                    `${WELL_MATERIAL} placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9`
+                  : `${WELL_MATERIAL} placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4`
             )}
           />
           {/* The prompt (U-01, the boards' `.search .sq`): the 7 px cinnabar square, centred on

@@ -47,7 +47,8 @@ impl Default for CacheBackend {
 pub struct CacheKeys;
 
 impl CacheKeys {
-    pub const NETWORK_STATS: &'static str = "ckbadger:stats:network";
+    // v2: the block time and the transaction rates cut (lane exactness, part A2, S5)
+    pub const NETWORK_STATS: &'static str = "ckbadger:stats:network:v2";
     pub const LATEST_BLOCKS: &'static str = "ckbadger:blocks:latest";
 
     pub fn block_by_hash(hash: &str) -> String {

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
-import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { api, ApiRequestError, type ItemCellVersion, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import {
@@ -9,6 +9,10 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 let query = '';
 const replace = vi.fn();
@@ -102,15 +106,27 @@ it('keeps recycled identity history while showing no live capacity', async () =>
   expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
+  // Readability R8 (lane p-assets): the head says the state in words, as the page's lede; the
+  // standard's sentence ("The name and everything about it live in one CKB cell.") contradicted it
+  const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+  const lede = header.querySelector('[data-role="lede"]')!;
+  expect(lede).toHaveTextContent(
+    'A .bit name that is no longer a live account: no CKB cell holds it now.'
+  );
+  expect(header).not.toHaveTextContent('live in one CKB cell');
+  // said once: tier 2's "in words" no longer says it again
+  expect(screen.getByTestId('identity-summary')).not.toHaveTextContent('no longer a live account');
 });
 it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
   query = 'activity_cursor=100:0';
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...itemActivityFeedProducer,
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   render(<Page identityId={evidence.itemId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
@@ -118,7 +134,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
       cursor: '100:0',
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
       limit: 20,
@@ -139,7 +155,7 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
     })),
   });
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
   // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
   // count is not shown at all rather than as "Not computed".
@@ -155,14 +171,18 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
   });
 });
 it('starts a new identity on its own first cursor page', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender } = render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
       limit: 20,
@@ -333,7 +353,7 @@ it('says nothing of .bit Cells while the index is not derived (L3: bitCells null
 // Cells · Fee · Size · This name's cell after it.
 it('lays the .bit Transactions out in the board columns (ID-C8)', async () => {
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   const table = await screen.findByRole('table', { name: 'Asset transactions' });
   const headers = Array.from(table.querySelectorAll('th')).map((th) =>
     th.textContent!.replace(/0[\d,]+$/, '')
@@ -349,4 +369,50 @@ it('lays the .bit Transactions out in the board columns (ID-C8)', async () => {
   ]);
   const row = table.querySelector('tbody tr')!;
   expect(row).toHaveTextContent(/cell after/);
+});
+
+// Lane P2's fifth round (item 1, MUST): a version whose type changed is never folded among versions
+// alike, though its capacity, byte counts and lock stay (a .bit account cell under a type of the
+// same length, its args changed), nor are a renewal and a record edit, which change only the data.
+it('never folds a type change, a renewal or a record edit of the same length', async () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  const type = base.type!;
+  const otherType = { ...type, args: `0x${'5e'.repeat((type.args.length - 2) / 2)}` };
+  const data = [
+    base.dataHash,
+    base.dataHash,
+    base.dataHash,
+    `0x${'e1'.repeat(32)}`,
+    `0x${'e2'.repeat(32)}`,
+  ];
+  const types = [type, type, otherType, otherType, otherType];
+  const cells: ItemCellVersions = {
+    data: data.map((dataHash, i): ItemCellVersion => {
+      const last = i === data.length - 1;
+      return {
+        ...base,
+        txHash: `0x${String(i + 1)
+          .padStart(2, '0')
+          .repeat(32)}`,
+        outputIndex: 0,
+        blockNumber: 100 + i,
+        txIndex: 0,
+        dataHash,
+        type: types[i],
+        isLive: last,
+        consumedByTx: last
+          ? null
+          : `0x${String(i + 2)
+              .padStart(2, '0')
+              .repeat(32)}`,
+        consumedAtBlock: last ? null : 101 + i,
+      };
+    }),
+    total: data.length,
+  };
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
+  render(<Page identityId={evidence.itemId} />);
+  const list = await screen.findByLabelText(/cell versions$/);
+  expect(within(list).getAllByRole('article')).toHaveLength(5);
+  expect(list.querySelector('[data-versions-fold]')).toBeNull();
 });

@@ -6,20 +6,27 @@
  * hold them as lanes a reader can tell apart. Pure, so the forms are tested without a browser.
  */
 
-import { clipLabel } from '@/lib/shorten';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+import { clipForeignLabel } from '@/lib/shorten';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { advancePx, foreignTextPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
-/** A gene caption's glyph (set at the tick size) at the advance Chromium was observed at: 6.4 px. */
-const CHAR_WIDTH = SVG_TEXT.tick * OBSERVED_ADVANCE_EM;
+/** A gene caption's glyph, set at the tick size. */
+const CHAR_WIDTH = advancePx(SVG_TEXT.tick);
 /** Gene names longer than this are shortened on the gel. */
 const CAPTION_CHARS = 14;
 /** The margin a turned caption keeps inside its head. */
 const ROTATED_MARGIN = 8;
+/** A caption's line at the tick size (readability plan 2026-11-18, lane F3). */
+const CAPTION_LINE = tightLinePx(SVG_TEXT.tick);
+/** A caption across its lane stands a pixel under the row's top, its well 6 px under it. */
+const CAPTION_PAD = 1;
 
 export const ALLELE_GEL = {
-  /** The narrowest lane that still holds a band (R3). */
-  laneFloor: 12,
+  /**
+   * The narrowest lane: it holds a band (R3) and its gene's caption turned on end, a tick line and
+   * a pixel (16 px at 12 px; it was 12, and a turned 12 px caption ran into its neighbour's).
+   */
+  laneFloor: CAPTION_LINE + 1,
   /** A lane this wide writes its variants inside its bands. */
   labelledLane: 60,
   /** More genes than this become the ranked list below `listBelow`. */
@@ -36,9 +43,14 @@ export const ALLELE_GEL = {
   charWidth: CHAR_WIDTH,
   /** Gene names longer than this are shortened on the gel (the full name is in the lane title). */
   captionChars: CAPTION_CHARS,
-  /** Head of a row whose gene names are written across their lanes. */
-  headAcross: 22,
-  /** Head of a row whose gene names are turned on end (14 characters at the tick size, and margin): 98. */
+  /** Head of a row whose gene names are written across their lanes: a pixel, the line and 6 px (22). */
+  headAcross: CAPTION_PAD + CAPTION_LINE + 6,
+  /** The baseline of a caption written across its lane. */
+  captionY: CAPTION_PAD + lineAscentPx(SVG_TEXT.tick),
+  /**
+   * Head of a row whose gene names are turned on end: a caption's room (14 Latin glyphs at the
+   * tick size, 100.8 px; a caption is cut to it, `geneCaption`) and margin: 109 (98 at 11 px).
+   */
   headRotated: Math.ceil(CAPTION_CHARS * CHAR_WIDTH) + ROTATED_MARGIN,
 } as const;
 
@@ -54,9 +66,13 @@ export type AlleleGelLayout =
       head: number;
     };
 
-/** A gene name as drawn on the gel: a label cut to the gel's caption budget. */
+/**
+ * A gene name as drawn on the gel: the collection creator's text, cut to the room of the gel's
+ * caption budget (14 Latin glyphs at the tick size, 100.8 px) at whole graphemes, measured by the
+ * bound of lib/type-metrics.ts (review F-B, logic finding 5).
+ */
 export function geneCaption(gene: string): string {
-  return clipLabel(gene, ALLELE_GEL.captionChars);
+  return clipForeignLabel(gene, SVG_TEXT.tick, textPx(ALLELE_GEL.captionChars, SVG_TEXT.tick));
 }
 
 export function alleleGelLayout({
@@ -102,7 +118,9 @@ export function alleleGelLayout({
   const rows: number[][] = [];
   for (let i = 0; i < n; i += perRow)
     rows.push(Array.from({ length: Math.min(perRow, n - i) }, (_, k) => i + k));
-  const across = genes.every((gene) => geneCaption(gene).length * g.charWidth + 6 <= laneWidth);
+  const across = genes.every(
+    (gene) => foreignTextPx(geneCaption(gene), SVG_TEXT.tick) + 6 <= laneWidth
+  );
   return {
     form: 'gel',
     rows,

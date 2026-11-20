@@ -139,7 +139,7 @@
 
 body {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--foreground);
   background: var(--background);
   min-height: 100vh;
@@ -438,19 +438,27 @@ h1.text-index {
   text-shadow: none;
 }
 
-/* Move 1c — hover: a link (and, through `.hover-lit`, a copyable hash) turns jade and glows. SVG
-   links (the pipeline's cards) keep their own hover design. */
-a:hover {
+/* Move 1c — hover and focus: a link of every look (components/ui/link.tsx: a row's key, a link
+   inside a line, a way onward, a block, the shell's navigation) turns celadon under the pointer and
+   under the keyboard's focus, the one rule for both (the controls board: "hover and focus turn any
+   of them celadon"); the glow is the theme's (none by day). The focus keeps its ring as well (the
+   base layer's `:focus-visible`). An underline follows its words into the celadon (a link inside
+   a line is underlined in the muted ink at rest): the rule's `a` and its state outrank the one
+   class that colours the line. SVG links (the pipeline's cards) keep their own hover and focus
+   design. The library's action after a failed read (components/ui/retry-action.tsx,
+   `.look-action`), a button in a way onward's ink, follows the same rule. */
+a:focus-visible,
+a:hover,
+.look-action:focus-visible,
+.look-action:hover {
   color: var(--c-jade);
+  text-decoration-color: currentColor;
   text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
+svg a:focus-visible,
 svg a:hover {
   color: inherit;
   text-shadow: none;
-}
-.hover-lit:hover {
-  color: var(--c-jade);
-  text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));
 }
 
 /* Move 2 — the hairlines, set flat (rubbing × Song print, phase 2): the jade tubes lit from the
@@ -755,15 +763,16 @@ h1.text-index {
 }
 
 /* Material pass v2, leftovers — tier-2 prose (components/ui/prose.tsx): an explanation reads at
-   the body step, 13 px (R12: the scale has no stylesheet-only size, and tier 2 is never larger
-   than tier 1), on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is
-   the true italic (the 400 italic face above). The piece carries the class; its paragraphs carry
-   nothing. */
+   the body step, 14 px (R12: the scale has no stylesheet-only size, and tier 2 is never larger
+   than tier 1), on a 1.7 line, on the measure (readability R4, lane B7: the one class
+   `max-w-measure`, 76 characters, that every lede and paragraph of running text takes), in the
+   reading ink, paragraphs 14 px apart; `em` is the true italic (the 400 italic face above). The
+   piece carries the class; its paragraphs carry nothing. */
 .prose-tier2 p {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.7;
-  max-width: 64ch;
-  color: var(--c-text-dim);
+  @apply max-w-measure;
+  color: var(--c-text);
 }
 .prose-tier2 p + p {
   margin-top: 14px;
@@ -773,9 +782,11 @@ h1.text-index {
 }
 
 /* The voice (rubbing × Song print): Courier Prime, for comment lines and the 404 verse only. A
-   comment is a row: the ghost `#` in the UI mono (generated, with empty alternative text, so a
-   screen reader reads the words only), then the lines at 14 px on a 1.55 line in the dim ink. Its
-   one child holds the lines; nothing in it is a measured label. */
+   comment is a row: the ghost `#` in the UI mono at the body step (generated, with empty
+   alternative text, so a screen reader reads the words only), then the lines at the section step,
+   17 px, on a 1.55 line in the reading ink (readability R4: Courier Prime's x-height is 0.45 em
+   against JetBrains Mono's 0.55, so 17 px of the voice stands as tall as the 14 px body). Its one
+   child holds the lines; nothing in it is a measured label. */
 .voice {
   font-family: var(--font-voice);
 }
@@ -784,16 +795,16 @@ h1.text-index {
   align-items: baseline;
   gap: 10px;
   font-family: var(--font-voice);
-  font-size: 14px;
+  font-size: 17px;
   line-height: 1.55;
-  color: var(--c-text-dim);
+  color: var(--c-text);
 }
 .comment::before {
   content: '#';
   content: '#' / '';
   flex: none;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--c-text-ghost);
 }
 .comment > * {
@@ -831,38 +842,24 @@ h1.text-index {
 
 /* The skeleton (rubbing × Song print): the page is a terminal session. The prompt square (the
    8 px cinnabar square that begins every command line) is drawn with the section mark, below. The
-   wordmark's name, 15 px: a mark's size, set once here like the voice's 14 px, not a step of
-   the type scale that running text may take. */
+   wordmark's name, 15 px: a mark's size, set once here, not a step of the type scale that
+   running text may take. */
 .wordmark {
   font-size: 15px;
   line-height: 1;
 }
 
 /* The not-found and error pages (rubbing × Song print, phase 4; the seals by kind, C5): the verse
-   over the newest block's seal. The seal (components/error-page-shell.tsx, the block's square stone
-   in the cinnabar mark) is pressed on the page's ground behind every line of text (z -1 in main's
-   isolated stack), centred, faint (`--m-seal-press`, the theme's material). It takes about the
-   area the old tall brush seal before it took (11.94 × 28.14 units, as tall as main's box and one
-   screen at most): a square 0.65 as tall (√(11.94 / 28.14) = 0.651), and never wider than the
-   page less its 16 px gutters. Its SVG keeps its drawn proportions at whatever height it is
-   given. */
+   and, in its own place, the newest block's seal (components/error-page-shell.tsx, the block's
+   square stone in the cinnabar mark), faint (`--m-seal-press`, the theme's material). It stands
+   clear of the text column at every width (readability R6: pressed behind the verse, its strokes
+   crossed the glyphs): beside the column from 1280, under it below, drawn at its own 256 px
+   (ERROR_PAGE_LAYOUT), in the page's flow. */
 .error-seal {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 0;
   pointer-events: none;
   opacity: var(--m-seal-press);
 }
-.error-seal > [data-seal] {
-  display: block;
-  height: min(65%, 65svh, calc(100vw - 32px));
-}
+.error-seal > [data-seal],
 .error-seal svg {
   display: block;
-  height: 100%;
-  width: auto;
 }

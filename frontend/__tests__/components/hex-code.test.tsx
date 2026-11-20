@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { HexCode } from '@/components/ui/hex-code';
 
@@ -21,55 +21,24 @@ describe('HexCode', () => {
   });
 
   // Seals by kind, C10 round 2: a name plate's id line sets the voice once (text-small in
-  // text-text-dim) and the hash in it takes it, so `inherit` writes no ink and no size of its own;
-  // its click-to-copy is unchanged.
-  it('takes the ink and the size of the line it stands in under `inherit`, still copying', async () => {
+  // text-text-dim) and the hash in it takes it, so `inherit` writes no ink and no size of its own.
+  // Re-pinned (lane c2-finish, rulings round 1): an id copies nothing on a click (its click-to-copy,
+  // its tick and its glow went with their last call site; a copy is the copy button's, after an id
+  // line), so its whole value is its title; the two tests of that copy alone (the click and its
+  // tick, the tick's timer) went with it.
+  it('takes the ink and the size of the line it stands in under `inherit`, copying nothing', () => {
     render(<HexCode value={HASH} truncate={false} variant="inherit" />);
     const hash = screen.getByText(HASH);
     // U-16 (re-pinned): a full value is one line in its own box, as wide as its column at most
-    expect(hash.className).toBe(
-      `font-mono hover-lit cursor-pointer transition-colors ${FULL_VALUE}`
-    );
-    expect(hash).toHaveAttribute('title', 'Click to copy');
+    expect(hash.className).toBe(`font-mono ${FULL_VALUE}`);
+    expect(hash).toHaveAttribute('title', HASH);
     fireEvent.click(hash);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(HASH);
-    await waitFor(() => expect(screen.getByText('✓')).toBeInTheDocument());
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(screen.queryByText('✓')).toBeNull();
   });
 
-  // A4 review 3: HexCode copies through the one copy path (hooks/useCopy): its tick's timer goes
-  // with it, and a copy without a clipboard shows no tick.
-  it('leaves no timer when it goes while its tick shows, and shows none without a clipboard', async () => {
-    vi.useFakeTimers();
-    try {
-      const { unmount } = render(<HexCode value={HASH} truncate={false} />);
-      await act(async () => {
-        fireEvent.click(screen.getByText(HASH));
-      });
-      expect(screen.getByText('✓')).toBeInTheDocument();
-      unmount();
-      expect(vi.getTimerCount()).toBe(0);
-      Object.assign(navigator, { clipboard: undefined });
-      render(<HexCode value={HASH} truncate={false} />);
-      await act(async () => {
-        fireEvent.click(screen.getByText(HASH));
-      });
-      expect(screen.queryByText('✓')).toBeNull();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('keeps the full value as its title under `inherit` when it does not copy', () => {
-    render(
-      <HexCode
-        value={HASH}
-        truncate={false}
-        variant="inherit"
-        copyable={false}
-        className="min-w-0"
-      />
-    );
+  it('keeps the full value as its title under `inherit`', () => {
+    render(<HexCode value={HASH} truncate={false} variant="inherit" className="min-w-0" />);
     const hash = screen.getByText(HASH);
     expect(hash.className).toBe(`font-mono ${FULL_VALUE} min-w-0`);
     expect(hash).toHaveAttribute('title', HASH);

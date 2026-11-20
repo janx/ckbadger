@@ -6,9 +6,11 @@ import detailFixture from '@/__tests__/fixtures/scripts/class-evidence-detail.js
 import multisigFixture from '@/__tests__/fixtures/scripts/multisig-evidence-detail.json';
 import type {
   ScriptCodeClassTotalApi,
+  ScriptCustodyApi,
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
+import { DetailTier2 } from '@/components/ui/detail-layout';
 import {
   ScriptCodeClassBar,
   ScriptCodeClassSummary,
@@ -47,7 +49,13 @@ describe('script code evidence', () => {
       </>
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('18,014,398,509.48198600');
+    // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form, whole CKB from
+    // 1,000 up, the exact value its title (it wrote the column's every decimal, padded)
+    expect(sentence).toContain('Of the 18,014,398,509 CKB under these');
+    expect(screen.getByTestId('code-class-sentence').querySelector('[title]')).toHaveAttribute(
+      'title',
+      expect.stringContaining('18,014,398,509.481986')
+    );
     expect(sentence).toContain('50.00% runs code no one can change');
     expect(sentence).toContain('50.00% sits under code marked "holder lock not recognised"');
     expect(screen.getByText('Holder lock not recognised')).toBeInTheDocument();
@@ -58,7 +66,8 @@ describe('script code evidence', () => {
   });
 
   it('consumes API-produced full-scope list totals and canonical history markers', () => {
-    expect(listFixture.roleCounts).toEqual({ all: 1, locks: 1, types: 0 });
+    // re-pinned on purpose (the P3 follow-up, SHOULD 3): the route states the overlap and the rest
+    expect(listFixture.roleCounts).toEqual({ all: 1, locks: 1, types: 0, both: 0, neither: 0 });
     expect(
       listFixture.classSummary.reduce(
         (sum, row) => sum + BigInt(row.lockOwnedCapacitySum),
@@ -72,7 +81,8 @@ describe('script code evidence', () => {
       />
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('55.56% runs code no one can change');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5 of 9 shannons is 55.555…%, 55.55% (half up 55.56%)
+    expect(sentence).toContain('55.55% runs code no one can change');
     expect(sentence).toContain('44.44% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });
@@ -90,6 +100,7 @@ describe('script code evidence', () => {
           requireFirstN: 0,
           keyHashes: [],
           verifiedByTx: `0x${'12'.repeat(32)}`,
+          verifiedCodeCell: `0x${'34'.repeat(32)}:1`,
           witnessState: 'verified',
           owners: [],
         }}
@@ -97,6 +108,50 @@ describe('script code evidence', () => {
     );
     expect(screen.getByText(fullText(/3 of 5 keys/))).toBeInTheDocument();
     expect(screen.getByText(/This holder signed to spend/)).toBeInTheDocument();
+    // Lane P2's third round (item 16): the spending transaction opens at the code cell it spent
+    // (`transactionAtCellHref`), which its page then never folds away (it linked the transaction
+    // bare)
+    expect(screen.getByRole('link', { name: /0x12121212/ })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/0x${'12'.repeat(32)}#0x${'34'.repeat(32)}-1`
+    );
+  });
+
+  // the custody's key hashes, the library's inner disclosure (lane cd-fixes-controls, the
+  // disclosure sweep): its words 13 px in the ink of the tier it stands in (the script family page's
+  // custody figure is tier 1, the reading ink; the scripts page's evidence tier 2, the quiet ink;
+  // they were quiet in both), the hashes 8 px under them (4) at 12 px in the quiet ink as before
+  it('folds the committed key hashes, their words in the ink of the tier they stand in', () => {
+    const custody: ScriptCustodyApi = {
+      class: 'multisig',
+      lockCodeHash: '0x01',
+      lockHashType: 'type',
+      lockArgs: '0x02',
+      threshold: 2,
+      keyCount: 2,
+      requireFirstN: 0,
+      keyHashes: [`0x${'aa'.repeat(20)}`, `0x${'bb'.repeat(20)}`],
+      verifiedByTx: null,
+      verifiedCodeCell: null,
+      witnessState: 'unavailable',
+      owners: [],
+    };
+    render(
+      <>
+        <ScriptCustodyEvidence custody={custody} />
+        <DetailTier2>
+          <ScriptCustodyEvidence custody={custody} />
+        </DetailTier2>
+      </>
+    );
+    const [one, two] = screen.getAllByText('2 committed key hashes');
+    expect(one).toHaveClass('text-small', 'text-text');
+    expect(two).toHaveClass('text-small', 'text-text-dim');
+    const details = one.closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    // re-pinned on purpose (the ink and size roles round): the hashes are values, the reading ink at
+    // 13 px (they kept the quiet 12 px of the line around them)
+    expect(details.querySelector('ul')).toHaveClass('text-small', 'text-text');
   });
 
   it('links every code cell each holder owns to its cell page', () => {
@@ -121,6 +176,7 @@ describe('script code evidence', () => {
           requireFirstN: null,
           keyHashes: [],
           verifiedByTx: null,
+          verifiedCodeCell: null,
           witnessState: 'not_applicable',
           owners: [owner('0x02', [`${txA}:0`, `${txA}:1`]), owner('0x03', [`${txB}:2`])],
         }}
@@ -172,10 +228,10 @@ describe('script code evidence', () => {
     ];
     const chart: StackedAreaChartResponse = {
       title: 'Capacity',
-      series: [{ key: 'used', label: 'Used', color: '#fff' }],
+      series: [{ key: 'occupiedCapacity', label: 'Occupied', color: '#fff' }],
       data: [
-        { date: '2024-08-01', values: { used: '100000000' } },
-        { date: '2024-11-01', values: { used: '200000000' } },
+        { date: '2024-08-01', values: { occupiedCapacity: '100000000' } },
+        { date: '2024-11-01', values: { occupiedCapacity: '200000000' } },
       ],
     };
     const { container } = render(<ScriptCapacityEvidenceChart chart={chart} markers={markers} />);
@@ -209,6 +265,7 @@ describe('script code evidence', () => {
       threshold: 1,
       keyCount: keyHashes.length,
       verifiedByTx: '0x' + '77'.repeat(32),
+      verifiedCodeCell: `0x${'77'.repeat(32)}:0`,
     });
     const tx = '0x' + '77'.repeat(32);
     const refA = '0x' + 'aa'.repeat(32);
@@ -263,10 +320,19 @@ describe('script code evidence', () => {
         chart={{
           title: 'Capacity',
           series: [
-            { key: 'used', label: 'Used', color: '#f59e0b' },
-            { key: 'unused', label: 'Unused', color: '#00c389' },
+            { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+            { key: 'freeCapacity', label: 'Free', color: '#00c389' },
           ],
-          data: [{ date: '2024-01-02', values: { used: '100000000', unused: '200000000' } }],
+          data: [
+            {
+              date: '2024-01-02',
+              values: {
+                occupiedCapacity: '100000000',
+                freeCapacity: '200000000',
+                capacity: '300000000',
+              },
+            },
+          ],
         }}
       />
     );
@@ -275,4 +341,28 @@ describe('script code evidence', () => {
     expect(document.body.textContent).not.toContain('CKB CKB');
     expect(document.body.textContent).toContain('1.00000000 CKB');
   });
+});
+
+// Lane P2's fifth round (item 3): the custody's verifiedCodeCell, sent with verifiedByTx from this
+// plan on; a verified spend from an API older than this page sends no code cell: refused by name
+// (it read `undefined` as an out point).
+it('refuses by name a verified spend an API older than this page sends', () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const custody = {
+    class: 'multisig',
+    lockCodeHash: '0x01',
+    lockHashType: 'type',
+    lockArgs: '0x02',
+    threshold: 3,
+    keyCount: 5,
+    requireFirstN: 0,
+    keyHashes: [],
+    verifiedByTx: `0x${'12'.repeat(32)}`,
+    witnessState: 'verified',
+    owners: [],
+  } as unknown as Parameters<typeof ScriptCustodyEvidence>[0]['custody'];
+  expect(() => render(<ScriptCustodyEvidence custody={custody} />)).toThrow(
+    'custody 0x02: the API sends no verifiedCodeCell: it is older than this page'
+  );
+  log.mockRestore();
 });

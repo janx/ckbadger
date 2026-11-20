@@ -3,6 +3,11 @@
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+
+/** A real JoyID address (RFC 0021 full format): a row names its lock, the default lock it leaves unnamed (B4). */
+const JOYID_ADDRESS =
+  'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqxeeh0qtxeeu05my2z7pfn7d45k4t8rvvsfavygk';
 
 function party(over: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
@@ -27,8 +32,12 @@ const objectArrived: ItemDelta = {
   collection: { name: '.cell deeds' },
 } as ItemDelta;
 
-function activity(participants: ParticipantInfo[]): ActivityRowData {
-  return {
+function activity(
+  participants: ParticipantInfo[],
+  // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+): ActivityRowData {
+  return activityRead({
     txHash: '0x' + 'cd'.repeat(32),
     blockNumber: 20757774,
     timestamp: '1700000000000',
@@ -36,8 +45,11 @@ function activity(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+
+    itemTypesUnread: null,
     participants,
-  };
+    ...over,
+  });
 }
 
 /** Every Tailwind class in the participants box, the box itself included. */
@@ -53,17 +65,18 @@ describe('activity participant lines (A1 → T7: one wrapping line at every widt
   // A1 kept the 4/5-track grid off the 640 band (it pushed the page 100–150 px sideways, report
   // B#1–5) and the 136 px party track clipped roles to "ow" (B#11). Option A (T7) has no tracks:
   // one wrapping line per participant at every width, so there is no breakpoint to get wrong.
-  it.each([
-    ['a plain row', false],
-    ['a lockColumn row (the prop no longer changes the row)', true],
-  ])('%s draws a flex column of wrapping lines, no grid, no sm:/md: track', (_name, lockColumn) => {
+  // B4 second fix round: the `lockColumn` prop, which changed nothing since Option A, is gone
+  // (the type refuses it); its case, "the prop no longer changes the row", went with it.
+  it('draws a flex column of wrapping lines, no grid, no sm:/md: track', () => {
     const { container } = render(
       <ActivityRow
-        lockColumn={lockColumn}
-        activity={activity([
-          party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
-          party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
-        ])}
+        activity={activity(
+          [
+            party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
+            party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
+          ],
+          { itemTypes: [ITEM_TYPE.spore] }
+        )}
       />
     );
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;
@@ -92,7 +105,10 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
   }
 
   it('keeps the address, then its lock tag, then the amount, each whole', () => {
-    const row = plainRow(party({ ckbDelta: '67073483600000000' }));
+    // B4 (re-pinned): a JoyID party, since a default-lock party's line names no lock (R9)
+    const row = plainRow(
+      party({ ckbDelta: '67073483600000000', lockKind: 'JoyID', address: JOYID_ADDRESS })
+    );
     expect(row).toHaveClass('flex', 'flex-wrap');
     expect([...row.children].map((e) => e.getAttribute('data-role'))).toEqual([
       'party',
@@ -100,10 +116,10 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'ckb',
       'occupied',
     ]);
-    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1…jg3x8k26'); // R9 (re-pinned)
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1…vsfavygk'); // R9
     // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping row, so it moves to
     // the next line whole; its words are not made one unit
-    expect(within(row).getByText('Default Lock')).not.toHaveClass('whitespace-nowrap');
+    expect(within(row).getByText('JoyID')).not.toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).not.toHaveClass('basis-full');
@@ -131,10 +147,12 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
   // Report C#8: the Activities page dropped each participant's lock kind at 390 (its column was
   // `hidden` below the grid breakpoint). On the T7 line the tag is the item right after the
   // party, with no breakpoint class, so no width can hide it.
-  // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip.
-  it('shows the lock kind in small caps right after the address, at every width', () => {
+  // Material pass v2 (move 5): the lock kind is dim words after the address, not a chip.
+  // Readability B4 (re-pinned on purpose): plain words, no small caps; a JoyID party, since the
+  // default lock is named on no line (R9).
+  it('shows the lock kind in plain words right after the address, at every width', () => {
     const { container } = render(
-      <ActivityRow lockColumn activity={activity([party({ lockKind: 'JoyID' })])} />
+      <ActivityRow activity={activity([party({ lockKind: 'JoyID', address: JOYID_ADDRESS })])} />
     );
     const kinds = container.querySelectorAll('[data-role="lock-kind"]');
     expect(kinds).toHaveLength(1);
@@ -143,8 +161,11 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
     // re-pinned (A4 Chrome sweep): no nowrap; an item of the wrapping line moves whole
-    expect(kind).toHaveClass('small-caps', 'text-text-dim');
+    const words = kind.querySelector('[data-lock-kind]') as HTMLElement;
+    expect(words).toHaveClass('text-text-dim');
+    expect(words).not.toHaveClass('small-caps');
     expect(kind).not.toHaveClass('whitespace-nowrap');
+    expect(words).not.toHaveClass('whitespace-nowrap');
     expect(kind).not.toHaveClass('border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
@@ -157,9 +178,12 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     // line whole; the party cell never exceeds the line.
     const { container } = render(
       <ActivityRow
-        lockColumn
         activity={activity([
-          party({ roles: ['owner_to', 'manager_to'], lockKind: 'InputTypeProxyLock' }),
+          party({
+            roles: ['owner_to', 'manager_to'],
+            lockKind: 'InputTypeProxyLock',
+            address: JOYID_ADDRESS,
+          }),
         ])}
       />
     );
@@ -188,18 +212,18 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockHashType: 'type',
       lockArgs: '0x' + String(i).padStart(4, '0') + 'ab'.repeat(20),
       scriptHash: '0x' + String(i).padStart(64, '0'),
-      scriptName: '.bit Lock',
+      lockScriptName: '.bit Lock',
       decoded: null,
       decodeError: null,
     });
-    return {
+    return activityRead({
       ...activity([party()]),
       protocolActions: [
         { protocol: 'dotbit', protocolName: '.bit', action: 'register', metadata: {} },
         ...Array.from({ length: 18 }, (_, i) => confirm(i)),
       ],
       lockCalls: Array.from({ length: 29 }, (_, i) => lock(i)),
-    } as ActivityRowData;
+    }) as ActivityRowData;
   }
 
   it('says a repeated action line once with its count', () => {
@@ -216,10 +240,12 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     // the row names the lock once with its count; each call stays whole in the hover.
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
     const lockLine = [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-      l.textContent?.startsWith(' · lock')
+      l.textContent?.includes('.bit Lock')
     ) as HTMLElement;
-    expect(lockLine).toHaveTextContent(/^· lock \.bit Lock ×29$/);
+    expect(lockLine).toHaveTextContent(/^· \.bit Lock ×29$/);
     const link = within(lockLine).getByRole('link', { name: '.bit Lock' });
     const calls = link.getAttribute('title')!.split('\n');
     expect(calls).toHaveLength(29);
@@ -234,18 +260,92 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockCalls: named.lockCalls.map((l, i) => ({
         ...l,
         lockCodeHash: '0x' + String(i).padStart(64, '0'),
-        scriptName: `Lock ${i}`,
+        lockScriptName: `Lock ${i}`,
       })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={distinct} />);
+    // re-pinned on purpose: found by its locks' names, the decision's words ("Lock 0 lock"), no
+    // longer by the run's "lock " label
     const lockLine = () =>
       [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-        l.textContent?.startsWith(' · lock')
+        l.textContent?.includes('Lock 0 lock')
       ) as HTMLElement;
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
-    const more = within(lockLine()).getByRole('button', { name: '+24 more locks' });
+    // re-pinned on purpose (the lead's final round, item 3): the inline fold, one button that
+    // stays, names what it opens and folds back ("fewer"); it was a button that went once pressed
+    // the fold is the head's part joined after the last name shown (its own item, so it stays)
+    const head = container.querySelector('[data-role="head-main"]') as HTMLElement;
+    const more = within(head).getByRole('button', { name: /^\+24\smore\slocks$/ });
     expect(more).toHaveAttribute('aria-expanded', 'false');
+    const names = document.getElementById(more.getAttribute('aria-controls')!)!;
+    expect(names).toContainElement(lockLine());
+    more.focus();
     fireEvent.click(more);
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(29);
+    expect(within(head).getByRole('button', { name: 'fewer' })).toBe(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
+  });
+
+  // The lead's final round, item 2: a head names its scripts by ONE rule, a row's and a folded
+  // run's alike: one list (a run's item types first, then the type calls, then the lock calls) of
+  // at most six names; over six, the first five and "+N more", the inline fold. Per run, three
+  // types and four locks were seven names on one head.
+  it('names six scripts at most on a row’s head, types and locks one list, the rest behind "+N more"', () => {
+    const named = dotbitRegistration();
+    const typeCall = (i: number) => ({
+      typeCodeHash: '0x' + String(i).padStart(64, 'e'),
+      typeHashType: 'type',
+      typeArgs: '0x',
+      scriptHash: '0x' + String(i).padStart(64, 'f'),
+      scriptName: `Type ${i}`,
+    });
+    const row = activityRead({
+      ...named,
+      protocolActions: [],
+      typeCalls: [typeCall(0), typeCall(1), typeCall(2)],
+      lockCalls: named.lockCalls.slice(0, 4).map((l, i) => ({
+        ...l,
+        lockCodeHash: '0x' + String(i).padStart(64, '0'),
+        lockScriptName: `Lock ${i}`,
+      })),
+    }) as ActivityRowData;
+    const { container } = render(<ActivityRow activity={row} />);
+    const head = () => container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(head().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
+    expect(head()).toHaveTextContent(
+      /Type 0 · Type 1 · Type 2 · Lock 0 lock · Lock 1 lock \+2\smore\slocks/
+    );
+    const more = within(head()).getByRole('button', { name: /^\+2\smore\slocks$/ });
+    fireEvent.click(more);
+    expect(head().querySelectorAll('a[href*="/script"]')).toHaveLength(7);
+    // six names are six: no fold for one name
+    const six = { ...row, lockCalls: row.lockCalls.slice(0, 3) } as ActivityRowData;
+    const again = render(<ActivityRow activity={six} />);
+    const sixHead = again.container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(sixHead.querySelectorAll('a[href*="/script"]')).toHaveLength(6);
+    expect(within(sixHead).queryByRole('button')).toBeNull();
+  });
+
+  it('says "+N more scripts" where the fold holds types and locks', () => {
+    const named = dotbitRegistration();
+    const typeCall = (i: number) => ({
+      typeCodeHash: '0x' + String(i).padStart(64, 'e'),
+      typeHashType: 'type',
+      typeArgs: '0x',
+      scriptHash: '0x' + String(i).padStart(64, 'f'),
+      scriptName: `Type ${i}`,
+    });
+    const row = activityRead({
+      ...named,
+      protocolActions: [],
+      typeCalls: Array.from({ length: 6 }, (_, i) => typeCall(i)),
+      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, lockScriptName: 'Lock 0' })),
+    }) as ActivityRowData;
+    const { container } = render(<ActivityRow activity={row} />);
+    const head = container.querySelector('[data-role="head-main"]') as HTMLElement;
+    expect(within(head).getByRole('button', { name: /^\+2\smore\sscripts$/ })).toBeInTheDocument();
   });
 });

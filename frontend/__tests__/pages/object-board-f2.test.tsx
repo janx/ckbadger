@@ -132,7 +132,12 @@ async function page() {
   return view;
 }
 
-it('opens with one hero section — name, status, id and the composition sentence as its lede — then its readable traits; its life story is in tier 2 (OB-6, OB-16, F4, R13)', async () => {
+// Re-pinned on purpose (readability R8, lane p-assets; renamed, it was "opens with one hero
+// section — name, status, id and the composition sentence as its lede — then its readable traits;
+// its life story is in tier 2 (OB-6, OB-16, F4, R13)"): the lede says what it is and whether it is
+// live, its life without the figures the metrics state (C7), then the composition sentence; "This
+// object, in words" keeps the collection sentence.
+it('opens with one hero section — name, status, id, its life and the composition sentence as its lede — then its readable traits (R8, OB-6, OB-16, F4, R13)', async () => {
   const { container } = await page();
   const header = screen.getByRole('banner');
   const hero = within(header).getByRole('region', { name: 'Nervape 3x' });
@@ -141,7 +146,10 @@ it('opens with one hero section — name, status, id and the composition sentenc
   const lede = within(hero).getByText(
     'Fully on-chain: its record lives in a CKB cell, its image in a Bitcoin inscription.'
   );
-  expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+  // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+  // reading ink (was text-text-dim)
+  expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
   expect(lede.textContent!.length).toBeLessThanOrEqual(90);
   const traits = screen.getByLabelText('Traits');
   expect(hero.contains(traits)).toBe(false);
@@ -153,20 +161,22 @@ it('opens with one hero section — name, status, id and the composition sentenc
   ]);
   expect(within(traits).getByText('Nature Green')).toBeInTheDocument();
   expect(within(traits).getByText('empty')).toHaveClass('text-text-dim');
-  // the life summary and the collection sentence: tier 2, every word kept
+  // its life is the lede, before the composition; the collection sentence stays in tier 2
   const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-  const story = await within(tier2).findByText(
+  const story = await within(hero).findByText(
     // Lane P: the path only; the dates are the metrics, the ages the sentence's hover.
     /^Minted to a secp256k1 lock, then moved/
   );
   expect(story).toHaveTextContent(
-    'then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+    /^Minted to a secp256k1 lock, then moved to a Nervape Shadow Lock, where it sits now\.$/
   );
   expect(story).toHaveAttribute(
     'title',
     expect.stringMatching(/^minted .+ ago · last moved .+ ago$/)
   );
+  expect(story.compareDocumentPosition(lede) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(tier2).not.toHaveTextContent('Minted to a secp256k1 lock');
   expect(tier2).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
   expect(tier1).not.toHaveTextContent(/^Minted \d/);
   expect(tier1).not.toHaveTextContent('each held by a different address');
@@ -174,7 +184,8 @@ it('opens with one hero section — name, status, id and the composition sentenc
 
 it('keeps tier 1 within the prose budget: one lede and captions under the evidence (F4, §0)', async () => {
   const { container } = await page();
-  await screen.findByRole('region', { name: 'CKB held in its cell' });
+  // re-pinned on purpose (lane P2's third round, item 1): the section is "History"
+  await screen.findByRole('region', { name: 'History' });
   await screen.findByRole('region', { name: 'In Nervape 3x' });
   expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
 });
@@ -185,18 +196,23 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   const dna = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
   // the hint is the readout line's "tap or hover" under the map (R6), not a header suffix
   expect(dna).not.toHaveTextContent('6 genes · hover a gene');
-  expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(
-    'tap or hover'
-  );
-  // evidence first: one caption under the plate, the full paragraph in tier 2 (F4, R13)
+  // re-pinned on purpose (lane P2's follow-up, item 1): the byte-level plot, the sequencing gel,
+  // stands in one place, the evidence tier, with its readout; tier 1 says what the traits are read
+  // from in one caption, and the allele gel says how common each variant is
+  const evidence = screen.getByRole('region', { name: 'DNA evidence' });
+  expect(evidence.closest('[data-tier="2"]')).not.toBeNull();
+  expect(within(dna).queryByRole('status', { name: 'Gene readout' })).toBeNull();
+  expect(within(evidence).getByRole('status', { name: 'Gene readout' })).toBeInTheDocument();
+  // one caption in tier 1, the full paragraph in tier 2 (F4, R13)
   const caption = dna.querySelector('p[data-role="caption"]')!;
   expect(caption).toHaveTextContent(
     'Its traits are read from 53 bytes of DNA; its prev.bg gene points to a Bitcoin inscription, which makes it BTC+CKB.'
   );
-  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+  expect(caption).toHaveClass('text-body', 'max-w-measure');
   expect(caption.textContent!.length).toBeLessThanOrEqual(160);
   const plate = container.querySelector('[data-nibble]')!;
-  expect(plate.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(evidence).toContainElement(plate as HTMLElement);
   expect(dna).not.toHaveTextContent('The object’s traits are not stored as text.');
   expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
     'The object’s traits are not stored as text. It carries 53 bytes of DNA, and the collection’s decoder reads each gene to express a trait. Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
@@ -209,7 +225,7 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     'Among Nervape 3x · its variant in each gene, and how common it is among the 90'
   );
   expect(container.querySelector('[data-overlay="me"]')!.textContent).toContain('this one');
-  expect(within(among).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
+  expect(within(among).getByRole('link', { name: 'Open the collection' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/clusters/${NERVAPE3X_CLUSTER}`)
   );
@@ -220,7 +236,8 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   expect(among.querySelector('[data-role="caption"]')).toHaveTextContent(
     'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
   );
-  for (const section of [dna, among]) {
+  // C10: one hint in each section that draws a gel (tier 1's DNA caption holds none now)
+  for (const section of [among, evidence]) {
     const hints = [...section.querySelectorAll('*')].filter((el) =>
       [...el.childNodes].some(
         (n) => n.nodeType === Node.TEXT_NODE && /\b(tap|hover)\b/i.test(n.textContent ?? '')
@@ -228,6 +245,24 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     );
     expect(hints).toHaveLength(1);
   }
+});
+
+// Lane P2's fourth round (item 1, MUST): at a 320 px window the page was the crash page, "Nervape
+// 3x: a 244 px DNA map cannot hold 16 lanes of 14 px (38 px ruler)". Its gels measure 244 px there
+// (the copper plate's box: 320 − 32 − 12 − 32): the DNA map wraps its lanes 8 a row and the
+// collection's allele gel takes its rows, and the page stands.
+it('stands at a 320 px window: its gels drawn in the 244 px box the copper plate gives them', async () => {
+  vi.unstubAllGlobals();
+  stubChartWidth(244);
+  const { container } = await page();
+  const evidence = screen.getByRole('region', { name: 'DNA evidence' });
+  expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
+  expect(evidence.querySelectorAll('[data-gel-row]')).toHaveLength(2);
+  const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+  expect(
+    [...among.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  expect(screen.queryByText(/cannot hold/)).toBeNull();
 });
 
 it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async () => {
@@ -256,17 +291,28 @@ it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async ()
 
 it('shows its cell at minting and now, to scale, with what changed (OB-9)', async () => {
   await page();
-  const cell = await screen.findByRole('region', { name: 'CKB held in its cell' });
-  expect(cell).toHaveTextContent('1 CKB per byte · all occupied, none free');
-  // R11: no coloured words in tier 1; the bars keep the occupied colour
-  expect(within(cell).getByText('all occupied')).not.toHaveClass('text-jade');
-  // the cell sentence is the caption under the evidence (F4); the lock note is tier 2
-  const caption = cell.querySelector('p[data-role="caption"]')!;
+  // re-pinned on purpose (lane P2's third round, item 1): the asset pages' one pattern, the
+  // section headed "History" with the sentence its versions give first and the versions after it,
+  // no figure of its own: "all occupied, none free" and the capacity partition said the metric
+  // again (CKB held and its split are the metric "CKB held in its cell")
+  const cell = await screen.findByRole('region', { name: 'History' });
+  const heading = within(cell).getByRole('heading', { name: 'History' });
+  expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
+  expect(cell).not.toHaveTextContent(/all occupied|none free/);
+  // the lock note is tier 2
+  const caption = cell.querySelector('p[data-role="history-sentence"]')!;
+  // re-pinned on purpose (lane P2's fifth round, item 2): the figures the route sent, both
+  // capacities and both lock sizes, over its one move; no difference the page computed (it said
+  // "the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved")
   expect(caption).toHaveTextContent(
-    'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
+    'The object’s cell holds 320 CKB. At minting it held 307 CKB, its lock 53 bytes; after 1 move its lock is 66 bytes.'
   );
-  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
-  expect(caption).toBe(cell.lastElementChild);
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+  expect(caption).toHaveClass('text-body', 'max-w-measure');
+  expect(
+    caption.compareDocumentPosition(within(cell).getAllByRole('article')[0]) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
   expect(cell.textContent).not.toMatch(/Lock: secp256k1/);
   expect(document.querySelector('[data-tier="2"]')).toHaveTextContent(
     'Lock: secp256k1 throughout. Type and data never changed.'
@@ -284,7 +330,7 @@ it('places it in its collection with the composition count and cluster cell (OB-
   const heading = within(coll).getByRole('heading', { name: 'Collection Nervape 3x' });
   expectPrompt(heading, 'Collection', 'Nervape 3x');
   expect(promptNote(heading)).toContainElement(
-    within(coll).getByRole('link', { name: 'Open the collection →' })
+    within(coll).getByRole('link', { name: 'Open the collection' })
   );
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');

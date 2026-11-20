@@ -4,35 +4,28 @@ import {
   activityTypeShares,
   activityFilterCounts,
   completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
   previousChainDay,
   formatShare,
   scriptLabel,
   scriptShares,
-  totalActivities,
   type ActivityCounts,
 } from '@/lib/activity-stats';
 
+// Re-pinned on purpose (lists lane P3: a page sums no count): the DAO kind's count and the kind
+// occurrences are the API's figures (`daoCount`, `kindOccurrences`); totalActivities, the
+// page's sum of the eight kinds, went with the three DAO steps' sum.
 const counts: ActivityCounts = {
   transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
+  daoCount: 8,
   tokenCount: 0,
   objectCount: 0,
   identityCount: 10,
   scriptCallCount: 5795,
+  kindOccurrences: 7115,
 };
 
-describe('totalActivities', () => {
-  it('sums every typed activity', () => {
-    expect(totalActivities(counts)).toBe(7115);
-  });
-});
-
 describe('activityTypeShares', () => {
-  it('ranks the types by count, folds the three DAO steps into one row and hides empty types', () => {
+  it('ranks the types by count, the DAO row the API’s count of its actions, and hides empty types', () => {
     const rows = activityTypeShares(counts);
     expect(rows.map((r) => [r.label, r.count])).toEqual([
       ['Script call', 5795],
@@ -48,11 +41,10 @@ describe('activityTypeShares', () => {
       activityTypeShares({
         ...counts,
         transferCount: 0,
-        daoDepositCount: 0,
-        daoWithdrawRequestCount: 0,
-        daoWithdrawCompleteCount: 0,
+        daoCount: 0,
         identityCount: 0,
         scriptCallCount: 0,
+        kindOccurrences: 0,
       })
     ).toEqual([]);
   });
@@ -70,8 +62,15 @@ describe('scriptShares', () => {
     { codeHash: '0x2222000000000000', name: 'rare', count: 1 },
   ];
 
+  // Re-pinned on purpose (the page-phase review's SHOULD 5): the total and the rest are the
+  // route's (scriptCalls, scriptRest), its ranking its order; the page summed both and ranked again
+  const route = {
+    scriptCounts: entries.filter((e) => e.count > 0),
+    scriptCalls: 9063,
+    scriptRest: { scripts: 2, calls: 4 },
+  };
   it('keeps the top five and folds the rest into one row', () => {
-    const s = scriptShares(entries);
+    const s = scriptShares(route);
     expect(s.total).toBe(9063);
     expect(s.top.map((r) => r.label)).toEqual([
       '.bit Time Info',
@@ -85,8 +84,21 @@ describe('scriptShares', () => {
   });
 
   it('has no others row when every script fits', () => {
-    expect(scriptShares(entries.slice(0, 2)).others).toBeNull();
-    expect(scriptShares([])).toEqual({ total: 0, top: [], others: null });
+    expect(
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 8790, scriptRest: null })
+        .others
+    ).toBeNull();
+    expect(scriptShares({ scriptCounts: [], scriptCalls: 0, scriptRest: null })).toEqual({
+      total: 0,
+      top: [],
+      others: null,
+    });
+  });
+
+  it('states the route’s whole: a total its rows do not make is refused', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: entries.slice(0, 2), scriptCalls: 9000, scriptRest: null })
+    ).toThrow(/script calls/);
   });
 });
 
@@ -115,7 +127,8 @@ describe('formatShare', () => {
     expect(formatShare(814, 1000)).toBe('81.40%');
     expect(formatShare(14, 10000)).toBe('0.14%');
     expect(formatShare(2, 100000)).toBe('<0.01%');
-    expect(formatShare(999_999, 1_000_000)).toBe('>99.99%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 999,999 of 1,000,000 is 99.9999%, 99.99% (half up 100.00, bounded >99.99%)
+    expect(formatShare(999_999, 1_000_000)).toBe('99.99%');
     expect(formatShare(0, 10)).toBe('0.00%');
     expect(formatShare(10, 10)).toBe('100.00%');
   });
@@ -136,33 +149,33 @@ describe('exact completed day counts', () => {
       completedYesterdayActivities([{ ...dailyActivities[0], date: '20261025' }], now)?.date
     ).toBe('20261025');
   });
-  it('selects only the exact complete transaction bucket and never a latest-bucket substitute', () => {
-    const base = { currentHour: 0, currentDay: 999, hourlyData: [] };
-    expect(
-      completedYesterdayTransactions(
-        {
-          ...base,
-          dailyData: [
-            { label: '10/24', value: 9, complete: true },
-            { label: '10/25', value: 10, complete: false },
-          ],
-        },
-        now
-      )
-    ).toBeUndefined();
-    expect(
-      completedYesterdayTransactions(
-        { ...base, dailyData: [{ label: '10/25', value: 0, complete: true }] },
-        now
-      )
-    ).toBe(0);
-  });
   it('keeps unique totals separate from overlapping occurrences', () => {
     expect(activityFilterCounts(counts, 10).all).toBe(10);
     expect(activityFilterCounts(counts).all).toBeUndefined();
-    expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
-    expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
-      'Invalid transaction/cellbase counts'
+    // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
+    expect(activityFilterCounts({ ...counts, daoCount: 13 }).dao).toBe(13);
+    // the P3 follow-up's 2b: the day's user transactions are the route's figure
+    // (userTransactionCount), so the page's subtraction and its tests went with it
+  });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('scriptShares on an older API', () => {
+  // it read BigInt(undefined)
+  it('refuses a summary without scriptCalls or scriptRest by name', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptRest: null } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow(
+      'the 24 h activity summary: the API sends no scriptCalls: it is older than this page'
     );
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptCalls: 0 } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow('the 24 h activity summary: the API sends no scriptRest: it is older than this page');
   });
 });

@@ -1,14 +1,25 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
+import {
+  ActivityRow,
+  ActivityTitle,
+  activityTitleText,
+  type ActivityRowData,
+} from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
-import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
+import {
+  PoolStatusBadge,
+  TimeInPool,
+  PoolInterpretationNotice,
+  poolStatusLabel,
+} from '@/components/ui/pool-status';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import { ClassMark } from '@/components/ui/class-mark';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
@@ -19,16 +30,33 @@ import type {
   Address,
   AddressTransaction,
   AddressCell,
+  ItemMovement,
   ParticipantInfo,
+  RowItemDelta,
 } from '@/lib/api';
+import { sentField } from '@/lib/api-fields';
 
 import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { formatUtc8Date } from '@/lib/utils';
+import {
+  LARGEST_TX_BYTES,
+  MAX_BLOCK_CYCLES,
+  MAX_TX_INPUTS,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_TX_FEE,
+  WIDEST_TX_VALUE,
+  shortChars,
+} from '@/lib/list-bounds';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 interface AddressActivityProps {
@@ -44,36 +72,54 @@ const plural = (n: number, noun: string) => formatCount(n, noun);
  * participant's own deltas, never a transaction-wide mint or burn. The collection follows, dim, when
  * every object shares one named collection.
  */
-function objectHeadline(participant: ParticipantInfo, txHash: string): ReactNode {
-  const objects = participant.itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
+function objectHeadline(
+  itemDeltas: readonly RowItemDelta[],
+  txHash: string
+): { node: ReactNode; text: string } {
+  const objects = itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
   if (objects.length === 0)
     throw new Error(`transaction ${txHash}: an object activity of this address moved no object`);
   const arrived = objects.filter((o) => o.delta > 0).length;
   const departed = objects.length - arrived;
+  // minted to it or burnt from it in the whole transaction, as the route states (the third read's
+  // Lb SHOULD 2): said so, never "Received" of objects no party gave
+  const moved = new Set(objects.map((o) => rowItemMovement(o)));
+  const only = moved.size === 1 ? [...moved][0] : null;
   const movement =
-    departed === 0
-      ? `Received ${plural(arrived, 'object')}`
-      : arrived === 0
-        ? `Sent ${plural(departed, 'object')}`
-        : `Received ${arrived}, sent ${plural(departed, 'object')}`;
+    only === 'mint'
+      ? `Minted ${plural(objects.length, 'object')}`
+      : only === 'burn'
+        ? `Burnt ${plural(objects.length, 'object')}`
+        : departed === 0
+          ? `Received ${plural(arrived, 'object')}`
+          : arrived === 0
+            ? `Sent ${plural(departed, 'object')}`
+            : `Received ${arrived}, sent ${plural(departed, 'object')}`;
   const names = new Set(objects.map((o) => o.collection?.name?.trim() || null));
   const [collection] = names;
-  return names.size === 1 && collection ? (
-    <>
-      {movement}
-      <span className="text-text-dim font-normal"> · {collection}</span>
-    </>
-  ) : (
-    movement
-  );
+  return names.size === 1 && collection
+    ? {
+        node: (
+          <>
+            {movement}
+            <span className="text-text font-normal"> · {collection}</span>
+          </>
+        ),
+        text: `${movement} · ${collection}`,
+      }
+    : { node: movement, text: movement };
+}
+
+/** An item's movement in its whole transaction, as the address route states it beside the item. */
+function rowItemMovement(item: RowItemDelta): ItemMovement {
+  return sentField(item.movement, "an address activity's item", 'movement');
 }
 
 /**
- * One activity of this address: the site's one activity row (consistency C3), its participant line
- * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
- * this participant's deltas only; the other parties of the transaction are on its page.
+ * What the address page draws of one activity: the row (this address's participant line alone),
+ * and its headline, in words for its run (readability B4) and as drawn.
  */
-export function AddressActivity({ activity, address }: AddressActivityProps) {
+function addressRow(activity: Activity, address: Address) {
   const participant: ParticipantInfo = {
     address: address.address ?? null,
     lockHash: address.lockScriptHash,
@@ -91,22 +137,87 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
+  // on an address's own page a token's and an identity's headline says what every feed says of a
+  // mint or a burn ("Token mint", "Token burn": the route states the item's movement in the whole
+  // transaction, the third read's Lb SHOULD 2), and of a transfer its direction for this address
+  // (the page-phase review's SHOULD 1), so a feed folds received with received, never a burn with
+  // a send; a CKB row says its direction, and one that left this address's balance as it was
+  // keeps the headline every feed gives it
+  const ckb = BigInt(activity.ckbDelta);
+  const itemWords = (item: RowItemDelta) => {
+    const moved = rowItemMovement(item);
+    if (moved !== 'transfer') return moved;
+    const delta = BigInt(item.delta);
+    return delta > BigInt(0) ? 'received' : delta < BigInt(0) ? 'sent' : 'changed';
+  };
+  const words =
+    (itemClass === 'token' || itemClass === 'identity') && primary
+      ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${itemWords(primary as RowItemDelta)}`
+      : itemClass === 'ckbTransfer' && !activity.isCellbase && ckb !== BigInt(0)
+        ? `CKB ${ckb > BigInt(0) ? 'received' : 'sent'}`
+        : activityHeadline(row);
   const headline =
     itemClass === 'object'
-      ? objectHeadline(participant, activity.txHash)
-      : (itemClass === 'token' || itemClass === 'identity') && primary
-        ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
-        : activityHeadline(row);
+      ? objectHeadline(activity.itemDeltas, activity.txHash)
+      : { node: words, text: words };
+  return { row, participant, headline };
+}
+
+/**
+ * One activity of this address: the site's one activity row (consistency C3), its participant line
+ * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
+ * this participant's deltas only; the other parties of the transaction are on its page.
+ */
+export function AddressActivity({ activity, address }: AddressActivityProps) {
+  const { row, headline } = addressRow(activity, address);
   return (
     <ActivityRow
-      headline={headline}
+      headline={headline.node}
       activity={row}
       focusLockHash={address.lockScriptHash}
       foldObjects
       itemTone="sign"
+      // the transaction's other parties are references here, their changes not on the row
+      unlistedParties={activity.participants.length}
     />
   );
 }
+/**
+ * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`, the
+ * rule of Gate B: what was done and the script code, not the parties): a run counts this address
+ * and the transaction's other parties, which the row does not draw but the activity names. A run
+ * folds within the page shown.
+ */
+export function AddressActivities({
+  rows,
+  address,
+  more,
+}: {
+  rows: Activity[];
+  address: Address;
+  /** Whether a next page holds older rows: the page's last run is then not final. */
+  more: boolean;
+}) {
+  return (
+    <ActivityRuns
+      more={more}
+      rows={rows.map((activity) => {
+        const { row, participant, headline } = addressRow(activity, address);
+        return {
+          key: activity.txHash,
+          subject: runSubject(row, activityTitleText(row, headline.text), [
+            participant,
+            ...activity.participants,
+          ]),
+          activity: row,
+          title: <ActivityTitle activity={row} headline={headline.node} />,
+          row: <AddressActivity activity={activity} address={address} />,
+        };
+      })}
+    />
+  );
+}
+
 function TxPosition({ tx }: { tx: AddressTransaction }) {
   return (
     <span className="text-small flex flex-col gap-1">
@@ -117,9 +228,11 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
         </>
       ) : (
         <>
-          <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
+          <Link look="inline" href={`/blocks/${tx.blockNumber}`}>
+            {formatBlockNumber(tx.blockNumber)}
+          </Link>
           {tx.timestamp !== null && (
-            <span className="text-text-dim">
+            <span className="text-text">
               <Utc8Date timestamp={tx.timestamp} />
             </span>
           )}
@@ -132,43 +245,65 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
 function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
   return (
     <span className="space-y-1">
-      <Link href={`/tx/${tx.txHash}`}>
-        <Hash hash={tx.txHash} size={size} copyable={false} className="text-small" />
+      <Link look="inline" href={`/tx/${tx.txHash}`}>
+        <Hash hash={tx.txHash} size={size} className="text-small" />
       </Link>
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
-        className="text-warning text-meta block"
+        className="text-warning text-small block"
       />
       {tx.txType === 'named' && (
-        <span className="text-text-dim text-meta block">Named participant</span>
+        <span className="text-text text-small block">Named participant</span>
       )}
     </span>
   );
 }
 
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+
+/**
+ * The address's transactions (readability F3-e): every column budgeted from the widest value it
+ * holds (lib/list-bounds.ts), the 13 px cells at 0.6 em a glyph and the 16 px gap after every
+ * column but the last. Scripts is the flexible column.
+ */
 const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'hash',
     label: 'Transaction',
-    minWidth: 172,
+    // the hash at the row size (17 characters, 132.6) and the gap; it was 172
+    minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
     render: (tx) => <TxHash tx={tx} size="row" />,
   },
-  { key: 'block', label: 'Block · date', minWidth: 136, render: (tx) => <TxPosition tx={tx} /> },
+  {
+    key: 'block',
+    label: 'Block · date',
+    // a pool transaction's wait on one line, "in pool for 99d" (waits under 100 days; 117), wider
+    // than "#99,999,999", a date or its status badge, and the gap; it was 136
+    minWidth: columnPx(cell('in pool for 99d'.length) + CELL_GAP_PX),
+    render: (tx) => <TxPosition tx={tx} />,
+  },
   {
     key: 'cells',
     label: 'Cells in → out',
-    minWidth: 100,
+    // the inputs at most MAX_TX_INPUTS (consensus, 13,568) and the outputs at most WIDEST_COUNT
+    // (consensus, 9,999), both grouped as written, "13,568 → 9,999" (109.2), and the gap (lane P1
+    // follow-up: it was four digits a side, "9999 → 9,999", from before the inputs were grouped)
+    minWidth: columnPx(
+      cell(`${MAX_TX_INPUTS.toLocaleString('en-US')} → ${WIDEST_COUNT}`.length) + CELL_GAP_PX
+    ),
     render: (tx) => (
       <span>
-        {tx.isCellbase ? 0 : tx.inputsCount} <span className="text-text-dim">→</span>{' '}
-        {tx.outputsCount.toLocaleString('en-US')}
+        {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')}{' '}
+        <span className="text-text-dim">→</span> {tx.outputsCount.toLocaleString('en-US')}
       </span>
     ),
   },
   {
     key: 'change',
     label: 'This address, CKB',
-    minWidth: 180,
+    // a change under a billion CKB with its sign on one line (21 characters, 163.8) and the gap
+    minWidth: columnPx(cell(`+${WIDEST_TX_VALUE}`.length) + CELL_GAP_PX),
     numeric: true,
     className: 'whitespace-normal',
     render: (tx) => (
@@ -178,7 +313,8 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'fee',
     label: 'Fee, CKB',
-    minWidth: 136,
+    // a fee under 100 CKB (85.8) and the gap; it was 136
+    minWidth: columnPx(cell(WIDEST_TX_FEE.length) + CELL_GAP_PX),
     numeric: true,
     className: 'whitespace-normal',
     render: (tx) => (
@@ -195,18 +331,25 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'size',
     label: 'Size, B',
-    minWidth: 90,
+    // "Unavailable" (85.8), wider than the largest transaction's size, "1,236,271"
+    // (LARGEST_TX_BYTES, of record: genesis's; lane P1 follow-up, it read a block's 597,000), and
+    // the gap; it was 90
+    minWidth: columnPx(
+      cell(Math.max('Unavailable'.length, LARGEST_TX_BYTES.toLocaleString('en-US').length)) +
+        CELL_GAP_PX
+    ),
     numeric: true,
     render: (tx) => (tx.txSize === null ? 'Unavailable' : tx.txSize.toLocaleString('en-US')),
   },
   {
     key: 'cycles',
     label: 'Cycles',
-    minWidth: 120,
+    // the cycle limit, "3,500,000,000" (101.4), wider than "Not computed", and the gap; it was 120
+    minWidth: columnPx(cell(MAX_BLOCK_CYCLES.toLocaleString('en-US').length) + CELL_GAP_PX),
     numeric: true,
     render: (tx) =>
       tx.cycles === null ? (
-        <span className="text-text-dim">
+        <span className="text-text">
           {tx.cyclesStatus === 'failed' ? 'Failed' : 'Not computed'}
         </span>
       ) : (
@@ -216,16 +359,21 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'scripts',
     label: 'Scripts',
-    minWidth: 146,
+    // The flexible column: a script's 12 px mark, its 6 px gap and 12 characters of its name at
+    // its minimum (a longer list wraps between scripts); the last column, no gap after it. It was
+    // 146.
+    minWidth: columnPx(12 + 6 + cell(12)),
+    width: 'auto',
     render: (tx) => (
       <span className="flex flex-wrap gap-x-2.5 gap-y-1">
         {tx.scriptLabels.map((label) => {
           const script = scriptLabel(label, tx.txHash);
           return (
             <Link
+              look="inline"
               key={label}
               href={`/scripts/${encodeURIComponent(label)}`}
-              className="text-text-dim hover:text-jade inline-flex items-center gap-1.5"
+              className="inline-flex items-center gap-1.5"
             >
               <ClassMark kind={script.mark} size={12} />
               {script.name}
@@ -236,6 +384,138 @@ const columns: ListColumn<AddressTransaction>[] = [
     ),
   },
 ];
+/**
+ * Line 1 of an address's transaction on a phone (the phone-rows board's head(), as the transactions
+ * list's): the tight hash at the key's 14 px (92.4; no stone, as the table's), the 12 px between the
+ * parts and, at 13 px, the wider of where a transaction stands: its block and day, "#99,999,999 ·
+ * 2026-11-02" (24 characters, 187.2), or the widest pool status with the widest wait under 100 days,
+ * "Confirming · in pool for 99d" (28 characters, 218.4): 322.8 of a 360 px phone's 328 px line.
+ */
+const ADDRESS_TX_PHONE_HEAD_PX = phoneHead(
+  'address transactions',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(
+      Math.max(
+        `${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`.length,
+        `${poolStatusLabel('committed_awaiting_index')} · in pool for 99d`.length
+      ),
+      fontPx('small')
+    )
+);
+
+/**
+ * An address's transaction on a phone (the phone-rows board, as the transactions list's row): the
+ * hash and where it stands; what it touched, the scripts by name and the notes the API attaches;
+ * then, quiet, the cells, this address's change and the fee, each figure after its name. Bytes and
+ * cycles are on the transaction's page and in the table; the cards from 560 px (`wide`) keep them at
+ * the end of the quiet line.
+ */
+function AddressTxPhoneRow({ tx, wide }: { tx: AddressTransaction; wide: boolean }) {
+  // where it stands, as the blocks list's head writes its two figures: a unit each, " · " between
+  // them; "this device's clock is behind" in the wait's place is words and breaks between them
+  const where =
+    tx.blockNumber === null ? (
+      <>
+        {tx.poolStatus ? poolStatusLabel(tx.poolStatus) : 'Unconfirmed'}
+        {tx.timeAddedToPool && (
+          <>
+            {' · '}
+            <TimeInPool since={tx.timeAddedToPool} />
+          </>
+        )}
+      </>
+    ) : (
+      <>
+        <NoBreak>
+          <Link href={`/blocks/${tx.blockNumber}`} look="inline">
+            {formatBlockNumber(tx.blockNumber)}
+          </Link>
+        </NoBreak>
+        {tx.timestamp !== null && (
+          <>
+            {' · '}
+            <Utc8Date timestamp={tx.timestamp} />
+          </>
+        )}
+      </>
+    );
+  // the notice draws nothing for an interpretation it has no reason to name: then it is no part
+  const partial =
+    tx.interpretation?.status === 'partial' && (tx.interpretation.reasons ?? []).length > 0;
+  const touched = [
+    partial && (
+      <PoolInterpretationNotice
+        key="notice"
+        interpretation={tx.interpretation}
+        className="text-warning"
+      />
+    ),
+    tx.txType === 'named' && (
+      <span key="named" className="text-text">
+        Named participant
+      </span>
+    ),
+    ...tx.scriptLabels.map((label) => {
+      const script = scriptLabel(label, tx.txHash);
+      return (
+        <Link key={label} href={`/scripts/${encodeURIComponent(label)}`} look="inline">
+          <ClassMark kind={script.mark} size={12} className="mr-1.5" />
+          {script.name}
+        </Link>
+      );
+    }),
+  ];
+  const figures = [
+    <span key="cells" className="whitespace-nowrap">
+      {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')} →{' '}
+      {formatCount(tx.outputsCount, 'cell')}
+    </span>,
+    <Labelled key="change" label="this address">
+      <CkbAmount form="summary" shannons={BigInt(tx.capacityChange)} />
+    </Labelled>,
+    <Labelled key="fee" label="fee">
+      <CkbAmount form="summary" shannons={BigInt(tx.fee)} signed={false} tone="plain" />
+    </Labelled>,
+    ...(wide
+      ? [
+          <span key="size" className="whitespace-nowrap">
+            {tx.txSize === null ? 'size unavailable' : `${tx.txSize.toLocaleString('en-US')} B`}
+          </span>,
+          <span key="cycles" className="whitespace-nowrap">
+            {tx.cycles === null
+              ? tx.cyclesStatus === 'failed'
+                ? 'cycles failed'
+                : 'cycles not computed'
+              : `${tx.cycles.toLocaleString('en-US')} cycles`}
+          </span>,
+        ]
+      : []),
+  ];
+  // a part with nothing to say is no line (an ordinary transfer touches no script the API names)
+  const said = touched.some(Boolean);
+  return (
+    <PhoneRow
+      testId="address-tx-row-mobile"
+      head={ADDRESS_TX_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/tx/${tx.txHash}`} look="key">
+              <Hash hash={tx.txHash} size="tight" className="text-body" />
+            </Link>
+          ),
+          right: where,
+        },
+        said && { key: 'what', tone: 'body', left: <Dotted parts={touched} /> },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+      ]}
+    />
+  );
+}
+
 export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
   return (
     <ListTable
@@ -244,22 +524,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
       rows={rows}
       rowKey={(tx) => tx.txHash}
       empty="No transactions."
-      mobileRow={(tx) => (
-        <div data-testid="address-tx-row-mobile" className="text-small space-y-3">
-          <div className="flex flex-wrap justify-between gap-2">
-            <TxHash tx={tx} size="tight" />
-            <TxPosition tx={tx} />
-          </div>
-          <dl className="space-y-2">
-            {columns.slice(2).map((c) => (
-              <div key={c.key} className="flex flex-wrap justify-between gap-2">
-                <dt className="text-text-dim">{c.label}</dt>
-                <dd className="max-w-full text-right">{c.render(tx)}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
+      mobileRow={(tx, wide) => <AddressTxPhoneRow tx={tx} wide={wide} />}
     />
   );
 }
@@ -269,8 +534,8 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
  */
 function CellOutPoint({ cell: c, size }: { cell: AddressCell; size: ShortSize }) {
   return (
-    <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
-      <Hash hash={c.txHash} size={size} copyable={false} className="text-small" />
+    <Link look="inline" href={`/cell/${c.txHash}-${c.outputIndex}`}>
+      <Hash hash={c.txHash} size={size} className="text-small" />
       <OutpointIndex index={c.outputIndex} />
     </Link>
   );
@@ -290,13 +555,14 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
       {ADDRESS_CLASSES.find((k) => k.key === c.class)!.label}
       {c.typeScriptHash && (
         <Link
+          look="inline"
           href={getScriptDetailHref({
             codeHash: c.typeCodeHash!,
             hashType: c.typeHashType,
             scriptKind: 'type',
           })}
         >
-          <Hash hash={c.typeScriptHash} size={size} className="text-small" copyable={false} />
+          <Hash hash={c.typeScriptHash} size={size} className="text-small" />
         </Link>
       )}
     </span>
@@ -304,29 +570,29 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
 }
 
 /**
- * The live cells table's columns (12 px monospace, 7.2 px a character; 11 px, 6.6; 16 px between
- * columns, none after the last). Its minimum is 992 px, the width it changes form at. The seals
- * by kind (C4) lead the Cell column with the cell's 30 px row seal, its footprint (30 + 8 = 38 px)
- * taken from measured slack so the total and the form change stay 992:
- * - Cell 200 → 238: the out point at the row size with a four-digit index, 22 characters (158.4;
- *   it was 24 with three dots) + 16, and the seal's 38: 212.4.
- * - Occupied 196 → 178: a cell is at most a block's 597,000 bytes, so at most "597,000.00000000"
- *   (16 characters, 115.2) and " CKB" at 11 px (26.4) + 16: 157.6.
- * - Created at 120 → 100 (the last column): "#99,999,999" is 11 characters (79.2), and
- *   "#100,000,000" 12 (86.4).
- * Contains (280) and Capacity (196: every amount under a billion CKB on one line, 186.4) keep
- * theirs.
+ * The live cells table's columns (readability F3-e: each budgeted from the widest value it holds,
+ * the 13 px cells and 12 px units at 0.6 em a glyph, 16 px between columns, none after the last):
+ * 953 px, the width it changes form at (it was 992, then 965 with the 30 px stone). The seals by
+ * kind (C4) lead the Cell column with the cell's 18 px row seal and its 8 px gap (readability R6).
+ * Contains is the flexible column.
  */
 const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'outpoint',
     label: 'Cell',
-    minWidth: 200 + ROW_SEAL.cell.footprint,
-    // The cell's seal leads the row, overhanging the out point's 18 px line (RowSeal), so a row
-    // keeps its height; the out point stays the row's link (the seal is an image, not a link).
+    // the stone and its gap (ROW_SEAL.cell.footprint, 26), the out point at the row size with a
+    // four-digit index (22 characters, 171.6) and the gap: 213.6 (it was 238, 12.4 of it spare,
+    // then 225.6 with the 30 px stone)
+    minWidth: columnPx(
+      ROW_SEAL.cell.footprint +
+        cell(shortChars(SHORT_FORMS.row.hash) + `:${WIDEST_COUNT_DIGITS}`.length) +
+        CELL_GAP_PX
+    ),
+    // The cell's seal leads the row, centred on the out point's line (RowSeal), so a row keeps its
+    // height; the out point stays the row's link (the seal is an image, not a link).
     render: (c) => (
       <span className="flex items-start">
-        <RowSeal id={addressCellSealId(c)} overhang />
+        <RowSeal id={addressCellSealId(c)} />
         <CellOutPoint cell={c} size="row" />
       </span>
     ),
@@ -334,13 +600,27 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'content',
     label: 'Contains',
-    minWidth: 280,
+    // The flexible column: what a cell holds in its class form whole at its minimum, the 16 px
+    // mark, "Other scripts" and the type script's hash at the row size, 8 px apart, and the gap:
+    // 281.8 (it was 280); a cell's content takes what the container gives beyond the sum.
+    minWidth: columnPx(
+      16 +
+        8 +
+        cell('Other scripts'.length) +
+        8 +
+        cell(shortChars(SHORT_FORMS.row.hash)) +
+        CELL_GAP_PX
+    ),
+    width: 'auto',
     render: (c) => <CellContains cell={c} size="row" />,
   },
   {
     key: 'capacity',
     label: 'Capacity, CKB',
-    minWidth: 196,
+    // every amount under a billion CKB on one line (156) and its unit at 12 px (28.8), and the gap
+    minWidth: columnPx(
+      cell(WIDEST_TX_VALUE.length) + textPx(' CKB'.length, fontPx('meta')) + CELL_GAP_PX
+    ),
     numeric: true,
     className: 'whitespace-normal',
     render: (c) => (
@@ -350,7 +630,15 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'occupied',
     label: 'Occupied, CKB',
-    minWidth: 178,
+    // a cell is at most the largest transaction's bytes, genesis's 1,236,271 (LARGEST_TX_BYTES,
+    // of record: genesis's cells are past a block's 597,000, its secp256k1 data cell alone is
+    // 1,048,576 bytes; lane P1 follow-up), so at most "1,236,271.00000000" (140.4) and its unit
+    // (28.8), and the gap
+    minWidth: columnPx(
+      cell(`${LARGEST_TX_BYTES.toLocaleString('en-US')}.00000000`.length) +
+        textPx(' CKB'.length, fontPx('meta')) +
+        CELL_GAP_PX
+    ),
     numeric: true,
     className: 'whitespace-normal',
     render: (c) => (
@@ -379,20 +667,28 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'created',
     label: 'Created at',
-    minWidth: 100,
+    // "#99,999,999" (85.8); the last column, no gap after it
+    minWidth: columnPx(cell(WIDEST_BLOCK_NUMBER.length)),
     render: (c) => (
-      <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
+      <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
+        {formatBlockNumber(c.createdAtBlock)}
+      </Link>
     ),
   },
 ];
-/** A live cell's quiet figures on a phone: "occupied 61 CKB · created #20,000,000". */
+/**
+ * A live cell's developer figures on a phone: "occupied 61 CKB · created #20,000,000". The figures
+ * are values, in their line's reading ink and size (the phone row's quiet line, or the body line's
+ * 13 px beside the contents on a wide row); their names are labels, quiet (lane P1, the ink and size
+ * roles: it set the quiet ink and the meta step over both).
+ */
 function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
   return (
-    <span className="text-text-dim text-meta">
+    <span>
       <Dotted
         parts={[
           <span key="o" className="whitespace-nowrap">
-            occupied{' '}
+            <span className="text-text-dim">occupied</span>{' '}
             <CkbAmount
               form="summary"
               shannons={BigInt(c.occupiedCapacity)}
@@ -401,8 +697,10 @@ function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
             />
           </span>,
           <span key="c" className="whitespace-nowrap">
-            created{' '}
-            <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
+            <span className="text-text-dim">created</span>{' '}
+            <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
+              {formatBlockNumber(c.createdAtBlock)}
+            </Link>
           </span>,
         ]}
       />
@@ -421,7 +719,8 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
       mobileRow={(c, wide) => (
         <PhoneRow
           testId="address-cell-row-mobile"
-          // the cell's seal is the row's mark, beside every line (it overhangs nothing here)
+          // the cell's seal is the row's mark, beside every line, centred in a row line's box at
+          // the top (RowSeal)
           mark={<RowSeal id={addressCellSealId(c)} />}
           lines={[
             {

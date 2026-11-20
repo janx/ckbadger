@@ -13,6 +13,7 @@ import {
 } from '@/__tests__/msw/fixtures/genesis-block';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -35,7 +36,7 @@ vi.mock('@/src/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-const page = <T,>(data: T[]) => ({ data, limit: 100, hasMore: false, nextCursor: null });
+const page = <T,>(data: T[]) => pagedRead({ data, limit: 100, hasMore: false, nextCursor: null });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -60,8 +61,17 @@ describe('the genesis block page', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryAllByRole('link', { name: /^Previous block,/, hidden: true })).toEqual([]);
     expect(screen.getByRole('link', { name: 'Next block, 1', hidden: true })).toBeInTheDocument();
-    expect(screen.getByTestId('block-summary')).toHaveTextContent(
-      /^2 transactions on 2019-11-16 at 05:09:50 UTC\+8\.$/
+    // Re-pinned on purpose (lane P1, the plan: the genesis lede says what was issued, from fields
+    // the API already sends; review chain-a block-genesis): the header's total issuance, its DAO
+    // field's C, 33,600,001,452.384882 CKB, in the summary form, exact in its title; the time is
+    // the status strip's. It read "2 transactions on 2019-11-16 at 05:09:50 UTC+8."
+    const summary = screen.getByTestId('block-summary');
+    expect(summary).toHaveTextContent(
+      /^2 transactions, which issued the chain’s first 33,600,001,452 CKB\.$/
+    );
+    expect(summary.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '33,600,001,452.384882 CKB'
     );
   });
 
@@ -101,12 +111,16 @@ describe('the genesis block page', () => {
   // yet", which is true only of a later block whose reward is still to be paid.
   it('says genesis has no miner and no mining reward', async () => {
     render(<BlockDetailPage />);
-    const facts = await screen.findByRole('complementary', { name: 'Block facts' });
+    // re-pinned on purpose (lane D2): the miner and the reward are the status strip's facts, their
+    // labels lowercase ("miner", "reward"; the aside's were "Miner", "Miner reward"); the fees
+    // stand in the evidence tier's facts (they were the aside's last)
+    const facts = await screen.findByRole('group', { name: 'Block status' });
     const fact = (label: string) => within(facts).getByText(label).parentElement as HTMLElement;
-    expect(fact('Miner')).toHaveTextContent(/^MinerGenesis$/);
-    expect(fact('Miner reward')).toHaveTextContent(/^Miner rewardNone: genesis has no miner$/);
+    expect(fact('miner')).toHaveTextContent(/^minerGenesis$/);
+    expect(fact('reward')).toHaveTextContent(/^rewardNone: genesis has no miner$/);
     expect(facts).not.toHaveTextContent('Not finalized yet');
-    expect(fact('Fees')).toHaveTextContent(/^Fees0 CKB$/);
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Fees').parentElement).toHaveTextContent(/^Fees0 CKB$/);
     const reward = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(
       'section'
     )!;
@@ -151,7 +165,8 @@ describe('the genesis block page', () => {
     expect(rows.map((row) => row.getAttribute('data-feed-row'))).toEqual(
       genesisTransactions.map((tx) => tx.hash)
     );
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    // re-pinned (lane c2-chain): the views are the library's tab row (were pressed buttons)
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('No proposals in this block.')).toBeInTheDocument();

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, useRoutes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { Atmosphere } from '@/components/layout/atmosphere';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
@@ -16,6 +17,7 @@ import { TopicHero } from '@/components/ui/topic-hero';
 import type { ParticipantInfo } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 import tailwindConfig from '@/tailwind.config';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // Material pass v2, citypop edition (review 2026-11-03): six moves on shared pieces. Where a move
 // is CSS only, the test pins the rule in globals.css and the class a component renders for it;
@@ -214,10 +216,14 @@ describe('the rules in globals.css', () => {
     expect(comment[1]).toContain('display: flex');
     expect(comment[1]).toContain('align-items: baseline');
     expect(comment[1]).toContain('font-family: var(--font-voice)');
-    expect(comment[1]).toContain('font-size: 14px');
+    // re-pinned (readability R4): the voice at the section step, 17 px (was 14), in the reading
+    // ink (was the dim ink), so its 0.45 em x-height stands as tall as the 14 px body's
+    expect(comment[1]).toContain('font-size: 17px');
     expect(comment[1]).toContain('line-height: 1.55');
-    expect(comment[1]).toContain('color: var(--c-text-dim)');
+    expect(comment[1]).toContain('color: var(--c-text)');
     const hash = css.match(/\n\.comment::before\s*\{([^}]*)\}/)!;
+    // its `#` at the body step, 14 px (was 13), the ghost as it was
+    expect(hash[1]).toContain('font-size: 14px');
     expect(hash[1]).toContain("content: '#' / '';");
     expect(hash[1]).toContain('font-family: var(--font-mono)');
     expect(hash[1]).toContain('color: var(--c-text-ghost)');
@@ -431,7 +437,7 @@ describe('move 4 on a home figure', () => {
 describe('move 5 on the activity row', () => {
   const TX = '0xa46efcd8' + 'ef'.repeat(26) + 'dac2e0';
   const party = (tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo => ({
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     lockKind: 'Default Lock',
@@ -444,7 +450,7 @@ describe('move 5 on the activity row', () => {
   });
   const sender = party('sendr1', { ckbDelta: '-326700000000', usedDelta: '-323100000000' });
   const receiver = party('hprdnn', { ckbDelta: '326699990000', usedDelta: '323100000000' });
-  const transfer: ActivityRowData = {
+  const transfer: ActivityRowData = activityRead({
     txHash: TX,
     blockNumber: 17627981,
     timestamp: '1761174000000',
@@ -452,23 +458,38 @@ describe('move 5 on the activity row', () => {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [sender, receiver],
-  };
+  });
   const lines = (c: HTMLElement) => [
     ...c.querySelectorAll<HTMLElement>('[data-role="participant"]'),
   ];
 
-  it('writes the lock kind as dim small caps, never a chip', () => {
+  // Readability B4 (re-pinned on purpose): plain dim words, not small caps (at 12 px their capitals
+  // were under 10 px), and only for a lock that is not the default lock (R9).
+  it('writes the lock kind as dim words, never a chip, and none for the default lock', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
-    for (const line of lines(container)) {
-      const kind = line.querySelector('[data-role="lock-kind"]') as HTMLElement;
-      expect(kind).toHaveTextContent('Default Lock');
-      // re-pinned (A4 Chrome sweep): a lock name is words, never made one unit
-      expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
-      expect(kind).not.toHaveClass('whitespace-nowrap');
-      expect(kind).not.toHaveClass('border', 'text-meta');
-    }
+    for (const line of lines(container))
+      expect(line.querySelector('[data-role="lock-kind"]')).toBeNull();
+    const joy = party('joyid1', {
+      lockKind: 'JoyID',
+      address: seededAddress('joyid1', JOYID_CODE_HASH),
+      ckbDelta: '-1',
+    });
+    const { container: named } = render(
+      <ActivityRow activity={activityRead({ ...transfer, participants: [joy] })} />
+    );
+    const kind = lines(named)[0].querySelector(
+      '[data-role="lock-kind"] [data-lock-kind]'
+    ) as HTMLElement;
+    expect(kind).toHaveTextContent(/^JoyID$/);
+    // a lock name is words, never made one unit (A4 Chrome sweep)
+    expect(kind).toHaveClass('text-text-dim');
+    for (const gone of ['small-caps', 'lowercase', 'whitespace-nowrap', 'border', 'text-meta'])
+      expect(kind).not.toHaveClass(gone);
     expect(container.querySelector('[data-row-tag]')).toBeNull();
+    expect(named.querySelector('[data-row-tag]')).toBeNull();
   });
 
   it('underlines the party a page is about in jade, and says "this address" only to a reader', () => {
@@ -492,12 +513,23 @@ describe('move 5 on the activity row', () => {
     expect(screen.getByTitle(sender.address!)).toHaveClass('this-address', 'text-text-dim');
   });
 
-  it('LockKind: dim small caps by default; a row chip’s classes replace them', () => {
-    const code = `0x${'9b'.repeat(32)}`;
-    const { rerender } = render(<LockKind size="row" lockKind="JoyID" lockCodeHash={code} />);
-    expect(screen.getByText('JoyID')).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
+  // Readability B4 (re-pinned on purpose): LockKind's default form is plain dim words.
+  it('LockKind: dim words by default; a row chip’s classes replace them', () => {
+    const code = JOYID_CODE_HASH;
+    const { rerender } = render(
+      <LockKind address={null} size="row" lockKind="JoyID" lockCodeHash={code} />
+    );
+    expect(screen.getByText('JoyID')).toHaveClass('text-text-dim');
+    expect(screen.getByText('JoyID')).not.toHaveClass('small-caps');
+    expect(screen.getByText('JoyID')).not.toHaveClass('lowercase');
     rerender(
-      <LockKind size="row" lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />
+      <LockKind
+        address={null}
+        size="row"
+        lockKind="JoyID"
+        lockCodeHash={code}
+        className={rowTagClass()}
+      />
     );
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps', 'lowercase');
     expect(screen.getByText('JoyID')).toHaveClass('border');

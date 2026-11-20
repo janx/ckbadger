@@ -1,3 +1,4 @@
+import { sentField } from '@/lib/api-fields';
 import type {
   ForkEventRef,
   ForkFirstOrphanStatus,
@@ -113,16 +114,21 @@ export function orphanFateWords(fate: OrphanedBlock['fate']): string {
 
 export const UNCLE_RATE_TARGET = '2.50%';
 
-/** The window's uncle rate from the API's exact per-day counts; null for an empty window. */
+/**
+ * The window's uncle rate from the route's window figures, its uncles and canonical blocks (lane
+ * exactness, part A, A5 i: the page summed the days' blocks); null for an empty window. An API
+ * older than the page sends no window blocks and is refused by name.
+ */
 export function uncleRateFigure(
-  overview: Pick<ForkOverview, 'days' | 'unclesInWindow'>
+  overview: Pick<ForkOverview, 'unclesInWindow' | 'canonicalBlocksInWindow'>
 ): { rate: string; percent: string; uncles: number; blocks: number } | null {
-  const uncles = overview.days.reduce((sum, day) => sum + day.uncles, 0);
-  const blocks = overview.days.reduce((sum, day) => sum + day.canonicalBlocks, 0);
-  if (uncles !== overview.unclesInWindow)
-    throw new Error(
-      `Fork overview: days hold ${uncles} uncles but the window says ${overview.unclesInWindow}`
-    );
+  const uncles = overview.unclesInWindow;
+  // this plan's field, through the one reader of a field an older API does not send
+  const blocks = sentField(
+    overview.canonicalBlocksInWindow,
+    'Fork overview',
+    'canonicalBlocksInWindow'
+  );
   if (blocks === 0) {
     if (uncles > 0) throw new Error(`Fork overview: ${uncles} uncles in a window with no blocks`);
     return null;

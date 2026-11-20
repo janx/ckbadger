@@ -41,15 +41,15 @@ describe('NoBreak, the one piece that keeps a unit whole', () => {
 describe('a shortened id is one unit', () => {
   it('HexCode and Hash keep a shortened hash whole', () => {
     // U-09 (re-pinned): the sizes of lib/shorten.ts, the one ellipsis
-    render(<HexCode value={HASH} size="row" copyable={false} />);
+    render(<HexCode value={HASH} size="row" />);
     const short = screen.getByText('0x12345678…abcdef');
     expect(nowrapOf(short)).not.toBeNull();
-    render(<Hash hash={HASH} size="head" copyable={false} />);
+    render(<Hash hash={HASH} size="head" />);
     expect(nowrapOf(screen.getByText('0x1234567890…90abcdef'))).not.toBeNull();
   });
 
   it('Address keeps a shortened address whole', () => {
-    render(<Address address={ADDRESS} size="head" />);
+    render(<Address look="key" address={ADDRESS} size="head" />);
     // R9 (re-pinned): `ckb1…` and the last 8 at the head size
     expect(nowrapOf(screen.getByText('ckb1…4k6kmfrz'))).not.toBeNull();
   });
@@ -57,7 +57,7 @@ describe('a shortened id is one unit', () => {
   it('an out point keeps its index with its hash', () => {
     const { container } = render(
       <span>
-        <HexCode value={HASH} size="row" copyable={false} />
+        <HexCode value={HASH} size="row" />
         <OutpointIndex index={0} />
       </span>
     );
@@ -83,11 +83,10 @@ describe('a unit sets no display of its own (A4 review 2)', () => {
       <div>
         <NoBreak className="block">2024-08-29</NoBreak>
         <ShortId value={HASH} kind="hash" size="row" className="block" />
-        <HexCode value={HASH} size="row" copyable={false} className="block" />
+        <HexCode value={HASH} size="row" className="block" />
         <Hash
           hash={HASH}
           size="tight"
-          copyable={false}
           className="text-text-dim text-meta block whitespace-nowrap"
         />
         <OutpointIndex index={0} />
@@ -115,7 +114,7 @@ describe('a unit sets no display of its own (A4 review 2)', () => {
 
 describe('a full hash is one token: whole on its line, else scrolled inside its own box', () => {
   it('HexCode writes a full value on one line in a box no wider than its column', () => {
-    render(<HexCode value={HASH} truncate={false} copyable={false} />);
+    render(<HexCode value={HASH} truncate={false} />);
     const full = screen.getByText(HASH);
     expect(full).toHaveAttribute('data-full-value');
     // one line, never wrapped in the middle …
@@ -126,7 +125,7 @@ describe('a full hash is one token: whole on its line, else scrolled inside its 
   });
 
   it('Hash passes the same behaviour on', () => {
-    render(<Hash hash={HASH} truncate={false} copyable={false} />);
+    render(<Hash hash={HASH} truncate={false} />);
     expect(screen.getByText(HASH)).toHaveAttribute('data-full-value');
   });
 });

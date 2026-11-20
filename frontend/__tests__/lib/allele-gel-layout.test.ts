@@ -5,7 +5,7 @@ const names = (n: number, name = (i: number) => `g${i}`) =>
   Array.from({ length: n }, (_, i) => name(i));
 const NERVAPE = ['prev.type', 'relief', 'prev.bg', 'Color', 'Serial', 'Note'];
 
-describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lanes below md)', () => {
+describe('alleleGelLayout (R3: lane floor 16 px, wrap, ranked list above 32 lanes below md)', () => {
   it('wraps six lanes to two rows of three at 358 px, in order, so each lane can label its bands', () => {
     const layout = alleleGelLayout({ genes: NERVAPE, width: 358, subject: 'Nervape 3x' });
     if (layout.form !== 'gel') throw new Error('expected a gel');
@@ -38,7 +38,7 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
     expect(alleleGelLayout({ genes: names(72), width: 735, subject: 'deeds' }).form).toBe('list');
     const md = alleleGelLayout({ genes: names(72), width: 736, subject: 'deeds' });
     if (md.form !== 'gel') throw new Error('expected a gel at md');
-    // 72 lanes at the 12 px floor do not fit one 736 px row: two balanced rows of 36
+    // 72 lanes at the 16 px floor do not fit one 736 px row: two balanced rows of 36
     expect(md.rows.map((row) => row.length)).toEqual([36, 36]);
     expect(md.rows.flat()).toEqual(names(72).map((_, i) => i));
     expect(md.laneWidth).toBeGreaterThanOrEqual(ALLELE_GEL.laneFloor);
@@ -49,7 +49,7 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
     expect(wide.laneWidth).toBeGreaterThanOrEqual(ALLELE_GEL.laneFloor);
   });
 
-  it('keeps up to 32 genes a gel on a phone, wrapping at the 12 px floor', () => {
+  it('keeps up to 32 genes a gel on a phone, wrapping at the 16 px floor', () => {
     const layout = alleleGelLayout({ genes: names(32), width: 358, subject: 'x' });
     if (layout.form !== 'gel') throw new Error('expected a gel');
     expect(layout.rows.flat()).toHaveLength(32);
@@ -69,14 +69,16 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
   });
 
   // Re-pinned with PB-04 (UI review 2026-11-14): no tag, no left margin, so the floor is reached
-  // under 34 px (22 px right edge + one 12 px lane) instead of under 96.
-  it('refuses a width under one 12 px lane instead of drawing an empty gel', () => {
+  // under 34 px (22 px right edge + one 12 px lane) instead of under 96. Re-pinned with readability
+  // F3: the floor is a lane that holds its caption turned on end, a 12 px tick line and a pixel,
+  // 16 px (was 12), so it is reached under 38 px; the test's name says the floor.
+  it('refuses a width under one lane at the floor instead of drawing an empty gel', () => {
     expect(() => alleleGelLayout({ genes: NERVAPE, width: 30, subject: 'Nervape 3x' })).toThrow(
-      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane \(0 px gutter\)/
+      /Nervape 3x: a 30 px allele gel cannot hold a 16 px lane \(0 px gutter\)/
     );
     expect(() =>
       alleleGelLayout({ genes: NERVAPE, width: 90, subject: 'x', overlayLabels: ['this one'] })
-    ).toThrow(/a 90 px allele gel cannot hold a 12 px lane \(62 px gutter\)/);
+    ).toThrow(/a 90 px allele gel cannot hold a 16 px lane \(62 px gutter\)/);
     expect(() => alleleGelLayout({ genes: [], width: 358, subject: 'empty' })).toThrow(
       /empty: allele gel has no genes/
     );

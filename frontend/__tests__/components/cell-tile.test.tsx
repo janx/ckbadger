@@ -1,10 +1,18 @@
+import { SHEETS } from '@/components/transaction/tx-structure';
+import { boxPx, containerContentPx } from '@/__tests__/utils/tailwind-box';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
+import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { CellTile } from '@/components/ui/cell-tile';
-import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, OUTPUT_SPENT } from '@/components/transaction/transaction-cell-tiles';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { TransactionDetail, TransactionScriptGroup } from '@/lib/api';
 import { drawSeal } from '@/lib/seal/stones';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { OWNER_SEAL } from '@/components/ui/owner-seal';
+import { fontPx, textPx } from '@/lib/type-metrics';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import {
   expectBefore,
@@ -14,7 +22,7 @@ import {
 } from '@/__tests__/utils/seals';
 
 /**
- * C11: in a tile the cell's stone and the owner's stand alone in the 30 px mark column, the
+ * C11: in a tile the cell's stone and the owner's stand alone in the 18 px mark column, the
  * column's 10 px gap their gap, so neither keeps its own trailing margin.
  */
 const IN_MARK_COLUMN = { gap: false };
@@ -26,7 +34,9 @@ vi.mock('@/lib/seal/stones', async (importOriginal) => {
 });
 
 describe('CellTile occupied wording (TX-19)', () => {
-  it('states occupied capacity as whole bytes, as the board does ("occupied 195")', () => {
+  // B4 fix round (re-pinned on purpose, tests MUST-2): "occupied" always carries its unit, as a
+  // figure does ("occupied 195 B"); it was "occupied 195"
+  it('states occupied capacity as whole bytes with their unit ("occupied 195 B")', () => {
     render(
       <CellTile
         cell={sealedTile({
@@ -39,16 +49,28 @@ describe('CellTile occupied wording (TX-19)', () => {
           kind: 'other',
           content: 'CKBFS file',
           capacity: '19500000000',
-          occupied: '19500000000',
+          occupiedBytes: '195',
           state: 'consumed',
         })}
       />
     );
     const tile = screen.getByTestId('tile');
-    expect(tile).toHaveTextContent('occupied 195');
+    expect(tile).toHaveTextContent('occupied 195 B');
     expect(tile).not.toHaveTextContent('occupied 195.00000000');
   });
 
+  // B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a cell's
+  // occupied bytes reach the tile as the API gives them (commonKnowledgeSize), with no shannons
+  // between (the tiles multiplied by 10^8 and the tile divided again)
+  it('takes the cell’s occupied bytes as the API gives them, no shannons between', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    expect(outputs[0]).toMatchObject({ occupiedBytes: '61' });
+    expect(outputs[0]).not.toHaveProperty('occupied');
+  });
+
+  // B4 second fix round (re-pinned on purpose): the tile takes bytes, so a figure that is not a
+  // whole number of bytes is refused as one (it took shannons and refused one not a multiple of
+  // 10^8); the change that is not whole bytes is refused where shannons are read, lib/occupied
   it('refuses an occupied amount that is not whole bytes', () => {
     expect(() =>
       render(
@@ -62,19 +84,19 @@ describe('CellTile occupied wording (TX-19)', () => {
             kind: 'ckb',
             content: 'CKB',
             capacity: '19500000000',
-            occupied: '6100000001',
+            occupiedBytes: '61.00000001',
             state: 'consumed',
           })}
         />
       )
-    ).toThrow('in:0: occupied 6100000001 shannons is not whole bytes');
+    ).toThrow(
+      'in:0: occupied bytes: expected a non-negative decimal integer, received "61.00000001"'
+    );
   });
 });
 
 /* ---------- the seals by kind (C3) ---------- */
 
-const ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74c';
-const OWNER_ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2fh0zmj';
 const HASH = sealHash('c3 tile transaction');
 const PREV = sealHash('c3 tile previous transaction');
 /** The real script hash of { code_hash 0x9b × 32, hash_type type, args 0x } (blake2b, CKB). */
@@ -82,6 +104,12 @@ const LOCK = '0x82cbea9785c59f24117b45294cff296e8ab0ac2f29bbfa78af6b01e4d5325644
 const NEW_OWNER = sealHash('c3 tile new owner');
 const TOKEN = sealHash('c3 tile token type');
 const lock = { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type', args: '0x' };
+// B4 second fix round (tests MUST-1): an owner's address is the real address of the cell's own
+// lock (a tile refuses one that spells another); these failed the bech32m checksum
+const ADDRESS = ckbAddress(lock as { codeHash: string; hashType: 'type'; args: string });
+const OWNER_ADDRESS = ckbAddress(
+  scriptHashToScript(NEW_OWNER) as { codeHash: string; hashType: 'type'; args: string }
+);
 const token = { codeHash: sealHash('c3 xudt code'), hashType: 'type', args: '0x' };
 const tokenDisplay = {
   kind: 'token' as const,
@@ -176,8 +204,11 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
       'pressed',
       IN_MARK_COLUMN
     );
-    // it overhangs the 18 px line by 6 px above and below, so the first line keeps its height
-    expect(seal).toHaveClass('-my-[6px]');
+    // the 18 px stone stands centred in a box of the 20 px line, 1 px clear above and below, so
+    // the first line keeps its height (re-pinned on purpose, readability R6: the 30 px stone
+    // overhung the line by 5 px, `-my-[5px]`)
+    expect(seal).toHaveClass('h-row', 'items-center');
+    expect(seal.className).not.toMatch(/-my-/);
     const outPoint = within(tile).getByRole('link', { name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:1$/ });
     expect(outPoint).toHaveAttribute('href', `/mainnet/cell/${HASH}-1`);
     expectBefore(seal, outPoint);
@@ -210,8 +241,11 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
-    // one line: the stone at the line's height (20 px, 1 px over above and below)
-    expect(stone).toHaveClass('-my-px');
+    // one line: re-pinned on purpose (lane D3, Gate B's ruling): the 18 px stone, as high as the
+    // cell's, stands centred in a box of the 20 px line, 1 px clear above and below, as the cell's
+    // stone does (it was the 20 px stone overhanging the line, `-my-px`)
+    expect(stone).toHaveClass('h-row', 'items-center');
+    expect(stone.className).not.toMatch(/-my-/);
     // the out point and its seal come first; the owner, then the lock's kind
     expectBefore(within(tile).getByRole('link', { name: /:1$/ }), stone);
   });
@@ -227,6 +261,24 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const live = cellTiles(transfer('committed', 'live'), undefined).outputs[0];
     render(<CellTile cell={live} />);
     expectOneRowSeal(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed', IN_MARK_COLUMN);
+  });
+
+  // Lane P1 (the plan: an output's state reads "spent later", not the "consumed" its input
+  // neighbours carry; review chain-a tx-transfer and tx-cellbase: "consumed" on a CREATED output
+  // read as a contradiction): an input is consumed by this transaction; an output spent since was
+  // spent by a later one.
+  it('writes an output spent since "spent later", and an input "consumed" (P1)', () => {
+    const { inputs, outputs } = cellTiles(transfer('committed', 'consumed'), undefined);
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(outputs.length).toBeGreaterThan(0);
+    expect(inputs.map((c) => c.state)).toEqual(inputs.map(() => 'consumed'));
+    expect(outputs.map((c) => c.state)).toEqual(outputs.map(() => 'spent later'));
+    render(<CellTile cell={outputs[0]} />);
+    const [, , , occupied] = tileRows(screen.getByTestId('tx-io-output-0'));
+    expectEnd(occupied.text, /^spent later$/);
+    // a live output and one in the pool keep their words
+    expect(cellTiles(transfer('committed', 'live'), undefined).outputs[0].state).toBe('live');
+    expect(cellTiles(transfer('pending'), undefined).outputs[0].state).toBe('pending');
   });
 
   it('draws the outputs of a transaction not yet committed dashed, and its inputs still pressed', () => {
@@ -379,15 +431,25 @@ function expectEnd(text: HTMLElement, content: RegExp) {
 // its first flex line wrapped seal + out point, owner and lock kind differently at every width.
 // The tile is now a grid of a 30 px mark column and the text, 10 px apart, in four rows: every
 // mark centred in the one column, every text from the one edge, the right ends one column.
+// Re-pinned on purpose (readability R6): the column is as wide as its widest mark, the cell's row
+// stone, 18 px since the stone is (it was 30); renamed: "the 30 px mark column".
 describe('CellTile: one mark column, one text edge (C11)', () => {
-  it('is a grid of the 30 px mark column and the text, 10 px apart, in four rows of one mark each', () => {
+  it('is a grid of the mark column, as wide as its widest mark, and the text, 10 px apart, in four rows of one mark each', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
     expect(tile.tagName).toBe('ARTICLE');
-    expect(tile).toHaveClass('grid', 'grid-cols-[30px_minmax(0,1fr)]', 'gap-x-2.5', 'gap-y-2.5');
-    // 12 px above, so the stone overhanging its line by 6 px stays 6 px inside the border; a
-    // 10 px row gap keeps the round stone's 5 px drawn overhang 4 px clear of the owner's stone
+    // the widest of the three marks: the cell's stone (18), the owner's (13.5), the class mark (16)
+    const column = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    expect(column).toBe(18);
+    expect(tile).toHaveClass(
+      'grid',
+      `grid-cols-[${column}px_minmax(0,1fr)]`,
+      'gap-x-2.5',
+      'gap-y-2.5'
+    );
+    // 12 px above (it held the 30 px stone's overhang; since readability R6 the 18 px stone stands
+    // inside its line, 1 px clear of it)
     expect(tile).toHaveClass('pt-3', 'pb-2', 'px-3', 'min-w-0');
     const [cell, owner, content, occupied] = tileRows(tile);
     expect(cell.mark.children).toHaveLength(1);
@@ -396,9 +458,10 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(owner.mark.firstElementChild).toHaveAttribute('data-owner-seal');
     expect(content.mark.children).toHaveLength(1);
     expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'ckb');
+    expect(content.mark.firstElementChild).toHaveAttribute('width', '16');
     expect(occupied.mark.childNodes).toHaveLength(0);
-    // each mark centred in the column, its top on its row's first line (the stones overhang the
-    // 18 px line by their own negative margins; the 16 px class mark sits 1 px down)
+    // each mark centred in the column, on its row's first line (the cell's stone centred in a box
+    // of the 20 px line, the owner's 18 px stone too; the 16 px class mark sits 1 px down)
     for (const { mark } of [cell, owner, content])
       expect(mark).toHaveClass('flex', 'items-start', 'justify-center');
     expect(content.mark).toHaveClass('pt-px');
@@ -423,7 +486,10 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     const tile = screen.getByTestId('tx-io-output-0');
     const [cell] = tileRows(tile);
     const seal = expectOneRowSeal(cell.mark, outputs[0].seal.id, 'pressed', IN_MARK_COLUMN);
-    expect(seal).toHaveClass('-my-[6px]');
+    // centred on the 20 px row line, 1 px clear above and below (re-pinned on purpose, readability
+    // R6: the 30 px stone was 5 px over it, `-my-[5px]`)
+    expect(seal).toHaveClass('h-row', 'items-center');
+    expect(seal.className).not.toMatch(/-my-/);
     // the out point with its index is one unit, never broken, and the cell's link
     const outPoint = within(cell.text).getByRole('link', {
       name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:0$/,
@@ -449,14 +515,17 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'href',
       `/mainnet/address/${ADDRESS}`
     );
-    // the change output's lock kind (no lookup: 'change' alone), dim
-    expect(expectEnd(owner.text, /^change$/).firstElementChild).toHaveClass('text-text-dim');
-    // a lock of no known kind: the owner alone, no empty end
+    // B4 fix round (re-pinned on purpose): a tile names its owner's lock by the one decision every
+    // row reads (U-15: a lock the registry does not name is "lock <code hash>"; here no lookup
+    // names the fixture's made-up 0x9b… lock), then "change" on the change output, dim. It wrote
+    // 'change' alone and left an unregistered lock unnamed, so it read as the default lock.
+    expect(
+      expectEnd(owner.text, /^lock 0x9b9b9b9b…9b9b9b · change$/).firstElementChild
+    ).toHaveClass('text-text-dim');
     cleanup();
     render(<CellTile cell={outputs[1]} />);
     const [, other] = tileRows(screen.getByTestId('tx-io-output-1'));
-    expect(other.text.children).toHaveLength(1);
-    expect(other.text.querySelector('[data-tile-end]')).toBeNull();
+    expectEnd(other.text, /^lock 0x9b9b9b9b…9b9b9b$/);
   });
 
   it('reads the content, bright, on the third row, the exact capacity at its right end', () => {
@@ -485,17 +554,49 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(occupied.text.children).toHaveLength(3);
     const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
     expect(bar).toHaveAttribute('aria-hidden', 'true');
-    expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
-    expect(bytes).toHaveTextContent(/^occupied 61$/);
+    // re-pinned on purpose (lane D3): the track is 40 px (it was w-14, 56 px), so the line holds
+    // in every tile the pages draw (the test after this one)
+    expect(bar).toHaveClass('h-1', 'w-10', 'shrink-0');
+    expect(bytes).toHaveTextContent(/^occupied 61 B$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
     // re-pinned with readability ruling R3: the state is a value, the reading ink (it was dim)
     expect(state.firstElementChild).toHaveClass('text-meta', 'text-text');
     // the state once in the tile
     expect(within(tile).getAllByText('live')).toHaveLength(1);
-    // the narrowest sheet's text column (1024: 203 px) holds the 56 px bar, 'occupied 231' and
-    // 'consumed' at 11 px (6.6 px a character) with the 6 px gaps: 200 px
-    expect(56 + 6 + 12 * 6.6 + 6 + 8 * 6.6).toBeLessThanOrEqual(203);
+    // The line's budget at a stated bound (B4 fix round, tests NOTE-4; it was the sample
+    // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
+    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record), so the
+    // widest figure is "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px.
+    // With the 40 px bar, 'consumed' and the 6 px gaps the line is 253.6 px.
+    //
+    // Re-pinned on purpose (lane D3): the tile's text column was derived with the 280 px facts
+    // rail and its 56 px gap beside the sheets (215 px at 1024, 343 at 1280), which lane D2 took
+    // away; the sheets now share the whole measure, half of it less the 4 px seam, less the
+    // sheet's lane on the seam side (SHEETS.lane) and its outer side (12 px and the 1 px border),
+    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 383 px at 1024,
+    // 511 at 1280. The line it said stood on two lines at 1024 for every real cell holds there.
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const textColumn = (viewport: number) =>
+      (containerContentPx(viewport) - SHEETS.seam) / 2 -
+      SHEETS.lane -
+      (12 + 1) -
+      2 * (12 + 1) -
+      mark -
+      10;
+    expect([textColumn(1024), textColumn(1280)]).toEqual([383, 511]);
+    const lineOf = (words: string) =>
+      40 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
+    expect(widest).toBe('occupied 1,236,271\u00a0B');
+    expect(lineOf(widest)).toBeCloseTo(253.6, 10);
+    // it holds at 1280 and at 1024
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1280));
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1024));
+    // where it does not fit, the line wraps and its end (the state) drops under the bar: the row
+    // is a wrapping flex row, the state its own last item
+    expect(occupied.text).toHaveClass('flex', 'flex-wrap');
+    expect(occupied.text.lastElementChild).toHaveAttribute('data-tile-end');
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
@@ -510,7 +611,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
           kind: 'ckb',
           content: 'CKB',
           capacity: '6100000000',
-          occupied: '6100000000',
+          occupiedBytes: '61',
           state: 'consumed',
           anatomy: { lock: '53', type: '0', data: '0' },
         })}
@@ -524,7 +625,86 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'in:0: 61 occupied bytes'
     );
     expect(cellBar).toHaveClass('min-w-0', 'flex-1');
-    expect(words).toHaveTextContent(/^occupied 61$/);
+    expect(words).toHaveTextContent(/^occupied 61 B$/);
+  });
+
+  // Lane D3 (the tile's last line; the readability review's note, ruled at Gate B for D3): the
+  // bar, "occupied N B" and the state stood on two lines in the narrow tiles, the state under the
+  // bar. A tile's text column, as the pages draw it since lane D2 gave tier 1 the whole measure:
+  // the sheet less its 12 px padding and 1 px border on the outer side (and its 36 px lane on the
+  // seam side from lg, where the sheets stand side by side; below lg they stack, the padding on
+  // both sides), the tile's 12 px padding and 1 px border on each side, the mark column and its
+  // 10 px gap. The line is the bar's track, 6 px, the bytes, 6 px and the state, at the meta step.
+  // Renamed on purpose (lane P1; it was "… for every cell under 1,000,000 bytes"): with an output's
+  // "spent later" the claim at 360 is a cell under 10,000 bytes, as the body states.
+  it('holds the bar, its bytes and the state on one line in every tile the pages draw, for every cell under 1,000,000 bytes from 390 and under 10,000 at 360', () => {
+    render(
+      <CellTile
+        cell={sealedTile({
+          id: 'in:0',
+          testId: 'tile',
+          href: '/cell/0x-0',
+          label: 'input 0',
+          owner: 'owner',
+          lockKind: null,
+          kind: 'ckb',
+          content: 'CKB',
+          capacity: '6100000000',
+          occupiedBytes: '61',
+          state: 'consumed',
+        })}
+      />
+    );
+    const [, , , occupied] = tileRows(screen.getByTestId('tile'));
+    const track = boxPx(occupied.text.firstElementChild!, 1024)!;
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const text = (sheet: number) => sheet - 2 * (12 + 1) - mark - 10;
+    /** The sheets side by side from lg, less the onward bridge's 96 px column where a page has it. */
+    const sideBySide = (viewport: number, bridge = 0) =>
+      text((containerContentPx(viewport) - SHEETS.seam - bridge) / 2 - SHEETS.lane - (12 + 1));
+    const stacked = (viewport: number) => text(containerContentPx(viewport) - 2 * (12 + 1));
+    const columns = {
+      'transaction page 1280': sideBySide(1280),
+      'transaction page 1024': sideBySide(1024),
+      'cell page 1024, beside its onward bridge': sideBySide(1024, 96),
+      'stacked 640': stacked(640),
+      'stacked 390': stacked(390),
+      'stacked 360': stacked(360),
+    };
+    expect(columns).toEqual({
+      'transaction page 1280': 511,
+      'transaction page 1024': 383,
+      'cell page 1024, beside its onward bridge': 335,
+      'stacked 640': 528,
+      'stacked 390': 278,
+      'stacked 360': 248,
+    });
+    const meta = fontPx('meta');
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph): the widest state a tile writes is an
+    // output's "spent later" (11 glyphs, 79.2 px; it was "consumed", 8 glyphs, 57.6 px), so at 360,
+    // where the text column is 248 px, the line holds a cell under 10,000 bytes (40 + 6 + 115.2 +
+    // 6 + 79.2 = 246.4 px) and a cell of 10,000 bytes or more that a later transaction spent drops
+    // its state under the bar, at the right (the row's designed wrap, never an overflow); from 390
+    // up nothing changes.
+    expect(OUTPUT_SPENT).toBe('spent later');
+    const lineOf = (bytes: number) =>
+      track +
+      6 +
+      textPx(`occupied ${occupiedBytesText(BigInt(bytes), 'a cell')}`.length, meta) +
+      6 +
+      textPx(OUTPUT_SPENT.length, meta);
+    expect(lineOf(9_999)).toBeCloseTo(246.4, 10);
+    expect(lineOf(10_000)).toBeCloseTo(253.6, 10);
+    // every cell under 1,000,000 bytes holds its line in every tile from 390 up, the widest state
+    // ("spent later") beside it
+    for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
+      expect(lineOf(999_999), where).toBeLessThanOrEqual(width);
+    // at 360, every cell under 10,000 bytes; the next byte count, 10,000, wraps its state
+    expect(lineOf(9_999)).toBeLessThanOrEqual(columns['stacked 360']);
+    expect(lineOf(10_000)).toBeGreaterThan(columns['stacked 360']);
+    // the widest of record (genesis's cellbase, LARGEST_TX_BYTES) holds it from 390 up
+    for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
+      expect(lineOf(LARGEST_TX_BYTES), where).toBeLessThanOrEqual(width);
   });
 });
 
@@ -536,7 +716,10 @@ describe('a transaction of 300 cells draws each tile’s seals once (seal kinds,
       commonKnowledgeSize: '61',
       display: null,
       lock: { ...lock, args: `0x${i.toString(16).padStart(40, '0')}` },
-      address: ADDRESS,
+      address: ckbAddress({
+        codeHash: lock.codeHash,
+        args: `0x${i.toString(16).padStart(40, '0')}`,
+      }),
     });
     const lockOf = (side: 'in' | 'out', i: number) => sealHash(`c3 300 ${side} lock ${i}`);
     const tx = {

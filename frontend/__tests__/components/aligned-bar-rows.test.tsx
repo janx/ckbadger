@@ -2,15 +2,98 @@
 // display slot and class tones. Every default is the drawing the existing bars already had.
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ALIGNED_BAR_HEIGHT, AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { ScaleHeader as BlockVisualScaleHeader } from '@/components/blocks/block-visual';
+import { ALIGNED_BAR_HEIGHT, AlignedBar, ScaleHeader, tickForm } from '@/components/ui/aligned-bar';
+import {
+  ScaleHeader as BlockVisualScaleHeader,
+  resourceScale,
+} from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 
 const ticksOf = (root: ParentNode) => root.querySelector('[data-scale-ticks]') as HTMLElement;
 
+/** What a tick in the tick form says, read back independently: "1.5M" is 1,500,000. */
+function readTick(text: string): number {
+  const m = /^(\d+(?:\.\d+)?)([kMB]?)$/.exec(text);
+  if (!m) throw new Error(`not a tick: ${text}`);
+  return Number(`${m[1]}e${{ '': 0, k: 3, M: 6, B: 9 }[m[2] as '' | 'k' | 'M' | 'B']}`);
+}
+
+/** Every scale resourceScale gives for a largest value from 0 to `max`: brute force over each. */
+function everyScale(max: number): number[] {
+  const scales = new Set<number>();
+  for (let v = 0; v <= max; v++) scales.add(resourceScale([v]));
+  return [...scales].sort((a, b) => a - b);
+}
+
+// Review fb-logic 7 (the lead's ruling): an axis maximum states the scale its bars are drawn on, so
+// a head whose tick text is not exactly its value is a wrong figure. The tick form is formatTick,
+// which writes every digit a tick has (the lead's ruling of 2026-11-19), and every scale the heads
+// are given (resourceScale's: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5 × 10^k) reads back as itself, its
+// half too. Lane D1's third round: the tick form's refusal of a value it would round went with the
+// rounding (it could no longer trip: formatTick has no value it rounds), and this test, which held
+// that refusal, now holds the exact text it writes instead.
+describe('the tick form writes an axis maximum exactly (review fb-logic 7)', () => {
+  // Re-pinned for the lead's ruling of 2026-11-19 (lane D1, second follow-up): formatTick writes
+  // every tick exactly, so the tick form has no value it would round any more; 1,234,567 read
+  // "1.235M" and was refused, it reads "1.234567M".
+  it('writes a value with every digit it has, never a rounded text', () => {
+    expect(tickForm(1_234_567)).toBe('1.234567M');
+    expect(tickForm(1_500_000)).toBe('1.5M');
+  });
+
+  it('writes every scale resourceScale gives exactly, and every scale’s half', () => {
+    // every scale from a largest value up to 10,000, by brute force, then to ten billion (past the
+    // cycle limit, the largest count a head is given) one past each scale resourceScale gives, or
+    // one past the value where its scale is under it (niceTicks' 1e-9 tolerance gives
+    // 2,000,000,001 the scale 2,000,000,000: an AlignedBar refuses that pair, never draws it)
+    const small = everyScale(10_000);
+    expect(small.slice(0, 12)).toEqual([1, 2, 3, 4, 6, 10, 15, 20, 30, 40, 60, 75]);
+    const large: number[] = [];
+    for (let v = 10_001; v < 1e10; ) {
+      const s = resourceScale([v]);
+      large.push(s);
+      v = Math.max(s, v) + 1;
+    }
+    // their significant digits: 1, 1.5, 2, 3, 4, 6 and 7.5 times a power of ten, and 8 × 10^9
+    // where the tolerance meets 7,500,000,000
+    expect(new Set([...small, ...large].map((s) => String(s).replace(/0+$/, '')))).toEqual(
+      new Set(['1', '15', '2', '3', '4', '6', '75', '8'])
+    );
+    for (const s of [...small, ...large]) {
+      expect(readTick(tickForm(s))).toBe(s);
+      expect(readTick(tickForm(s / 2))).toBe(s / 2);
+    }
+  });
+});
+
 describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
   it('is the same component block-visual has always exported', () => {
     expect(BlockVisualScaleHeader).toBe(ScaleHeader);
+  });
+
+  // Readability F3-e, the coordinator's ruling: a head's ticks are axis labels, and an axis label
+  // is written in the tick form everywhere on the site (formatTick); the head's unit stays in its
+  // label. So the widest tick row of a count scale up to the cycle limit, "0 4B" or "0 1.5M" (at
+  // most 6 characters at 12 px, 43.2 px), stands whole over the 48 px a bar keeps at least.
+  it('writes its ticks in the tick form, whole over a 48 px track, its unit in its label', () => {
+    for (const [scale, end] of [
+      [4_000, '4k'],
+      [600_000, '600k'],
+      [1_500_000, '1.5M'],
+      [4_000_000_000, '4B'],
+      [10, '10'],
+    ] as const) {
+      const { container, unmount } = render(
+        <ScaleHeader label="Size, bytes" scale={scale} trackWidth={48} />
+      );
+      const head = container.firstElementChild as HTMLElement;
+      expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
+      const ticks = Array.from(ticksOf(head).children).map((t) => t.textContent!);
+      expect(ticks).toEqual(['0', end]);
+      // "0", a glyph, the end tick, at 7.2 px a glyph, inside the track
+      expect((ticks.join(' ').length * 12 * 3) / 5 <= 48).toBe(true);
+      unmount();
+    }
   });
 
   it('draws the name over 0 … scale, as wide as the track, 3 px apart by default (Blocks)', () => {
@@ -18,7 +101,9 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     const head = container.firstElementChild as HTMLElement;
     expect(head).toHaveClass('flex', 'flex-col');
     expect(head.style.gap).toBe('3px');
-    expect(head).toHaveTextContent(/^Size, bytes04,000$/);
+    // re-pinned on purpose (readability F3-e, the coordinator's ruling): the ticks in the tick
+    // form ("4k"; it was the exact "4,000"), the unit in the name
+    expect(head).toHaveTextContent(/^Size, bytes04k$/);
     // T5 (coordinator ruling, lane M): the name is a column head, 11 px like every head.
     expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
     expect(head.firstElementChild).toHaveClass('text-meta');
@@ -26,7 +111,7 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(ticks).toHaveAttribute('aria-hidden', 'true');
     expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');
     expect(ticks.style.width).toBe('120px');
-    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4,000']);
+    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4k']);
   });
 
   it('takes the track width and the gap a table has always drawn (transactions: 80 px, 2 px)', () => {
@@ -36,7 +121,8 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     const head = container.firstElementChild as HTMLElement;
     expect(head.style.gap).toBe('2px');
     expect(ticksOf(head).style.width).toBe('80px');
-    expect(head).toHaveTextContent(/^Cycles02,000,000$/);
+    // re-pinned on purpose (F3-e): "2M" in the tick form (it was "2,000,000")
+    expect(head).toHaveTextContent(/^Cycles02M$/);
   });
 
   it('formats its ticks and can mark the middle of the scale ("0 · 25B · 50B")', () => {

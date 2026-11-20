@@ -1,7 +1,7 @@
 'use client';
 import type { AssetCapacityHistory, CollectionInsights } from '@/lib/api';
 import { AssetHistory } from '@/components/asset/asset-history';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { heldPoint } from '@/lib/held-point';
 export interface CapacityHistoryProps {
   history: AssetCapacityHistory;
   subject: string;
@@ -14,15 +14,14 @@ export interface CapacityHistoryProps {
 export function CapacityHistory({ history, subject, weekly, assetClass }: CapacityHistoryProps) {
   if (history.source !== 'indexedChainTimeUtc8')
     throw new Error(`${subject}: unsupported capacity calendar ${history.source}`);
-  const daily = history.data.map((point) => {
-    const occupied = exactUnsignedInteger(point.values.used, `${subject} ${point.date}: occupied`);
-    const free = exactUnsignedInteger(point.values.unused, `${subject} ${point.date}: free`);
-    return {
-      date: point.date,
-      capacity: (occupied + free).toString(),
-      occupiedCapacity: occupied.toString(),
-    };
-  });
+  // the route states the whole each day's cells hold beside its parts (`capacity`,
+  // `occupiedCapacity`, `freeCapacity`, the one reader `heldPoint`; lane exactness, part B, the third read's S4: they were `used` and
+  // `unused`): the page reads all three and sums and subtracts nothing (it was occupied + free,
+  // added here; then free was capacity − occupied, in AssetHistory: lane P2's third round, item 13)
+  const daily = history.data.map((point) => ({
+    date: point.date,
+    ...heldPoint(point.values, `${subject} ${point.date}`),
+  }));
   return (
     <section aria-label={`${subject} capacity history`}>
       <AssetHistory

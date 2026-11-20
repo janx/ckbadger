@@ -3,15 +3,25 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { NotFoundPage } from '@/components/not-found-page';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { CellBar } from '@/components/ui/cell-bar';
-import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
+import { RangeSelect } from '@/components/ui/range-select';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
-import { ListTable } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  UNAVAILABLE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_CELL_AMOUNT_LINE,
+  WIDEST_CKB_HELD_COMPACT,
+  WIDEST_ROW_COUNT,
+  WIDEST_VERSION_CODE_CELLS,
+} from '@/lib/list-bounds';
 import {
   ScriptCustodyEvidence,
   ScriptCapacityEvidenceChart,
@@ -23,8 +33,12 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isAwaited } from '@/lib/query-state';
-import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import {
+  CAPACITY_RANGE_OPTIONS,
+  getCapacityRangeParams,
+  CapacityRangeKey,
+} from '@/lib/capacity-range';
+import { ENTITY_PAGE_SIZE, mergeAsked, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -39,7 +53,34 @@ import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { NEWEST_CELLS_COUNT, mergeNewestFirst, newestCellsKind } from '@/lib/script-newest-cells';
 
-function CellOccupiedValue({ cell }: { cell: Cell }) {
+/**
+ * What a code reference's tables hold (readability F3-e): each column's widest value measured at
+ * its step through columnPx, with the 16 px gap after every column but the last. A full id here
+ * breaks anywhere (`break-all`), so its column is a flexible one: at its minimum a line of 22
+ * characters (a hash in three), the rest of the container beyond the table's sum.
+ */
+const small = (text: string) => textPx(text.length, fontPx('small'));
+const meta = (text: string) => textPx(text.length, fontPx('meta'));
+const ID_LINE_PX = columnPx(textPx(22, fontPx('small')) + CELL_GAP_PX);
+const BLOCK_PX = columnPx(small(WIDEST_BLOCK_NUMBER) + CELL_GAP_PX);
+/**
+ * An amount on one line with its unit (WIDEST_CELL_AMOUNT_LINE, "999,999.99999999 CKB"); a larger
+ * one breaks before its decimals (`wrap`). Lane P2's third round (item 11): the bound is
+ * lib/list-bounds.ts's, as is a version's compact CKB (WIDEST_CKB_HELD_COMPACT, "999.99M").
+ */
+const AMOUNT_LINE_PX = columnPx(small(WIDEST_CELL_AMOUNT_LINE) + meta(' CKB') + CELL_GAP_PX);
+
+function CellOccupiedValue({
+  cell,
+  form,
+}: {
+  cell: Cell;
+  /**
+   * The table's numeric column aligns its points (`column`); a phone row writes the summary (lane
+   * P2's follow-up, item 5: one form for both was the column's).
+   */
+  form: 'column' | 'summary';
+}) {
   if (cell.cellType === 'genesis_special_burn') {
     return cell.virtualCommonKnowledgeSize === undefined ? (
       <span
@@ -55,7 +96,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
         <CkbAmount
-          form="column"
+          form={form}
           shannons={BigInt(cell.virtualCommonKnowledgeSize)}
           signed={false}
           tone="plain"
@@ -66,7 +107,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
   }
   return (
     <CkbAmount
-      form="column"
+      form={form}
       shannons={BigInt(cell.commonKnowledgeSize)}
       signed={false}
       tone="plain"
@@ -77,7 +118,7 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
 
 function CellOwner({ cell }: { cell: Cell }) {
   return cell.address ? (
-    <Link href={`/address/${cell.address}`} className="text-emphasis break-all hover:underline">
+    <Link href={`/address/${cell.address}`} look="inline" className="break-all">
       {cell.address}
     </Link>
   ) : (
@@ -98,7 +139,8 @@ function CellTypeReference({ cell }: { cell: Cell }) {
   return (
     <Link
       href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
-      className="text-emphasis break-all hover:underline"
+      look="inline"
+      className="break-all"
     >
       {cell.typeProtocolName ?? cell.typeCodeHash}
     </Link>
@@ -388,7 +430,22 @@ export default function ScriptDetailPage({
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedVersion, setSelectedVersion] = useState<SelectedVersion | null>(null);
   const [selectedDeploymentOutpoint, setSelectedDeploymentOutpoint] = useState<string | null>(null);
-  const cellsPagination = useCursorPagination();
+  // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
+  const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
+  const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): the version
+  // (what the cells' query key holds of the list: a code-hash page's version and its kind, a
+  // family page's name)
+  const cellsPagination = useCursorPagination(cellsPageSize, {
+    list: isCodeHashMode
+      ? [
+          selectedVersion?.codeHash,
+          selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
+            ? selectedVersion.scriptKind
+            : undefined,
+        ]
+      : [name],
+  });
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
@@ -835,9 +892,6 @@ export default function ScriptDetailPage({
   });
   const selectedCapacityChart = selectedCapacityChartRead.data;
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
-  // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
-  const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
   const selectedVersionCellsQueries = useQueries({
     queries: cellReferences.map((reference) => ({
       queryKey: [
@@ -849,14 +903,17 @@ export default function ScriptDetailPage({
         versionCellsCursorState[reference.key] ?? null,
         cellsPageSize,
       ],
-      queryFn: () =>
+      // asked by the walk (lane cd-fixes-controls, item 1): each reference's page carries the
+      // walk's page it was read for, and the merged page is asked where all of them were
+      queryFn: cellsPagination.ask(() =>
         api.getCellsByScriptRef({
           codeHash: reference.referenceHash,
           hashType: reference.hashType,
           scriptKind: cellsKind,
           limit: cellsPageSize,
           cursor: versionCellsCursorState[reference.key],
-        }),
+        })
+      ),
       enabled: isCodeHashMode ? Boolean(selectedVersion) : Boolean(namedScriptDetail),
       placeholderData: keepPreviousData,
     })),
@@ -907,9 +964,6 @@ export default function ScriptDetailPage({
   const usageByCodeHash = new Map(
     versionUsageEntries.map((deployment) => [deployment.codeHash, deployment])
   );
-  const selectedVersionUsage = selectedVersion
-    ? usageByCodeHash.get(selectedVersion.codeHash)
-    : undefined;
   // Usage lists every family version (by_deployment) with its counts; the page waits for it
   // before rendering. A failed request, or a version the response leaves out (a contract
   // violation), is shown as such — never as "0 cells, 0 CKB".
@@ -929,14 +983,6 @@ export default function ScriptDetailPage({
       ownedKnowledgeSum: stats.ownedKnowledgeSum,
     };
   };
-  const selectedVersionUsageState = selectedVersion
-    ? versionUsageOf(selectedVersionUsage, selectedVersion.codeHash)
-    : null;
-  // The cell list's total comes from the usage; without it the list states no total.
-  const selectedVersionLiveCellsCount =
-    selectedVersionUsageState?.state === 'ready'
-      ? selectedVersionUsageState.liveCellsCount
-      : undefined;
   const selectedVersionCellsData = useMemo(() => {
     const merged = new Map<
       string,
@@ -1008,24 +1054,31 @@ export default function ScriptDetailPage({
       mergedEntries.length > cellsPageSize ||
       selectedVersionCellsQueries.some((query) => Boolean(query.data?.hasMore));
 
-    return {
-      data: pageEntries.map((entry) => entry.cell),
-      total: selectedVersionLiveCellsCount,
-      hasMore,
-      nextCursor:
-        hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
-      currentCount: pageEntries.length,
-    };
+    return mergeAsked(
+      selectedVersionCellsQueries.map((query) => query.data),
+      {
+        data: pageEntries.map((entry) => entry.cell),
+        // the page the references' pages are merged into: this many rows, counting none (the
+        // usage's live cells are another read, at another tip: lane c2-finish, 1c)
+        limit: cellsPageSize,
+        hasMore,
+        nextCursor:
+          hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
+      }
+    );
   }, [
     cellsKind,
     cellsPageSize,
     selectedVersionCellsQueries,
-    selectedVersionLiveCellsCount,
     versionCellsCursorState,
     cellReferences,
   ]);
   // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
   // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
+  // The version's cells, oldest first: the pager's pages mode by its rows and its "more" (its
+  // merged page counts none), null for one page.
+  const versionCellsAt =
+    selectedVersionCellsData && rankedPageAt('cells', selectedVersionCellsData, cellsPagination);
   const isAwaiting = isCodeHashMode
     ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
     : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
@@ -1080,7 +1133,7 @@ export default function ScriptDetailPage({
               title="Conflicting live bytecode"
               args={formatCount(codeHashAmbiguity.versionHashes.length, 'version')}
             >
-              <p className="text-text-dim text-small mb-4">
+              <p className="text-text text-small mb-4">
                 Current live type resolution points to more than one bytecode version.
               </p>
               <ul className="text-small space-y-2">
@@ -1134,7 +1187,8 @@ export default function ScriptDetailPage({
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
           <DetailLayout title="No script deployments">
-            <p className="text-text-dim text-small py-8">
+            {/* an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3) */}
+            <p className="text-small max-w-measure py-8">
               The script request returned no code-cell deployments.
             </p>
           </DetailLayout>
@@ -1235,7 +1289,6 @@ export default function ScriptDetailPage({
         scriptKind: versionRow.scriptKind,
       });
       setSelectedDeploymentOutpoint(null);
-      cellsPagination.reset();
     }
   };
   const isSelected = (versionRow: (typeof versionRows)[number]) =>
@@ -1278,15 +1331,9 @@ export default function ScriptDetailPage({
         codeCells={codeCells}
         newest={newest}
         cells={{
-          pageSize: cellsPageSize,
-          rows: selectedVersionCellsData.data,
+          read: selectedVersionCellsData,
+          walk: cellsPagination,
           loading: isVersionCellsLoading,
-          page: cellsPagination.page,
-          hasMore: selectedVersionCellsData.hasMore,
-          hasPrevious: cellsPagination.hasPrevious,
-          currentCount: selectedVersionCellsData.currentCount,
-          onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
-          onPrevious: cellsPagination.goToPrevious,
         }}
       />
     );
@@ -1315,9 +1362,9 @@ export default function ScriptDetailPage({
           }
           actions={
             pageWebsite && (
-              <a href={pageWebsite} className="text-emphasis text-small hover:underline">
-                Website ↗
-              </a>
+              <ExternalLink href={pageWebsite} look="onward" className="text-small">
+                Website
+              </ExternalLink>
             )
           }
           facts={[
@@ -1373,8 +1420,10 @@ export default function ScriptDetailPage({
                     {
                       key: 'version',
                       label: 'Version · bytecode hash',
-                      minWidth: 225,
-                      width: '30%',
+                      // the full hash, breaking anywhere: a flexible column (F3-e: it was 225 and
+                      // 30 %)
+                      minWidth: ID_LINE_PX,
+                      width: 'auto',
                       render: (row) => (
                         <button
                           type="button"
@@ -1388,13 +1437,14 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployed',
                       label: 'First observed',
-                      minWidth: 130,
-                      width: '17%',
+                      // the block; "No deployment observed" breaks between its words (F3-e: it was
+                      // 130 and 17 %)
+                      minWidth: BLOCK_PX,
                       render: (row) =>
                         row.firstDeploymentCell ? (
                           <Link
                             href={`/blocks/${row.firstDeploymentCell.createdAtBlock}`}
-                            className="text-emphasis"
+                            look="inline"
                           >
                             {formatBlockNumber(row.firstDeploymentCell.createdAtBlock)}
                           </Link>
@@ -1405,24 +1455,33 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployments',
                       label: 'Code cells',
-                      minWidth: 110,
-                      width: '12%',
+                      // a version's code cells, two digits (WIDEST_VERSION_CODE_CELLS; lane P2's
+                      // follow-up, item 7: it read WIDEST_COUNT, a block's or a transaction's
+                      // count), under its head's words (F3-e: it was 110 and 12 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_VERSION_CODE_CELLS), meta('cells')) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (row) => row.deploymentsCount.toLocaleString(),
                     },
                     {
                       key: 'cells',
                       label: 'Live cells using it',
-                      minWidth: 120,
-                      width: '17%',
+                      // eight digits of live cells, or "unavailable" (F3-e: it was 120 and 17 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE)) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (row) => <VersionUsageCell usage={row.usage} field="cells" />,
                     },
                     {
                       key: 'capacity',
                       label: 'CKB in its cells',
-                      minWidth: 150,
-                      width: '24%',
+                      // the compact CKB and its unit, "999.99M CKB", or "unavailable" (the wider);
+                      // the last column, no gap after it (F3-e: it was 150 and 24 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_CKB_HELD_COMPACT) + meta(' CKB'), small(UNAVAILABLE))
+                      ),
                       numeric: true,
                       render: (row) => <VersionUsageCell usage={row.usage} field="capacity" />,
                     },
@@ -1455,13 +1514,16 @@ export default function ScriptDetailPage({
                       {
                         key: 'outpoint',
                         label: 'Outpoint',
-                        minWidth: 235,
-                        width: '28%',
+                        // the full out point, breaking anywhere: a flexible column (F3-e: it was
+                        // 235 and 28 %)
+                        minWidth: ID_LINE_PX,
+                        width: 'auto',
                         render: (row) =>
                           row.outpointKey ? (
                             <Link
                               href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
-                              className="text-emphasis break-all"
+                              look="key"
+                              className="break-all"
                             >
                               {row.outpointKey}
                             </Link>
@@ -1472,15 +1534,20 @@ export default function ScriptDetailPage({
                       {
                         key: 'status',
                         label: 'Status',
-                        minWidth: 90,
-                        width: '12%',
+                        // "Consumed", or "Status unavailable" breaking between its words (F3-e: it
+                        // was 90 and 12 %)
+                        minWidth: columnPx(
+                          Math.max(small('Consumed'), small(UNAVAILABLE)) + CELL_GAP_PX
+                        ),
                         render: (row) => renderDeploymentStatus(row.codeCell),
                       },
                       {
                         key: 'holder',
                         label: 'Code cell holder',
-                        minWidth: 220,
-                        width: '36%',
+                        // the holder's evidence, sentences and ids that break: a flexible column
+                        // in lines of 22 characters (F3-e: it was 220 and 36 %)
+                        minWidth: ID_LINE_PX,
+                        width: 'auto',
                         render: (row) => {
                           const custody = row.outpointKey
                             ? custodyByOutpoint.get(row.outpointKey)
@@ -1488,21 +1555,22 @@ export default function ScriptDetailPage({
                           return custody ? (
                             <ScriptCustodyEvidence custody={custody} />
                           ) : (
-                            <span className="text-text-dim">Custody evidence unavailable</span>
+                            // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+                            <span>Custody evidence unavailable</span>
                           );
                         },
                       },
                       {
                         key: 'block',
                         label: 'Created at',
-                        minWidth: 120,
-                        width: '24%',
+                        // the block, or "unavailable"; the last column, no gap after it (F3-e: it
+                        // was 120 and 24 %)
+                        minWidth: columnPx(
+                          Math.max(small(WIDEST_BLOCK_NUMBER), small(UNAVAILABLE))
+                        ),
                         render: (row) =>
                           row.codeCell ? (
-                            <Link
-                              href={`/blocks/${row.codeCell.createdAtBlock}`}
-                              className="text-emphasis"
-                            >
+                            <Link href={`/blocks/${row.codeCell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(row.codeCell.createdAtBlock)}
                             </Link>
                           ) : (
@@ -1514,7 +1582,8 @@ export default function ScriptDetailPage({
                       <div className="text-small space-y-2">
                         <Link
                           href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
-                          className="text-emphasis break-all"
+                          look="key"
+                          className="break-all"
                         >
                           {row.outpointKey}
                         </Link>
@@ -1540,22 +1609,25 @@ export default function ScriptDetailPage({
                   }
                 >
                   {isVersionCellsLoading ? (
-                    <p className="text-text-dim text-small py-6">Loading cells…</p>
+                    <p className="text-text text-small py-6">Loading cells…</p>
                   ) : (
                     <ListTable
                       label="Its cells"
-                      rows={selectedVersionCellsData.data}
+                      rows={selectedVersionCellsData?.data ?? []}
                       rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                       columns={[
                         {
                           key: 'cell',
                           label: 'Cell',
-                          minWidth: 220,
-                          width: '26%',
+                          // the full out point, breaking anywhere: a flexible column (F3-e: it was
+                          // 220 and 26 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => (
                             <Link
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                              className="text-emphasis break-all"
+                              look="key"
+                              className="break-all"
                             >
                               {cell.txHash}
                               <OutpointIndex index={cell.outputIndex} />
@@ -1565,22 +1637,26 @@ export default function ScriptDetailPage({
                         {
                           key: 'owner',
                           label: 'Owner',
-                          minWidth: 200,
-                          width: '18%',
+                          // the full address, breaking anywhere: a flexible column (F3-e: it was
+                          // 200 and 18 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => <CellOwner cell={cell} />,
                         },
                         {
                           key: 'type',
                           label: 'Type reference',
-                          minWidth: 165,
-                          width: '15%',
+                          // a protocol's name or the full code hash, breaking: a flexible column
+                          // (F3-e: it was 165 and 15 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => <CellTypeReference cell={cell} />,
                         },
                         {
                           key: 'capacity',
                           label: 'Capacity',
-                          minWidth: 120,
-                          width: '11%',
+                          // one line under a million CKB with its unit (F3-e: it was 120 and 11 %)
+                          minWidth: AMOUNT_LINE_PX,
                           numeric: true,
                           // Material pass v2 leftovers: the shared exact figure (ink, dim unit), not gold.
                           render: (cell) => (
@@ -1596,19 +1672,19 @@ export default function ScriptDetailPage({
                         {
                           key: 'knowledge',
                           label: 'Occupied',
-                          minWidth: 120,
-                          width: '11%',
+                          // as Capacity (F3-e: it was 120 and 11 %)
+                          minWidth: AMOUNT_LINE_PX,
                           numeric: true,
-                          render: (cell) => <CellOccupiedValue cell={cell} />,
+                          render: (cell) => <CellOccupiedValue cell={cell} form="column" />,
                         },
                         {
                           key: 'created',
                           label: 'Created',
-                          minWidth: 95,
-                          width: '9%',
+                          // the block (F3-e: it was 95 and 9 %)
+                          minWidth: BLOCK_PX,
                           numeric: true,
                           render: (cell) => (
-                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
+                            <Link href={`/blocks/${cell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           ),
@@ -1616,8 +1692,12 @@ export default function ScriptDetailPage({
                         {
                           key: 'anatomy',
                           label: 'Cell anatomy',
-                          minWidth: 180,
-                          width: '10%',
+                          // The bar over its legend, whose widest part is its 8 px swatch, its 6 px
+                          // gap and "data 9,999,999 B" at 12 px (115.2); the last column, no gap
+                          // after it (F3-e: it was 180 and 10 %).
+                          minWidth: columnPx(
+                            8 + 6 + meta(`data ${(9_999_999).toLocaleString('en-US')} B`)
+                          ),
                           render: (cell) => <CellAnatomyBar cell={cell} />,
                         },
                       ]}
@@ -1625,7 +1705,8 @@ export default function ScriptDetailPage({
                         <div className="text-small min-w-0 space-y-2">
                           <Link
                             href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                            className="text-emphasis break-all"
+                            look="key"
+                            className="break-all"
                           >
                             {cell.txHash}
                             <OutpointIndex index={cell.outputIndex} />
@@ -1643,11 +1724,11 @@ export default function ScriptDetailPage({
                               signed={false}
                               tone="plain"
                             />{' '}
-                            · occupied <CellOccupiedValue cell={cell} />
+                            · occupied <CellOccupiedValue cell={cell} form="summary" />
                           </div>
                           <div>
                             Created{' '}
-                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
+                            <Link href={`/blocks/${cell.createdAtBlock}`} look="inline">
                               {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           </div>
@@ -1657,42 +1738,38 @@ export default function ScriptDetailPage({
                       empty="No live cells currently use this version."
                     />
                   )}
-                  {selectedVersionCellsData.data.length > 0 && (
-                    <CursorPagination
-                      total={selectedVersionCellsData.total}
-                      totalLabel="cells"
-                      pageSize={cellsPageSize}
-                      page={cellsPagination.page}
-                      currentCount={selectedVersionCellsData.currentCount}
-                      hasMore={selectedVersionCellsData.hasMore}
-                      hasPrevious={cellsPagination.hasPrevious}
-                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                      onPrevious={cellsPagination.goToPrevious}
-                    />
-                  )}
+                  {/* The cells oldest first, paged by their rows and their "more" (the usage
+                      states their count: lane c2-finish, 1c). */}
+                  {versionCellsAt && <Pager mode="pages" label="cells" {...versionCellsAt} />}
                 </DetailSection>
               )}
             </>
           }
         >
           <DetailSection title="Capacity history">
-            <p className="text-text-dim text-small mb-3">
+            <p className="text-text text-small max-w-measure mb-3">
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
-            <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
+            <RangeSelect
+              label="range"
+              options={CAPACITY_RANGE_OPTIONS}
+              value={capacityRange}
+              onChange={setCapacityRange}
+            />
             {isAwaited(isCodeHashMode ? selectedCapacityChartRead : familyCapacityChartRead) ? (
-              <p className="text-text-dim text-small py-6">Loading capacity history…</p>
+              <p className="text-text text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart
                 chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}
                 markers={namedScriptDetail?.history ?? []}
               />
             ) : (
-              <p className="text-text-dim text-small py-6">No capacity history.</p>
+              // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+              <p className="text-small max-w-measure py-6">No capacity history.</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
-              <p role="alert" className="text-negative text-small">
+              <p role="alert" className="text-negative text-small max-w-measure">
                 Capacity history unavailable: {String(familyCapacityChartError)}
               </p>
             )}
@@ -1721,7 +1798,7 @@ export default function ScriptDetailPage({
                     minWidth: 210,
                     width: '30%',
                     render: (row) => (
-                      <span className="text-text-dim [overflow-wrap:anywhere]">
+                      <span className="text-text [overflow-wrap:anywhere]">
                         {row.currentVersionHash ?? 'Retired · no current code cell'}
                       </span>
                     ),
@@ -1735,7 +1812,8 @@ export default function ScriptDetailPage({
                       row.custody ? (
                         <ScriptCustodyEvidence custody={row.custody} />
                       ) : (
-                        <span className="text-text-dim">Evidence unavailable</span>
+                        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+                        <span>Evidence unavailable</span>
                       ),
                   },
                 ]}

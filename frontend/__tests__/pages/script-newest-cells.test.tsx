@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/newest-cells.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -30,7 +31,7 @@ vi.mock('@/src/navigation', () => ({
 }));
 
 type ScriptName = keyof typeof fixture.scripts;
-const EMPTY = { data: [], total: 0, limit: 12, hasMore: false, nextCursor: null };
+const EMPTY = pagedRead({ data: [], total: 0, limit: 12, hasMore: false, nextCursor: null });
 
 /**
  * The lane's real captures (worktree API on the live store, tip #20,911,460): each script's family
@@ -116,7 +117,9 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       'The newest live cells this script locks, newest block first · it is not a list of transactions'
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-small', 'text-text-dim');
+    // re-pinned on purpose (lane P2's follow-up, item 4): the caption states what the list is, a
+    // statement in the reading ink (it was the quiet ink)
+    expect(caption).toHaveClass('text-small', 'text-text');
     // R16 measures a text node's parent box: the words sit in their own inline box, not the
     // full-width paragraph.
     expect(caption.children).toHaveLength(1);
@@ -192,9 +195,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         name: `${first.address!.slice(0, 4)}…${first.address!.slice(-8)}`,
       })
     ).toHaveAttribute('title', first.address);
+    // re-pinned on purpose (lane P2's follow-up, item 11): the creating transaction opens at
+    // this cell, the anchor P1's builder writes, so its fold never hides the cell
     expect(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' })).toHaveAttribute(
       'href',
-      `/mainnet/tx/${first.txHash}`
+      `/mainnet/tx/${first.txHash}#${first.txHash}-0`
     );
     expect(within(row).getByRole('link', { name: '#20,911,460' })).toHaveAttribute(
       'href',
@@ -213,11 +218,58 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     serve('Default Lock');
     const section = await renderPage();
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    const all = within(footer).getByRole('link', { name: 'All 887,562 cells ↓' });
+    // re-pinned on purpose (lane p-assets, the controls gate's work list): a way onward to a place
+    // on this page, the onward look writing its "↓" (it was a raw anchor typing "All … ↓")
+    const all = within(footer).getByRole('link', { name: /^all 887,562\scells$/ });
     expect(all).toHaveAttribute('href', '#its-cells');
+    expect(all).toHaveTextContent(/^all 887,562\scells\s↓$/);
+    expect(all).toHaveClass('text-jade');
     expect(document.getElementById('its-cells')).toHaveAttribute('aria-label', 'Its cells');
     expect(within(footer).getAllByRole('link')).toHaveLength(1);
     expect(section.querySelector('a[href*="/activities"]')).toBeNull();
+  });
+
+  // Readability F3-e: every column budgeted from the widest value it writes, at 0.6 em a glyph (the
+  // out point 14 px, the cells 13) and the 16 px gap after every column but the last. What it is is
+  // the flexible column: 20 characters at its minimum, the rest of the container beyond the sum.
+  it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the out point at the row size, an output index of four digits
+      ceil(at('0x12345678…abcdef:9999', 14) + 16),
+      // the flexible column: 20 characters of what the cell is
+      ceil(at('x'.repeat(20), 13) + 16),
+      // an owner's address at the row size
+      ceil(at('ckb1…4s93hhsj', 13) + 16),
+      // "tx", the hash at the row size, the block and the date, the last column
+      ceil(at('tx 0x12345678…abcdef · #99,999,999 · 2026-11-02', 13)),
+    ];
+    expect(budgets).toEqual([201, 172, 118, 367]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(858);
+    serve('Default Lock');
+    const section = await renderPage();
+    const table = within(section).getByRole('table', { name: 'Newest cells' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols.map((c) => c.width)).toEqual(['201px', 'auto', '118px', '367px']);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    for (const [width, form] of [
+      [1232, 'table'],
+      [sum, 'table'],
+      [sum - 1, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      stubLayoutWidths({ chart: 900, list: width });
+      serve('Default Lock');
+      cleanup();
+      const shown = await renderPage();
+      expect(shown.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+    }
   });
 
   it('names DAO cells as deposits and requests, says "types", and links the DAO feed', async () => {
@@ -242,11 +294,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     // 17:55 UTC on 2026-11-02 is 01:55 on 2026-11-03 in UTC+8.
     expect(rows[0]).toHaveTextContent('#20,907,299 · 2026-11-03');
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    expect(within(footer).getByRole('link', { name: 'All 22,291 cells ↓' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: /^all 22,291\scells$/ })).toHaveAttribute(
       'href',
       '#its-cells'
     );
-    expect(within(footer).getByRole('link', { name: 'Activity: Nervos DAO →' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: 'Activity: Nervos DAO' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=dao'
     );
@@ -276,7 +328,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       })
     ).toHaveAttribute('title', args);
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    expect(within(footer).getByRole('link', { name: 'Activity: Objects →' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: 'Activity: Objects' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=object'
     );
@@ -325,5 +377,13 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         },
       ])
     );
+    // The coordinator's sweep (F3-e): a phone row's line is budgeted as a column is. The created
+    // line's widest, "tx 0xfa30…31b9 · #99,999,999 · date unavailable" (47 characters at 12 px,
+    // 338.4 px), is past a 328 px row, so it breaks between its facts, never inside one: no
+    // nowrap run holds the whole line (each fact keeps its own).
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    expect(at('tx 0xfa30…31b9 · #99,999,999 · date unavailable', 12)).toBeGreaterThan(328);
+    const created = rows[0].querySelector('[data-line="created"] > [data-part="left"]')!;
+    expect(created.querySelector('[data-dotted]')!.closest('.whitespace-nowrap')).toBeNull();
   });
 });

@@ -14,7 +14,7 @@ interface Props {
  */
 export function DotCellRecordsTable({ records }: Props) {
   if (records.length === 0) {
-    return <div className="text-text-dim text-body p-4 font-mono">No records.</div>;
+    return <div className="text-text text-body p-4 font-mono">No records.</div>;
   }
   return (
     <div className="overflow-x-auto">
@@ -34,12 +34,13 @@ export function DotCellRecordsTable({ records }: Props) {
               className="border-row-rule border-b last:border-b-0"
             >
               <td className="text-text-bright px-4 py-2 align-top">{record.key}</td>
-              <td className="text-text-dim px-4 py-2 align-top">{record.label}</td>
+              <td className="text-text px-4 py-2 align-top">{record.label}</td>
               <td className="text-text px-4 py-2 align-top [overflow-wrap:anywhere]">
                 {record.decodedAddress ? (
                   <Link
+                    look="inline"
                     href={`/address/${record.decodedAddress.address}`}
-                    className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                    className="transition-colors"
                   >
                     {record.decodedAddress.address}
                   </Link>
@@ -49,7 +50,7 @@ export function DotCellRecordsTable({ records }: Props) {
                   (record.valueUtf8 ?? record.valueHex)
                 )}
               </td>
-              <td className="text-text-dim px-4 py-2 text-right align-top">{record.ttl}</td>
+              <td className="text-text px-4 py-2 text-right align-top">{record.ttl}</td>
             </tr>
           ))}
         </tbody>

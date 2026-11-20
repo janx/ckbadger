@@ -2,15 +2,18 @@
 
 import type { NetworkStats } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
+import { cutFloat } from '@/lib/exact-integer';
 
+/**
+ * A rate the indexer reports, cut: thousands at one place from 1,000, else whole (lane exactness,
+ * part B3: it was rounded, 1,299.9 blocks a second read 1.3k).
+ */
 function formatRate(value: number | null | undefined): string | null {
   if (value === null || value === undefined || value <= 0) {
     return null;
   }
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}k`;
-  }
-  return value.toFixed(0);
+  if (value >= 1000) return `${cutFloat(value, 1, 'sync rate', BigInt(1000))}k`;
+  return cutFloat(value, 0, 'sync rate');
 }
 
 export function SyncBanner({ stats }: { stats: NetworkStats }) {
@@ -37,7 +40,12 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING…</span>
         </div>
         <span className="text-gold-dim text-body font-mono">
-          <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (
+          {/* cut, never rounded: 99.96 % read 100.0 while the sync ran (lane exactness, part B3) */}
+          <TerminalNumber
+            value={cutFloat(syncStatus.progress, 1, 'sync progress')}
+            glowIntensity="subtle"
+          />
+          % (
           <TerminalNumber
             value={syncStatus.syncedBlock.toLocaleString()}
             glowIntensity="none"

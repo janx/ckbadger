@@ -9,7 +9,7 @@ import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cel
 import { api, type TransactionDetail } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
@@ -78,17 +78,15 @@ export function FiberChannelStep({
       <span className="text-text-bright text-body">
         {n} · {title}
       </span>
-      <span className="text-text-dim text-small">
-        <Link
-          href={`/tx/${txHash}`}
-          className="text-[color:var(--ink)] hover:underline"
-          style={inkStyle(BOARD_INKS.link)}
-          title={txHash}
-        >
+      {/* The step's transaction is its key (the bright ink of the look); its block, time and
+          epoch are values, in the reading ink (R3: they were the quiet ink), the block a link
+          inside the line. */}
+      <span className="text-text text-small">
+        <Link href={`/tx/${txHash}`} look="key" title={txHash}>
           <ShortId value={txHash} kind="hash" size="row" />
         </Link>
         {' · '}
-        <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">
+        <Link href={`/blocks/${blockNumber}`} look="inline">
           {formatBlockNumber(blockNumber)}
         </Link>
         {unitNode(` · ${formatUtc8DateTime(timestamp)}`)}
@@ -99,11 +97,13 @@ export function FiberChannelStep({
   let body: ReactNode;
   if (isAwaited(transaction) || isAwaited(lookup)) {
     body = (
-      <p className="text-text-dim text-small">Loading the {title.toLowerCase()} transaction…</p>
+      <p className="text-text text-small max-w-measure">
+        Loading the {title.toLowerCase()} transaction…
+      </p>
     );
   } else if (transaction.error || lookup.error) {
     body = (
-      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+      <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
         {title} transaction unavailable: {String(transaction.error ?? lookup.error)}
       </p>
     );
@@ -121,14 +121,14 @@ export function FiberChannelStep({
       : -1;
     if (consumes && spentIndex < 0) {
       body = (
-        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+        <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
           {title} transaction {txHash} does not spend the {consumes.role} cell {consumes.txHash}:
           {consumes.index}
         </p>
       );
     } else if (carries && carries.index >= tiles.outputs.length) {
       body = (
-        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+        <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
           {title} transaction {txHash} has no output {carries.index} to carry the channel
         </p>
       );
@@ -162,7 +162,6 @@ export function FiberChannelStep({
             continuity={continuity}
             meOut={carries ? `out:${carries.index}` : undefined}
             onward="the channel, onward"
-            hideGroups
           />
           <div
             className="text-small flex flex-col items-start gap-1 border border-dashed px-3 py-2.5"
@@ -183,7 +182,7 @@ export function FiberChannelStep({
     <div className="flex min-w-0 flex-col gap-2.5">
       {header}
       {/* The step's one caption, at caption width (R14). */}
-      {description && <p className="text-text text-body max-w-[640px]">{description}</p>}
+      {description && <p className="text-text text-body max-w-measure">{description}</p>}
       {body}
     </div>
   );

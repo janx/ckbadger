@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { HexMap, gapId, type HexField } from '@/components/ui/hex-map';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { TintedJson } from '@/components/ui/tinted-json';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
+import { CopyButton } from '@/components/ui/copy-button';
 import { hexBytes } from '@/lib/hex-bytes';
 import {
   asciiPreview,
@@ -121,7 +123,6 @@ function ProtocolEvidenceView({
   // ID-C12 / TX-16: inside tier 2 the heading is quiet, as DetailSection's are.
   const tier = useDetailTier();
   const readout = usePinnedReadout<string>();
-  const [copyResult, setCopyResult] = useState<{ dataHex: string; error?: string } | null>(null);
   const hexFields: HexField[] = fields.map((field, index) => ({
     id: `field-${index}`,
     label: field.name,
@@ -188,15 +189,6 @@ function ProtocolEvidenceView({
           },
           2
         );
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(dataHex);
-      setCopyResult({ dataHex });
-    } catch (error) {
-      setCopyResult({ dataHex, error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-  const copied = copyResult?.dataHex === dataHex ? copyResult : null;
   return (
     <section aria-label={title} className="min-w-0 space-y-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5">
@@ -215,7 +207,7 @@ function ProtocolEvidenceView({
         </span>
       </div>
       {bytes.length === 0 ? (
-        <p className="text-text-dim text-small">Empty cell data (0 bytes).</p>
+        <p className="text-text text-small">Empty cell data (0 bytes).</p>
       ) : (
         <HexMap
           layout="scale"
@@ -238,39 +230,25 @@ function ProtocolEvidenceView({
       )}
       {children}
       {decodedJson !== undefined && (
-        <details className="min-w-0">
-          <summary className="text-text-dim text-small cursor-pointer">Decoded fields</summary>
-          <p className="text-text-dim text-meta mt-3">
+        // the library's inner disclosures (lane cd-fixes-controls, the disclosure sweep)
+        <SectionDisclosure form="inner" summary="Decoded fields">
+          <p className="text-text text-small max-w-measure">
             Protocol interpretation; raw cell bytes remain the evidence.
           </p>
           <TintedJson text={decodedJson} className="mt-2" />
-        </details>
+        </SectionDisclosure>
       )}
-      <details className="min-w-0">
-        <summary className="text-text-dim text-small cursor-pointer">
-          All {plural(bytes.length, 'byte', 'bytes')} as hex
-        </summary>
-        <div className="mt-3 flex flex-wrap items-baseline gap-3">
-          <button
-            type="button"
-            onClick={copy}
-            className="text-interactive hover:text-interactive-hover text-meta"
-          >
-            Copy raw bytes
-          </button>
-          {copied && (
-            <span
-              role={copied.error ? 'alert' : 'status'}
-              className="text-text-dim text-small break-words"
-            >
-              {copied.error ? `Could not copy raw bytes: ${copied.error}` : 'Raw bytes copied.'}
-            </span>
-          )}
-        </div>
+      <SectionDisclosure
+        form="inner"
+        summary={<>All {plural(bytes.length, 'byte', 'bytes')} as hex</>}
+      >
+        {/* the controls board's copy button, through the one copy path: "copied", or "not
+            copied" where the clipboard refuses */}
+        <CopyButton value={dataHex} label="copy raw bytes" />
         <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
           {dataHex}
         </pre>
-      </details>
+      </SectionDisclosure>
     </section>
   );
 }
@@ -313,11 +291,14 @@ function FieldDetail({
           {pinned && <span className="text-text-dim">selected · </span>}
           <span>{reading.name}</span>
         </span>
-        <span className="text-text-dim text-meta whitespace-nowrap tabular-nums">
+        {/* the field's place in the bytes, a value: the reading ink at 13 px (ink and size roles) */}
+        <span className="text-text text-small whitespace-nowrap tabular-nums">
           [{fmt(reading.start)}..{fmt(reading.end)}) · {fmt(n)} B
         </span>
       </div>
-      <p className="text-text-dim text-small mt-1 [overflow-wrap:anywhere]">{reading.words}</p>
+      <p className="text-text text-small max-w-measure mt-1 [overflow-wrap:anywhere]">
+        {reading.words}
+      </p>
       {rows.map((row) => {
         const words = hexWords(row.bytes);
         return (
@@ -349,19 +330,24 @@ function FieldDetail({
       })}
       {n > WHOLE_LIMIT && (
         <>
-          <p className="text-text-dim text-meta mt-1.5">… {fmt(n - shown)} more bytes</p>
-          <details className="mt-1.5 min-w-0">
-            <summary className="text-text-dim text-meta cursor-pointer">
-              All {unitNode(formatCount(n, 'byte'))} of {reading.name}
-            </summary>
-            <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
+          <p className="text-text text-small max-w-measure mt-1.5">… {fmt(n - shown)} more bytes</p>
+          <SectionDisclosure
+            form="inner"
+            className="mt-1.5"
+            summary={
+              <>
+                All {unitNode(formatCount(n, 'byte'))} of {reading.name}
+              </>
+            }
+          >
+            <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
               0x{bytes.slice(reading.start, reading.end).join('')}
             </pre>
-          </details>
+          </SectionDisclosure>
         </>
       )}
       {hint && (
-        <p className="text-text-dim text-meta mt-2 text-right">
+        <p className="text-text text-meta max-w-measure ml-auto mt-2 text-right">
           <TapOrHoverHint what="a field" />
         </p>
       )}

@@ -52,11 +52,13 @@ export default function FiberChannelDetailPage() {
             channel.data ? [titleHash(channel.data.channelId), 'Fiber channel'] : ['Fiber channel']
           }
         />
-        <nav aria-label="Breadcrumb" className="text-text-dim text-small">
-          <Link href="/fiber/channels" className="hover:text-text">
+        {/* The way back up is a link inside the breadcrumb's line (as the chart pages' is): it
+            reads in the line's ink, underlined, not quiet (R3: a link reads). */}
+        <nav aria-label="Breadcrumb" className="text-small">
+          <Link href="/fiber/channels" look="inline">
             Fiber
           </Link>{' '}
-          <span className="text-text-ghost">/</span> channels
+          <span className="text-text-ghost">/</span> <span className="text-text-dim">channels</span>
         </nav>
         {/* Hierarchy v3: once loaded, the board's hero section holds the title, state and id. */}
         {!channel.data && (
@@ -64,15 +66,18 @@ export default function FiberChannelDetailPage() {
             <h1 className="text-text-bright text-entity max-md:text-index mt-2.5 font-medium">
               Fiber channel
             </h1>
-            <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
+            {/* The id the address asked for, a value in the reading ink (R3), wrapped, never
+                scrolled; the head's designed lines (HeadId) take it once the API has answered with
+                a channel, since a malformed address is not yet known to be a hex id here. */}
+            <p className="text-text text-small max-w-measure mt-1.5 break-all">{channelId}</p>
           </>
         )}
         {isAwaited(channel) && (
-          <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
+          <p className="text-text text-body py-8">Loading channel evidence…</p>
         )}
         {channel.error && <ReadFailure what="channel" error={channel.error} />}
         {token.isError && (
-          <p role="alert" className="text-rouge text-small mt-2">
+          <p role="alert" className="text-rouge text-small max-w-measure mt-2">
             Funding token could not be loaded: {readErrorText(token.error)}
           </p>
         )}

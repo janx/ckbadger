@@ -18,8 +18,10 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
+import { RangeSelect } from '@/components/ui/range-select';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
+import { chartUnitValue } from '@/components/charts/chart-model';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
 import {
   exactDecimalRatio,
@@ -32,7 +34,6 @@ import {
   formatOrphanRateTarget,
   orphanRateTargetPercent,
 } from '@/lib/network-metrics';
-import { cn } from '@/lib/utils';
 
 /** Daily charts show their last 14 points: complete days, by the endpoints' contract. */
 const DAYS = 14;
@@ -60,11 +61,14 @@ export function NetworkSection() {
   );
 }
 
+/** A point's place on the chart; its exact figure (`display`) is added by the view that reads it. */
+type PlacedPoint = Omit<SeriesPoint, 'display'>;
+
 interface LineView {
-  points: SeriesPoint[];
+  points: PlacedPoint[];
   min: number;
   max: number;
-  last: SeriesPoint;
+  last: PlacedPoint;
 }
 
 /** The last 14 days of a daily chart, scaled for display. */
@@ -90,7 +94,8 @@ function exactLineView(
   multiplier: number,
   displaySuffix = ''
 ):
-  | (LineView & {
+  | (Omit<LineView, 'points'> & {
+      points: SeriesPoint[];
       minExact: string;
       maxExact: string;
       lastExact: string;
@@ -130,23 +135,41 @@ function BlockTimeFigure() {
     refetchInterval: 300_000,
   });
   const d = useMemo(
-    () => derive({ data, error }, (chart) => exactLineView(chart, 1), 'No block-time history.'),
+    () =>
+      derive(
+        { data, error },
+        // the route sends each day's average in whole ms (lane D1's third round, M1); read in
+        // seconds through the chart pages' one conversion, exactly
+        (chart) =>
+          exactLineView(
+            {
+              ...chart,
+              data: chart.data.map((point) => ({
+                ...point,
+                value: chartUnitValue(point.value, 'ms-seconds', `block time ${point.date}`),
+              })),
+            },
+            1
+          ),
+        'No block-time history.'
+      ),
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
       testId="home-block-time"
       title="Block time"
       href="/charts/average-block-time"
-      subtitle="daily average, s"
+      // its window named, the day the headline is the average of (P3: it read against the status
+      // strip's recent blocks)
+      subtitle={v ? `average of ${v.last.label}` : 'daily average'}
       headline={v?.lastExact}
+      unit="s"
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={s}
           ariaLabel={`Average block time per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} seconds, ${view.lastExact} s on ${view.last.label}`}
         />
       ))}
@@ -202,19 +225,18 @@ function HashRateFigure() {
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
       testId="home-hash-rate"
       title="Hash rate"
       href="/charts/hash-rate"
-      subtitle={v ? `daily, ${v.unit}` : 'daily'}
+      subtitle={v ? `average of ${v.last.label}` : 'daily average'}
       headline={v ? v.lastExact : undefined}
+      unit={v?.unit}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={s}
           ariaLabel={`Hash rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} ${view.unit}, ${view.lastExact} ${view.unit} on ${view.last.label}`}
         />
       ))}
@@ -246,20 +268,18 @@ function UncleRateFigure() {
     [data, error]
   );
   const v = viewOf(d);
-  const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
       hint={false}
       testId="home-uncle-rate"
       title="Uncle rate"
       href="/charts/uncle-rate"
-      subtitle={v ? `daily, NC-Max target ${v.targetExact}%` : 'daily'}
+      subtitle={v ? `on ${v.last.label} · target ${v.targetExact}%` : 'daily'}
       headline={v ? `${v.lastExact}%` : undefined}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
           reference={view.target}
-          formatValue={(n) => `${s(n)}%`}
           ariaLabel={`Uncle rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} percent around the NC-Max target of ${view.targetExact} percent, ${view.lastExact} percent on ${view.last.label}`}
         />
       ))}
@@ -269,11 +289,16 @@ function UncleRateFigure() {
 
 type TxRange = '24h' | '14d';
 
-// The toggle names the range, so the sub-label names only the bucket.
-const TX_RANGES: Record<TxRange, { button: string; subtitle: string; series: string }> = {
-  '24h': { button: '24 h', subtitle: 'per hour', series: 'hourlyData' },
-  '14d': { button: '14 d', subtitle: 'per day', series: 'dailyData' },
+// The range names the span, so the sub-label names the headline's window: its last full bucket.
+const TX_RANGES: Record<TxRange, { span: string; subtitle: string; series: string }> = {
+  '24h': { span: '24 h', subtitle: 'in the last full hour', series: 'hourlyData' },
+  '14d': { span: '14 d', subtitle: 'on the last full day', series: 'dailyData' },
 };
+/** The range's spans, in the one spelling of a span (the controls board's `24 h · 14 d`). */
+const TX_SPANS = (Object.keys(TX_RANGES) as TxRange[]).map((key) => ({
+  key,
+  label: TX_RANGES[key].span,
+}));
 
 interface TxView {
   bars: Bar[];
@@ -355,28 +380,13 @@ function TransactionsFigure() {
       subtitle={meta.subtitle}
       headline={v ? (v.last ? n(v.last.value) : '—') : undefined}
       controls={
-        <span
-          role="group"
-          aria-label="Transactions range"
-          className="border-base-border flex overflow-hidden border"
-        >
-          {(Object.keys(TX_RANGES) as TxRange[]).map((r) => (
-            <button
-              key={r}
-              type="button"
-              aria-pressed={txRange === r}
-              onClick={() => setTxRange(r)}
-              className={cn(
-                'text-small h-8 whitespace-nowrap px-[9px] transition-colors',
-                txRange === r
-                  ? 'bg-base-border-subtle text-text-bright'
-                  : 'text-text-dim hover:text-text bg-transparent'
-              )}
-            >
-              {TX_RANGES[r].button}
-            </button>
-          ))}
-        </span>
+        // the controls board's range: the chips joined, one span at a time
+        <RangeSelect
+          label="Transactions range"
+          options={TX_SPANS}
+          value={txRange}
+          onChange={setTxRange}
+        />
       }
       body={bodyOf(d, (view) => (
         <SparkChart bars={view.bars} formatValue={n} ariaLabel={ariaLabel(view)} />

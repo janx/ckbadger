@@ -85,6 +85,20 @@ const dark = {
   gold: '#e4bf76',
   'gold-dim': '#ceb077',
   'gold-bright': '#f6cf87',
+  /**
+   * The DAO's second band in a stack, its compensation not yet claimed (the Supply chart, lane D1):
+   * old gold mixed into the page ground at 70 %, so it reads as the gold band beside it, not a
+   * class of its own, and clears that gold (1.86:1), the burnt slate (1.86:1) and the ground
+   * (5.73:1) by the board's 1.5:1 for a stack's fills.
+   */
+  'gold-ramp': '#a68b57',
+  /**
+   * The DAO's withdrawal requests in a stack, the principal still in a DAO cell (the Supply chart,
+   * lane exactness, part B1): old gold mixed into the page ground at 48 %, so it reads as the DAO's gold and stands
+   * between its two neighbours, the deposits' gold (3.22:1) and the unclaimed compensation's
+   * gold-ramp (1.73:1), and off the ground (3.32:1), each over the board's 1.5:1 for a stack's fills.
+   */
+  'gold-mid': '#786540',
   rouge: '#ff9e88',
   /**
    * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
@@ -269,6 +283,10 @@ const light: Palette = {
   gold: '#80600f',
   'gold-dim': '#786234',
   'gold-bright': '#684e0d',
+  /** By day the gold mixed into the paper at 30 %: 3.34:1 to the gold, 1.55 to the slate, 1.51 to the paper. */
+  'gold-ramp': '#d0c3a4',
+  /** By day the gold mixed into the paper at 62 %: 2.02:1 to the gold, 1.65 to the gold-ramp, 2.49 to the paper. */
+  'gold-mid': '#ac9660',
   rouge: '#a8392a',
   'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',
@@ -384,9 +402,10 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * (`.glass`, the rule name kept) is a flat tile: the surface, opaque, under its own 1 px border —
  * no sheen, no lit edges, no outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
  * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
- * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
- * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
- * verse and its facts still text-grade across a stroke (palette.test).
+ * faint the newest block's seal is pressed on the 404 page: the cinnabar at 16 % on the night,
+ * 8 % on paper (where the same red reads stronger): the most each allowed, while it stood behind
+ * the verse, with every ink of the verse and its facts still text-grade across a stroke
+ * (palette.test); since readability R6 it stands clear of the text, beside or below it.
  */
 
 /**
@@ -478,6 +497,18 @@ export const MATERIAL_KEYS = Object.keys(darkMaterials) as MaterialKey[];
 /** The CSS reference of a colour key, for a style, an SVG attribute or a CSS string. */
 export function color(key: PaletteKey): string {
   return `var(--c-${key})`;
+}
+
+/**
+ * The palette key a `color(key)` names, its inverse: for a figure handed its tones as colours (the
+ * cell microscope's ELF regions) that must read an ink off one (`inkOnFill`). Any other string is
+ * refused, never guessed.
+ */
+export function paletteKeyOf(css: string): PaletteKey {
+  const key = /^var\(--c-([a-z0-9-]+)\)$/.exec(css)?.[1];
+  if (key === undefined || !(key in dark))
+    throw new Error(`palette: ${JSON.stringify(css)} names no palette key`);
+  return key as PaletteKey;
 }
 
 /** A colour key at `alpha` (0–1). */

@@ -97,6 +97,20 @@ describe('PoolInterpretationNotice', () => {
     expect(screen.getByText('partial: an input is not yet resolvable')).toBeInTheDocument();
   });
 
+  // The ink and size round (the shared lane): a notice is a sentence, at 13 px in the warning ink,
+  // whatever class its caller passes (the transactions page passed text-meta): the caller places it
+  it('says it at 13 px in the warning ink, a caller placing it, never sizing it', () => {
+    render(
+      <PoolInterpretationNotice
+        className="text-warning text-meta ml-2"
+        interpretation={{ status: 'partial', reasons: [{ code: 'unresolved_input' }] }}
+      />
+    );
+    const words = screen.getByText('partial: an input is not yet resolvable');
+    expect(words).toHaveClass('text-warning', 'text-small');
+    expect(words.parentElement).toHaveClass('ml-2');
+  });
+
   it('shows a code it has no wording for verbatim rather than dropping it', () => {
     // DAO phase-2 compensation is computed exactly now, so the API no longer
     // sends `dao_compensation_unavailable`; were it to, it is not special.

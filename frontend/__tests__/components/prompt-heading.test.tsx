@@ -50,7 +50,11 @@ describe('PromptHeading', () => {
     expect(note).not.toHaveClass('text-text-ghost');
     // the link names no ink of its own: it is the note's dim, and jade under the pointer
     expect([...link.classList].filter((c) => /^text-/.test(c))).toEqual([]);
-    expect(css).toMatch(/\ba:hover\s*\{\s*color: var\(--c-jade\);/);
+    // re-pinned on purpose (lane cd-fixes-controls): the rule's selector ends with the library's
+    // action after a failed read (`.look-action`), after `a:hover`
+    expect(css).toMatch(
+      /\ba:hover,\n\.look-action:focus-visible,\n\.look-action:hover\s*\{\s*color: var\(--c-jade\);/
+    );
   });
 
   it('renders the bare heading when there is no args or note', () => {

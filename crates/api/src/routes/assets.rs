@@ -18,10 +18,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::cache::InMemoryCache;
 use crate::response::{
-    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse, RankedPage,
 };
 use crate::utils::hash::parse_fixed_hex;
 use crate::utils::{
@@ -1874,34 +1874,22 @@ fn build_capacity_history_chart_with_initial(
             used_delta,
             &format!("building capacity history chart at date {}", date),
         )?;
-        let unused = cumulative_capacity - cumulative_used;
-
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values: HashMap::from([
-                ("used".to_string(), cumulative_used.to_string()),
-                ("unused".to_string(), unused.to_string()),
-            ]),
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                cumulative_capacity,
+                cumulative_used,
+                "capacity history",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     Ok(StackedAreaChartResponse {
         data,
-        series: vec![
-            StackedAreaSeries {
-                id: None,
-                key: "used".to_string(),
-                label: "Used".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                id: None,
-                key: "unused".to_string(),
-                label: "Unused".to_string(),
-                color: "#00c389".to_string(),
-            },
-        ],
+        series: super::asset_calendar::held_series(),
         title,
+        bands: None,
     })
 }
 
@@ -1928,11 +1916,10 @@ fn latest_capacity_from_chart(
         );
         Ok(value)
     };
-    let used = read("used")?;
-    let unused = read("unused")?;
-    let total = used.checked_add(unused).ok_or_else(|| {
-        anyhow::anyhow!("collection capacity chart {} total exceeds i128", last.date)
-    })?;
+    let used = read("occupiedCapacity")?;
+    // the day's capacity, which the point states (lane exactness, part A2, N6: the total was
+    // used + unused here)
+    let total = read("capacity")?;
     Ok(Some((total.to_string(), used.to_string())))
 }
 
@@ -3983,14 +3970,31 @@ fn list_object_collection_holders_ranked(
     Ok(holders)
 }
 
+/// The read view's tip, number and hash, as a part of a cache key (lane exactness, part A, A3): a value cached
+/// under it was read at that block, so a request at another block reads its own.
+pub(crate) fn view_tip_key(store: &CkbadgerStore) -> Result<String, ApiRouteError> {
+    Ok(
+        match store
+            .get_sync_tip_block()
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            Some((number, header)) => format!("{number}:{}", hex::encode(header.hash)),
+            None => "no-tip".to_string(),
+        },
+    )
+}
+
 fn list_object_collection_holders_ranked_cached(
     store: &CkbadgerStore,
     mem_cache: &InMemoryCache,
     collection_id_bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    // keyed by the read view's tip, so the ranking a page is cut from and the total beside it are
+    // read in one view (lane exactness, part A, A3: a 30 s entry could serve the ranking of an older block)
     let cache_key = format!(
-        "assets:nft_collection_holders_ranked:0x{}",
-        hex::encode(collection_id_bytes)
+        "assets:nft_collection_holders_ranked:0x{}:{}",
+        hex::encode(collection_id_bytes),
+        view_tip_key(store)?
     );
     if let Some(cached) = mem_cache.get::<Vec<(Vec<u8>, i64)>>(&cache_key) {
         return Ok(cached);
@@ -4005,7 +4009,7 @@ async fn list_object_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<CollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
+) -> ApiResult<RankedPage<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_object_collection_id(&collection_id)?;
     let cursor = params
@@ -4033,15 +4037,8 @@ async fn list_object_collection_holders(
     )?;
 
     let total = agg.holders_count;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        holders
-            .iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid object collection holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this view's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&holders, cursor.as_ref());
 
     let page: Vec<_> = holders.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;
@@ -4061,12 +4058,11 @@ async fn list_object_collection_holders(
         })
         .collect::<Result<_, ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(RankedPage {
+        page: CursorPaginatedResponse::new(rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking read in this request's view, plus one
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 async fn list_object_collection_activities(
@@ -4296,6 +4292,7 @@ async fn get_object_collection_capacity_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::statistics::StackedAreaDataPoint;
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::{AssetAction, CachedBlockHeader, ProtocolAction, TxIndexEntry};
 
@@ -4638,12 +4635,13 @@ mod tests {
             data: vec![StackedAreaDataPoint {
                 date: "2026-10-24".to_string(),
                 values: HashMap::from([
-                    ("used".to_string(), "oops".to_string()),
-                    ("unused".to_string(), "1".to_string()),
+                    ("occupiedCapacity".to_string(), "oops".to_string()),
+                    ("freeCapacity".to_string(), "1".to_string()),
                 ]),
             }],
             series: vec![],
             title: "test".to_string(),
+            bands: None,
         };
         assert!(latest_capacity_from_chart(&chart).is_err());
     }

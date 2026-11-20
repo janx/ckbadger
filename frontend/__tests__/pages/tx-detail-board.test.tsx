@@ -4,10 +4,14 @@
  * group identity, resolved cell deps, the proposal ruler, the capacity equation, header deps,
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
+import { JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
+import { addressScript } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { expectRestingLink } from '@/__tests__/utils/resting-link';
+import { factsOf } from '@/__tests__/utils/facts';
 import {
   expectBefore,
   expectNamePlate,
@@ -20,6 +24,9 @@ import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -66,6 +73,8 @@ vi.mock('@/src/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
   usePathname: () => `/tx/${TX_HASH}`,
   useSearchParams: () => mockSearchParams,
+  // lane D3: the page reads the URL's anchor (a cell's out point); these tests give none
+  useSearchAndHash: () => (mockSearchParams.size ? `?${mockSearchParams}` : ''),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
@@ -103,7 +112,9 @@ function committed(): TransactionDetail {
         display: null,
         lock: lockScript(`0x${'11'.repeat(20)}`),
         type: typeScript,
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({ codeHash: LOCK_CODE_HASH, args: `0x${'11'.repeat(20)}` }),
         lockArgsDecoded: { lock: 'secp256k1_blake160', pubkeyHash: `0x${'11'.repeat(20)}` },
       },
     ],
@@ -117,7 +128,9 @@ function committed(): TransactionDetail {
         display: null,
         lock: lockScript(`0x${'22'.repeat(20)}`),
         type: typeScript,
-        address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({ codeHash: LOCK_CODE_HASH, args: `0x${'22'.repeat(20)}` }),
       },
     ],
     scriptGroups: [
@@ -204,7 +217,7 @@ function objectActivity(): GlobalActivity {
     composition: 'btc_ckb' as const,
   });
   const [from, to, third] = feedSamples.objectTransfer.participants;
-  return {
+  return activityRead({
     ...feedSamples.objectTransfer,
     txHash: TX_HASH,
     participants: [
@@ -212,7 +225,7 @@ function objectActivity(): GlobalActivity {
       { ...to, itemDeltas: [withContext(1)] },
       third,
     ],
-  };
+  });
 }
 
 const lookup = {
@@ -224,8 +237,10 @@ const lookup = {
  * The page's seals by kind (C2): the header presses one page stone of `id` (its long stone, 94 px,
  * 64 below md), and — when the cells are drawn — the same stone is pressed again at 64 px across
  * the seam between the two sheets (C11: two impressions of it, its left half on the consumed sheet
- * and its right half on the created one), shown from lg only. Returns the head's stone and the
- * seam seal's first half (null when none).
+ * and its right half on the created one), shown from lg only. Re-pinned on purpose (lane D3,
+ * PA-07): below lg the same stone is pressed across the gap of the stacked sheets, a second
+ * holder of two halves (upper, lower) shown below lg only; it was none. Returns the head's stone
+ * and the seam seal's first half (null when none).
  */
 function expectTxSeals(
   container: HTMLElement,
@@ -242,22 +257,32 @@ function expectTxSeals(
     expect(holders).toHaveLength(0);
     return { head, seam: null };
   }
-  // the seam seal's two halves of one stone, never a second one in the header
-  expect(all).toHaveLength(3);
-  expect(holders).toHaveLength(1);
-  const [holder] = Array.from(holders);
-  expect(header).not.toContainElement(holder);
-  expect(screen.getByTestId('tx-cells-frame')).toContainElement(holder);
-  // in the seam, from lg only (below it the sheets stack and the header's stone is the one), and
-  // hidden from a screen reader, which has the header's
-  expect(holder.parentElement).toHaveAttribute('data-seam');
-  expect(holder.parentElement).toHaveClass('hidden', 'lg:block');
-  expect(holder).toHaveAttribute('aria-hidden', 'true');
-  const stamps = Array.from(holder.querySelectorAll<HTMLElement>('[data-seal]'));
-  expect(stamps.map((s) => s.closest('[data-seam-half]')!.getAttribute('data-seam-half'))).toEqual([
-    'consumed',
-    'created',
+  // the seam seal's two halves of one stone in each of its two forms (one shown at a width), never
+  // a second one in the header
+  expect(all).toHaveLength(5);
+  expect(Array.from(holders).map((h) => h.getAttribute('data-seam-seal'))).toEqual([
+    'side-by-side',
+    'stacked',
   ]);
+  const [holder, stacked] = Array.from(holders);
+  for (const h of [holder, stacked]) {
+    expect(header).not.toContainElement(h);
+    expect(screen.getByTestId('tx-cells-frame')).toContainElement(h);
+    // in the seam (a column from lg, the row between the stacked sheets below it), hidden from a
+    // screen reader, which has the header's
+    expect(h.parentElement).toHaveAttribute('data-seam');
+    expect(h).toHaveAttribute('aria-hidden', 'true');
+    expect(
+      Array.from(h.querySelectorAll<HTMLElement>('[data-seal]')).map((s) =>
+        s.closest('[data-seam-half]')!.getAttribute('data-seam-half')
+      )
+    ).toEqual(['consumed', 'created']);
+  }
+  expect(holder).toHaveClass('hidden', 'lg:flex');
+  expect(stacked).toHaveClass('flex', 'lg:hidden');
+  const stamps = Array.from(holders).flatMap((h) =>
+    Array.from(h.querySelectorAll<HTMLElement>('[data-seal]'))
+  );
   for (const stamp of stamps) {
     expect(stamp).toHaveAttribute('data-seal', 'tx');
     expect(stamp).toHaveAttribute('data-seal-form', 'page');
@@ -362,6 +387,13 @@ beforeEach(() => {
   });
 });
 
+/**
+ * A feed sample's party at the row size, by the seed its fixture spells its args from: `ckb1…` and
+ * the last 8 characters (R9; B4 re-pinned: the samples carry real addresses, a row reads the lock
+ * off them, and their last characters are their checksum).
+ */
+const row = (seed: string) => `ckb1…${seededAddress(seed).slice(-8)}`;
+
 describe('Transaction board, tier 1', () => {
   it('heads the page with the action, a plain summary and a copy button (TX-11)', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -378,22 +410,26 @@ describe('Transaction board, tier 1', () => {
       // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
       // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
       // R9 (re-pinned): prose takes the row form, the object's id 10…6
-      'Nervape 3x 0x51c75a00…0096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
+      // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee stands in the status strip,
+      // so the summary's last sentence, "The sender paid a 0.00064119 CKB fee.", is gone
+      `Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}.`
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    const copy = screen.getByRole('button', { name: 'copy transaction hash' });
+    fireEvent.click(copy);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
-    // A4 review 3: the one copy path; a copy that worked says so in its title for a moment
+    // A4 review 3: the one copy path; a copy that worked says so for a moment. Re-pinned on
+    // purpose (lane c2-chain): the library's CopyButton says it in words beside the icon, heard
+    // as a status, `copied` (it was the button's title, "Copied"); the name stays lowercase.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveAttribute(
-        'title',
-        'Copied'
-      )
+      expect(within(copy.parentElement!).getByRole('status')).toHaveTextContent(/^copied$/)
     );
   });
 
   // A4 review 3: over plain HTTP on a LAN address there is no clipboard. The copy button copies
-  // through the one copy path: nothing claims a copy, and nothing rejects unhandled.
+  // through the one copy path: nothing claims a copy, and nothing rejects unhandled. Re-pinned on
+  // purpose (lane c2-chain): the library's CopyButton says so, `not copied` (the controls board;
+  // the old button's title stayed "Copy transaction hash" and said nothing).
   it('claims no copy and rejects nothing where the clipboard is absent', async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
@@ -402,12 +438,14 @@ describe('Transaction board, tier 1', () => {
       Object.assign(navigator, { clipboard: undefined });
       render(<TransactionDetailPage />);
       await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
-      const button = screen.getByRole('button', { name: 'Copy transaction hash' });
+      const button = screen.getByRole('button', { name: 'copy transaction hash' });
       await act(async () => {
         fireEvent.click(button);
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(button).toHaveAttribute('title', 'Copy transaction hash');
+      const answer = within(button.parentElement!).getByRole('status');
+      expect(answer).toHaveTextContent(/^not copied$/);
+      expect(answer).not.toHaveTextContent(/^copied$/);
       expect(rejections).toEqual([]);
     } finally {
       process.off('unhandledRejection', onRejection);
@@ -438,7 +476,7 @@ describe('Transaction board, tier 1', () => {
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
-    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'copy transaction hash' }));
     // C10 round 2: the id line in the plate's one voice, set by the plate; the hash and its
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
@@ -450,24 +488,34 @@ describe('Transaction board, tier 1', () => {
     // re-pinned (A4 Chrome F3): the piece is every head's HeadId, still no size or ink of its own
     const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
     expect(hash).toHaveAttribute('title', TX_HASH);
-    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    // re-pinned (lane c2-finish, item 4: copy has one form): HeadId draws the copy after the id,
+    // the one form of every head (8 px after it, at its first line: was items-center gap-0.5 by
+    // the page's hand); the id no longer positions a tick over itself (was 'relative'). Re-pinned
+    // again (lane c2-finish, rulings round 2): the id takes its content's width (it was flex-1 and
+    // filled the row, so its copy stood at the row's far end, 352 to 727 px after the hash at 1280)
+    expect(hash.className).toBe('block min-w-0 font-mono');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
-    expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
-    expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
-      'text-text-dim',
-      'hover:text-jade',
-      '-my-3',
-      'h-11',
-      'w-11'
-    );
-    // under both: the summary first
-    expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
+    expect(hash.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
+    // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
+    // icon in the quiet ink in a 32 px box below 640 and 24 px from it, kept whole beside the
+    // hash (was a 44 px box pulled 12 px into the line, -my-3 h-11 w-11). Re-pinned (lane
+    // c2-finish, rulings round 1): its answer took 6 px and its words (43.2 or 72 px) from the
+    // hash's line while it stood; it hangs under the whole id now, out of the line's flow
+    const copy = screen.getByRole('button', { name: 'copy transaction hash' });
+    expect(copy).toHaveClass('text-text-dim', 'hover:text-jade', 'h-8', 'w-8', 'sm:h-6', 'sm:w-6');
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(copy);
+    expect(copy.parentElement).toHaveClass('shrink-0', 'self-stretch');
+    // under both: re-pinned on purpose (lane D2, gate D0′): the status strip first, then the
+    // summary (the summary was first; the facts stood in a rail outside the head)
+    const strip = screen.getByRole('group', { name: 'Transaction status' });
+    expect(below!.firstElementChild).toBe(strip);
+    expect(below!.children[1]).toBe(screen.getByTestId('tx-summary'));
     expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));
+    expect(nameBox).not.toContainElement(strip);
     expect(head.closest('header')).toContainElement(h1);
     expectBefore(seal, h1);
-    expect(head).not.toContainElement(
-      await screen.findByRole('complementary', { name: 'Transaction facts' })
-    );
     expect(head).not.toContainElement(
       await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' })
     );
@@ -503,23 +551,26 @@ describe('Transaction board, tier 1', () => {
     expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
   });
 
-  // Rubbing × Song print, phase 5 (T4): the board's comment, three lines from the figures the page
-  // draws — the cells heading's counts, the rail's fee and the evidence tier's common-knowledge
-  // delta (563 → 589 occupied bytes). The name plate (C10): under the stone and the plate after
-  // the summary, from the page's left edge (it was in the column beside the stone).
-  it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
+  // Rubbing × Song print, phase 5 (T4): the board's comment, from the figures the page draws — the
+  // cells heading's counts and the evidence tier's common-knowledge delta (563 → 589 occupied
+  // bytes). The name plate (C10): under the stone and the plate after the summary, from the page's
+  // left edge (it was in the column beside the stone). Re-pinned on purpose (lane D2, gate D0′'s
+  // "said once"; renamed, it was "comments on the cells, the fee and common knowledge under the
+  // sealed head, before the facts"): two lines, its fee line ("0.00064119 ckb to the miner.")
+  // gone, since the fee stands in the status strip; the strip comes before it in the head.
+  it('comments on the cells and common knowledge under the sealed head, after the status strip', async () => {
     const { container } = render(<TransactionDetailPage />);
     const first = await screen.findByText('1 cell became 1.');
     const comment = first.closest('.comment') as HTMLElement;
     expect(comment).not.toBeNull();
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
-    ).toEqual([
-      '1\u00a0cell became 1.',
-      '0.00064119 ckb to the miner.',
-      'common knowledge grew by 26\u00a0bytes.',
-    ]);
-    expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
+    ).toEqual(['1\u00a0cell became 1.', 'common knowledge grew by 26\u00a0bytes.']);
+    // re-pinned with readability R4 (lane B7): the comment's paragraph stands on the measure, which
+    // the Comment sets itself (the page gave the comment max-w-[60ch])
+    expect(comment).toHaveClass('mt-4');
+    expect(comment.className).not.toMatch(/max-w-/);
+    expect(comment.querySelector('p')).toHaveClass('max-w-measure');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
     // under the seal and the plate, across both columns, after the summary, inside the header
     const { head, below } = expectNamePlate(
@@ -528,45 +579,79 @@ describe('Transaction board, tier 1', () => {
     );
     expect(comment.parentElement).toBe(below);
     const summary = await screen.findByTestId('tx-summary');
-    expect(Array.from(below!.children)).toEqual([summary, comment]);
+    const strip = screen.getByRole('group', { name: 'Transaction status' });
+    expect(Array.from(below!.children)).toEqual([strip, summary, comment]);
     expect(head.closest('header')).toContainElement(comment);
-    // reading order: the identity (the hash and its copy button), the summary, the comment, then
-    // the facts
-    expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
-    expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
-    // the fee is the one the rail prints, digit for digit
-    expect(screen.getByRole('complementary', { name: 'Transaction facts' })).toHaveTextContent(
-      '0.00064119 CKB'
-    );
+    // reading order: the identity (the hash and its copy button), the strip, the summary, the
+    // comment
+    expectBefore(screen.getByRole('button', { name: 'copy transaction hash' }), strip);
+    expectBefore(strip, comment);
     // the counts are the cells heading's
     expect(screen.getByRole('heading', { name: 'Cells 1 in → 1 out' })).toBeInTheDocument();
   });
 
-  it('keeps the status, time, block and fee in a facts rail (TX-18)', async () => {
+  // Re-pinned on purpose (lane D2, gate D0′; renamed, it was "keeps the status, time, block and
+  // fee in a facts rail (TX-18)"): the same four facts, in the status strip under the id line;
+  // the status word lowercase as the board writes it (it was "Committed"), the fee exact
+  // (0.00064119 has no trailing zero to drop).
+  it('keeps the status, time, block and fee in the status strip (TX-18)', async () => {
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
-    expect(rail).toHaveTextContent('Committed');
-    expect(rail).toHaveTextContent('27,369 confirmations');
-    expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
-    expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
-    expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1…sqcjk9lz'); // R9 (re-pinned): 4…8
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    expect(strip).toHaveTextContent('committed');
+    expect(strip).toHaveTextContent('27,369 confirmations');
+    expect(strip).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
+    expect(within(strip).getByRole('link', { name: '#101' })).toBeInTheDocument();
+    expect(strip).toHaveTextContent('0.00064119 CKB');
+    expect(strip).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
+  });
+
+  // Lane P1 follow-up (item 3; the link-look gate's participant-ref entry): every party the page
+  // links states its look. In a line (the lede, the fee's payer, What moved) a party is a name
+  // inside it, the inline look; in the balance changes a party is its row's key. None writes an ink
+  // by hand.
+  it('states the look of every party it links: inline in a line, the key of a balance row', async () => {
+    render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const INLINE = ['underline', 'decoration-[color:var(--c-ink-muted)]'];
+    const parties = (root: HTMLElement) =>
+      within(root)
+        .getAllByRole('link')
+        .filter((a) => a.getAttribute('href')!.includes('/address/'));
+    const expectLook = (links: HTMLElement[], classes: string[]) => {
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link).toHaveClass(...classes);
+        expect(link).not.toHaveClass('hover:text-jade');
+      }
+    };
+    expectLook(parties(strip), INLINE);
+    const summary = await screen.findByTestId('tx-summary');
+    await waitFor(() => expect(parties(summary).length).toBeGreaterThan(0));
+    expectLook(parties(summary), INLINE);
+    expectLook(parties(await screen.findByTestId('tx-what-moved')), INLINE);
+    expectLook(parties(screen.getByLabelText('Balance changes by participant')), [
+      'text-text-bright',
+    ]);
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
     // Responsive review A#17: on a phone the facts rail came after the six cell cards.
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
+    // re-pinned on purpose (lane D2): the facts are the status strip (they were the rail)
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
+    const hash = screen.getByRole('button', { name: 'copy transaction hash' });
     const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
-    expect(before(hash, rail)).toBe(true);
-    expect(before(rail, table)).toBe(true);
-    expect(before(rail, cells)).toBe(true);
-    // From lg up the rail is still the right-hand column beside the tier-1 story.
-    expect(rail).toHaveClass('lg:col-start-2', 'lg:row-start-1');
+    expect(before(hash, strip)).toBe(true);
+    expect(before(strip, table)).toBe(true);
+    expect(before(strip, cells)).toBe(true);
+    // re-pinned on purpose (lane D2, U-13): at every width the strip is in the head, under the
+    // hash, and no column beside the tier-1 story holds facts (from lg the rail was the
+    // right-hand column, lg:col-start-2 lg:row-start-1)
+    expect(strip.closest('header')).not.toBeNull();
+    expect(strip.className).not.toMatch(/col-start|row-start/);
   });
 
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
@@ -574,10 +659,105 @@ describe('Transaction board, tier 1', () => {
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a00…0096f2 departed'));
     expect(table.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(2);
-    expect(table).toHaveTextContent('−502');
+    // B4 item 2 (re-pinned on purpose): occupied bytes carry their unit (it was "−502", "+26")
+    expect(table).toHaveTextContent('−502 B');
     expect(table).not.toHaveTextContent('502.00000000');
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent(
-      'Net−0.00064119 CKB+26the fee, paid to the miner'
+      'Net−0.00064119 CKB+26 Bthe fee, paid to the miner'
+    );
+  });
+});
+
+// Lane D2 (gate D0′, the transaction board; PA-13, U-13): the facts rail becomes the status strip
+// under the id line — status, time, block and fee — and tier 1 takes the whole measure. A fact is
+// said once: the fee stands in the strip and in the created sheet's balance row, so neither the
+// lede nor the comment repeats it.
+describe('Transaction board, the status strip (lane D2)', () => {
+  it('states status, time, block and fee in one strip under the id line', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    expect(strip).toHaveAttribute('data-status-strip');
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'time', 'block', 'fee']);
+    expect(facts[0][1]).toBe('committed · 27,369 confirmations');
+    // the site's one clock: the date-time, then its age (Utc8Age)
+    expect(facts[1][1]).toMatch(/^2026-10-22 22:43:55 UTC\+8 · \S+ ago$/);
+    expect(facts[2][1]).toBe('#101');
+    // the fee exact (the board's form, its trailing zeros dropped), who paid it at the row size
+    expect(facts[3][1]).toBe(`0.00064119 CKB · paid by ${row('cjk9lz')}`);
+    // committed: the jade dot before the word
+    const dot = strip.querySelector<HTMLElement>('[data-strip-dot]')!;
+    expect(dot.style.backgroundColor).toBe('var(--c-jade)');
+    // the block and the payer are links inside the strip's line
+    expect(within(strip).getByRole('link', { name: '#101' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/101'
+    );
+    // under the id line: the first thing under the stone and the plate, then the summary and the
+    // comment
+    const { below } = expectNamePlate(
+      container.querySelector('header') as HTMLElement,
+      'Transaction'
+    );
+    const summary = await screen.findByTestId('tx-summary');
+    const comment = container.querySelector('.comment') as HTMLElement;
+    expect(Array.from(below!.children)).toEqual([strip, summary, comment]);
+  });
+
+  it('gives tier 1 the whole measure: no facts rail beside it (U-13)', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    await screen.findByRole('group', { name: 'Transaction status' });
+    expect(screen.queryByRole('complementary', { name: 'Transaction facts' })).toBeNull();
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('aside')).toBeNull();
+    expect(tier1.className).not.toMatch(/280px|col-start|row-span/);
+    for (const name of ['What moved', 'Balance changes', 'Cells 1 in → 1 out'])
+      expect(
+        (await screen.findByRole('heading', { name })).closest('[data-tier="1"] > *')!.className
+      ).not.toMatch(/col-start/);
+  });
+
+  it('says the fee once: neither the lede nor the comment repeats it', async () => {
+    const { container } = render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    // before: "… to ckb1…. The sender paid a 0.00064119 CKB fee."
+    // Re-pinned on purpose (lane P1, third round; review p-logic-chain NOTE 2: the CKB leg went
+    // unsaid when an item moved): the CKB that reached parties is said after the item
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\. 528 CKB moved from ${row('cjk9lz')} to ${row('shp3hr')} and ${row('204m4g')}\\.$`
+      )
+    );
+    const comment = container.querySelector('.comment') as HTMLElement;
+    // before: three lines, the second "0.00064119 ckb to the miner."
+    expect(
+      Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
+    ).toEqual(['1 cell became 1.', 'common knowledge grew by 26 bytes.']);
+    // the head states the fee once, in the strip
+    const header = container.querySelector('header') as HTMLElement;
+    expect(header.textContent!.match(/0\.00064119/g)).toHaveLength(1);
+    expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
+      '0.00064119 CKB'
+    );
+    // and the created sheet closes on it
+    expect(await screen.findByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
+  });
+
+  it('states a pool transaction’s status, its time in the pool and its fee, and no block', async () => {
+    const tx = { ...committed(), status: 'pending', pendingSince: '2026-10-30T08:14:17Z' };
+    for (const key of ['blockNumber', 'blockHash', 'index', 'timestamp', 'confirmations'] as const)
+      delete (tx as Partial<TransactionDetail>)[key];
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const facts = factsOf(strip);
+    // a fact the page does not know is not passed: no block, no block time
+    expect(facts.map(([label]) => label)).toEqual(['status', 'pending since', 'fee']);
+    expect(facts[0][1]).toBe('pending');
+    expect(facts[1][1]).toMatch(/^2026-10-30 16:14:17 UTC\+8 · /);
+    expect(facts[2][1]).toBe(`0.00064119 CKB · paid by ${row('cjk9lz')}`);
+    expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
+      'var(--c-aqua)'
     );
   });
 });
@@ -609,6 +789,9 @@ describe('Transaction board, tier 2', () => {
 
   // Visual finish V5: a dep row's out point link rests as ink with the faint aqua underline (was
   // `text-info/80`); the global a:hover lights it jade.
+  // Re-pinned on purpose (lane P1, the link-look gate: one owner of a link's look): a dep's out
+  // point is its row's key, the key look's bright ink with no hand-written underline, no aqua and
+  // no hover colour of its own (it was V5's bright ink over a faint aqua underline, by hand).
   it("rests each cell dep's out point link as ink, not aqua (V5)", async () => {
     render(<TransactionDetailPage />);
     const dep0 = await waitFor(() => {
@@ -622,7 +805,10 @@ describe('Transaction board, tier 2', () => {
       const outPoint = dep.querySelector(':scope > a') as HTMLElement | null;
       expect(outPoint, dep.id).not.toBeNull();
       expect(outPoint!.getAttribute('href')).toMatch(/\/cell\/0x[0-9a-z]+-\d+$/);
-      expectRestingLink(outPoint!);
+      expect(outPoint).toHaveClass('text-text-bright');
+      expect(Array.from(outPoint!.classList)).not.toContainEqual(
+        expect.stringMatching(/^(decoration-aqua|underline$|hover:text-|text-(aqua|interactive))/)
+      );
       // The out point still wraps anywhere in its narrow column.
       expect(outPoint).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
     }
@@ -728,10 +914,13 @@ describe('Transaction board, tier 2', () => {
       })
     ).toBeInTheDocument();
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
-      '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
+      '555 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
     );
+    // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
+    // B4 fix round (re-pinned on purpose, tests MUST-2): the pair carries its unit once, after
+    // it ("occupied 563 → 589 B"); it was bare beside the delta's "+26 B"
     expect(screen.getByText(/^occupied 563 → 589/)).toHaveTextContent(
-      'occupied 563 → 589 · common knowledge +26'
+      /^occupied 563 → 589 B · common knowledge \+26 B$/
     );
   });
 
@@ -758,23 +947,41 @@ describe('Transaction variants (D4)', () => {
       { blockHash: `0x${'66'.repeat(32)}`, blockNumber: 9 },
     ];
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
-    vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.daoWithdrawRequest,
-      txHash: TX_HASH,
-      protocolActions: [
-        {
-          protocol: 'dao',
-          protocolName: 'Nervos DAO',
-          action: 'withdraw_complete',
-          metadata: { capacity: '2605000000000', compensation: '17530634165' },
-        },
-      ],
-      participants: [
-        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-2605000000000' },
-        { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
-      ],
-    });
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            // each DAO action names its cell's owner (lane exactness, part B6): the withdrawn deposit's
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          // the owner of the withdrawn deposit: the API tags it DAO (TAG_DAO, bit 3), as the indexer
+          // does the party whose cells hold the step (lane P1 follow-up: the fixture carried no tag)
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '-2605000000000',
+            tags: 8,
+          },
+          { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '2622530633229' },
+        ],
+      })
+    );
     render(<TransactionDetailPage />);
+    // Lane P1 follow-up (the review's standing cause, What moved and the lede on a DAO step): the
+    // lede says what happened from the activity's own kind, a withdrawal with its compensation
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
+    );
     const inflow = await screen.findByTestId('tx-inflow');
     expect(inflow).toHaveAttribute('data-inflow', 'dao');
     expect(inflow).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
@@ -786,7 +993,7 @@ describe('Transaction variants (D4)', () => {
     expect(first).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
     await screen.findByTestId('tx-capacity-equation');
     expect(screen.getByTestId('tx-capacity-equation')).toHaveTextContent(
-      '26,050.00000000 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
+      '26,050 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
     );
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent(
       'Nervos DAO compensation, less the fee'
@@ -796,6 +1003,307 @@ describe('Transaction variants (D4)', () => {
     expect(headers).toHaveTextContent('2 · read, not consumed');
     expect(within(headers).getByRole('link', { name: '#5' })).toBeInTheDocument();
     expect(within(headers).getByRole('link', { name: '#9' })).toBeInTheDocument();
+  });
+
+  // Lane P1 follow-up (review chain-b tx-dao-deposit: the deposit read as a payment): the lede
+  // says the CKB went into a Nervos DAO deposit and who holds it (the party the API tags DAO), and
+  // What moved writes that party's end as the deposit; the payer is not its holder here.
+  it('says a deposit went into the Nervos DAO and who holds it, the figure too', async () => {
+    const tx = committed();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            // the deposit's owner (lane exactness, part B6)
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[2],
+            ckbDelta: `-${BigInt('12200000000000') + BigInt(tx.fee)}`,
+          },
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '12200000000000',
+            tags: 8,
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
+    // the one rule (lane P1, the lead's look): the step's own line and amount, which here is also
+    // what reached the holder
+    expect(moved.querySelector('[data-flow-side="to"] [data-dao-step]')).toHaveTextContent(
+      /^Nervos DAO deposit 122,000 CKB$/
+    );
+  });
+
+  // Lane P1, third round (review p-logic-chain MUST 2): the common shape of a DAO step, from the
+  // owner's own address. Its one party gives the fee and holds the DAO cell (the API tags it DAO);
+  // for a deposit and a withdrawal request its CKB delta is −fee, so the flows are the fee alone,
+  // yet the transaction took a step: the lede says the step and never "Only the fee moved", What
+  // moved is drawn with the party's step on its end, and the balance table is drawn.
+  describe('a Nervos DAO step from the owner’s own address', () => {
+    const self = (
+      action: string,
+      metadata: Record<string, string>,
+      ckbDelta: (fee: bigint) => string
+    ) => {
+      const tx = committed();
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.daoWithdrawRequest,
+          txHash: TX_HASH,
+          // the step's owner, the one party (lane exactness, part B6)
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action,
+              metadata: {
+                ...metadata,
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
+            },
+          ],
+          participants: [
+            {
+              ...feedSamples.daoWithdrawRequest.participants[1],
+              ckbDelta: ckbDelta(BigInt(tx.fee)),
+              tags: 8,
+            },
+          ],
+        })
+      );
+      return tx;
+    };
+    const expectStep = async (lede: string, step: string) => {
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(lede);
+      expect(summary).not.toHaveTextContent('Only the fee moved');
+      const moved = await screen.findByTestId('tx-what-moved');
+      // re-pinned (lane P1, the lead's look after the third round): the step's own line, with its
+      // own amount, the lede's figure, apart from the fee or the compensation that flowed
+      expect(moved.querySelector('[data-dao-step]')).toHaveTextContent(new RegExp(`^${step}$`));
+      expect(
+        screen.getByRole('heading', { name: 'Balance changes' }).closest('section')
+      ).toHaveTextContent(row('r4p74p'));
+    };
+
+    it('a deposit', async () => {
+      self('deposit', { capacity: '12200000000000' }, (fee) => `-${fee}`);
+      await expectStep(
+        `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`,
+        'Nervos DAO deposit 122,000 CKB'
+      );
+    });
+
+    it('a withdrawal request', async () => {
+      self(
+        'withdraw_request',
+        { capacity: '2605000000000', depositBlock: '19695550' },
+        (fee) => `-${fee}`
+      );
+      await expectStep(
+        `${row('r4p74p')} asked to withdraw a Nervos DAO deposit of 26,050 CKB, made at #19,695,550.`,
+        'Nervos DAO withdrawal request 26,050 CKB'
+      );
+    });
+
+    it('a withdrawal', async () => {
+      const tx = committed();
+      tx.inputsCapacity = '2605000000000';
+      tx.inputs![0].capacity = '2605000000000';
+      tx.outputsCapacity = '2622530633229';
+      tx.outputs![0].capacity = '2622530633229';
+      tx.fee = '936';
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.daoWithdrawRequest,
+          txHash: TX_HASH,
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'withdraw_complete',
+              metadata: {
+                capacity: '2605000000000',
+                compensation: '17530634165',
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
+            },
+          ],
+          participants: [
+            { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '17530633229', tags: 8 },
+          ],
+        })
+      );
+      await expectStep(
+        `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`,
+        'Nervos DAO withdrawal 26,050 CKB'
+      );
+    });
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 2): a batch in which one party deposits and
+  // another withdraws. Re-pinned for lane exactness, part B6: each DAO action names its cell's owner (it was read as
+  // naming none, so the lede said each step without its party and the figure "a Nervos DAO step" on
+  // each); the lede says whose each step is, and the figure draws each party's own step
+  it('says whose each DAO step of a batch is, the deposit and the withdrawal apart', async () => {
+    const tx = committed();
+    tx.inputsCapacity = '2605000000000';
+    tx.inputs![0].capacity = '2605000000000';
+    tx.outputsCapacity = '2622530633229';
+    tx.outputs![0].capacity = '2622530633229';
+    tx.fee = '936';
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead<GlobalActivity>({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[2].lockHash!.slice(2),
+            },
+          },
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
+          },
+        ],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: '-12182469366771',
+            tags: 8,
+          },
+          {
+            ...feedSamples.daoWithdrawRequest.participants[2],
+            ckbDelta: '12200000000000',
+            tags: 8,
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('hxw6h7')}. ${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved).not.toHaveTextContent('a Nervos DAO step');
+    const steps = [...moved.querySelectorAll('[data-dao-step]')].map((s) => s.textContent);
+    expect(steps.sort()).toEqual([
+      'Nervos DAO deposit 122,000 CKB',
+      'Nervos DAO withdrawal 26,050 CKB',
+    ]);
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
+  // said "no block before it is final yet", which is false for block 0 (it created the chain's
+  // first cells) and for the first blocks after it (the block whose reward they would pay is the
+  // genesis block, which earns none, or comes before the chain began). The API's `pays: null`
+  // means just that; each says what is true, and the cells' note with it.
+  describe('a cellbase that pays no block’s reward', () => {
+    const cellbase = (blockNumber: number) => {
+      const tx = committed();
+      return {
+        ...tx,
+        blockNumber,
+        isCellbase: true,
+        fee: '0',
+        feeRate: null,
+        inputs: [
+          {
+            previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+            since: '0x0',
+            capacity: null,
+            commonKnowledgeSize: null,
+            lock: null,
+            type: null,
+            address: null,
+            cellType: null,
+            display: null,
+          } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+        ],
+        inputsCapacity: '0',
+        inputsCommonKnowledgeSize: '0',
+        outputsCapacity: '55961739927',
+        outputsCommonKnowledgeSize: '61',
+        outputs: [
+          {
+            ...tx.outputs![0],
+            type: undefined,
+            cellType: 'plain',
+            capacity: '55961739927',
+            commonKnowledgeSize: '61',
+          },
+        ],
+        scriptGroups: [tx.scriptGroups![2]],
+        witnessDetails: [],
+        witnesses: [],
+        cellbaseWitness: null,
+        feePaidBy: [],
+        pays: null,
+      } as TransactionDetail;
+    };
+
+    it('says the genesis cellbase created the chain’s first cells', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(0));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^The genesis block’s cellbase pays no block’s reward: it created the chain’s first cells, 559\.61 CKB\.$/
+      );
+      expect(summary).not.toHaveTextContent('final');
+      expect(
+        screen.getByText(
+          'The genesis cellbase consumes no cell: it creates the chain’s first cells.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('says block 5’s cellbase pays no reward because genesis earns none', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(5));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^It pays no block’s reward: the block whose reward it would pay is the genesis block, which earns none, or would come before the chain began\.$/
+      );
+      expect(
+        screen.getByText('A cellbase consumes no cell; this one pays no block’s reward.')
+      ).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent('now final');
+    });
   });
 
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
@@ -860,16 +1368,38 @@ describe('Transaction variants (D4)', () => {
     } as Awaited<ReturnType<typeof api.getBlock>>);
     render(<TransactionDetailPage />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Cellbase' })).toBeInTheDocument();
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph; review chain-a tx-cellbase: "the lede
+    // lacks the payee, two heights 11 apart in one sentence"): the lede names who is paid
+    // (`tx.outputs[].address`, as the cell tile names its owner), how much (the API's outputs
+    // capacity, in the summary form, exact in its title and in the reward source) and which block
+    // the reward is for. It was "The first transaction of block #101. It consumes no cell and pays
+    // the reward of block #89, 559.61739927 CKB.": the block it is in is the strip's, and that it
+    // consumes no cell the cells' note and the comment say.
+    const payee = committed().outputs![0].address!;
     expect(screen.getByTestId('tx-summary')).toHaveTextContent(
-      'The first transaction of block #101. It consumes no cell and pays the reward of block #89, 559.61739927 CKB.'
+      new RegExp(`^It pays ckb1…${payee.slice(-8)} 559\\.61 CKB, the reward for block #89\\.$`)
+    );
+    expect(
+      within(screen.getByTestId('tx-summary')).getByRole('link', {
+        name: `ckb1…${payee.slice(-8)}`,
+      })
+    ).toHaveAttribute('href', `/mainnet/address/${payee}`);
+    expect(screen.getByTestId('tx-summary').querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '559.61739927 CKB'
     );
     // R-6a: the paid block is linked by its canonical hash.
     expect(
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#89' })
     ).toHaveAttribute('href', `/mainnet/blocks/0x${'89'.repeat(32)}`);
-    // Lane L: the block the cellbase is in is a link too.
+    // the block the cellbase is in is the status strip's link, said once
     expect(
-      within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
+      within(screen.getByTestId('tx-summary')).queryByRole('link', { name: '#101' })
+    ).toBeNull();
+    expect(
+      within(screen.getByRole('group', { name: 'Transaction status' })).getByRole('link', {
+        name: '#101',
+      })
     ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
     // A cellbase consumes no cell: the cells command runs on 0 in (T1), and its comment says where
@@ -897,6 +1427,8 @@ describe('Transaction variants (D4)', () => {
     ]);
     expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
+    // lane P1, the ink and size roles: a sentence, the reading ink (it was quiet)
+    expect(inkOf(screen.getByText(/never proposed/))).toBe(READING);
     await waitFor(() =>
       expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
         // U-09 (re-pinned): a witness note in its row, the row size
@@ -906,6 +1438,78 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('a cellbase runs no script');
     expect(api.getTransactionActivity).not.toHaveBeenCalled();
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+  });
+
+  // Lane P1 follow-up (the lock-words gate's known writer 12, the cellbase witness's lock): the
+  // miner lock is named by the one decision. A lock on the default lock's code hash by data is not
+  // the default lock, and the registry's name for that code hash ("Default Lock") is not its name.
+  it('writes a cellbase’s miner lock on the default lock’s code hash by data by its code hash', async () => {
+    const message = `0x${Buffer.from('0.210.0 (860c9bb 2026-09-21) ').toString('hex')}0011223344556677`;
+    const cellbase = {
+      ...committed(),
+      isCellbase: true,
+      fee: '0',
+      feeRate: null,
+      inputs: [
+        {
+          previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+          since: '0x14023e7',
+          capacity: null,
+          commonKnowledgeSize: null,
+          lock: null,
+          type: null,
+          address: null,
+          cellType: null,
+          display: null,
+        } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+      ],
+      inputsCapacity: '0',
+      inputsCommonKnowledgeSize: '0',
+      outputsCapacity: '55961739927',
+      outputsCommonKnowledgeSize: '61',
+      outputs: [
+        {
+          ...committed().outputs![0],
+          type: undefined,
+          cellType: 'plain',
+          capacity: '55961739927',
+          commonKnowledgeSize: '61',
+        },
+      ],
+      scriptGroups: [committed().scriptGroups![2]],
+      witnessDetails: [
+        {
+          index: 0,
+          size: 127,
+          kind: 'cellbase',
+          fields: [
+            { name: 'table header', start: 0, end: 12, hex: '0x' },
+            { name: 'lock', start: 12, end: 85, hex: '0x' },
+            { name: 'message', start: 85, end: 127, hex: '0x' },
+          ],
+        },
+      ],
+      witnesses: ['0x00'],
+      cellbaseWitness: {
+        lock: { codeHash: LOCK_CODE_HASH, hashType: 'data', args: `0x${'ab'.repeat(20)}` },
+        message,
+      },
+      feePaidBy: [],
+      pays: { number: 89, hash: '0x' + '89'.repeat(32) },
+    } as TransactionDetail;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase);
+    vi.mocked(api.getBlock).mockResolvedValue({
+      number: 101,
+      minerMessage: message,
+      minerMessageText: '0.210.0 (860c9bb 2026-09-21)',
+    } as Awaited<ReturnType<typeof api.getBlock>>);
+    render(<TransactionDetailPage />);
+    await waitFor(() =>
+      expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
+        'miner lock 0x9bd7e06f…a3cce8 by data(0xabababab…ababab) · message “0.210.0 (860c9bb 2026-09-21)”'
+      )
+    );
+    expect(screen.getByTestId('tx-witness-item-0')).not.toHaveTextContent('Default Lock');
   });
 
   it('says a pending transaction will run when committed, and still lists its witnesses (TX-37)', async () => {
@@ -918,13 +1522,17 @@ describe('Transaction variants (D4)', () => {
     expect(screen.queryByText(/0 ran/)).not.toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
-    expect(screen.getByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the time it entered the pool is the strip's fact, its label
+    // lowercase as the board writes them (it was the rail's "Pending since")
+    expect(screen.getByText('pending since')).toBeInTheDocument();
     // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
-    // Under the stone and the plate (C10) stands its summary alone, the sentence that says so.
+    // Under the stone and the plate (C10) stand the status strip and its summary, the sentence
+    // that says so (re-pinned on purpose, lane D2: the summary stood alone there)
     expect(document.querySelector('.comment')).toBeNull();
     const below = document.querySelector('[data-sealed-below]') as HTMLElement;
-    expect(below.children).toHaveLength(1);
-    expect(below).toHaveTextContent(
+    expect(below.children).toHaveLength(2);
+    expect(below.firstElementChild).toBe(screen.getByRole('group', { name: 'Transaction status' }));
+    expect(below.lastElementChild).toHaveTextContent(
       /^Activity and canonical cell structure are available once this transaction is committed and indexed\.$/
     );
     // C2: not in a block yet, so its stone is dashed; its cells are not drawn, so no seam seal.
@@ -935,6 +1543,19 @@ describe('Transaction variants (D4)', () => {
       'unpressed',
       false
     );
+  });
+
+  // Lane P1 (lane D3's note): the witnesses' heading stated "29 bytes", their sizes added in the
+  // page; a stated total is the API's figure, and the API sends none, so the heading counts the
+  // witnesses (the API's list) and each row states its own size.
+  it('states no total of the witnesses’ sizes, which the page would have to add (P1)', async () => {
+    render(<TransactionDetailPage />);
+    const witnesses = await screen.findByRole('heading', { name: 'Witnesses · 2' });
+    const head = witnesses.parentElement!;
+    expect(head).not.toHaveTextContent(/byte/);
+    // each row its own size, the API's
+    expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent('22 B');
+    expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent('7 B');
   });
 
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
@@ -969,11 +1590,64 @@ describe('Transaction board, R2b-a fields', () => {
   it('marks change outputs and reads decoded lock args (TX-22, TX-20)', async () => {
     render(<TransactionDetailPage />);
     const out = await screen.findByTestId('tx-io-output-0');
-    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
+    // B4 fix round (re-pinned on purpose): the default lock is named beside no owner, so a
+    // default-lock change output says 'change' alone (it was 'Default Lock · change')
+    await waitFor(() => expect(out).toHaveTextContent('change'));
+    expect(out).not.toHaveTextContent('Default Lock');
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
       'pubkey hash 0x11111111…111111'
     );
+  });
+
+  // B4 second fix round (review-rules-fixes-logic SHOULD 3, the coordinator's item 5): the
+  // "Lock of output i" fact reads the one decision off the output's lock, as its tile does: a
+  // lock on the default code hash by data is named by its code hash and hash type, never the
+  // default lock's name.
+  it('names an output lock on the default code hash by data as its tile does', async () => {
+    const base = committed();
+    const lock = { codeHash: LOCK_CODE_HASH, hashType: 'data', args: `0x${'22'.repeat(20)}` };
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      outputs: [
+        {
+          ...base.outputs![0],
+          lock,
+          address: ckbAddress({ ...lock, hashType: 'data' }),
+          lockArgsDecoded: null,
+          lockArgsDecodeError: 'args not read for this hash type',
+        },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const tile = await screen.findByTestId('tx-io-output-0');
+    await waitFor(() => expect(tile).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data'));
+    const fact = screen.getByTestId('tx-fact-output-lock-0');
+    expect(fact).toHaveTextContent(/^Lock of output 0lock 0x9bd7e06f…a3cce8 by data, /);
+    expect(fact).not.toHaveTextContent('Default Lock');
+  });
+
+  // Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+  // lock decision's refusals placed above their parts fail the part they are in, said in its place,
+  // never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+  it('fails the Cells section and the output’s lock fact in place, the page drawn', async () => {
+    const base = committed();
+    const joy = seededAddress('joyout', JOYID_CODE_HASH);
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      outputs: [
+        { ...base.outputs![0], address: joy, lockArgsDecoded: null, lockArgsDecodeError: 'odd' },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const cells = await screen.findByRole('heading', { name: /^Cells/ });
+    expect(cells.closest('section')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    );
+    expect(screen.getByTestId('tx-fact-output-lock-0')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    );
+    expect(screen.getByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
   });
 
   it('reads a Shadow Lock and a JoyID lock by their registry layouts (R-8, TX-20)', async () => {
@@ -1066,40 +1740,273 @@ describe('Transaction board, R2b-a fields', () => {
   });
 
   it('names the type scripts a plain script call ran (TX-11)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        itemTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [
+          {
+            typeCodeHash: '0xtime',
+            typeHashType: 'type',
+            typeArgs: '0x02',
+            scriptHash: '0xs1',
+            scriptName: '.bit Time Index State',
+          },
+          {
+            typeCodeHash: '0xinfo',
+            typeHashType: 'type',
+            typeArgs: '0x02',
+            scriptHash: '0xs2',
+            scriptName: '.bit Time Info',
+          },
+        ],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-64119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee sentence ("ckb1…xxxxxxxx
+    // paid a 0.00064119 CKB fee.") is gone; the payer and the fee stand in the status strip
+    const summary = await screen.findByTestId('tx-summary');
+    // re-pinned on purpose (lane P1, the plan: "a transaction that moves only its fee says so in
+    // one line"; review chain-b tx-old-sample, its fee seven times above the fold): its one party
+    // lost only the fee, so the lede says so after the scripts it ran (it ended at "Info.")
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^It ran \\.bit Time Index State and \\.bit Time Info\\. Only the fee moved: ${row('cjk9lz')} kept the rest of its CKB\\.$`
+      )
+    );
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
+    expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
+      `0.00064119 CKB · paid by ${row('cjk9lz')}`
+    );
+  });
+
+  // Lane P1 (the plan's P1 paragraph; review chain-a tx-transfer, chain-b tx-pool: "the lede lacks
+  // the amount"): the summary states how much moved, from the flows the figure draws, in the
+  // summary form, its exact value in its title and in the balance table.
+  it('states how much CKB moved, cut to the summary form, its exact value in its title (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        itemTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-66959187575',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+          {
+            ...feedSamples.objectTransfer.participants[1],
+            ckbDelta: '66959123456',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    // what reached the receiver, 669.59123456 CKB, cut to two places; the fee is the strip's
+    expect(summary).toHaveTextContent(
+      new RegExp(`^669\\.59 CKB moved from ${row('cjk9lz')} to ${row('shp3hr')}\\.$`)
+    );
+    const amount = summary.querySelector('[data-ckb-amount]')!;
+    expect(amount).toHaveAttribute('data-form', 'summary');
+    expect(amount).toHaveAttribute('title', '669.59123456 CKB');
+    // the exact value stands in the balance table, the receiver's row
+    const balance = (await screen.findByRole('heading', { name: 'Balance changes' })).closest(
+      'section'
+    )!;
+    expect(balance).toHaveTextContent('+669.59123456');
+  });
+
+  it('states a token’s amount in its own units, in the summary form (P1)', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...committed(),
+      fee: '8888',
+      outputsCapacity: '55499991112',
+    });
     vi.mocked(api.getTransactionActivity).mockResolvedValue({
-      ...feedSamples.objectTransfer,
+      ...feedSamples.tokenTransfer,
       txHash: TX_HASH,
-      typeCalls: [
-        {
-          typeCodeHash: '0xtime',
-          typeHashType: 'type',
-          typeArgs: '0x02',
-          scriptHash: '0xs1',
-          scriptName: '.bit Time Index State',
-        },
-        {
-          typeCodeHash: '0xinfo',
-          typeHashType: 'type',
-          typeArgs: '0x02',
-          scriptHash: '0xs2',
-          scriptName: '.bit Time Info',
-        },
-      ],
-      lockCalls: [],
-      participants: [
-        {
-          ...feedSamples.objectTransfer.participants[0],
-          ckbDelta: '-64119',
-          usedDelta: '0',
-          itemDeltas: [],
-        },
-      ],
     });
     render(<TransactionDetailPage />);
-    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      // R9 (re-pinned): the payer is `ckb1…` and its last 8 characters
-      'It ran .bit Time Index State and .bit Time Info. ckb1…sqcjk9lz paid a 0.00064119 CKB fee.'
+    const summary = await screen.findByTestId('tx-summary');
+    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up; re-pinned (lane P1, third round,
+    // NOTE 2): the CKB the receiver's new cell holds is said after the token
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\. 215 CKB moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`
+      )
     );
+    expect(within(summary).getByRole('link', { name: 'Seal' })).toBeInTheDocument();
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 5 and NOTE 2): a token minted and given in
+  // one transaction read "100 Seal moved from A to B" while 50 left A and 50 were minted, which the
+  // figure drew apart; a burn read "36,583 Seal left A" with no word that it was burnt. The lede
+  // says what the figure draws: what left the givers, what was minted or burnt, what reached the
+  // receivers.
+  describe('a token minted or burnt beside its parties', () => {
+    const seal = (delta: string) => ({
+      kind: 'token' as const,
+      typeScriptHash: '0xseal',
+      delta,
+      symbol: 'Seal',
+      decimals: 8,
+    });
+    const tokenTx = (giver: string, receiver: string | null): GlobalActivity => {
+      const [to, from] = feedSamples.tokenTransfer.participants;
+      return activityRead({
+        ...feedSamples.tokenTransfer,
+        txHash: TX_HASH,
+        participants: [
+          { ...from, ckbDelta: '-8888', itemDeltas: [seal(giver)] },
+          ...(receiver === null ? [] : [{ ...to, ckbDelta: '0', itemDeltas: [seal(receiver)] }]),
+        ],
+      });
+    };
+    const lede = async (activity: GlobalActivity) => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(activity);
+      render(<TransactionDetailPage />);
+      return screen.findByTestId('tx-summary');
+    };
+
+    it('says what was minted beside what left the giver', async () => {
+      const summary = await lede(tokenTx('-5000000000', '10000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(
+          `^100 Seal reached ${row('3fzxu7')}: 50 from ${row('j3pkeh')}, and 50 minted here\\.$`
+        )
+      );
+    });
+
+    it('says what was burnt beside what reached the receiver', async () => {
+      const summary = await lede(tokenTx('-10000000000', '6000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')}: 60 to ${row('3fzxu7')}, and 40 burnt\\.$`)
+      );
+    });
+
+    it('says a burn is a burn', async () => {
+      const summary = await lede(tokenTx('-10000000000', null));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')} and was burnt\\.$`)
+      );
+    });
+  });
+
+  // Lane P1, third round (review p-logic-chain NOTE 2): the DAO sentences were skipped when an item
+  // moved (an iCKB deposit said only its iCKB); they are said beside the item.
+  it('says a Nervos DAO step beside an item that moved', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+    const [to, from] = feedSamples.tokenTransfer.participants;
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.tokenTransfer,
+        txHash: TX_HASH,
+        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '12200000000000', lockHash: to.lockHash!.slice(2) },
+          },
+        ],
+        participants: [{ ...to, tags: 1 | 8 }, { ...from }],
+      })
+    );
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}.`
+    );
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('3fzxu7')}.`
+    );
+  });
+
+  // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"; review chain-b
+  // tx-old-sample: the fee printed seven times above the fold, the figure and the table restating
+  // it): the lede says it once, and the figure and the one-party table, which said nothing else,
+  // are not drawn.
+  it('says in one line that only the fee moved, and draws no figure or table that restates it (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        itemTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-64119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      new RegExp(`^Only the fee moved: ${row('cjk9lz')} kept the rest of its CKB\\.$`)
+    );
+    await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' });
+    expect(screen.queryByRole('heading', { name: 'What moved' })).toBeNull();
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Balance changes' })).toBeNull();
+  });
+
+  it('keeps the balance table when several locks shared the fee, and says "their" (P1)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue(
+      activityRead({
+        ...feedSamples.objectTransfer,
+        itemTypes: [],
+        txHash: TX_HASH,
+        typeCalls: [],
+        lockCalls: [],
+        participants: [
+          {
+            ...feedSamples.objectTransfer.participants[0],
+            ckbDelta: '-60000',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+          {
+            ...feedSamples.objectTransfer.participants[1],
+            ckbDelta: '-4119',
+            usedDelta: '0',
+            itemDeltas: [],
+          },
+        ],
+      })
+    );
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^Only the fee moved: ${row('cjk9lz')} and ${row('shp3hr')} kept the rest of their CKB\\.$`
+      )
+    );
+    expect(await screen.findByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
   });
 });
 
@@ -1114,8 +2021,8 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
     ]);
     const [object, ckb] = groups;
     // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sqcjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…sqshp3hr');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent(row('cjk9lz'));
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('shp3hr'));
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee
@@ -1136,7 +2043,10 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
 
   it('lights a hovered party’s cells in the cells diagram and dims the rest', async () => {
     const tx = committed();
-    tx.inputs![0].address = feedSamples.objectTransfer.participants[0].address!;
+    // the giver's cell: its address and the lock it spells (B4 second fix round: one cell's)
+    const giverAddress = feedSamples.objectTransfer.participants[0].address!;
+    tx.inputs![0].address = giverAddress;
+    tx.inputs![0].lock = addressScript(giverAddress);
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
     const frame = await screen.findByTestId('tx-what-moved');

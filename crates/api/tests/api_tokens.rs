@@ -909,14 +909,31 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
     assert_eq!(json["title"], "TEST Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    // lane exactness, part B (the third read's S4): one name for a held point's parts on every
+    // route, the cell versions' and the token history's: occupiedCapacity and freeCapacity (the
+    // capacity histories sent used and unused), drawn as "Occupied" and "Free"
+    let series: Vec<(&str, &str)> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["key"].as_str().unwrap(), s["label"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        series,
+        [("occupiedCapacity", "Occupied"), ("freeCapacity", "Free")],
+        "{json}"
+    );
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "60");
-    assert_eq!(data[1]["values"]["unused"], "40");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[1]["values"]["freeCapacity"], "40");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "50");
-    assert_eq!(data[2]["values"]["unused"], "30");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(data[2]["values"]["freeCapacity"], "30");
+    // lane exactness, part A2 (the routes review's N6): the token's history states the whole its cells hold, as
+    // the other four histories do: 100 − 20 CKB
+    assert_eq!(data[2]["values"]["capacity"], "80", "{json}");
 
     let request = Request::builder()
         .uri(format!(
@@ -932,8 +949,8 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 }
 
 #[tokio::test]
@@ -996,8 +1013,8 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "60");
-    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(data[0]["values"]["freeCapacity"], "40");
 }
 
 #[tokio::test]
@@ -1961,4 +1978,118 @@ async fn token_transfers_tell_a_lock_with_no_address_form_from_a_corrupt_one() {
             "{path}: {json}"
         );
     }
+}
+
+/// lane exactness, part A, A3: a holders page states the rank of its first row (`firstRank`), counted in the
+/// request's view; the page computed it from the rows it had read, which is wrong once the list
+/// moves between two reads. Holders of 100 (0x01), 100 (0x02) and 50 (0x03): page one is 0x01 at
+/// rank 1; a new holder of 500 (0x04) arrives; the next page, after 0x01, starts at 0x02, which is
+/// now rank 3 (0x04, 0x01, 0x02), not 2.
+#[tokio::test]
+async fn token_holders_state_the_rank_of_their_first_row_in_the_view_they_read() {
+    let store = test_store();
+    let type_hash = vec![0x7a; 32];
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Ranked Holders".to_string()),
+                symbol: Some("RH".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
+    let hold = |lock: u8, balance: u128| {
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &[lock; 32], balance);
+        batch.put_token_holder_by_balance(&type_hash, &[lock; 32], balance);
+        batch.put_addr_token_by_balance(&[lock; 32], &type_hash, balance);
+        batch.commit().unwrap();
+    };
+    hold(0x01, 100);
+    hold(0x02, 100);
+    hold(0x03, 50);
+    let app = create_router(test_config(store.clone())).await;
+    let path = format!("/tokens/0x{}/holders", hex::encode(&type_hash));
+    let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["firstRank"], 1, "{first}");
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+    hold(0x04, 500);
+    let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        second["data"][0]["lockScriptHash"],
+        format!("0x{}", "02".repeat(32))
+    );
+    assert_eq!(second["firstRank"], 3, "{second}");
+}
+
+/// lane exactness, part A, A3: the rank of a deep page is a count of the keys before its cursor, in the request's
+/// view: a page after the 10,000th of 12,000 holders (the most holders of a token on the live
+/// store, 2026-11-19, was 11,866) starts at rank 10,001. The time the request took is printed for
+/// the hand-back's cost (`cargo test … -- --nocapture`); the test pins the figure, not the time.
+#[tokio::test]
+async fn token_holders_rank_a_deep_page_by_counting_the_keys_before_its_cursor() {
+    let store = test_store();
+    let type_hash = vec![0x7b; 32];
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Many Holders".to_string()),
+                symbol: Some("MH".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
+    let lock = |i: u32| {
+        let mut lock = [0u8; 32];
+        lock[..4].copy_from_slice(&i.to_be_bytes());
+        lock
+    };
+    let mut batch = StoreBatch::new(&store);
+    for i in 0..12_000u32 {
+        // balances 12,000 down to 1: holder i is rank i + 1
+        let balance = u128::from(12_000 - i);
+        batch.put_token_holder(&type_hash, &lock(i), balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock(i), balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    // the 10,000th holder (i = 9,999) holds 2,001
+    let cursor = format!("2001:{}", hex::encode(lock(9_999)));
+    let path = format!(
+        "/tokens/0x{}/holders?limit=20&cursor={cursor}",
+        hex::encode(&type_hash)
+    );
+    let started = std::time::Instant::now();
+    let (status, page) = get_json(&app, &path).await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["firstRank"], 10_001, "{page}");
+    assert_eq!(page["data"][0]["balance"], "2000");
+    eprintln!("token holders page at rank 10,001 of 12,000: {elapsed:?}");
 }

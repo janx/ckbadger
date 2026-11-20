@@ -208,7 +208,9 @@ pub fn seed_sparse_daily_chart_history(store: &Arc<CkbadgerStore>) {
             frozen_phase1_compensation: 0,
             cumulative_depositors: depositors,
             daily_depositor_addresses: 0,
-            protocol_deposited: None,
+            // the DAO cells' capacity, as the indexer's reducer writes it on every day
+            // (lane exactness, part B1: the Supply chart reads it; a day's deposits that left were withdrawn)
+            protocol_deposited: Some(deposited),
         };
         let key = ckbadger_store::keys::encode_stats_key(
             ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
@@ -1367,6 +1369,61 @@ pub fn make_test_tx_actions(
             tags,
             roles: 0,
         }],
+    }
+}
+
+/// A cell whose type script is `code` (hash type `type`) with `args`: the cell an item's own
+/// record places for an activity's `itemTypes` (an object's creating output, an identity's cell in
+/// the item outpoint index).
+pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
+    LiveCellInfo {
+        capacity: 200_00000000,
+        lock_code_hash: [0x9b; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0x01; 20],
+        type_code_hash: Some(code),
+        type_hash_type: Some(1),
+        type_args: Some(args.to_vec()),
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    }
+}
+
+/// An object's creating transaction for `itemTypes`: its location and index row at
+/// `(block, tx_index)` and one output per id, each a `code` cell whose type args are the id.
+pub fn seed_creating_tx(
+    batch: &mut StoreBatch,
+    block: i64,
+    tx_index: i32,
+    tx_hash: [u8; 32],
+    code: [u8; 32],
+    ids: &[&[u8]],
+) {
+    batch.put_tx_hash_map(&tx_hash, block, tx_index);
+    batch.put_tx_index(
+        block,
+        tx_index,
+        &TxIndexEntry {
+            tx_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: i16::try_from(ids.len()).unwrap(),
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    for (index, id) in ids.iter().enumerate() {
+        batch
+            .put_cell_payload_by_outpoint(
+                &tx_hash,
+                i16::try_from(index).unwrap(),
+                &typed_cell(code, id),
+            )
+            .unwrap();
     }
 }
 

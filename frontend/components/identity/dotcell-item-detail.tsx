@@ -12,6 +12,7 @@ import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { Pager } from '@/components/ui/pager';
 import { NamedParty } from '@/components/asset/identity-document';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -53,7 +54,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
       {/* The endpoint declares no total, so a count is shown only once the whole list is here. */}
       {children.length === 0 && !hasMore ? (
         // C16: nothing to list is a line, not a heading over an empty list.
-        <p className="text-text-dim text-small">Sub-names · none</p>
+        <p className="text-text text-small">Sub-names · none</p>
       ) : (
         <h3 className="text-text-dim text-small font-normal">
           {hasMore ? 'Sub-names' : `Sub-names · ${children.length.toLocaleString('en-US')}`}
@@ -63,7 +64,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
         <ul className="text-small space-y-1">
           {children.map((child) => (
             <li key={child.identityId}>
-              <Link href={nameHref(child.identityId)} className="text-emphasis hover:underline">
+              <Link look="inline" href={nameHref(child.identityId)}>
                 {child.name}
               </Link>
             </li>
@@ -74,14 +75,21 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
         <p className="text-negative text-small mt-2">Failed to load more sub-names</p>
       )}
       {hasMore && (
-        <button
-          type="button"
-          disabled={more.isFetching}
-          onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Show more sub-names
-        </button>
+        // the controls board's short-list form, "next 20 ↓": the rows the next load asks for; a
+        // load in flight is not asked for again
+        <div className="mt-2">
+          <Pager
+            mode="more"
+            next={
+              more.isFetching
+                ? undefined
+                : {
+                    count: pageSize,
+                    onShow: () => (wantsMore ? void more.fetchNextPage() : setWantsMore(true)),
+                  }
+            }
+          />
+        </div>
       )}
     </div>
   );
@@ -144,17 +152,21 @@ function ScopedName({ itemRef }: { itemRef: string }) {
         <section aria-label="Name relationships" className="text-small min-w-0 space-y-3">
           <h2 className="text-text text-body font-medium">Name relationships</h2>
           {item.parent ? (
-            <p>
-              Parent <AppLink href={nameHref(item.parent.identityId)}>{item.parent.name}</AppLink>
+            <p className="max-w-measure">
+              Parent{' '}
+              <AppLink look="inline" href={nameHref(item.parent.identityId)}>
+                {item.parent.name}
+              </AppLink>
             </p>
           ) : (
-            <p className="text-text-dim">Top-level name</p>
+            <p className="text-text">Top-level name</p>
           )}
           <DotCellChildren item={item} />
           {ring.data ? (
             <>
               <AssetReadState label="name ring" error={ring.error} retained />
               <AppLink
+                look="inline"
                 href={`/cell/${ring.data.rootOutPoint.txHash}-${ring.data.rootOutPoint.index}`}
               >
                 Namespace root cell · {ring.data.liveCount.toLocaleString('en-US')} live names
@@ -170,7 +182,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
         <section aria-label="For sale" className="space-y-3">
           <PromptHeading command="For sale" />
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={BigInt(item.sale.priceShannons)}
             signed={false}
             tone="plain"
@@ -181,6 +193,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           </dl>
           {item.sale.offerOutPoint && (
             <AppLink
+              look="inline"
               href={`/cell/${item.sale.offerOutPoint.txHash}-${item.sale.offerOutPoint.index}`}
             >
               Sale offer cell

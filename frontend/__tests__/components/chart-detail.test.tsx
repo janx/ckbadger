@@ -108,9 +108,9 @@ describe('shared chart detail', () => {
     expect(
       await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
     ).toBeInTheDocument();
-    // The head rounds a rate like the board (9.01); the exact value is its hover title. Re-pinned
-    // for CH-14: the unit bound to its figure by a no-break space.
-    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01 PH/s');
+    // The head's figure is the exact value cut at two decimals, never rounded (re-pinned for lane
+    // D1: 9.007… is 9.00, was 9.01); the exact value is its hover title.
+    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.00 PH/s');
     expect(screen.getByText('/charts/hash-rate')).toBeInTheDocument();
     // R-10 (CH-27): a dated block chart's evidence names the blocks of its latest day, exactly.
     expect(api.getBlocksByDay).toHaveBeenCalledWith(response.data.at(-1)!.date);
@@ -119,17 +119,22 @@ describe('shared chart detail', () => {
       `Blocks of ${response.data.at(-1)!.date} (UTC+8): #20,000,000 – #20,008,000 · 8,001 blocks`
     );
     // Lane L: the chart still links its topic page, after the day's blocks (was: no topic link).
-    const topic = screen.getByRole('link', { name: 'Explore Blocks →' });
+    // Re-pinned for lane D1 (the link-look gate): a way onward's arrow is the link's own, unread.
+    const topic = screen.getByRole('link', { name: 'Explore Blocks' });
     expect(topic).toHaveAttribute('href', '/mainnet/blocks');
     expect(day.compareDocumentPosition(topic)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    fireEvent.click(screen.getByRole('button', { name: '30 d' }));
+    // Re-pinned for lane D1 (rule 8): the range and the scale are the controls library's radios
+    // (were pressed buttons, 'Log scale' a toggle).
+    fireEvent.click(screen.getByRole('radio', { name: '30 d' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, linear' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Log scale' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'log' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, log' })).toBeInTheDocument();
   });
 
   // CH-02 residual (round 2): rates read at two decimals, thousands grouped; exact on hover.
-  it('rounds rate readings like the board, grouped, exact on hover (CH-02)', async () => {
+  // Re-pinned for lane D1 (the chart-hero board): the head's figure is cut, never rounded, and the
+  // change is said by the sentence (was the readings group and its Last change line).
+  it('cuts the head figure at two decimals, grouped, exact on hover (CH-02)', async () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue({
       ...response,
       data: [
@@ -138,10 +143,14 @@ describe('shared chart detail', () => {
       ],
     });
     render(<ChartDetail slug="hash-rate" />);
-    const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(readings).toHaveTextContent('2024-02-101,234.57 PH/s');
-    expect(screen.getByTitle('1,234.567890123456789 PH/s')).toBeInTheDocument();
-    expect(screen.getByText('+1,233.57 PH/s')).toBeInTheDocument();
+    const figure = await screen.findByTestId('figure-value');
+    expect(figure).toHaveTextContent('1,234.56 PH/s');
+    expect(figure).toHaveAttribute('title', '1,234.567890123456789 PH/s');
+    expect(screen.getByTestId('figure-eyebrow')).toHaveTextContent('hash rate · 2024-02-10');
+    // the change is a figure of the sentence, cut from the exact difference
+    expect(document.querySelector('[data-role="sentence-words"]')).toHaveTextContent(
+      '1,233.56 PH/s up since 2024-01-01.'
+    );
   });
 
   it('puts related charts before the quieter method and evidence tier (CH-20, #11)', async () => {
@@ -206,20 +215,35 @@ describe('shared chart detail', () => {
           blocksMined: 41743,
           percentage: '62.7931',
         },
+        // the window's other miner (lane D1's third round, S7: the route lists every miner of the window, so one
+        // row is one miner who found every block; 41,743 of 66,477 has a second, 24,734)
+        {
+          minerLockHash: `0x${'b'.repeat(64)}`,
+          address: null,
+          minerName: 'Pool B',
+          blocksMined: 24734,
+          percentage: '37.2068',
+        },
       ],
       totalBlocks: 66477,
+      restBlocks: 0,
       windowDays: 7,
       fromDate: '2026-10-21',
       toDate: '2026-10-27',
     });
     render(<ChartDetail slug="miner-address-distribution" />);
-    const label = await screen.findByText('Leading miner');
-    expect(label.nextElementSibling).toHaveTextContent('ckb1…4s93hhsj · 41,743 blocks · 62.79%');
-    // A ranked chart counts no points: its command has no args (phase 5, D10).
-    const heading = screen.getByRole('heading', { name: 'Distribution' });
-    expect(heading.children).toHaveLength(1);
-    expect(label).toHaveClass('min-w-0', 'break-words');
-    expect(label.parentElement).toHaveClass('grid-cols-1');
+    // Re-pinned for lane D1 (the chart-hero board): the head names the leading miner in words over
+    // its blocks, under the window (was a "Leading miner" fact under the lede); the fact, with its
+    // share, stands in the evidence tier, and the ranking follows the figure with no command line
+    // (was "Distribution").
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent(
+      'ckb1…4s93hhsj, the largest miner · 2026-10-21 → 2026-10-27'
+    );
+    expect(screen.getByTestId('figure-value')).toHaveTextContent('41,743 blocks');
+    const fact = screen.getByText(/^Leading miner:/);
+    expect(fact).toHaveTextContent('Leading miner: ckb1…4s93hhsj · 41,743 blocks · 62.79%');
+    expect(fact.closest('[data-tier="2"]')).not.toBeNull();
+    expect(screen.queryByRole('heading', { name: /^Distribution/ })).toBeNull();
     const link = screen.getByRole('link', { name: 'ckb1…4s93hhsj' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
@@ -263,22 +287,30 @@ describe('shared chart detail', () => {
   it('heads the chart with the latest reading and the API peak at two decimals (CH-21, CH-02)', async () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
     render(<ChartDetail slug="hash-rate" />);
-    const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
-    // Re-pinned for CH-14: each figure's unit after a no-break space.
-    expect(readings).toHaveTextContent('2026-10-2991.34 PH/s');
-    expect(readings).toHaveTextContent('peak, 2022-06-01465.31 PH/s');
-    // The exact values stay one hover away.
-    expect(screen.getByTitle('465.31129244471372 PH/s')).toBeInTheDocument();
+    // Re-pinned for lane D1 (the chart-hero board, rules 1 and 2): one figure under an eyebrow that
+    // names it, and the peak said once, in the sentence (was a second reading beside the first).
+    const figure = await screen.findByTestId('figure-value');
+    expect(figure).toHaveTextContent('91.34 PH/s');
+    expect(screen.getByTestId('figure-eyebrow')).toHaveTextContent('hash rate · 2026-10-29');
+    expect(document.querySelector('[data-role="sentence-words"]')).toHaveTextContent(
+      '80.37% under its peak of 465.31 PH/s on 2022-06-01, and 373.97 PH/s down since 2024-12-27.'
+    );
+    // The exact value stays one hover away.
+    expect(figure).toHaveAttribute('title', '91.34 PH/s');
   });
 
   it('leads with a breadcrumb to its section, plain range labels and a help button (CH-26)', async () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
     render(<ChartDetail slug="hash-rate" />);
-    const crumb = await screen.findByRole('link', { name: 'Charts / Proof of work' });
+    // Re-pinned for lane D1 (the chart-hero board): the crumb in the board's words, each part a
+    // link inside the line; the range the controls library's (was one link, "Charts / Proof of
+    // work", and four pressed buttons ending "All").
+    const crumb = await screen.findByRole('link', { name: 'proof of work' });
     expect(crumb).toHaveAttribute('href', '/mainnet/charts#proof-of-work');
+    expect(screen.getByRole('link', { name: 'charts' })).toHaveAttribute('href', '/mainnet/charts');
     expect(screen.queryByRole('link', { name: /All charts/ })).toBeNull();
-    for (const name of ['30 d', '90 d', '1 y', 'All'])
-      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    for (const name of ['30 d', '90 d', '1 y', 'all'])
+      expect(screen.getByRole('radio', { name })).toBeInTheDocument();
     const help = screen.getByRole('button', { name: 'How to read and zoom this chart' });
     expect(help).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(help);
@@ -292,8 +324,9 @@ describe('shared chart detail', () => {
       ReturnType<typeof api.getHardforks>
     >);
     render(<ChartDetail slug="hash-rate" />);
+    // Re-pinned for lane D1 (the link-look gate): the way onward's arrow is the link's own, unread.
     await screen.findByRole('link', {
-      name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293 →',
+      name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293',
     });
     const props = lastChart('Hash rate');
     expect(props.xTicks).toEqual([
@@ -308,7 +341,7 @@ describe('shared chart detail', () => {
       { index: 3, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' },
     ]);
     expect(
-      screen.getByRole('link', { name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293 →' })
+      screen.getByRole('link', { name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293' })
     ).toHaveAttribute('href', '/mainnet/hardforks');
   });
 
@@ -334,19 +367,23 @@ describe('shared chart detail', () => {
       title: 'Epoch durations',
       yAxisLabel: 'Epochs',
       data: [
+        // minute 241 in hours, cut as the API writes it (re-pinned: half up it was 4.02)
         { date: '3.98', value: '10' },
-        { date: '4.02', value: '622' },
+        { date: '4.01', value: '622' },
         { date: '50.50', value: '1' },
       ],
     });
     render(<ChartDetail slug="epoch-time-distribution" />);
-    // phase 5 (D10): the bucket count, which stood at the row's right end, is the command's args
-    const heading = await screen.findByRole('heading', { name: 'Distribution 3 buckets' });
-    expect(heading.lastElementChild).toHaveTextContent(/^3 buckets$/);
-    expect(heading.lastElementChild).toHaveClass('text-text-dim');
-    expect(screen.queryByRole('heading', { name: /^Full history/ })).toBeNull();
+    // Re-pinned for lane D1 (the chart-hero board, rule 3): the chart stands under its figure, the
+    // answer it is asked named in words, with no command line (was "Distribution 3 buckets"); the
+    // bucket count is the span its plot's name and caption state.
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent(
+      'the most common duration'
+    );
+    expect(screen.queryByRole('heading', { name: /^Distribution|^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
-    expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
+    expect(props.plotName).toBe('epochs, by hours taken · 3\u00a0buckets');
+    expect(props.reading).toEqual({ label: '4.01', values: { primary: '622' } });
     expect(props.subtitle).toBe('Completed epochs by hours taken · 3\u00a0buckets');
     expect(props.slotBars).toBe(true);
   });
@@ -364,9 +401,13 @@ describe('shared chart detail', () => {
       title: 'Cell Size Distribution',
       yAxisLabel: 'Live Cells',
       data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
+      // the route's wholes (lane D1): 1,000 + 999 + … + 995 cells; no CKB series sent
+      liveCells: '5985',
+      occupiedCapacity: '0',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
-    await screen.findByRole('heading', { name: 'Distribution 6 buckets' });
+    // re-pinned for lane D1: under its figure, with no command line (was "Distribution 6 buckets")
+    await screen.findByTestId('figure-eyebrow');
     const props = lastChart('Cell size');
     expect(props.categoricalX).toBe(true);
     // Every bucket named, in the axis' words with the unit once (re-pinned for CH-12: the API's
@@ -381,17 +422,21 @@ describe('shared chart detail', () => {
   it('prints epoch numbers with thousands groups (CH-35)', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 4.1 h and 4.29 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: [
-        { date: '15201', value: '4.1', value2: '1800' },
-        { date: '15202', value: '4.29', value2: '1800' },
+        { date: '15201', value: '14760000', value2: '1800' },
+        { date: '15202', value: '15444000', value2: '1800' },
       ],
+      // the API's consensus target, which the page's sentence reads (lane D1)
+      target: { seconds: 14400, hours: '4.00' },
     });
     render(<ChartDetail slug="epoch-time-length" />);
-    const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
-    // Re-pinned for CH-14: the SI symbol h, after a no-break space (was '4.29hours').
-    expect(readings).toHaveTextContent('#15,2024.29 h');
+    // Re-pinned for lane D1 (the chart-hero board): the figure named in words, the epoch grouped
+    // (was the readings group); for CH-14: the SI symbol h, after a space (was '4.29hours').
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent('epoch #15,202 took');
+    expect(screen.getByTestId('figure-value')).toHaveTextContent('4.29 h');
     const props = lastChart('Epoch length') as { formatLabel: (label: string) => string };
     expect(props.formatLabel('15202')).toBe('epoch #15,202');
   });
@@ -399,22 +444,30 @@ describe('shared chart detail', () => {
   it('draws the main chart without repeating the title, counts its points grouped, formats epoch peaks (visual pass)', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 50.48 h, then 4.15 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: Array.from({ length: 1201 }, (_, i) => ({
         date: String(14004 + i),
-        value: i === 0 ? '50.48' : '4.15',
+        value: i === 0 ? '181728000' : '14940000',
         value2: '1800',
       })),
-      peak: { date: '14004', value: '50.48' },
+      peak: { date: '14004', value: '181728000' },
       peak2: { date: '14004', value: '1800' },
       target: { seconds: 14400, hours: '4.00' },
     });
     render(<ChartDetail slug="epoch-time-length" />);
-    const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
-    expect(readings).toHaveTextContent('peak, #14,004');
-    // the count is the command's args (phase 5, D10): 'full history 1,201 epochs'
-    expect(screen.getByRole('heading', { name: 'Full history 1,201 epochs' })).toBeInTheDocument();
+    // Re-pinned for lane D1 (the chart-hero board, rules 4 and 6): the main chart stands under its
+    // figure with no command line (was "Full history 1,201 epochs"), its span in its plot's name;
+    // the genesis-like first epoch, 50.48 h, is named over the axis instead of setting it (was the
+    // "peak, #14,004" reading).
+    await screen.findByTestId('figure-eyebrow');
+    expect(lastChart('Epoch length').plotName).toBe(
+      'h each epoch took · every completed epoch since #14,004'
+    );
+    expect(
+      (lastChart('Epoch length').axisCap as { note: string }).note.replace(/\u00a0/g, ' ')
+    ).toBe('#14,004 · 50.48 h, above this scale');
     // Re-pinned for CH-06: the blocks chart's command line carries its span as well.
     expect(screen.getByRole('heading', { name: 'Epoch blocks 1,201 epochs' })).toBeInTheDocument();
     const main = lastChart('Epoch length');
@@ -429,18 +482,20 @@ describe('shared chart detail', () => {
   it('gives every chart a readout line a tap pins (R6), and says so in its help', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 4.1 h and 4.2 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: [
-        { date: '14004', value: '4.1', value2: '1800' },
-        { date: '14005', value: '4.2', value2: '1801' },
+        { date: '14004', value: '14760000', value2: '1800' },
+        { date: '14005', value: '15120000', value2: '1801' },
       ],
-      peak: { date: '14005', value: '4.2' },
+      peak: { date: '14005', value: '15120000' },
       peak2: { date: '14005', value: '1801' },
       target: { seconds: 14400, hours: '4.00' },
     });
     render(<ChartDetail slug="epoch-time-length" />);
-    await screen.findByRole('group', { name: 'Epoch length readings' });
+    // re-pinned for lane D1: waits for the figure (the readings group is gone)
+    await screen.findByTestId('figure-value');
     expect(lastChart('Epoch length').pinnedReadout).toEqual({
       label: 'Epoch length readout',
       idle: 'A point on the chart reads its value here.',

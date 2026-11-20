@@ -6,6 +6,7 @@ import { TokenHolders } from '@/components/asset/token-holders';
 import { CollectionHolders } from '@/components/asset/collection-holders';
 import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { api, type CollectionHolder } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
 
@@ -41,15 +42,18 @@ const holder = (n: number, balance: string) => ({
 describe('token holders (PB-11)', () => {
   function serve() {
     // USDC's three largest holders: 52.73 %, 26.45 % and 7.76 % of the supply.
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [holder(1, '5273'), holder(2, '2645'), holder(3, '776')],
-      total: 3,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '10000',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [holder(1, '5273'), holder(2, '2645'), holder(3, '776')],
+        total: 3,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '10000',
+        anchor: null,
+        firstRank: 1,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
   }
 
@@ -94,14 +98,16 @@ describe('DAO depositors (PB-11)', () => {
       depositCount: 1,
       sharePercent,
     });
-    vi.spyOn(api, 'getDaoDepositors').mockResolvedValue({
-      anchor: { blockNumber: 1, blockHash: '0x' + 'a'.repeat(64) },
-      total: 2,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-      data: [row(1, '25.00'), row(2, '12.50')],
-    });
+    vi.spyOn(api, 'getDaoDepositors').mockResolvedValue(
+      pagedRead({
+        anchor: { blockNumber: 1, blockHash: '0x' + 'a'.repeat(64) },
+        total: 2,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+        data: [row(1, '25.00'), row(2, '12.50')],
+      })
+    );
     render(<DaoDepositorsPage />);
     await screen.findAllByTestId('holder-row-mobile');
     const bars = phoneBars();
@@ -120,13 +126,16 @@ describe('collection holders (PB-11)', () => {
       lockCodeHash: null,
       lockKind: null,
     }));
-    const load = vi.fn().mockResolvedValue({
-      data: holders,
-      limit: 10,
-      total: 3,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: holders,
+        limit: 10,
+        total: 3,
+        hasMore: false,
+        nextCursor: null,
+        firstRank: 1,
+      })
+    );
     render(<CollectionHolders load={load} queryKey="bit" assetClass="identities" />);
     await screen.findAllByTestId('holder-row-mobile');
     const bars = phoneBars();

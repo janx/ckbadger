@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -24,6 +25,11 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 
 vi.mock('@/lib/api', async (load) => {
   const actual = await load<typeof import('@/lib/api')>();
@@ -149,6 +155,29 @@ describe('MnftItemDetailPage', () => {
     expectHeadId(id);
   });
 
+  // Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+  // lock decision's refusals placed above their parts fail the part they are in, said in its place,
+  // never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+  it('fails the owner note in place when its lock is refused, the page drawn', async () => {
+    const joy = seededAddress('joymn', JOYID_CODE_HASH);
+    vi.mocked(api.getItemProtocol).mockResolvedValue({
+      ...mnftProtocolProducer,
+      versions: mnftProtocolProducer.versions.map((v) => ({
+        ...v,
+        cell: { ...v.cell, ownerAddress: joy },
+      })),
+    } as never);
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    // re-pinned on purpose (lane P2's third round, item 1): the Issued fact's note no longer says
+    // the lock the token was issued to (the lede says it, once), so the one alert in Metrics is the
+    // owner's note again (it was two, the owner's and the Issued note's)
+    await waitFor(() => expect(within(metrics).getAllByRole('alert')).toHaveLength(1));
+    for (const alert of within(metrics).getAllByRole('alert'))
+      expect(alert).toHaveTextContent(new RegExp(`address ${joy} spells the lock`));
+  });
+
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
@@ -168,7 +197,18 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
     // F2 objects (OB-M5): the hero sentence tells who issued it and its life since.
     expect(screen.getByText(/^Issued by Issuer A/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the class →' })).toHaveAttribute(
+    // the issuer's raw metadata, the library's inner disclosure in tier 2 (lane cd-fixes-controls,
+    // the disclosure sweep): its words at the control step, 13 px, and the quiet ink (they were
+    // 12 px in the page's bright ink); shut; re-pinned on purpose (the ink and size roles round):
+    // its bytes are a value, the reading ink at 13 px (they were 12 px)
+    const metadata = screen.getByText('Raw issuer metadata');
+    expect(metadata).toHaveClass('text-small', 'text-text-dim');
+    expect(metadata.closest('details')).not.toHaveAttribute('open');
+    expect(metadata.closest('details')!.querySelector('pre')).toHaveClass(
+      'text-small',
+      'text-text'
+    );
+    expect(screen.getByRole('link', { name: 'Open the class' })).toHaveAttribute(
       'href',
       `/mainnet/classes/${detail.class.classId}`
     );
@@ -192,6 +232,9 @@ describe('MnftItemDetailPage', () => {
         )
     ).toBe(true);
     expect(screen.getByRole('heading', { name: 'm-NFT token ID' })).toBeInTheDocument();
+    // lane c2-finish (item 4, and rulings round 1): the issuer's id copies by the icon after it,
+    // its answer out of the line's flow with nothing above it to clip it
+    expectAnswerUnclipped(screen.getByRole('button', { name: 'copy issuer id' }));
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();
@@ -203,7 +246,7 @@ describe('MnftItemDetailPage', () => {
     expect(within(permissions).getByText('Transfer after claim').parentElement).toHaveTextContent(
       'Allowed'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
     expect(api.getItemTransactions).toHaveBeenCalledWith('mnft', id, {
       limit: 20,
@@ -230,13 +273,15 @@ describe('MnftItemDetailPage', () => {
   });
 
   it('starts a newly navigated-to token on its first activity page', async () => {
-    vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-      ...itemActivityFeedProducer,
-      hasMore: true,
-      nextCursor: '100:2',
-    });
+    vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+      pagedRead({
+        ...itemActivityFeedProducer,
+        hasMore: true,
+        nextCursor: '100:2',
+      })
+    );
     const { rerender } = render(<MnftItemDetailPage objectId={id} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
     await waitFor(() =>
       expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', id, {
         limit: 20,
@@ -264,7 +309,9 @@ describe('MnftItemDetailPage', () => {
       nextId,
       expect.objectContaining({ cursor: expect.any(String) })
     );
-    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    // the newest end cannot be taken: quiet words, no control (was a disabled Previous)
+    expect(screen.getByRole('navigation', { name: 'activities' })).toHaveTextContent('← newer');
+    expect(screen.queryByRole('button', { name: '← newer' })).toBeNull();
   });
 
   it('shows an absent item only for a real 404 response', async () => {
@@ -342,9 +389,22 @@ describe('MnftItemDetailPage', () => {
     // the owner field says 'No live owner', as every object's owner field does (U-15)
     expect(screen.getByText('No live owner')).toBeInTheDocument();
     expect(screen.getAllByText('No live cell')).toHaveLength(1);
-    expect(screen.getByRole('link', { name: 'Consumed in transaction →' })).toBeInTheDocument();
+    // lane P2's follow-up (item 11): the spending transaction opens at this cell, the anchor
+    // P1's builder writes, so its fold never hides the cell the reader came from
+    const cell = consumed.versions[0].cell;
+    expect(screen.getByRole('link', { name: 'Consumed in transaction' })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${'0x' + '56'.repeat(32)}#${cell.txHash}-${cell.outputIndex}`
+    );
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();
+    // lane P2's fifth round (item 2, MUST): the History sentence says what the burned token's
+    // cell held when it was consumed, in the past tense (it said the cell "holds" it)
+    const sentence = screen
+      .getByRole('region', { name: 'History' })
+      .querySelector('[data-role="history-sentence"]')!;
+    expect(sentence.textContent).toMatch(/^The token’s cell held .+ CKB.* when it was consumed\.$/);
+    expect(sentence.textContent).not.toMatch(/holds/);
   });
 });

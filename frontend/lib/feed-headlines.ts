@@ -18,10 +18,15 @@ const NEIGHBOUR_HEADLINES: Record<NonNullable<ItemFeedContext['ringRelink']>['by
   unattributed: 'Ring pointer changed',
 };
 
-/** A `.cell` action in words; `ring_relink` names the neighbour whose pointer changed. */
-export function dotcellActionLabel(action: string, name: string | null = null): string {
-  if (action === 'ring_relink')
-    return name ? `ring pointer changed for ${name}` : 'ring pointer changed';
+/**
+ * A `.cell` action in words, the one writer of them (the page-phase review's NOTE 6: the feeds and
+ * the boards each kept one). `ring_relink` is the indexer's own record of a ring pointer rewrite
+ * nothing else in the transaction explains: what was done is the pointer's change; the name whose
+ * pointer changed is a fact of the action, said in its note (`protocolActionNoteFacts`), never in
+ * the label a feed's fold compares.
+ */
+export function dotcellActionLabel(action: string): string {
+  if (action === 'ring_relink') return 'ring pointer changed';
   return action.replace(/_/g, ' ');
 }
 

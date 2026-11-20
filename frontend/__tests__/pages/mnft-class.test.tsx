@@ -113,7 +113,8 @@ it('retains class and issuer raw evidence and separate full transaction history'
   expect(within(evidence).getByText('100 · planned 100')).toBeInTheDocument();
   expect(within(evidence).getByText('not recorded')).toBeInTheDocument();
   // Main.dc.html: "Recent activity" opens the full feed at its transactions.
-  fireEvent.click(screen.getByRole('button', { name: /transactions →$/ }));
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N transactions ↓" (it was "N transactions →")
+  fireEvent.click(screen.getByRole('button', { name: /^all 50\stransactions ↓$/ }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
 });
 it('does not invent permissions or issuer data when class metadata is absent', async () => {
@@ -123,4 +124,19 @@ it('does not invent permissions or issuer data when class metadata is absent', a
   await screen.findByRole('heading', { name: 'Test mNFT Class' });
   expect(screen.queryByRole('region', { name: 'mNFT permissions' })).not.toBeInTheDocument();
   expect(screen.queryByText(/Test Issuer/)).not.toBeInTheDocument();
+});
+
+// Readability R7 (lane p-assets): the class's history leaves the hero for tier 1's body, after the
+// metrics, 160 px under one sentence its points give.
+it('draws its history out of the hero, after the metrics, under one sentence (R7)', async () => {
+  render(<Page classId={mockClassId} />);
+  await screen.findByRole('heading', { name: 'Test mNFT Class' });
+  const history = await screen.findByRole('region', { name: 'History' });
+  expect(document.querySelector('[data-role="hero"]')).not.toContainElement(history);
+  expect(
+    screen.getByRole('region', { name: 'Metrics' }).compareDocumentPosition(history) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(document.querySelector('[data-tier="1"]')).toContainElement(history);
+  expect(await within(history).findByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
 });

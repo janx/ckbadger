@@ -12,10 +12,9 @@ import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { decodeDaoHeader } from '@/lib/dao-header';
-import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
-import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 
 const INDEX = /^(0|[1-9]\d*)$/;
@@ -54,7 +53,7 @@ export default function UncleDetailPage() {
         {isAwaited(query) && <p role="status">Loading uncle…</p>}
         {query.error && !query.data && <ReadFailure what="uncle" error={query.error} />}
         {query.error && query.data && (
-          <p role="alert">
+          <p className="max-w-measure" role="alert">
             Unable to refresh uncle: {query.error.message}. Showing previously loaded data.
           </p>
         )}
@@ -65,7 +64,9 @@ export default function UncleDetailPage() {
 }
 
 const blockLink = (number: number) => (
-  <Link href={`/blocks/${number}`}>{formatBlockNumber(number)}</Link>
+  <Link look="inline" href={`/blocks/${number}`}>
+    {formatBlockNumber(number)}
+  </Link>
 );
 
 function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; index: number }) {
@@ -116,44 +117,98 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
   ];
   return (
     <DetailLayout
-      title={`Uncle ${formatBlockNumber(uncle.number)}`}
+      // The block's name plate (lane D2b; U-03, PA-06, the UI review's R8): the kind line says
+      // "Uncle", so the h1 is the height alone, as the block page's is
+      title={formatBlockNumber(uncle.number)}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
-      identity={<HeadId value={uncle.hash} kind="hash" copyable />}
-      facts={[
-        {
-          label: 'Included by',
-          value: (
-            <>
-              {blockLink(uncle.includedBy.number)}
-              <span className="text-text-dim"> · uncle {index}</span>
-            </>
-          ),
-        },
-        {
-          label: `Canonical ${formatBlockNumber(uncle.number)}`,
-          value: (
-            <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-              <Hash hash={uncle.canonicalAtHeight.hash} size="row" copyable={false} />
-            </Link>
-          ),
-        },
-        {
-          label: 'Time',
-          value: (
-            <>
-              <Utc8DateTime timestamp={uncle.timestamp} />
-              <span className="text-text-dim text-meta block">
-                <ClockText text={(now) => formatTimeAgo(uncle.timestamp, now)} />
-              </span>
-              {delay && <span className="text-text-dim text-meta block">{delay} its sibling</span>}
-            </>
-          ),
-        },
-        {
-          label: 'Epoch',
-          value: epoch,
-        },
-      ]}
+      identity={<HeadId value={uncle.hash} kind="hash" copy="copy uncle hash" />}
+      // The block stone without rods, in the dead ink (the owner's ruling of 2026-11-19): a block
+      // stone counts its transactions in rods, and the chain keeps none for an uncle (its header
+      // and its proposals); an uncle is no longer in force, as a consumed cell is not
+      seal={{
+        id: { kind: 'block', hash: uncle.hash, txs: 'not kept' },
+        state: 'ink',
+        kind: 'Uncle',
+      }}
+      // The status strip under the id line (lane D2; PA-13, PA-06): the block that included it
+      // (the dot in the dead ink: an uncle is no longer in force), its time with its age and the
+      // delay to its sibling, the canonical block at its height and its epoch; its sentence
+      // follows as the lede, where every entity page's does (the facts stood before it).
+      strip={{
+        label: 'Uncle status',
+        facts: [
+          {
+            label: 'included by',
+            value: (
+              <Link look="inline" href={`/blocks/${uncle.includedBy.number}`}>
+                {formatBlockNumber(uncle.includedBy.number)}
+              </Link>
+            ),
+            dot: 'text-dim',
+            note: `uncle ${index}`,
+          },
+          {
+            label: 'time',
+            value: <Utc8DateTime timestamp={uncle.timestamp} />,
+            note: [
+              <Utc8Age key="age" timestamp={uncle.timestamp} />,
+              delay && `${delay} its sibling`,
+            ],
+          },
+          // the label names the block (lane P1 follow-up; review chain-a: it wrote a number and
+          // its value was a bare hash): the uncle's sibling, the canonical block on the same
+          // parent, or the canonical block at its height on another; a label no wider than
+          // "included by", which the strip's phone grid holds at 320 beside the time
+          {
+            label: delay ? 'sibling' : 'canonical',
+            value: (
+              <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+              </Link>
+            ),
+            note: delay ? 'canonical, same parent' : 'another parent',
+          },
+          { label: 'epoch', value: epoch },
+        ],
+      }}
+      lede={
+        <>
+          {/* two sentences (lane P1 follow-up; review chain-a: one paragraph of 158 characters a
+              line, the height said twice): the block at its height and the parent, then the
+              block that included it and what an uncle is; the height is the h1's */}
+          <p className="text-body leading-relaxed">
+            {delay ? (
+              <>
+                Its sibling on the canonical chain,{' '}
+                <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                  <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+                </Link>
+                , was mined on the same parent, {blockLink(uncle.number - 1)}, and this uncle came{' '}
+                {delay} it.
+              </>
+            ) : (
+              <>
+                The canonical block at its height,{' '}
+                <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                  <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+                </Link>
+                , has another parent; this uncle was mined on{' '}
+                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
+                  <Hash hash={uncle.parentHash} size="row" />
+                </Link>
+                .
+              </>
+            )}{' '}
+            {blockLink(uncle.includedBy.number)} included it: its transactions never ran, but the
+            proposals it carried count toward the proposal window.
+          </p>
+          {/* why its stone has no rods, said once (lane D2b) */}
+          <p className="text-body mt-2 leading-relaxed">
+            Its seal has no rods: a block’s seal counts its transactions in rods, and the chain
+            keeps none for an uncle.
+          </p>
+        </>
+      }
       tier2={
         <>
           <DetailSection title={`Proposals it carried (${uncle.proposalIds.length})`}>
@@ -166,7 +221,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
                 ))}
               </ul>
             ) : (
-              <p className="text-text-dim text-small">This uncle proposed nothing.</p>
+              <p className="text-text text-small">This uncle proposed nothing.</p>
             )}
           </DetailSection>
           <DetailSection title="Header">
@@ -189,7 +244,13 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                   <dt className="text-text-dim">{key}</dt>
                   <dd className="break-all">
-                    {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
+                    {key === 'parentHash' ? (
+                      <Link look="inline" href={`/blocks/${value}`}>
+                        {value}
+                      </Link>
+                    ) : (
+                      value
+                    )}
                   </dd>
                 </div>
               ))}
@@ -205,34 +266,8 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         </>
       }
     >
-      <p className="text-body leading-relaxed">
-        Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
-        {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
-        chain is{' '}
-        <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-          <Hash hash={uncle.canonicalAtHeight.hash} size="row" copyable={false} />
-        </Link>
-        {delay ? (
-          <>
-            , its sibling: both were mined on parent{' '}
-            <Link href={`/blocks/${uncle.parentHash}`}>
-              {formatBlockNumber(uncle.number - 1)}{' '}
-              <Hash hash={uncle.parentHash} size="row" copyable={false} />
-            </Link>
-            , and this uncle came {delay} it.
-          </>
-        ) : (
-          <>
-            , which has another parent; this uncle was mined on parent{' '}
-            <Link href={`/blocks/${uncle.parentHash}`}>
-              <Hash hash={uncle.parentHash} size="row" copyable={false} />
-            </Link>
-            .
-          </>
-        )}{' '}
-        It is not part of the canonical chain: its transactions never ran, but the proposals it
-        carried count toward the proposal window.
-      </p>
+      {/* its first content is the head's strip and sentence; its evidence is tier 2 */}
+      {null}
     </DetailLayout>
   );
 }

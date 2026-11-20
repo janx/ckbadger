@@ -1,0 +1,67 @@
+/**
+ * The one writer of an occupied figure (readability lane B4 and its fix rounds): occupied capacity
+ * is bytes, 1 CKB (10^8 shannons) of capacity for each, and a figure writes its symbol
+ * (`docs/RESPONSIVE_LAYOUT.md`, "Formats"), so "occupied" always carries its unit: "61 B", a pair
+ * "563 → 589 B" (the unit once, after the pair), a change "−61 B". Grouped, BigInt, never rounded.
+ * A figure and its unit never break apart ("Non-breaking units"): they are joined by a no-break
+ * space. A refusal names where the figure stands (`where`: a transaction, a cell).
+ */
+import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { unitAfter } from '@/lib/format-unit';
+import { MINUS } from '@/lib/chart-ticks';
+
+const NBSP = ' ';
+const grouped = (bytes: bigint) => bytes.toLocaleString('en-US');
+/** A figure and its "B", joined by a no-break space. */
+const bytesUnit = (figure: string) => `${figure}${unitAfter('B', NBSP)}`;
+
+function nonNegative(bytes: bigint, what: string, where: string): bigint {
+  if (bytes < BigInt(0)) throw new Error(`${where}: ${what} ${bytes} bytes is negative`);
+  return bytes;
+}
+
+/** A count of occupied bytes: "61 B". */
+export function occupiedBytesText(bytes: bigint, where: string): string {
+  return bytesUnit(grouped(nonNegative(bytes, 'occupied', where)));
+}
+
+/** Occupied bytes before and after: "563 → 589 B", the unit once, after the pair. */
+export function occupiedPairText(before: bigint, after: bigint, where: string): string {
+  return bytesUnit(
+    `${grouped(nonNegative(before, 'occupied before', where))} → ${grouped(nonNegative(after, 'occupied after', where))}`
+  );
+}
+
+/** A change in occupied bytes, signed: "+26 B", "−61 B", "0 B". */
+export function occupiedBytesDelta(bytes: bigint): string {
+  const sign = bytes > BigInt(0) ? '+' : bytes < BigInt(0) ? MINUS : '';
+  return bytesUnit(`${sign}${grouped(bytes < BigInt(0) ? -bytes : bytes)}`);
+}
+
+/**
+ * Occupied capacity as the API sends it (shannons: an address's or a class's
+ * `occupiedCapacity`) as bytes with their unit ("102 B"), the unit a bar of on-chain space is
+ * drawn in (lane P1, the address page). A figure that is not a whole number of bytes is not one
+ * the chain holds, and is refused with its value and where it stands.
+ */
+export function occupiedCapacityText(shannons: bigint, where: string): string {
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(
+      `${where}: occupied capacity ${shannons} shannons is not a whole number of bytes (10^8 shannons each)`
+    );
+  return occupiedBytesText(shannons / SHANNONS_PER_CKB, where);
+}
+
+/**
+ * A change in occupied capacity as the API sends it (shannons, `usedDelta`) as bytes with their
+ * unit ("−61 B"). A change that is not a whole number of bytes is not one the chain can make, and
+ * is refused with its value and where it stands.
+ */
+export function formatOccupiedDelta(usedDelta: string, where: string): string {
+  const shannons = BigInt(usedDelta);
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(
+      `${where}: occupied change ${usedDelta} shannons is not a whole number of bytes (10^8 shannons each)`
+    );
+  return occupiedBytesDelta(shannons / SHANNONS_PER_CKB);
+}

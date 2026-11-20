@@ -180,6 +180,16 @@ export function ckbShortenedTitle(
   return ckbDigits(shannons, form, signed).shortened ? ckbAmountTitle(shannons, signed) : undefined;
 }
 
+/**
+ * A token amount of `raw` base units at `decimals`, as text in `form`, without a sign and without
+ * its unit (a column's widest figure, for a width budget). The rule of `ckbDigits` holds here too:
+ * a negative amount is never written as its absolute value.
+ */
+export function tokenAmountText(raw: bigint, decimals: number, form: AmountForm): string {
+  if (raw < ZERO) throw new Error(`token amount ${raw} is negative where a sign is not written`);
+  return amountText(amountDigits(raw, decimals, form), false);
+}
+
 const DECIMAL_RE = /^([+-])?(\d+)(?:\.(\d+))?$/;
 
 /**

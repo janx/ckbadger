@@ -1,4 +1,6 @@
 import { AppLink } from '@/components/ui/app-link';
+import { PartReadError, readPart } from '@/components/read-failure';
+import { partyLockSentence } from '@/components/ui/lock-kind';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import {
   describeIdentityRecords,
@@ -44,7 +46,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         <span className="text-text">{unitNode(formatCount(value.bytes, 'byte'))}, not text</span>
       );
     case 'empty':
-      return <span className="text-text-dim">set, empty</span>;
+      return <span className="text-text">set, empty</span>;
   }
 }
 
@@ -55,18 +57,28 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
  */
 interface RecordParty {
   lockHash: string | null;
-  scriptName: string | null;
+  lockScriptName: string | null;
 }
 
-/** "the manager's own JoyID wallet": an address record that is the owner's or manager's lock. */
-function whose(lockHash: string | null, parties?: { owner: RecordParty; manager: RecordParty }) {
+/**
+ * "the manager's own address, under a JoyID lock": an address record that is the owner's or
+ * manager's lock, the lock by the one decision's sentence form off the record's address (lane P2's
+ * third round, item 12: it wrote "the manager's own JoyID wallet", the API's name by hand).
+ */
+function whose(
+  address: string | null,
+  lockHash: string | null,
+  parties?: { owner: RecordParty; manager: RecordParty }
+) {
   if (!lockHash || !parties) return null;
   const owner = parties.owner.lockHash === lockHash,
     manager = parties.manager.lockHash === lockHash;
   const party = owner ? parties.owner : manager ? parties.manager : null;
   if (!party) return null;
-  const lock = party.scriptName ? `${party.scriptName} ` : '';
-  return `the ${owner ? 'owner' : 'manager'}'s own ${lock}wallet`;
+  return `the ${owner ? 'owner' : 'manager'}'s own address, under ${partyLockSentence(
+    { lockScriptName: party.lockScriptName, address },
+    'row'
+  )}`;
 }
 
 export function IdentityRecords({
@@ -109,6 +121,7 @@ export function IdentityRecords({
                   <dd className="min-w-0">
                     {a.ckbAddress ? (
                       <AppLink
+                        look="inline"
                         href={`/address/${a.ckbAddress}`}
                         className="[overflow-wrap:anywhere]"
                       >
@@ -117,11 +130,24 @@ export function IdentityRecords({
                     ) : (
                       <RecordValue value={a.value} />
                     )}
-                    {whose(a.ckbLockHash, parties) && (
-                      <span className="text-text-dim text-small block">
-                        {whose(a.ckbLockHash, parties)}
-                      </span>
-                    )}
+                    {(() => {
+                      // whose own address it is, read once; a party from an API older than this
+                      // page is refused in the note's place (lane P2's fifth round, item 3)
+                      const note = readPart(() => whose(a.ckbAddress, a.ckbLockHash, parties));
+                      if (note.error !== undefined)
+                        return (
+                          <PartReadError
+                            what="whose address it is"
+                            where={`record ${a.key}`}
+                            error={note.error}
+                          />
+                        );
+                      return (
+                        note.value && (
+                          <span className="text-text-dim text-small block">{note.value}</span>
+                        )
+                      );
+                    })()}
                   </dd>
                 </div>
               ))}
@@ -156,7 +182,7 @@ export function IdentityRecords({
               ))}
             </dl>
           )}
-          <p className="text-text-dim text-small">
+          <p className="text-text text-small max-w-measure">
             {records.length.toLocaleString('en-US')} {countNoun(records.length, 'record')} · each
             cached for {view.ttls.map((t) => `${t.toLocaleString('en-US')} s`).join(' or ')}
           </p>

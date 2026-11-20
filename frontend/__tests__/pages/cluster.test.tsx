@@ -1,3 +1,5 @@
+import { clusterProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   render,
@@ -11,7 +13,7 @@ import {
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { expectHeadId } from '@/__tests__/utils/head-id';
 import { api } from '@/lib/api';
-import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { mockItemReads, emptyPage, rankedPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   clusterDetailProducer,
@@ -20,6 +22,10 @@ import {
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 const id = clusterDetailProducer.clusterId;
 beforeEach(() => {
@@ -31,6 +37,28 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+// Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+// lock decision's refusals placed above their parts fail the part they are in, said in its place,
+// never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+it('fails the cluster cell holder’s lock note in place, the page drawn', async () => {
+  const { current } = clusterProtocolProducer;
+  const joy = seededAddress('joycp', JOYID_CODE_HASH);
+  vi.spyOn(api, 'getSporeClusterProtocol').mockResolvedValue({
+    kind: 'spore_cluster',
+    clusterId: id,
+    source: 'canonicalLiveTypeIndex',
+    current: { ...current, cell: { ...current.cell, ownerAddress: joy } },
+  } as never);
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    )
+  );
+});
+
 it('renders collection identity, capacity history, genes, gallery, holders and both feed layers', async () => {
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-entity');
@@ -45,11 +73,14 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   const objects = await screen.findByRole('region', { name: 'Objects' });
   expect(within(objects).getByRole('img', { name: /allele gel/ })).toBeInTheDocument();
   expect(await within(objects).findByRole('table', { name: 'Newest objects' })).toBeInTheDocument();
-  expect(screen.getByRole('group', { name: 'History time range' })).toBeInTheDocument();
+  // re-pinned (lane c2-assets): the range is RangeSelect, a radio group (was a group of buttons)
+  expect(screen.getByRole('radiogroup', { name: 'History time range' })).toBeInTheDocument();
   // Main.dc.html: "Recent activity" — its link to the transactions opens the full feed there.
   const recent = screen.getByRole('region', { name: 'Recent activity' });
-  fireEvent.click(within(recent).getByRole('button', { name: /transactions →$/ }));
-  expect(screen.getByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N transactions ↓" (it was "N transactions →")
+  expect(recent).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /^all \S+\stransactions ↓$/ }));
+  expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
@@ -81,14 +112,19 @@ it('keeps live, created and burned counts separate and never adds the cluster ce
   expect(hero).toHaveTextContent('4,000 CKB held in their cells');
 });
 it('applies exact whole-collection trait filtering before pagination and resets the cursor', async () => {
-  vi.mocked(api.getCollectionGallery).mockResolvedValue({
-    ...collectionGalleryFilteredProducer,
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    pagedRead({
+      ...collectionGalleryFilteredProducer,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const { container } = render(<ClusterPage clusterId={id} />);
   const objects = await screen.findByRole('region', { name: 'Objects' });
-  fireEvent.click(await within(objects).findByRole('button', { name: 'Next' }));
+  // re-pinned (lane c2-assets): the objects are newest first, so the controls board's pager goes
+  // "older →" and an end it cannot take is quiet words, no control (was "Next" and a disabled
+  // "Previous")
+  fireEvent.click(await within(objects).findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(
       id,
@@ -104,7 +140,10 @@ it('applies exact whole-collection trait filtering before pagination and resets 
       traits: { Face: 'Blue' },
     })
   );
-  expect(within(objects).getByRole('button', { name: 'Previous' })).toBeDisabled();
+  expect(within(objects).queryByRole('button', { name: '← newer' })).toBeNull();
+  expect(within(objects).getByRole('navigation', { name: 'objects' })).toHaveTextContent(
+    'page 1 of 4'
+  );
   fireEvent.click(within(objects).getByRole('button', { name: 'Clear Face = Blue' }));
   await waitFor(() =>
     expect(container.querySelector('[data-allele="Blue"]')).not.toHaveAttribute('stroke')
@@ -156,7 +195,7 @@ it('retains the stored description and exact current decoder version without inv
 });
 it('handles empty gallery and holder sets without using collection totals as page lengths', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
-  vi.mocked(api.getSporeClusterHolders).mockResolvedValue(emptyPage());
+  vi.mocked(api.getSporeClusterHolders).mockResolvedValue(rankedPage());
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByText('No objects.')).toBeInTheDocument();
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
@@ -225,4 +264,19 @@ it('says nothing of an activity count the indexer has not derived (L2)', async (
   expect(facts).not.toHaveTextContent('Transactions');
   expect(screen.queryByText('Activities', { selector: 'dt' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
+  // Lane P2's third round (item 9): the newest rows still fold into the whole feed, by name with
+  // no number ("all activity ↓"), on its activities, and fold back by the same button
+  const recent = screen.getByRole('region', { name: 'Recent activity' });
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  const fold = screen.getByRole('button', { name: 'all activity ↓' });
+  fold.focus();
+  fireEvent.click(fold);
+  expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  expect(fold).toHaveAccessibleName('fewer ↑');
+  expect(document.activeElement).toBe(fold);
+  fireEvent.click(fold);
+  expect(await screen.findByRole('region', { name: 'Recent activity' })).toBeInTheDocument();
 });

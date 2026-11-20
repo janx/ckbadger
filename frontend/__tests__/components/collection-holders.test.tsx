@@ -1,3 +1,5 @@
+import { JOYID_CODE_HASH, namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -11,9 +13,10 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import { CollectionHolders } from '@/components/asset/collection-holders';
-import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
+import type { CollectionHolder, RankedCursorPage } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const barWidth = (value: number, scale: number, track: number) =>
   `${Math.max(Math.round((value / scale) * track * 100) / 100, value > 0 ? 2 : 0)}px`;
@@ -30,15 +33,17 @@ const lock = '0x' + '12'.repeat(32);
 const prefix = '0x' + '34'.repeat(20);
 const page = (
   data: CollectionHolder[],
-  extra: Partial<CursorPaginatedResponse<CollectionHolder>> = {}
-): CursorPaginatedResponse<CollectionHolder> => ({
-  data,
-  limit: 10,
-  total: 2,
-  hasMore: false,
-  nextCursor: null,
-  ...extra,
-});
+  extra: Partial<RankedCursorPage<CollectionHolder>> = {}
+): RankedCursorPage<CollectionHolder> =>
+  pagedRead({
+    data,
+    limit: 10,
+    total: 2,
+    hasMore: false,
+    nextCursor: null,
+    firstRank: 1,
+    ...extra,
+  });
 // Round 3 (contracts R-A · R-2): no indexed lock script → no address and no code hash either.
 const named = {
   lockScriptHash: null,
@@ -55,6 +60,26 @@ const resolved = {
   lockCodeHash: null,
   lockKind: null,
 };
+/**
+ * A first page of 21 holders as the API sends it at `limit` a page (lane cd-fixes-controls,
+ * review-p-tests SHOULD-5): the named holder and as many more as fill the page, with more after it
+ * (the tests served the named holder alone and said more followed, a page the API cannot send).
+ */
+const firstOf21 = (limit: number) =>
+  pagedRead({
+    data: [
+      named,
+      ...Array.from({ length: limit - 1 }, (_, i) => ({
+        ...resolved,
+        lockScriptHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+      })),
+    ],
+    limit,
+    total: 21,
+    hasMore: true,
+    nextCursor: 'next-50',
+    firstRank: 1,
+  });
 // Unmodified holderDistribution from the real collection-insights producer.
 const distribution = [
   { holders: 0, items: 0, range: '1' },
@@ -89,16 +114,19 @@ describe('Collection holders', () => {
 
   it('names each holder lock by the registry, else by its code hash (R-2, OB-C7)', async () => {
     const load = vi.fn().mockResolvedValue(
-      page([
-        { ...resolved, lockCodeHash: `0x${'9b'.repeat(32)}`, lockKind: 'JoyID' },
-        {
-          ...resolved,
-          lockScriptHash: `0x${'56'.repeat(32)}`,
-          lockCodeHash: `0x${'43'.repeat(32)}`,
-          lockKind: null,
-        },
-        named,
-      ])
+      page(
+        [
+          { ...resolved, lockCodeHash: JOYID_CODE_HASH, lockKind: 'JoyID' },
+          {
+            ...resolved,
+            lockScriptHash: `0x${'56'.repeat(32)}`,
+            lockCodeHash: `0x${'43'.repeat(32)}`,
+            lockKind: null,
+          },
+          named,
+        ],
+        { total: 3 }
+      )
     );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="kinds" />);
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
@@ -118,8 +146,9 @@ describe('Collection holders', () => {
       lockScriptHash: `0x${'88'.repeat(32)}`,
       address: null,
       itemCount: 2,
-      lockCodeHash: `0x${'9b'.repeat(32)}`,
-      lockKind: 'SECP256K1/blake160',
+      // B4 fix round: a real other lock (the made-up 0x9b… is no SECP256K1/blake160)
+      lockCodeHash: JOYID_CODE_HASH,
+      lockKind: 'JoyID',
     };
     const addressPage = `/mainnet/address/0x${'88'.repeat(32)}`;
     const load = vi.fn().mockResolvedValue(page([unaddressable], { total: 1 }));
@@ -131,17 +160,14 @@ describe('Collection holders', () => {
       const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
       const [, row] = within(table).getAllByRole('row');
       expect(within(row).getByRole('link')).toHaveAttribute('href', addressPage);
-      expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
-      expect(row).toHaveAttribute(
-        'title',
-        `#1 · 0x${'88'.repeat(32)} · SECP256K1/blake160 · 2 items`
-      );
+      expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('JoyID');
+      expect(row).toHaveAttribute('title', `#1 · 0x${'88'.repeat(32)} · JoyID · 2 items`);
       unmount();
       atContainerWidth(358);
       render(<CollectionHolders assetClass="objects" load={load} queryKey="no-address-phone" />);
       const [phone] = await screen.findAllByTestId('holder-row-mobile');
       expect(within(phone).getByRole('link')).toHaveAttribute('href', addressPage);
-      expect(phone).toHaveTextContent('SECP256K1/blake160');
+      expect(phone).toHaveTextContent('JoyID');
       expect(phone).not.toHaveTextContent(/not indexed/);
     } finally {
       vi.restoreAllMocks();
@@ -150,32 +176,74 @@ describe('Collection holders', () => {
   });
 
   it('uses backend ordering and cursor pages, and resets mode and cursor for a new collection', async () => {
-    const load = vi
-      .fn()
-      .mockImplementation(({ limit, cursor }) =>
-        Promise.resolve(
-          cursor
-            ? page([resolved], { limit, total: 51 })
-            : page([named], { limit, total: 51, hasMore: true, nextCursor: 'next-50' })
-        )
-      );
+    // Re-pinned (lane c2-assets): the pager is the controls board's (words, not boxes: "← prev",
+    // "next →", an end that cannot be taken quiet words and no control, where the Previous / Next
+    // buttons were disabled), and it reads its pages from the response: the count is 21 holders,
+    // two pages of 20, where the cursor ends (it was 51, three pages, while the cursor ended on
+    // the second).
+    const load = vi.fn().mockImplementation(({ limit, cursor }) =>
+      Promise.resolve(
+        // page two's first row is the 21st (lane exactness, part B5: the route ranks the page)
+        cursor ? page([resolved], { limit, total: 21, firstRank: 21 }) : firstOf21(limit)
+      )
+    );
     const { rerender } = render(
       <CollectionHolders assetClass="objects" load={load} queryKey="first" />
     );
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
-    fireEvent.click(screen.getByRole('button', { name: 'All holders →' }));
+    // Re-pinned on purpose (lane p-assets, the placement lane's toggles with the lead's ruling): a
+    // control that opens more of a list in place is the short list's form, the Pager's "all N
+    // holders ↓", under the list; its way back is "fewer ↑" (it was "All holders →" in the heading
+    // row, an arrow that said another page)
+    expect(screen.queryByRole('button', { name: /→$/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^all 21\sholders ↓$/ }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): the first page is full, 20 of 21
+    // (it was the named holder alone, "1–1 of 21")
+    expect(pager).toHaveTextContent('1–20 of 21');
+    expect(pager).toHaveTextContent('page 1 of 2');
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: 'next-50' }));
     const table = await screen.findByRole('table', { name: 'All collection holders' });
     expect(within(table).getAllByRole('row')[1]).toHaveTextContent('21');
-    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled());
+    expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('page 2 of 2');
+    expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '← prev' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '← prev' })).toBeNull());
+    expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('page 1 of 2');
+    // the way back folds the list to its ten
+    fireEvent.click(screen.getByRole('button', { name: 'fewer ↑' }));
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(screen.getByRole('button', { name: /^all 21\sholders ↓$/ })).toBeInTheDocument();
     rerender(<CollectionHolders assetClass="objects" load={load} queryKey="second" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(load).toHaveBeenLastCalledWith({ limit: 10, cursor: undefined });
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'holders' })).not.toBeInTheDocument();
+  });
+
+  // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
+  // (FoldToggle): one button that stays mounted while the list loads, says its state, names the
+  // list it opens, and keeps the keyboard's focus both ways (the Pager's "all N ↓" and a second
+  // "fewer ↑" button swapped places, and the loading list took both away)
+  it('opens and folds its list with one button that keeps the focus', async () => {
+    const load = vi.fn().mockImplementation(({ limit }) => Promise.resolve(firstOf21(limit)));
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="fold" />);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    toggle.focus();
+    fireEvent.click(toggle);
+    const all = await screen.findByRole('table', { name: 'All collection holders' });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('fewer ↑');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(all);
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(toggle).toHaveAccessibleName(/^all 21\sholders ↓$/);
+    expect(document.activeElement).toBe(toggle);
   });
 
   it('shows refresh failures while retaining the previously read holder rows', async () => {
@@ -235,16 +303,22 @@ describe('Collection holders', () => {
   ])('rejects invalid full-scope counts or repeated buckets %#', (...buckets) => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(() =>
-        render(
-          <CollectionHolders
-            assetClass="objects"
-            load={vi.fn().mockResolvedValue(page([]))}
-            queryKey="bad-distribution"
-            distribution={buckets}
-          />
-        )
-      ).toThrow(/collection|Collection/);
+      // B4 second fix round (re-pinned on purpose, ruling D7): the refusal fails the section in
+      // its place, saying why, where it took the page. Third round (re-pinned on purpose, the
+      // coordinator's item 4): it fails the distribution's column alone, said with its collection;
+      // the section's heading and the holders' table stand
+      render(
+        <CollectionHolders
+          assetClass="objects"
+          load={vi.fn().mockResolvedValue(page([]))}
+          queryKey="bad-distribution"
+          distribution={buckets}
+        />
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /^Could not draw the holder distribution \(collection bad-distribution\): .*(collection|Collection)/
+      );
+      expect(screen.getByRole('heading', { name: /^Who holds it/ })).toBeInTheDocument();
     } finally {
       error.mockRestore();
     }
@@ -281,14 +355,89 @@ describe('Collection holders', () => {
 
 // Table-rows round, lane L2-4: the collection holder tables on the row rules — one 41 px line,
 // the holder bright, the lock a chip, the item count as an 8 px bar on the table's scale.
+// Lane P2's follow-up (item 3): a lock the same on every row of the page (an identity collection's
+// holders, every one ".bit Lock") is no column and no phone part: said once over the list, by the
+// one helper the objects list uses (SaidOnce), and the holder takes the table's flexible width.
+describe('Collection holders say a lock the same on every row once', () => {
+  const bitLock = namedLockCodeHash('.bit Lock');
+  const holder = (seed: string, itemCount: number) => {
+    const address = seededAddress(seed, bitLock);
+    return {
+      lockScriptHash: '0x' + seed.charCodeAt(0).toString(16).padStart(2, '0').repeat(32),
+      address,
+      itemCount,
+      lockCodeHash: bitLock,
+      lockKind: '.bit Lock',
+    };
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('drops the Lock column and says ".bit Lock" once over the table', async () => {
+    atContainerWidth(1232);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).not.toContain('Lock');
+    expect(table).not.toHaveTextContent('.bit Lock');
+    const once = document.querySelector<HTMLElement>('[data-role="said-once"]')!;
+    expect(once).toHaveTextContent(/^every one of the 2\sholders listed · \.bit Lock$/);
+    expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the holder is the flexible column now
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols[1].width).toBe('auto');
+    // each row's title still names its lock
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain('.bit Lock');
+  });
+
+  it('leaves the lock out of each phone row', async () => {
+    atContainerWidth(358);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit-phone" />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="said-once"]')).toHaveTextContent(
+        /^every one of the 2\sholders listed · \.bit Lock$/
+      )
+    );
+    expect(document.querySelectorAll('[data-lock-kind]')).toHaveLength(1);
+    expect(document.querySelector('[data-role="said-once"] [data-lock-kind]')).toBeInTheDocument();
+  });
+
+  it('keeps the column where the rows’ locks differ', async () => {
+    atContainerWidth(1232);
+    const other = {
+      ...holder('c', 1),
+      address: seededAddress('c'),
+      lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+      lockKind: 'Default Lock',
+    };
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), other]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="mixed" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toContain('Lock');
+    expect(document.querySelector('[data-role="said-once"]')).toBeNull();
+  });
+});
+
 describe('Collection holders on the row rules (table-rows L2-4)', () => {
   const joyid = {
     ...resolved,
     itemCount: 6,
     lockKind: 'JoyID',
-    lockCodeHash: `0x${'9b'.repeat(32)}`,
+    lockCodeHash: JOYID_CODE_HASH,
   };
-  it('draws one-line rows with the holder bright, the lock a chip and the count as a bar', async () => {
+  // renamed (lane p-assets): it was "… the lock a chip …"; a lock is plain words now
+  it('draws one-line rows with the holder bright, the lock in words and the count as a bar', async () => {
     const load = vi.fn().mockResolvedValue(page([joyid, named]));
     render(
       <CollectionHolders
@@ -313,7 +462,10 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       '[&_a]:leading-row',
       'flex-nowrap'
     );
-    expect(within(first).getByText('JoyID')).toHaveClass('border', 'text-meta');
+    // re-pinned on purpose (lane p-assets): a lock is plain words, no chip, the column's value in
+    // the reading ink at the cells' step (it was the row tag's border and 12 px)
+    expect(within(first).getByText('JoyID')).toHaveClass('text-text', 'text-small');
+    expect(within(first).getByText('JoyID')).not.toHaveClass('border');
     const scale = resourceScale([6, 6]);
     expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
     expect(first.querySelector('[data-segment]')).toHaveStyle({
@@ -324,10 +476,8 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       within(table).getByRole('columnheader', { name: 'Items' }).querySelector('[data-scale-ticks]')
     ).not.toBeNull();
     expect(first).toHaveAttribute('title', `#1 · ${lock} · JoyID · 6 items`);
-    expect(second).toHaveAttribute(
-      'title',
-      `#2 · ${prefix} (unresolved) · lock not indexed · 6 items`
-    );
+    // B4 second fix round (re-pinned on purpose): the row's title says what its Lock cell says, from the one decision: 'not indexed' (it was 'lock not indexed')
+    expect(second).toHaveAttribute('title', `#2 · ${prefix} (unresolved) · not indexed · 6 items`);
     const buckets = screen.getByRole('table', { name: 'Holders by how many items they hold' });
     expectWordHeads(buckets);
     expect(within(buckets).getByText('3–5')).toHaveClass(
@@ -342,6 +492,103 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
   });
   // Re-pinned with PB-12 (UI review 2026-11-14): every collection gives its class colour (an
   // identity collection no longer prints plain counts); the count still ends the row.
+  // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the holder and
+  // cells 13 px, tags and ticks 12, the range 14) and the 16 px gap after every column but the
+  // last. Lock is the holder table's flexible column (a name that ends in the ellipsis): its tag
+  // holds 12 characters at its minimum.
+  it('budgets every column of both tables from what it holds (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const holders = [
+      // a rank of five digits (a collection's holders under 100,000)
+      ceil(at('99999', 13) + 16),
+      // the widest holder: a prefix-only owner at the row size, its 8 px gap and the
+      // "unresolved" badge (13 px words, 8 px sides, a 1 px border)
+      ceil(at('0x34343434…343434', 13) + 8 + at('unresolved', 13) + 16 + 2 + 16),
+      // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
+      // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
+      ceil(at('x'.repeat(12), 13) + 16),
+      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "999,999" items; the last
+      // column. Re-pinned on purpose (lane P2's follow-up, item 7): a holder's items are
+      // lib/list-bounds.ts's one bound of them, WIDEST_HELD_ITEMS, "999,999" (the column held
+      // "99,999", a second bound of the same quantity kept in the file), 113 px, the table 531
+      48 + 10 + ceil(at('999,999', 13)),
+    ];
+    const bands = [
+      // the head "Holds", wider than the widest range, "3–5" at 14 px
+      ceil(Math.max(at('Holds', 12), at('3–5', 14)) + 16),
+      // the track, the gap and "99,999" holders
+      48 + 10 + ceil(at('99,999', 13)) + 16,
+      // a range's items under a million, "999,999"; the last column
+      ceil(at('999,999', 13)),
+    ];
+    expect(holders).toEqual([55, 253, 110, 113]);
+    expect(bands).toEqual([52, 121, 55]);
+    expect(holders.reduce((s, w) => s + w, 0)).toBe(531);
+    expect(bands.reduce((s, w) => s + w, 0)).toBe(228);
+    const load = vi.fn().mockResolvedValue(page([joyid, named]));
+    render(
+      <CollectionHolders
+        load={load}
+        queryKey="budgets"
+        distribution={distribution}
+        assetClass="objects"
+      />
+    );
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(holders);
+    expect(cols[2].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(531);
+    const bandTable = screen.getByRole('table', { name: 'Holders by how many items they hold' });
+    expect(
+      [...bandTable.querySelectorAll('col')].map((c) =>
+        Number.parseFloat((c as HTMLElement).style.minWidth)
+      )
+    ).toEqual(bands);
+    expect(Number.parseFloat(bandTable.style.minWidth)).toBe(228);
+  });
+
+  it('changes each table’s form where its sum stops fitting (F3-e)', async () => {
+    try {
+      for (const [width, holders, bands] of [
+        [1232, 'table', 'table'],
+        // re-pinned on purpose (lane p-assets): the holders' table is 523 px with the lock as
+        // words (it was 528 with the lock's tag); then (lane P2's follow-up, item 7) 531, its
+        // items column holding WIDEST_HELD_ITEMS
+        [531, 'table', 'table'],
+        [530, 'rows', 'table'],
+        [358, 'rows', 'table'],
+        [228, 'rows', 'table'],
+        [227, 'rows', 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        // a fresh read each width (restoring the mocks resets a mock's answer)
+        const load = vi.fn().mockResolvedValue(page([joyid, named]));
+        const { container, unmount } = render(
+          <CollectionHolders
+            load={load}
+            queryKey={`forms-${width}`}
+            distribution={distribution}
+            assetClass="objects"
+          />
+        );
+        // the holders arrive from their read; the distribution is drawn at once
+        await waitFor(() => expect(container.querySelectorAll('[data-list-form]')).toHaveLength(2));
+        const forms = [...container.querySelectorAll('[data-list-form]')].map((l) =>
+          l.getAttribute('data-list-form')
+        );
+        expect(forms).toEqual([holders, bands]);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('draws the counts of an identity collection as bars in the identity rose', async () => {
     const load = vi.fn().mockResolvedValue(page([joyid]));
     render(<CollectionHolders assetClass="identities" load={load} queryKey="plain" />);
@@ -361,13 +608,19 @@ describe('Collection holders phone rows (board L5)', () => {
   // R9: a phone row is drawn wherever the holders' column is narrower than its 462 px table, a
   // desktop column too: tight only below sm, the row size, the table's, from it.
   it('names a holder at the tight size on a phone and at the row size from sm', async () => {
-    const address =
-      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj';
-    const load = vi
-      .fn()
-      .mockResolvedValue(
-        page([{ ...resolved, address, lockKind: 'JoyID', lockCodeHash: `0x${'9b'.repeat(32)}` }])
-      );
+    // B4 fix round: a real default-lock address (the row's lock is read off it); its tails below
+    const address = seededAddress('93hhsj');
+    const load = vi.fn().mockResolvedValue(
+      // B4 fix round: the row's lock is the one its address spells, the default lock
+      page([
+        {
+          ...resolved,
+          address,
+          lockKind: 'Default Lock',
+          lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+        },
+      ])
+    );
     try {
       atContainerWidth(358);
       atViewportWidth(390);
@@ -375,13 +628,17 @@ describe('Collection holders phone rows (board L5)', () => {
         <CollectionHolders assetClass="objects" load={load} queryKey="phone-size" />
       );
       const [phone] = await screen.findAllByTestId('holder-row-mobile');
-      expect(within(phone).getByRole('link', { name: 'ckb1…93hhsj' })).toBeInTheDocument();
+      expect(
+        within(phone).getByRole('link', { name: `ckb1…${address.slice(-6)}` })
+      ).toBeInTheDocument();
       unmount();
       atContainerWidth(440);
       atViewportWidth(1280);
       render(<CollectionHolders assetClass="objects" load={load} queryKey="desktop-size" />);
       const [column] = await screen.findAllByTestId('holder-row-mobile');
-      expect(within(column).getByRole('link', { name: 'ckb1…4s93hhsj' })).toBeInTheDocument();
+      expect(
+        within(column).getByRole('link', { name: `ckb1…${address.slice(-8)}` })
+      ).toBeInTheDocument();
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -393,7 +650,7 @@ describe('Collection holders phone rows (board L5)', () => {
     const load = vi
       .fn()
       .mockResolvedValue(
-        page([named, { ...resolved, lockKind: 'JoyID', lockCodeHash: `0x${'9b'.repeat(32)}` }])
+        page([named, { ...resolved, lockKind: 'JoyID', lockCodeHash: JOYID_CODE_HASH }])
       );
     render(
       <CollectionHolders
@@ -412,7 +669,11 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(phoneLines(rows[0])[1].left).toBe('06');
     // The rank is inline at the start of the first line, not a line of its own (B#19).
     expect(rows[1].querySelector('[data-line="holder"] [data-role="rank"]')).toHaveTextContent('2');
-    expect(second[0].left).toMatch(/^2.*JoyID$/);
+    // re-pinned on purpose (lane D4, PB-09): the lock stands at the bar line's right edge, held
+    // there (it was after the holder on line 1, where a long one dropped the count under it)
+    expect(second[0].left).toMatch(/^2/);
+    expect(second[0].left).not.toMatch(/JoyID/);
+    expect(second[1].right).toBe('JoyID');
     expect(second[0].right).toBe('2 items');
     // Re-pinned with ruling R7: on the table's scale for its Items bars, the page's rounded
     // maximum (here 6, the largest itself is round).
@@ -420,13 +681,16 @@ describe('Collection holders phone rows (board L5)', () => {
       'data-share-bar',
       `${Math.round((2 / resourceScale([6, 2])) * 10000) / 100}%`
     );
-    // The three-column distribution (265 px) still fits a phone as a table (R1) …
+    // The three-column distribution (228 px; 265 before readability F3-e) still fits a phone as
+    // a table (R1) …
     expect(
       screen.getByRole('table', { name: 'Holders by how many items they hold' })
     ).toBeInTheDocument();
   });
+  // Re-pinned on purpose (readability F3-e): the distribution's three columns, each its content,
+  // need 228 px (they were 265), so one pixel under, 227 (it was 240), is where it folds.
   it('folds the distribution into one-line rows where even it does not fit', async () => {
-    atContainerWidth(240);
+    atContainerWidth(227);
     const load = vi.fn().mockResolvedValue(page([named]));
     render(
       <CollectionHolders
@@ -441,5 +705,49 @@ describe('Collection holders phone rows (board L5)', () => {
     expect(phoneLines(buckets[1])).toEqual([
       { key: 'range', tone: 'body', left: 'holds 2 · 2 items', right: '1holder' },
     ]);
+  });
+});
+
+// Lane exactness, part B5: a row's rank is the route's (`firstRank`, the rank of the page's first
+// row in the read view that served it, plus the row's place), not (page − 1) × size + its place.
+describe('Collection holders rank each row from the route', () => {
+  it('reads the rank of a page whose list moved between the reads: 23, not 21', async () => {
+    atContainerWidth(1248);
+    const load = vi.fn().mockImplementation(({ limit, cursor }) =>
+      Promise.resolve(
+        cursor
+          ? // page two, read after two holders came in above it: its first row is the 23rd
+            page([resolved], { limit, total: 23, firstRank: 23 })
+          : { ...firstOf21(limit), total: 22, firstRank: 1 }
+      )
+    );
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="moved" />);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    fireEvent.click(screen.getByRole('button', { name: /^all 22\sholders ↓$/ }));
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('23–23 of 23')
+    );
+    const table = screen.getByRole('table', { name: 'All collection holders' });
+    const [, first] = within(table).getAllByRole('row');
+    expect(within(first).getAllByRole('cell')[0]).toHaveTextContent(/^23$/);
+    expect(first.getAttribute('title')).toMatch(/^#23 · /);
+  });
+
+  it('refuses an API that sends no firstRank, by name', async () => {
+    const { firstRank: _, ...older } = page([named, resolved]) as never as Record<string, unknown>;
+    render(
+      <CollectionHolders
+        assetClass="objects"
+        load={vi.fn().mockResolvedValue(older)}
+        queryKey="older"
+      />
+    );
+    expect(
+      await screen.findByText(
+        'Could not load collection holders: the holders of collection older: the API sends no firstRank: it is older than this page.'
+      )
+    ).toHaveAttribute('role', 'alert');
   });
 });

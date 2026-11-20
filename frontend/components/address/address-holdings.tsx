@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { sentField } from '@/lib/api-fields';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type Address, type AddressHoldings, type AddressCellClass } from '@/lib/api';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -13,20 +14,29 @@ import { formatStandard } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import {
+  ENTITY_PAGE_SIZE,
+  rankedPageAt,
+  timePageAt,
+  type Asked,
+  type CursorPageRead,
+  type CursorWalk,
+} from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
+import { occupiedCapacityText } from '@/lib/occupied';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
+import { cellLockFacts, lockWords } from '@/components/ui/lock-kind';
+import { Pager } from '@/components/ui/pager';
+import type { StripFact } from '@/components/ui/status-strip';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { charPx } from '@/lib/type-metrics';
-import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import { percentOf } from '@/lib/format-unit';
@@ -63,55 +73,66 @@ export function AddressLoadState({
         ? `${label} unavailable.`
         : null;
   if (sentence === null) return null;
-  return (
-    <p className="text-text-dim text-small py-3" role={error ? 'alert' : 'status'}>
+  // a failed read is a statement, the reading ink, and so are the loading and the unavailable
+  // line: sentences, none of the quiet roles (lane P1, the ink and size roles; they were quiet)
+  return error ? (
+    <p className="text-text text-small max-w-measure py-3" role="alert">
+      {sentence}
+    </p>
+  ) : (
+    <p className="text-text text-small max-w-measure py-3" role="status">
       {sentence}
     </p>
   );
 }
 export function AddressStaleNotice({ error, label }: { error: Error | null; label: string }) {
   return error ? (
-    <p role="alert" className="text-warning text-small py-2">
+    <p role="alert" className="text-warning text-small max-w-measure py-2">
       Could not refresh {label}: {error.message}. Showing previously loaded data.
     </p>
   ) : null;
 }
 /**
- * An address list's pages (consistency C11): the one `CursorPagination` — "Showing a–b of N
- * <label> · S per page" and "Page x of y" — in a nav named for the list. `pageSize` is the size
- * the list asked the API for (twenty below md), so the range counts the rows a page really holds.
+ * An address list's pager: the library's Pager (the controls board), in a nav named for the list,
+ * computing no figure. A list in time, newest first (the activities, the transactions), takes its
+ * time mode: its order in words, `← newer` and `older →`, the page the walk is on and the pages
+ * where the API counts the list. A list read from its first by key or by rank (the live cells, the
+ * DAO cells largest first, the token kinds, the identities) takes its pages mode, counted only of
+ * the total its own response states: a count another read supplies is at another tip (lane
+ * c2-finish, 1c), so a list whose page carries none is paged by its rows and its "more", its
+ * count standing where the page states it. Where the page stands is lib/pagination.ts's
+ * (timePageAt, rankedPageAt), from the response; nothing is drawn for a list on one page.
  */
 export function AddressPagination({
   pagination,
-  hasMore,
-  nextCursor,
-  currentCount,
-  total,
+  read,
   label,
-  pageSize,
+  order,
 }: {
-  pagination: ReturnType<typeof useCursorPagination>;
-  hasMore: boolean;
-  nextCursor?: string | null;
-  currentCount: number;
-  total?: number | null;
+  pagination: CursorWalk;
+  /** The page as its walk asked for it (lane cd-fixes-controls, item 1). */
+  read: Asked<CursorPageRead>;
   label: string;
-  pageSize: number;
+  /** A list in time's order in words (`newest first`); a list read from its first has none. */
+  order?: string;
 }) {
+  if (order !== undefined) {
+    const at = timePageAt(label, read, pagination);
+    return (
+      at && (
+        <div className="mt-4">
+          <Pager mode="time" label={label} order={order} {...at} />
+        </div>
+      )
+    );
+  }
+  const at = rankedPageAt(label, read, pagination);
   return (
-    <nav aria-label={`${label} pages`} className="mt-4">
-      <CursorPagination
-        total={total}
-        totalLabel={label}
-        pageSize={pageSize}
-        page={pagination.page}
-        currentCount={currentCount}
-        hasMore={hasMore}
-        hasPrevious={pagination.hasPrevious}
-        onNext={() => pagination.goToNext(nextCursor)}
-        onPrevious={pagination.goToPrevious}
-      />
-    </nav>
+    at && (
+      <div className="mt-4">
+        <Pager mode="pages" label={label} {...at} />
+      </div>
+    )
   );
 }
 
@@ -124,14 +145,16 @@ const composition = [
   ['decodePending', 'decode_pending'],
 ] as const;
 /** "free part of 5 deposits": what the DAO free figure is made of (BA-37). */
-function daoFreeNote(holdings: AddressHoldings): string | undefined {
+/** The Nervos DAO cells a DAO part holds, by kind: "in 5 deposits", "in 1 deposit and 1 withdrawal request". */
+function daoCellsNote(holdings: AddressHoldings): string {
   const { depositCellsCount: deposits, withdrawalRequestCellsCount: requests } = holdings;
-  if (deposits + requests === 0) return undefined;
+  if (deposits + requests === 0)
+    throw new Error(`Address ${holdings.lockScriptHash}: CKB in Nervos DAO cells and no DAO cell`);
   const parts = [
     ...(deposits ? [formatCount(deposits, 'deposit')] : []),
     ...(requests ? [formatCount(requests, 'withdrawal request')] : []),
   ];
-  return `free part of ${parts.join(' and ')}`;
+  return `in ${parts.join(' and ')}`;
 }
 
 /**
@@ -164,35 +187,58 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
   );
 }
 
-/** An exact CKB amount in the balance's line of exact parts (Address board), in one ink. */
+/**
+ * An exact CKB amount among the balance's labelled figures (Address board), in one ink, with its
+ * unit: the bar beside them is by CKB, the space bar under the holdings by bytes (lane P1, the
+ * plan: the two bars say their unit).
+ */
 function ExactParts({ shannons }: { shannons: bigint }) {
-  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" unit={false} />;
+  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" />;
 }
 
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
- * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — with its live
- * cells at the right; the 18 px partition with each share
- * inside its part (a share its part cannot hold is in the part's title, never cut); and one quiet
- * line of the exact parts. A DAO part is drawn only when the address has CKB in the Nervos DAO.
+ * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — and beside it,
+ * exact, where it holds Nervos DAO cells, the compensation they have accrued unclaimed (lane P1);
+ * the 18 px partition with each share inside its part (a share its part cannot hold is in the
+ * part's title, never cut); and under it the same parts as labelled facts with their unit
+ * (`DetailFacts`). The parts are the route's three, each true by its name, that make the balance
+ * exactly (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3 and SHOULD 3):
+ * "in Nervos DAO cells" (their whole capacity, as "Deposited" says it), "occupied" (what pays for
+ * the bytes of its other cells) and "free" (the rest of those), with one line saying what "free"
+ * is (a sentence, the reading ink; lane P1, the ink and size roles: it was quiet). None is "spendable" (it was: said of the genesis burn cell's 8.4 billion and a
+ * miner's immature rewards), and a part with nothing in it is not drawn.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
   const sum = exactUnsignedInteger(holdings.balance, 'Address balance');
-  const occupied = exactUnsignedInteger(holdings.occupiedCapacity, 'Address occupied');
-  const free = exactUnsignedInteger(holdings.freeCapacity, 'Address free');
-  const daoFree = exactUnsignedInteger(holdings.daoFreeCapacity, 'Address DAO free');
-  if (occupied + free + daoFree !== sum)
+  // the balance's three parts this plan added to the route, refused by name where an older API
+  // sends none (the third read's La N6: it said "expected a non-negative decimal integer, received
+  // undefined", true, and silent that the API is older)
+  const part = (
+    field: 'daoCellsCapacity' | 'otherCellsOccupiedCapacity' | 'otherCellsFreeCapacity'
+  ) => sentField(holdings[field], 'Address holdings', field);
+  const daoCells = exactUnsignedInteger(part('daoCellsCapacity'), 'Address Nervos DAO cells');
+  const occupied = exactUnsignedInteger(
+    part('otherCellsOccupiedCapacity'),
+    'Address other cells occupied'
+  );
+  const free = exactUnsignedInteger(part('otherCellsFreeCapacity'), 'Address other cells free');
+  if (daoCells + occupied + free !== sum)
     throw new Error(
-      `Address ${holdings.lockScriptHash}: occupied ${occupied} + free ${free} + DAO free ${daoFree} ≠ balance ${sum} shannons`
+      `Address ${holdings.lockScriptHash}: Nervos DAO cells ${daoCells} + occupied ${occupied} + free ${free} ≠ balance ${sum} shannons`
     );
   const parts = (
     [
+      { key: 'in Nervos DAO cells', value: daoCells, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
       { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
       { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
-      { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
+  const holdsDao = holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0;
+  // "other" only beside a DAO part: the cells that are not Nervos DAO cells; an address with no
+  // DAO cell says "its cells" (lane P1, the lead's look after the third round)
+  const cells = daoCells > BigInt(0) ? 'its other cells' : 'its cells';
   const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const zero = sum === BigInt(0);
@@ -211,20 +257,32 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
-        <span className="text-text-dim text-body tabular-nums">
-          in{' '}
-          <NoBreak>
-            <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
-            {countNoun(holdings.liveCellsCount, 'live cell')}
-          </NoBreak>
-        </span>
+        {holdsDao && (
+          <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
+            <DetailFacts
+              facts={[
+                {
+                  label: 'unclaimed compensation',
+                  value: (
+                    <ExactParts
+                      shannons={exactUnsignedInteger(
+                        holdings.daoUnclaimedCompensation,
+                        'Address unclaimed compensation'
+                      )}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
       </div>
       {!zero && (
         <div aria-label="Address capacity partition" className="mt-3.5">
           <div
             ref={barRef}
             role="img"
-            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}${daoFree === BigInt(0) ? ', nothing in the Nervos DAO' : ''}`}
+            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}`}
             className="text-meta flex h-[18px] gap-0.5"
           >
             {parts.map((p) => {
@@ -257,118 +315,167 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
               );
             })}
           </div>
-          <p data-testid="balance-parts" className="text-text-dim text-small mt-2 tabular-nums">
-            occupied <ExactParts shannons={occupied} /> pays for the bytes its cells keep · free{' '}
-            <ExactParts shannons={free} /> ·{' '}
-            {daoFree === BigInt(0) ? (
-              'no CKB in the Nervos DAO'
-            ) : (
-              <>
-                DAO free <ExactParts shannons={daoFree} />
-                {daoFreeNote(holdings) ? `, ${daoFreeNote(holdings)}` : ''}
-              </>
+          {/* The exact parts as labelled facts, the detail pages' dl rows (readability R4, lane
+              B7), each named as its part of the bar: three facts with notes joined by "·" read
+              as one sentence about three different frees. */}
+          <div data-testid="balance-parts" className="text-small mt-2 tabular-nums">
+            <DetailFacts
+              facts={[
+                ...(daoCells > BigInt(0)
+                  ? [
+                      {
+                        label: 'in Nervos DAO cells',
+                        value: (
+                          <>
+                            <ExactParts shannons={daoCells} />{' '}
+                            <span className="text-text">{daoCellsNote(holdings)}</span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(occupied > BigInt(0)
+                  ? [
+                      {
+                        label: 'occupied',
+                        value: (
+                          <>
+                            <ExactParts shannons={occupied} />{' '}
+                            <span className="text-text">pays for the bytes of {cells}</span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(free > BigInt(0)
+                  ? [{ label: 'free', value: <ExactParts shannons={free} /> }]
+                  : []),
+              ]}
+            />
+            {/* what "free" is, said once in a line of its own (the lead's ruling): no part is called
+                spendable, since the page cannot know what a lock, a since or a cellbase's
+                maturity allows */}
+            {free > BigInt(0) && (
+              <div data-testid="free-note" className="text-text max-w-measure mt-1.5">
+                Free is the CKB {cells} hold beyond what their bytes occupy; their locks, any since
+                on them and a cellbase reward’s maturity decide whether it can be spent.
+              </div>
             )}
-          </p>
+          </div>
         </div>
       )}
     </section>
   );
 }
 
-/** A live cell count by class, for the Live cells metric ("827 objects + 1 plain CKB"). */
-const CELL_NOUN: Record<AddressCellClass, [string, string]> = {
-  dao: ['DAO cell', 'DAO cells'],
-  token: ['token cell', 'token cells'],
-  object: ['object', 'objects'],
-  identity: ['identity', 'identities'],
-  script: ['other-script cell', 'other-script cells'],
-  plain: ['plain CKB', 'plain CKB'],
-};
-
 /**
- * The metrics row under the balance (lane P, Address.dc.html): Holdings · Live cells ·
- * Transactions · Lock, as the asset pages' `AssetMetrics` (meta label, 17 px value, dim note).
+ * The address's status strip (lane D2, PA-13; gate D0′'s strip with the address's own four
+ * facts): its lock, its live cells, its transactions and its holdings, under the id line. They
+ * were said twice: on the kind line (lock · live cells · transactions) and again in the metrics
+ * row under the balance (Holdings · Live cells · Transactions · Lock), which the strip replaces.
+ * The lock is a link to its script, its hash type and args as its notes (and "deprecated" in the
+ * warning's ink where the registry says so); the holdings are those of the classes it holds. The
+ * live cells by class stand in the holdings section, a class to a heading ("5 cells · … held"),
+ * so the strip states their count alone. A fact the page does not know yet is not passed: the
+ * live cells and the holdings come with the holdings read, and an address read without its lock
+ * script states no lock (the evidence tier says "Script unavailable").
  */
-export function AddressMetrics({
-  holdings,
-  address,
-}: {
-  holdings: AddressHoldings;
-  address: Address;
-}) {
-  const held = HOLDING_LINE.map((c) => ({ ...c, count: holdings.holdings[c.key] })).filter(
-    (c) => c.count > 0
-  );
-  const holdingsMetric: AssetMetric =
-    held.length === 0
-      ? { label: 'Holdings', value: 'none' }
-      : held.length === 1
-        ? {
-            label: 'Holdings',
-            value: formatCount(held[0].count, held[0].one, held[0].many),
-            note:
-              held[0].key === 'object'
-                ? `in ${formatCount(holdings.objectCollections.length, 'collection')}`
-                : held[0].key === 'token'
-                  ? `in ${formatCount(holdings.classes.token.cellCount, 'cell')}`
-                  : undefined,
-          }
-        : {
-            label: 'Holdings',
-            value: formatCount(
-              held.reduce((n, c) => n + c.count, 0),
-              'holding'
-            ),
-            note: held.map((c) => formatCount(c.count, c.one, c.many)).join(' · '),
-          };
-  const byClass = ADDRESS_CLASSES.map((c) => ({
-    key: c.key,
-    count: holdings.classes[c.key].cellCount,
-  }));
-  const cells = byClass.reduce((n, c) => n + c.count, 0);
-  if (cells !== holdings.liveCellsCount)
-    throw new Error(
-      `Address ${holdings.lockScriptHash}: class cell counts add up to ${cells}, not its ${holdings.liveCellsCount} live cells`
-    );
+/**
+ * The address's lock as the one decision names it (`lockWords`, lane P1 follow-up; the lock-words
+ * gate's known writers 7 and 11): the registry's name for its code hash ('Unknown' is the API's
+ * word for none), the lock read off the address and checked against its script. A lock on the
+ * default lock's code hash by data is another lock; the registry's name is the default lock's, so
+ * it has none and is written by its code hash (its hash type is the strip's note and the byte
+ * map's field). The strip and the evidence tier's byte map both write this one name.
+ */
+export function addressLockName(address: Address): string | null {
   const lock = address.lockScript;
-  const lockName = address.lockScriptInfo?.name;
-  const items: AssetMetric[] = [
-    holdingsMetric,
-    {
-      label: 'Live cells',
-      value: holdings.liveCellsCount.toLocaleString('en-US'),
-      note:
-        byClass
-          .filter((c) => c.count > 0)
-          .map(
-            (c) => `${c.count.toLocaleString('en-US')} ${CELL_NOUN[c.key][c.count === 1 ? 0 : 1]}`
-          )
-          .join(' + ') || undefined,
-    },
-    { label: 'Transactions', value: address.transactionsCount.toLocaleString('en-US') },
-    lock
-      ? {
-          label: 'Lock',
-          size: 'body',
-          value: (
-            <Link
-              href={getScriptDetailHref({
-                name: lockName,
-                codeHash: lock.codeHash,
-                hashType: lock.hashType,
-                scriptKind: 'lock',
-              })}
-              className="text-text-bright"
-            >
-              {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
-            </Link>
-          ),
-          note: `${lock.hashType} · ${argsNote(lock.args)}`,
-          title: lockName ? undefined : lock.codeHash,
-        }
-      : { label: 'Lock', size: 'body', value: 'unavailable' },
-  ];
-  return <AssetMetrics items={items} />;
+  if (!lock) throw new Error(`address ${address.lockScriptHash}: no lock script to name`);
+  const registered = address.lockScriptInfo?.name ?? null;
+  const words = lockWords(
+    cellLockFacts(
+      {
+        lock,
+        name: registered !== null && registered.toLowerCase() !== 'unknown' ? registered : null,
+        address: address.address ?? null,
+      },
+      `address ${address.lockScriptHash}`
+    ),
+    'column'
+  );
+  if (words === null)
+    throw new Error(`address ${address.lockScriptHash}: a column's lock words are never empty`);
+  return words.form === 'not-indexed' ? null : words.name;
+}
+
+export function addressStripFacts(
+  address: Address,
+  holdings: AddressHoldings | undefined
+): StripFact[] {
+  const lock = address.lockScript;
+  const lockName = lock ? addressLockName(address) : null;
+  const facts: StripFact[] = [];
+  if (lock)
+    facts.push({
+      label: 'lock',
+      value: (
+        <Link
+          look="inline"
+          href={getScriptDetailHref({
+            name: lockName,
+            codeHash: lock.codeHash,
+            hashType: lock.hashType,
+            scriptKind: 'lock',
+          })}
+          title={lockName ? undefined : lock.codeHash}
+        >
+          {lockName ?? <ShortId value={lock.codeHash} kind="hash" size="row" />}
+        </Link>
+      ),
+      note: [
+        lock.hashType,
+        argsNote(lock.args),
+        address.lockScriptInfo?.deprecated && <span className="text-negative">deprecated</span>,
+      ],
+    });
+  if (holdings) {
+    const cells = ADDRESS_CLASSES.reduce((n, c) => n + holdings.classes[c.key].cellCount, 0);
+    if (cells !== holdings.liveCellsCount)
+      throw new Error(
+        `Address ${holdings.lockScriptHash}: class cell counts add up to ${cells}, not its ${holdings.liveCellsCount} live cells`
+      );
+    facts.push({ label: 'live cells', value: holdings.liveCellsCount.toLocaleString('en-US') });
+  }
+  facts.push({ label: 'transactions', value: address.transactionsCount.toLocaleString('en-US') });
+  if (holdings) {
+    const held = HOLDING_LINE.map((c) => ({ ...c, count: holdings.holdings[c.key] })).filter(
+      (c) => c.count > 0
+    );
+    facts.push(
+      held.length === 0
+        ? { label: 'holdings', value: 'none' }
+        : held.length === 1
+          ? {
+              label: 'holdings',
+              value: unitNode(formatCount(held[0].count, held[0].one, held[0].many)),
+              note:
+                held[0].key === 'object'
+                  ? unitNode(`in ${formatCount(holdings.objectCollections.length, 'collection')}`)
+                  : held[0].key === 'token'
+                    ? unitNode(`in ${formatCount(holdings.classes.token.cellCount, 'cell')}`)
+                    : undefined,
+            }
+          : // each class's count as the API states it, the first the value and the rest its
+            // notes: DAO cells, token kinds, objects and identities are unlike things, never
+            // added into one "holdings" figure in the page (review of phases C and D, NOTE 12)
+            {
+              label: 'holdings',
+              value: unitNode(formatCount(held[0].count, held[0].one, held[0].many)),
+              note: held.slice(1).map((c) => unitNode(formatCount(c.count, c.one, c.many))),
+            }
+    );
+  }
+  return facts;
 }
 
 /** A lock's args by their length: "20-byte args", or "no args". */
@@ -409,7 +516,7 @@ function HoldingSection({
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
         </h3>
-        <span className="text-text-dim text-small max-w-full">{summary}</span>
+        <span className="text-text text-small max-w-full">{summary}</span>
       </div>
       {children}
     </section>
@@ -420,12 +527,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const addr = holdings.lockScriptHash;
   const [active, setActive] = useState<AddressCellClass | null>(null);
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const tokensPage = useCursorPagination(),
-    daoPage = useCursorPagination(),
-    identitiesPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const tokensPage = useCursorPagination(pageSize),
+    daoPage = useCursorPagination(pageSize),
+    identitiesPage = useCursorPagination(pageSize);
   const tokens = useQuery({
     queryKey: ['address-tokens', addr, tokensPage.cursor, pageSize],
-    queryFn: () => api.getAddressTokens(addr, { limit: pageSize, cursor: tokensPage.cursor }),
+    queryFn: tokensPage.ask((cursor) => api.getAddressTokens(addr, { limit: pageSize, cursor })),
     enabled: holdings.holdings.token > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -434,13 +542,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const deposits = useQuery({
     queryKey: ['address-holdings-cells', addr, 'dao', daoPage.cursor, pageSize],
     // R2b-a 9 (BA-34): largest deposit first, ordered and paged by the API.
-    queryFn: () =>
+    queryFn: daoPage.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'dao',
         order: 'capacity',
         limit: pageSize,
-        cursor: daoPage.cursor,
-      }),
+        cursor,
+      })
+    ),
     enabled: holdings.holdings.dao > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -448,12 +557,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   });
   const identities = useQuery({
     queryKey: ['address-holdings-cells', addr, 'identity', identitiesPage.cursor, pageSize],
-    queryFn: () =>
+    queryFn: identitiesPage.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'identity',
         limit: pageSize,
-        cursor: identitiesPage.cursor,
-      }),
+        cursor,
+      })
+    ),
     enabled: holdings.holdings.identity > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -472,7 +582,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const held_ = (kind: AddressCellClass) => (
     <>
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -485,7 +595,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     <>
       {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -517,17 +627,18 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             />,
             dottedGroup(
               held.map((c) => (
-                <a
+                <Link
                   key={c.key}
+                  look="inline"
                   href={`#holdings-${c.key}`}
-                  className="hover:text-jade tabular-nums"
+                  className="tabular-nums"
                   onMouseEnter={() => setActive(c.key)}
                   onMouseLeave={() => setActive(null)}
                   onFocus={() => setActive(c.key)}
                   onBlur={() => setActive(null)}
                 >
                   {unitNode(formatCount(c.count, c.one, c.many))}
-                </a>
+                </Link>
               )),
               { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
             ),
@@ -550,9 +661,11 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       )}
       <div className="space-y-2">
         <div className="text-small flex flex-wrap justify-between gap-2">
-          <span className="text-text-dim">On-chain space they take</span>
+          {/* the bar's unit, bytes (lane P1, the plan: the two bars say their unit; review
+              chain-b address-miner: its "102 / 122" beside the CKB bar above read as CKB) */}
+          <span className="text-text-dim">On-chain space they take, in bytes</span>
           <span>
-            {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
+            {occupiedCapacityText(occupied, `Address ${holdings.lockScriptHash}`)} occupied in{' '}
             {unitNode(formatCount(holdings.liveCellsCount, 'cell'))}
           </span>
         </div>
@@ -597,9 +710,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 <ClassMark kind={c.mark} size={12} />
                 {c.label}
                 <span className="text-text-bright">
-                  {formatCkbAmount(holdings.classes[c.key].occupiedCapacity).full.replace(
-                    /\.0{8}$/,
-                    ''
+                  {occupiedCapacityText(
+                    BigInt(holdings.classes[c.key].occupiedCapacity),
+                    `Address ${holdings.lockScriptHash} ${c.label}`
                   )}
                 </span>
                 {occupied > BigInt(0) && (
@@ -609,16 +722,16 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 )}
               </button>
             ))}
-          {/* Lane A follow-up (C14): the classes it does not hold are one quiet line, their zero
-              figures in its title. */}
+          {/* Lane A follow-up (C14): the classes it does not hold are one line, their zero figures
+              in its title (a sentence, the reading ink: lane P1, the ink and size roles) */}
           {spaceOrder(holdings).some(
             (c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0)
           ) && (
             <span
-              className="text-text-dim sm:col-span-2"
+              className="text-text sm:col-span-2"
               title={spaceOrder(holdings)
                 .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
-                .map((c) => `${c.label} 0 CKB`)
+                .map((c) => `${c.label} 0 B`)
                 .join(' · ')}
             >
               nothing in{' '}
@@ -650,120 +763,91 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       <div className="grid items-start gap-x-12 gap-y-9 lg:grid-cols-2">
         {holdings.holdings.dao > 0 && (
           <HoldingSection kind="dao" summary={summary('dao')} active={active} onActive={setActive}>
-            {holdings.holdings.dao === 0 ? (
-              <p className="text-text-dim text-small py-4">No live DAO holdings.</p>
-            ) : (
-              <>
-                <p className="text-text-dim text-small pt-3">
-                  {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
-                  {unitNode(
-                    formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
-                  )}
-                </p>
-                <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
-                  <div>
-                    <dt className="text-text-dim">
-                      {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
-                    </dt>
-                    <dd className="mt-1">
-                      <CkbAmount
-                        form="summary"
-                        shannons={BigInt(holdings.classes.dao.capacity)}
-                        signed={false}
-                        tone="plain"
-                        wrap
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-text-dim">Unclaimed compensation</dt>
-                    <dd className="mt-1">
-                      <CkbAmount
-                        form="summary"
-                        shannons={BigInt(holdings.daoUnclaimedCompensation)}
-                        signed={false}
-                        tone="plain"
-                        wrap
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-text-dim">Estimated APC</dt>
-                    <dd className="mt-1">
-                      {holdings.estimatedApc === null ? 'Unavailable' : `${holdings.estimatedApc}%`}
-                    </dd>
-                  </div>
-                </dl>
-                {deposits.data && (
-                  <AddressStaleNotice error={deposits.error} label="DAO holdings" />
-                )}
-                {deposits.data ? (
-                  <>
-                    {deposits.data.data.map((cell) => {
-                      const d = cell.dao;
-                      if (!d)
-                        throw new Error(
-                          `DAO cell ${cell.txHash}:${cell.outputIndex} has no deposit evidence`
-                        );
-                      if (d.status !== 'deposited' && d.status !== 'withdrawing')
-                        throw new Error(
-                          `Live DAO cell ${cell.txHash}:${cell.outputIndex} has invalid phase ${d.status}`
-                        );
-                      const eventBlock =
-                        d.status === 'withdrawing' ? d.withdrawRequestBlock : d.depositBlockNumber;
-                      const eventTimestamp =
-                        d.status === 'withdrawing'
-                          ? d.withdrawRequestTimestamp
-                          : d.depositTimestamp;
-                      if (eventBlock === null || eventTimestamp === null)
-                        throw new Error(
-                          `DAO cell ${cell.txHash}:${cell.outputIndex} is missing ${d.status} evidence`
-                        );
-                      return (
-                        <div
-                          key={`${cell.txHash}:${cell.outputIndex}`}
-                          data-dao-cell
-                          className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
-                        >
-                          <span className="text-text-dim">
-                            <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-                              {d.status === 'deposited'
-                                ? 'deposited'
-                                : d.status === 'withdrawing'
-                                  ? 'withdraw requested'
-                                  : 'withdrawn'}
-                            </Link>{' '}
-                            at{' '}
-                            <Link href={`/blocks/${eventBlock}`}>
-                              {formatBlockNumber(eventBlock)}
-                            </Link>{' '}
-                            · <Utc8Date timestamp={eventTimestamp} />
-                          </span>
-                          <CkbAmount
-                            form="column"
-                            shannons={BigInt(cell.capacity)}
-                            signed={false}
-                            tone="plain"
-                            wrap
-                          />
-                        </div>
-                      );
-                    })}
-                    <AddressPagination
-                      pagination={daoPage}
-                      hasMore={deposits.data.hasMore}
-                      nextCursor={deposits.data.nextCursor}
-                      currentCount={deposits.data.data.length}
-                      total={holdings.holdings.dao}
-                      pageSize={pageSize}
-                      label="DAO cells"
+            <>
+              <p className="text-text text-small max-w-measure pt-3">
+                {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
+                {unitNode(formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request'))}
+              </p>
+              {/* its unclaimed compensation stands beside the balance, said once (lane P1) */}
+              <dl className="text-small grid gap-3 py-3 sm:grid-cols-2">
+                <div>
+                  <dt className="text-text-dim">
+                    {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
+                  </dt>
+                  <dd className="mt-1">
+                    <CkbAmount
+                      form="summary"
+                      shannons={BigInt(holdings.classes.dao.capacity)}
+                      signed={false}
+                      tone="plain"
+                      wrap
                     />
-                  </>
-                ) : (
-                  <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
-                )}
-              </>
-            )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-text-dim">Estimated APC</dt>
+                  <dd className="mt-1">
+                    {holdings.estimatedApc === null ? 'Unavailable' : `${holdings.estimatedApc}%`}
+                  </dd>
+                </div>
+              </dl>
+              {deposits.data && <AddressStaleNotice error={deposits.error} label="DAO holdings" />}
+              {deposits.data ? (
+                <>
+                  {deposits.data.data.map((cell) => {
+                    const d = cell.dao;
+                    if (!d)
+                      throw new Error(
+                        `DAO cell ${cell.txHash}:${cell.outputIndex} has no deposit evidence`
+                      );
+                    if (d.status !== 'deposited' && d.status !== 'withdrawing')
+                      throw new Error(
+                        `Live DAO cell ${cell.txHash}:${cell.outputIndex} has invalid phase ${d.status}`
+                      );
+                    const eventBlock =
+                      d.status === 'withdrawing' ? d.withdrawRequestBlock : d.depositBlockNumber;
+                    const eventTimestamp =
+                      d.status === 'withdrawing' ? d.withdrawRequestTimestamp : d.depositTimestamp;
+                    if (eventBlock === null || eventTimestamp === null)
+                      throw new Error(
+                        `DAO cell ${cell.txHash}:${cell.outputIndex} is missing ${d.status} evidence`
+                      );
+                    return (
+                      <div
+                        key={`${cell.txHash}:${cell.outputIndex}`}
+                        data-dao-cell
+                        className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
+                      >
+                        <span className="text-text">
+                          <Link look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+                            {d.status === 'deposited'
+                              ? 'deposited'
+                              : d.status === 'withdrawing'
+                                ? 'withdraw requested'
+                                : 'withdrawn'}
+                          </Link>{' '}
+                          at{' '}
+                          <Link look="inline" href={`/blocks/${eventBlock}`}>
+                            {formatBlockNumber(eventBlock)}
+                          </Link>{' '}
+                          · <Utc8Date timestamp={eventTimestamp} />
+                        </span>
+                        <CkbAmount
+                          form="column"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                          wrap
+                        />
+                      </div>
+                    );
+                  })}
+                  <AddressPagination pagination={daoPage} read={deposits.data} label="DAO cells" />
+                </>
+              ) : (
+                <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
+              )}
+            </>
           </HoldingSection>
         )}
         {holdings.holdings.token > 0 && (
@@ -779,9 +863,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             onActive={setActive}
           >
             {tokens.data && <AddressStaleNotice error={tokens.error} label="tokens" />}
-            {holdings.holdings.token === 0 ? (
-              <p className="text-text-dim text-small py-4">No tokens held.</p>
-            ) : tokens.data ? (
+            {tokens.data ? (
               <>
                 {tokens.data.data.map((t) => (
                   <div
@@ -790,28 +872,15 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
-                      <Link
-                        href={`/tokens/${t.typeScriptHash}`}
-                        className="text-text-bright hover:text-jade"
-                      >
+                      <Link look="key" href={`/tokens/${t.typeScriptHash}`}>
                         {tokenName(t) ?? (
-                          <Hash
-                            hash={t.typeScriptHash}
-                            size="row"
-                            copyable={false}
-                            className="text-small"
-                          />
+                          <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         )}
                       </Link>{' '}
                       <span className="text-text-dim">{formatStandard(t.standard)}</span>
                       {sharedNames(tokens.data.data).has(tokenName(t) ?? '') && (
-                        <span data-type-hash className="text-meta ml-2">
-                          <Hash
-                            hash={t.typeScriptHash}
-                            size="row"
-                            copyable={false}
-                            className="text-meta"
-                          />
+                        <span data-type-hash className="ml-2">
+                          <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         </span>
                       )}
                     </span>
@@ -821,15 +890,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     </span>
                   </div>
                 ))}
-                <AddressPagination
-                  pagination={tokensPage}
-                  hasMore={tokens.data.hasMore}
-                  nextCursor={tokens.data.nextCursor}
-                  currentCount={tokens.data.data.length}
-                  total={holdings.holdings.token}
-                  pageSize={pageSize}
-                  label="token kinds"
-                />
+                <AddressPagination pagination={tokensPage} read={tokens.data} label="token kinds" />
               </>
             ) : (
               <AddressLoadState label="tokens" error={tokens.error} read={tokens} />
@@ -844,9 +905,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             onActive={setActive}
           >
             {identities.data && <AddressStaleNotice error={identities.error} label="identities" />}
-            {holdings.holdings.identity === 0 ? (
-              <p className="text-text-dim text-small py-4">No identity cells held.</p>
-            ) : identities.data ? (
+            {identities.data ? (
               <>
                 {identities.data.data.map((c) => {
                   const d = c.display;
@@ -861,16 +920,17 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
+                          look="key"
                           href={getIdentityItemDetailHref(d.standard, d.id)}
-                          className="text-text-bright text-body"
+                          className="text-body"
                         >
-                          {d.name ?? <Hash hash={d.id} size="row" copyable={false} />}
+                          {d.name ?? <Hash hash={d.id} size="row" />}
                         </Link>
                         <span className="text-text-dim text-small">
                           {formatStandard(d.standard)}
                         </span>
                       </div>
-                      <div className="text-text-dim text-small flex flex-wrap justify-between gap-2">
+                      <div className="text-text text-small flex flex-wrap justify-between gap-2">
                         <span>
                           {unitNode(
                             c.expiresAt === null
@@ -878,7 +938,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                               : `expires ${formatUtc8Date(c.expiresAt * 1000)}`
                           )}{' '}
                           · held since{' '}
-                          <Link href={`/blocks/${c.heldSinceBlock!}`}>
+                          <Link look="inline" href={`/blocks/${c.heldSinceBlock!}`}>
                             {formatBlockNumber(c.heldSinceBlock!)}
                           </Link>
                         </span>
@@ -889,11 +949,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 })}
                 <AddressPagination
                   pagination={identitiesPage}
-                  hasMore={identities.data.hasMore}
-                  nextCursor={identities.data.nextCursor}
-                  currentCount={identities.data.data.length}
-                  total={holdings.holdings.identity}
-                  pageSize={pageSize}
+                  read={identities.data}
                   label="identities"
                 />
               </>
@@ -985,8 +1041,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                 <ClassMark kind="objects" size={16} />
                 {href ? (
                   <Link
+                    look="key"
                     href={href}
-                    className="text-text-bright text-body min-w-0 truncate"
+                    className="text-body min-w-0 truncate"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {label}
@@ -1031,7 +1088,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
           </div>
         );
       })}
-      <p className="text-text-dim text-small mt-3.5 max-w-[640px]">
+      <p className="text-text text-small max-w-measure mt-3.5">
         Open a collection to list its objects here; every object is one live cell of this address.
       </p>
     </div>
@@ -1056,13 +1113,14 @@ function AddressCollectionObjects({
   const pages = useCursorPagination();
   const objects = useQuery({
     queryKey: ['address-collection-objects', addr, group.standard, group.id, pages.cursor],
-    queryFn: () =>
+    queryFn: pages.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'object',
         collection: group.id ?? 'none',
         limit: COLLECTION_PAGE,
-        cursor: pages.cursor,
-      }),
+        cursor,
+      })
+    ),
     placeholderData: keepPreviousData,
   });
   const rows = objects.data?.data ?? [];
@@ -1071,6 +1129,9 @@ function AddressCollectionObjects({
       throw new Error(
         `Object cell ${c.txHash}:${c.outputIndex} is not in collection ${group.id ?? 'none'}`
       );
+  // ten a page: the pager's pages mode, counted only where the page's own response counts its
+  // rows (the collection's count is the holdings' read, stated in the group's row: c2-finish 1c)
+  const objectsAt = objects.data && rankedPageAt(`${label} objects`, objects.data, pages);
   return (
     <div className="bg-base-surface pl-7">
       {objects.data ? (
@@ -1098,28 +1159,30 @@ function AddressCollectionObjects({
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
                     <Link
+                      look="key"
                       href={d.standard === 'm-nft' ? `/objects/mnft/${d.id}` : `/objects/${d.id}`}
                       aria-label={d.name ?? `Object ${d.id}`}
                       title={d.id}
-                      className="text-text-bright text-body min-w-0 truncate"
+                      className="text-body min-w-0 truncate"
                     >
                       {d.name ?? <ShortId value={d.id} kind="hash" size="row" />}
                     </Link>
                   </span>
                   <span role="cell" className="min-w-0">
                     {d.compositionTier === null ? (
-                      <span className="text-text-dim">Composition unavailable</span>
+                      <span className="text-text">Composition unavailable</span>
                     ) : (
                       <CompositionBadge tier={d.compositionTier} size="sm" />
                     )}
                   </span>
-                  <span role="cell" className="text-text-dim hidden tabular-nums sm:block">
-                    <Link href={`/blocks/${c.createdAtBlock}`}>
+                  <span role="cell" className="text-text hidden tabular-nums sm:block">
+                    <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
                       {formatBlockNumber(c.createdAtBlock)}
                     </Link>
                   </span>
                   <span role="cell" className="text-right">
                     <Link
+                      look="inline"
                       href={`/cell/${c.txHash}-${c.outputIndex}`}
                       title={`${c.txHash}:${c.outputIndex}`}
                     >
@@ -1131,19 +1194,9 @@ function AddressCollectionObjects({
             })}
           </div>
           <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
-            <CursorPagination
-              total={group.itemCount}
-              totalLabel="objects"
-              pageSize={COLLECTION_PAGE}
-              page={pages.page}
-              currentCount={rows.length}
-              hasMore={objects.data.hasMore}
-              hasPrevious={pages.hasPrevious}
-              onNext={() => pages.goToNext(objects.data!.nextCursor)}
-              onPrevious={pages.goToPrevious}
-            />
+            {objectsAt && <Pager mode="pages" label={`${label} objects`} {...objectsAt} />}
             {href && (
-              <Link href={href} className="text-small">
+              <Link look="inline" href={href} className="text-small">
                 All {group.itemCount.toLocaleString('en-US')} in the collection →
               </Link>
             )}

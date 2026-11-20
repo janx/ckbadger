@@ -12,6 +12,8 @@ import {
   itemTransactionsProducer,
   sporeCellVersionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const obj = (n: number, delta: 1 | -1) => ({
   kind: 'object' as const,
@@ -32,7 +34,7 @@ const party = (lock: string, kind: string, delta: string, items: ReturnType<type
   usedDelta: '0',
   itemDeltas: items,
 });
-const batch: GlobalActivity = {
+const batch: GlobalActivity = activityRead({
   txHash: '0x' + 'cd'.repeat(32),
   blockNumber: 12,
   txIndex: 3,
@@ -51,18 +53,20 @@ const batch: GlobalActivity = {
       scriptName: 'M-NFT',
     },
   ],
+  itemTypes: [ITEM_TYPE.spore],
+  itemTypesUnread: null,
   lockCalls: [
     {
       lockCodeHash: '0x' + '0c'.repeat(32),
       lockHashType: 'type',
       lockArgs: '0x5678',
       scriptHash: '0x' + '0d'.repeat(32),
-      scriptName: 'PW Lock',
+      lockScriptName: 'PW Lock',
     },
   ],
   protocolActions: [],
-};
-const page = { data: [batch], total: 1, limit: 50, hasMore: false, nextCursor: null };
+});
+const page = pagedRead({ data: [batch], total: 1, limit: 50, hasMore: false, nextCursor: null });
 
 function feed(plain: boolean) {
   return render(
@@ -99,13 +103,15 @@ it('keeps the script-call lines on a feed that does not ask for plain rows', asy
 
 it('folds a batch of objects behind "+N more objects", leading with this one (OB-M3)', async () => {
   const { container } = feed(true);
-  const more = await screen.findAllByRole('button', { name: '+2 more objects' });
+  // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline words
+  const more = await screen.findAllByRole('button', { name: /^\+2\smore\sobjects$/ });
   expect(more).toHaveLength(2);
   const first = container.querySelector('[data-role="participants"]')!;
   expect(first.querySelectorAll('a[href*="/objects/"]')).toHaveLength(2);
   expect(first.innerHTML).toContain(obj(2, 1).objectId.slice(0, 10));
   fireEvent.click(more[0]);
-  expect(screen.getAllByRole('button', { name: '+2 more objects' })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: /^\+2\smore\sobjects$/ })).toHaveLength(1);
+  expect(more[0]).toHaveTextContent(/^fewer$/);
   expect(first.querySelectorAll('a[href*="/objects/"]').length).toBe(4);
 });
 
@@ -134,10 +140,11 @@ describe('phone form of a collection activity entry (L6)', () => {
   });
 
   it("keeps occupied on the participant's line in the plain rows only", async () => {
-    const withOccupied = {
+    const withOccupied = activityRead({
       ...batch,
+      itemTypes: [ITEM_TYPE.spore],
       participants: batch.participants.map((p) => ({ ...p, usedDelta: '32400000000' })),
-    };
+    });
     const { container } = render(
       <AssetFeed
         queryKey="plain-occupied"
@@ -171,8 +178,10 @@ it('says where the object went in the Transactions column (OB-13)', () => {
     />
   );
   expect(screen.getByText(/^to /)).toHaveTextContent('(output 1)');
-  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters
-  expect(screen.getByRole('link', { name: 'ckb1…qgutsyjq' })).toHaveAttribute(
+  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters (B4 fix rounds:
+  // the producer's owner is the real address of the cell's own lock, its tail read off it)
+  const owner = created.ownerAddress;
+  expect(screen.getByRole('link', { name: `ckb1…${owner.slice(-8)}` })).toHaveAttribute(
     'href',
     expect.stringContaining(`/address/${created.ownerAddress}`)
   );

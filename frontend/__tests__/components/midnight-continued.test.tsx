@@ -37,12 +37,19 @@ describe('the rules in globals.css', () => {
     );
   });
 
+  // Re-pinned on purpose (lane c2-links, the ruling on a link inside a line's underline): the rule
+  // carries `text-decoration-color: currentColor` between the colour and the glow, so a muted
+  // underline follows its words into the celadon; the colour and the glow are as they were.
+  // Re-pinned on purpose (lane cd-fixes-controls): the rule's selector also names the library's
+  // action after a failed read (`.look-action`, components/ui/retry-action.tsx), after `a:hover`
   it('move 1c: a hovered link turns jade and glows; SVG links keep their own hover', () => {
     expect(css).toMatch(
-      /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
+      /\na:hover,\n\.look-action:focus-visible,\n\.look-action:hover\s*\{\s*color: var\(--c-jade\);\s*text-decoration-color: currentColor;\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
     expect(css).toMatch(/svg a:hover\s*\{\s*color: inherit;\s*text-shadow: none;/);
-    expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px/);
+    // re-pinned (lane c2-finish, rulings round 1): `.hover-lit`, a copyable hash's glow, went
+    // with the click-to-copy of an id (an id copies nothing on a click; the copy button does)
+    expect(css).not.toMatch(/\.hover-lit/);
   });
 
   // Rubbing × Song print, phase 2: the three tubes are set flat — a plain 1 px line in the line
@@ -109,13 +116,12 @@ describe('the rules in globals.css', () => {
   });
 });
 
+// 'move 1c on a hash' tested a copyable hash's hover glow alone: it went with the click-to-copy of
+// an id (lane c2-finish, rulings round 1), and a hash glows on hover only inside a link now.
 describe('move 1c on a hash', () => {
-  it('a copyable hash carries the hover glow; a plain one does not', () => {
-    const hash = `0x${'ab'.repeat(32)}`;
-    const { rerender } = render(<Hash hash={hash} size="row" />);
-    expect(screen.getByText(/0xabababab/)).toHaveClass('hover-lit', 'cursor-pointer');
-    rerender(<Hash hash={hash} size="row" copyable={false} />);
-    expect(screen.getByText(/0xabababab/)).not.toHaveClass('hover-lit');
+  it('a hash carries no glow and no pointer of its own: it copies nothing', () => {
+    render(<Hash hash={`0x${'ab'.repeat(32)}`} size="row" />);
+    expect(screen.getByText(/0xabababab/)).not.toHaveClass('hover-lit', 'cursor-pointer');
   });
 });
 
@@ -228,7 +234,7 @@ describe('move 3 on the tx page’s cells diagram', () => {
       kind: 'ckb',
       content: 'CKB',
       capacity: '106200000000',
-      occupied: '6100000000',
+      occupiedBytes: '61',
       state,
     });
   // C11: the one frame became two sheets of one contract, each its own instrument frame, in a
@@ -262,7 +268,8 @@ describe('move 3 on the tx page’s cells diagram', () => {
     expect(sheets[1]).toHaveTextContent('1 cell created');
     // the consumed capacity once, on its sheet's head, exact; no second line under the sheets
     const total = sheets[0].querySelector('[data-sheet-total]');
-    expect(total).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    // re-pinned on purpose (lane P1): exact, its trailing zeros dropped (it was the column form)
+    expect(total).toHaveTextContent(/^1,062 CKB$/);
     expect(container.querySelectorAll('[data-sheet-total]')).toHaveLength(2);
     expect(container).not.toHaveTextContent(/entering the pool/i);
   });

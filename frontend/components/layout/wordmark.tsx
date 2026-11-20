@@ -9,12 +9,17 @@ import Link from '@/components/ui/link';
  */
 const WORDMARK_CLASS = 'flex min-h-8 shrink-0 items-center gap-2.5 font-semibold text-text-bright';
 
-/** The square and the name; the link around them is the caller's. */
-function Mark() {
+/**
+ * The square and the name; the link around them is the caller's. Where the wordmark heads the
+ * home page the name is the page's h1 (lane D2, U-11: the outline opens on it), drawn as the span
+ * it is everywhere else: a flex item of the link, `.wordmark`'s size and weight, no new words.
+ */
+function Mark({ heading = false }: { heading?: boolean }) {
+  const Name = heading ? 'h1' : 'span';
   return (
     <>
       <span aria-hidden="true" className="prompt-square" />
-      <span className="wordmark">ckbadger</span>
+      <Name className="wordmark">ckbadger</Name>
     </>
   );
 }
@@ -24,8 +29,15 @@ function Mark() {
  * begins every command line on the site, then the name in lowercase — the site is a session and
  * its name is the first command. When an animal mark exists it replaces the square without moving
  * anything. `plain` draws a bare `<a href="/">` for the error page that renders without the router.
+ * `heading`: the wordmark heads the home page, so its name is that page's h1.
  */
-export function Wordmark({ plain = false }: { plain?: boolean }) {
+export function Wordmark({
+  plain = false,
+  heading = false,
+}: {
+  plain?: boolean;
+  heading?: boolean;
+}) {
   if (plain)
     return (
       <a href="/" aria-label="CKBadger home" className={WORDMARK_CLASS}>
@@ -33,8 +45,8 @@ export function Wordmark({ plain = false }: { plain?: boolean }) {
       </a>
     );
   return (
-    <Link href="/" aria-label="CKBadger home" className={WORDMARK_CLASS}>
-      <Mark />
+    <Link look="nav" href="/" aria-label="CKBadger home" className={WORDMARK_CLASS}>
+      <Mark heading={heading} />
     </Link>
   );
 }

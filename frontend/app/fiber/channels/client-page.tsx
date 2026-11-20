@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import {
-  FiberGraphNotes,
   FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
@@ -14,21 +13,24 @@ import {
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatCount, countNoun } from '@/lib/format-count';
-import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
-import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
+import { cn, formatUtc8Date } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { WIDEST_FIBER_LIFETIME, WIDEST_TX_VALUE_SUMMARY, shortChars } from '@/lib/list-bounds';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
@@ -66,6 +68,19 @@ const filters: {
 const ROW = 'text-body py-1.5';
 
 /**
+ * The channel list's columns, each budgeted from the widest value it holds (readability F3-e) at
+ * the row's body step (14 px), a meta line or a unit at 12 and the gap after every column but the
+ * last.
+ */
+const body = (chars: number) => textPx(chars, fontPx('body'));
+const meta = (chars: number) => textPx(chars, fontPx('meta'));
+/**
+ * The 6 px between the two parties of a pair on its line (the flex gap, set from this constant),
+ * so the Parties column budgets the pair whole.
+ */
+const PARTY_GAP_PX = 6;
+
+/**
  * A party in the table, by its address or lock hash at the row size (U-09; it was the last six
  * characters alone, a form of its own); its whole address or lock hash is its title and link.
  */
@@ -75,12 +90,9 @@ function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
   ) : (
     <ShortId value={party.lockScriptHash} kind="hash" size="row" />
   );
+  // a link inside the row's line: the channel id is the row's key (T5)
   return party.address ? (
-    <Link
-      href={`/address/${party.address}`}
-      className="text-text hover:text-jade"
-      title={party.address}
-    >
+    <Link href={`/address/${party.address}`} look="inline" title={party.address}>
       {text}
     </Link>
   ) : (
@@ -160,18 +172,13 @@ function PartySuffix({ party }: { party: FiberChannel['observedParties'][number]
   ) : (
     <ShortId value={party.lockScriptHash} kind="hash" size={size} />
   );
+  // a link inside the row's line, as the table writes it: the channel id is the row's key
   return party.address ? (
-    <Link
-      href={`/address/${party.address}`}
-      className="text-text-bright hover:text-jade"
-      title={party.address}
-    >
+    <Link href={`/address/${party.address}`} look="inline" title={party.address}>
       {text}
     </Link>
   ) : (
-    <span className="text-text-bright" title={party.lockScriptHash}>
-      {text}
-    </span>
+    <span title={party.lockScriptHash}>{text}</span>
   );
 }
 
@@ -204,104 +211,133 @@ function lifetime(channel: FiberChannel): string {
 }
 
 /**
- * A channel on a phone (board L8): id and state; the pair, their locks and the capacity; when it
- * opened and how long it lived — three labelled lines. In a wide container (640) two lines.
+ * Line 1 of a channel on a phone (the phone-rows board's head()): the channel id at its tight size
+ * below sm, at the key's 14 px (11 characters, 92.4; no stone, as the table's), the 12 px between the
+ * parts and the channel's capacity, the list's sort, in the summary form at its widest, a capacity
+ * under a billion CKB cut to whole CKB ("999,999,999", WIDEST_TX_VALUE_SUMMARY, 11 characters at
+ * 13 px, 85.8) and " CKB" at the unit's 12 px (28.8): 219 of a 360 px phone's 328 px line.
  */
-function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boolean }) {
+const CHANNEL_PHONE_HEAD_PX = phoneHead(
+  'Fiber channels',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(WIDEST_TX_VALUE_SUMMARY.length, fontPx('small')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
+
+/**
+ * A channel on a phone (the phone-rows board; PB-17): the fields the table states and no others —
+ * the channel and its capacity, the list's sort; its parties, joined as the table joins them; quiet,
+ * the day it opened and how long it has been open or lived, each named, and its state where the
+ * list is of every state (`showState`, as the table writes it under the id there). The cards from
+ * 560 px take the same three parts.
+ */
+function ChannelPhoneRow({
+  channel,
+  showState,
+  lived,
+}: {
+  channel: FiberChannel;
+  showState: boolean;
+  /** How long it is open or lived, in the table's head's words ("open for", "lifetime"). */
+  lived: string;
+}) {
   // the channel id at the size of its parties (R9): tight below sm, the row size from it
   const size = useTightBelowSm();
-  const id = (
-    <Link
-      href={`/fiber/channels/${channel.channelId}`}
-      className="text-[color:var(--ink)] hover:underline"
-      style={inkStyle(BOARD_INKS.link)}
-      title={channel.channelId}
-    >
-      <ShortId value={channel.channelId} kind="hash" size={size} />
-    </Link>
-  );
-  const pair = (
-    <span>
-      {channel.observedParties.map((party, index) => (
-        <span key={party.lockScriptHash}>
-          {index > 0 && <span className="text-text-dim"> ⇄ </span>}
-          <PartySuffix party={party} />
-        </span>
-      ))}{' '}
-      <span className="text-text-dim">
-        {channel.observedParties.map((party) => party.lockScriptName ?? 'unnamed lock').join(' · ')}
-      </span>
-    </span>
-  );
-  const capacity = (
-    <span className="text-text-bright">
-      <CkbAmount form="summary" shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
-    </span>
-  );
-  const when = `opened ${formatUtc8DateTime(channel.openTimestamp).slice(0, 16)} · ${
-    channel.state === 'open' ? 'open for' : 'lifetime'
-  } ${lifetime(channel)}`;
   return (
     <PhoneRow
       testId="fiber-channel-row-mobile"
-      lines={
-        wide
-          ? [
-              {
-                key: 'channel',
-                tone: 'head',
-                left: (
-                  <>
-                    {id} <span className="text-text-dim text-small">· </span>
-                    <span className="text-small">{pair}</span>
-                  </>
-                ),
-                right: capacity,
-              },
-              {
-                key: 'time',
-                tone: 'quiet',
-                left: when,
-                right: <ChannelState state={channel.state} />,
-              },
-            ]
-          : [
-              {
-                key: 'channel',
-                tone: 'head',
-                left: id,
-                right: <ChannelState state={channel.state} />,
-              },
-              { key: 'pair', tone: 'body', left: pair, right: capacity },
-              { key: 'time', tone: 'quiet', left: when },
-            ]
-      }
+      head={CHANNEL_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'channel',
+          tone: 'head',
+          left: (
+            <Link
+              href={`/fiber/channels/${channel.channelId}`}
+              look="key"
+              title={channel.channelId}
+            >
+              <ShortId value={channel.channelId} kind="hash" size={size} />
+            </Link>
+          ),
+          right: (
+            <span className="text-text-bright">
+              <CkbAmount
+                form="summary"
+                shannons={BigInt(channel.capacity)}
+                signed={false}
+                tone="plain"
+              />
+            </span>
+          ),
+        },
+        {
+          key: 'parties',
+          tone: 'body',
+          left: (
+            <span className="flex min-w-0 flex-wrap gap-x-1.5">
+              {channel.observedParties.map((party, index) => (
+                <span key={party.lockScriptHash}>
+                  {index > 0 && <span className="text-text-dim">↔ </span>}
+                  <PartySuffix party={party} />
+                </span>
+              ))}
+            </span>
+          ),
+        },
+        {
+          key: 'time',
+          tone: 'quiet',
+          left: (
+            <Dotted
+              parts={[
+                <Labelled key="opened" label="opened">
+                  <Utc8Date timestamp={channel.openTimestamp} />
+                </Labelled>,
+                <Labelled key="lived" label={lived}>
+                  {lifetime(channel)}
+                </Labelled>,
+                showState && <ChannelState key="state" state={channel.state} />,
+              ]}
+            />
+          ),
+        },
+      ]}
     />
   );
 }
 
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
-  const pagination = useCursorPagination();
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): the state
+  const pagination = useCursorPagination(pageSize, { list: [stateFilter] });
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const pin = useFiberGraphPin();
   const channels = useQuery({
     queryKey: ['fiber-channels', stateFilter, pagination.cursor, pageSize],
-    queryFn: () =>
+    queryFn: pagination.ask((cursor) =>
       api.getFiberChannels({
         limit: pageSize,
-        cursor: pagination.cursor,
+        cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
         sort: 'capacity',
-      }),
+      })
+    ),
   });
   const summary = network.data?.summary;
+  // where the ranked list stands (lib/pagination.ts): the rows shown of the response's total at
+  // its page size, the page the response was asked as (the list keeps no previous page while the
+  // next loads, so the two never part); nothing for a list on one page, an empty one too
+  const channelsAt = channels.data
+    ? rankedPageAt('Fiber channels', channels.data, pagination)
+    : null;
   const chosen = filters.find((filter) => filter.value === stateFilter)!;
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto max-w-[1280px] pb-16 pt-7">
+      <main className="container mx-auto max-w-[1280px] pb-16 pt-8">
         {/* Hierarchy v3 (R13): the hero is open now and the network picture; the concept and the
             graph's explainer are tier 2. Hero → first section 64 px (R6). */}
         <div data-tier="1" className="min-w-0">
@@ -311,9 +347,10 @@ export default function FiberChannelsPage() {
             lede={
               <>
                 Channels touch the chain only to open and to close.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                {/* a way onward to a place on this page: the link writes its "↓" */}
+                <Link href="#evidence" look="onward">
+                  How it works
+                </Link>
               </>
             }
             figure={summary ? openNowFigure(summary) : undefined}
@@ -321,11 +358,11 @@ export default function FiberChannelsPage() {
               network.data ? (
                 <FiberNetworkPicture network={network.data} pin={pin} />
               ) : network.isError ? (
-                <p role="alert" className="text-rouge text-body">
+                <p role="alert" className="text-rouge text-body max-w-measure">
                   Fiber network evidence could not be loaded: {String(network.error)}
                 </p>
               ) : (
-                <p className="text-text-dim text-body">Loading indexed Fiber network…</p>
+                <p className="text-text text-body">Loading indexed Fiber network…</p>
               )
             }
             reading={network.data && <FiberNetworkReading network={network.data} pin={pin} />}
@@ -347,45 +384,26 @@ export default function FiberChannelsPage() {
               }
               note="sorted by capacity"
             />
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
-              {filters.map((filter) => {
-                const on = stateFilter === filter.value;
-                return (
-                  <button
-                    key={filter.value}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => {
-                      setStateFilter(filter.value);
-                      pagination.reset();
-                    }}
-                    className={cn(
-                      'text-small h-[30px] border px-[11px]',
-                      on
-                        ? 'bg-base-elevated text-text-bright'
-                        : 'border-base-border-subtle text-text hover:text-text-bright'
-                    )}
-                    style={on ? { borderColor: FIBER_COLORS.filterOn } : undefined}
-                  >
-                    {filter.label}
-                    {summary && (
-                      <span className="text-text-dim">
-                        {' '}
-                        {filter.count(summary).toLocaleString('en-US')}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            {/* The state is the controls board's filter (one of five, its words lowercase, each
+                with the summary's count once it is in; on a phone a select after "state" where
+                the chips do not fit its line): a state starts the list again from its first page. */}
+            <FilterChips
+              label="state"
+              values={filters.map((filter) => ({
+                key: filter.value,
+                label: filter.label.toLowerCase(),
+                count: summary ? filter.count(summary) : undefined,
+              }))}
+              value={stateFilter}
+              onChange={setStateFilter}
+              counted
+            />
             {channels.isError && (
-              <p role="alert" className="text-rouge text-body py-7">
+              <p role="alert" className="text-rouge text-body max-w-measure py-7">
                 Channel list could not be loaded: {String(channels.error)}
               </p>
             )}
-            {isAwaited(channels) && (
-              <p className="text-text-dim text-body py-7">Loading channels…</p>
-            )}
+            {isAwaited(channels) && <p className="text-text text-body py-7">Loading channels…</p>}
             {channels.data && (
               <>
                 <ListTable
@@ -398,13 +416,21 @@ export default function FiberChannelsPage() {
                       key: 'channel',
                       className: ROW,
                       label: 'Channel',
-                      minWidth: 200,
-                      // Table-rows T5: the channel id is the row's one bright thing.
+                      // The channel id at the row size (17 characters, 142.8), or the widest
+                      // state "All" writes under it, "force-closed · not settled" (26 at 12 px,
+                      // 187.2, the wider), and the gap. It was 200.
+                      minWidth: columnPx(
+                        Math.max(
+                          body(shortChars(SHORT_FORMS.row.hash)),
+                          meta(Math.max(...Object.values(FIBER_STATE_WORDS).map((w) => w.length)))
+                        ) + CELL_GAP_PX
+                      ),
+                      // Table-rows T5: the channel id is the row's one bright thing, its key.
                       render: (channel) => (
                         <>
                           <Link
                             href={`/fiber/channels/${channel.channelId}`}
-                            className="text-text-bright hover:underline"
+                            look="key"
                             title={channel.channelId}
                           >
                             <ShortId value={channel.channelId} kind="hash" size="row" />
@@ -421,11 +447,22 @@ export default function FiberChannelsPage() {
                       key: 'parties',
                       className: ROW,
                       label: 'Parties',
-                      minWidth: 180,
-                      // The column that takes the free width, as the grid's 1fr did.
-                      width: 'auto',
+                      // The pair on one line (lane P4; review fiber-channels: some 380 px stood
+                      // empty between the parties and their capacity, the flexible column's): two
+                      // lock hashes at the row size, the wider form (17 characters each; an
+                      // address is 13), "↔ " before the second, 36 characters at 14 px (302.4),
+                      // the 6 px between them and the gap: 324.4. It was one party (158.8) and
+                      // the rest of the container.
+                      minWidth: columnPx(
+                        body(2 * shortChars(SHORT_FORMS.row.hash) + '↔ '.length) +
+                          PARTY_GAP_PX +
+                          CELL_GAP_PX
+                      ),
                       render: (channel) => (
-                        <span className="flex min-w-0 flex-wrap gap-x-1.5">
+                        <span
+                          className="flex min-w-0 flex-wrap"
+                          style={{ columnGap: PARTY_GAP_PX }}
+                        >
                           {channel.observedParties.map((party, index) => (
                             <span key={party.lockScriptHash}>
                               {index > 0 && (
@@ -446,11 +483,18 @@ export default function FiberChannelsPage() {
                       key: 'capacity',
                       className: ROW,
                       label: 'Capacity',
-                      minWidth: 210,
+                      // A list column's figure (readability R5; lane P4, review fiber-channels:
+                      // every amount wrote ".00000000 CKB"): the summary form, as the phone row's
+                      // line 1 writes it, its exact value in its title. A capacity under a billion
+                      // CKB cut to whole CKB, "999,999,999" (11 characters, 92.4), its unit " CKB"
+                      // at 12 px (28.8) and the gap: 137.2. It was every decimal, 212.8.
+                      minWidth: columnPx(
+                        body(WIDEST_TX_VALUE_SUMMARY.length) + meta(' CKB'.length) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (channel) => (
                         <CkbAmount
-                          form="column"
+                          form="summary"
                           shannons={BigInt(channel.capacity)}
                           signed={false}
                           tone="plain"
@@ -460,8 +504,10 @@ export default function FiberChannelsPage() {
                     {
                       key: 'opened',
                       label: 'Opened',
-                      minWidth: 120,
-                      className: cn(ROW, 'text-text-dim'),
+                      // the date (10 characters, 84) and the gap; it was 120. A date is a value,
+                      // in the reading ink (R3; it was the quiet ink).
+                      minWidth: columnPx(body(formatUtc8Date(0).length) + CELL_GAP_PX),
+                      className: ROW,
                       render: (channel) => (
                         <span>
                           <Utc8Date timestamp={channel.openTimestamp} />
@@ -472,33 +518,32 @@ export default function FiberChannelsPage() {
                       key: 'lifetime',
                       className: ROW,
                       label: lastColumn,
-                      minWidth: 110,
-                      numeric: true,
+                      // "9999d 23h" (9 characters, 75.6), wider than the head ("Lifetime" at 12
+                      // px); the last column, no gap. It was 110. The flexible column (lane P4):
+                      // read from its left, so the room the container gives beyond the columns'
+                      // sum (843 px) stands at the row's end, after the last figure.
+                      minWidth: columnPx(body(WIDEST_FIBER_LIFETIME.length)),
+                      width: 'auto',
                       render: (channel) => <span>{lifetime(channel)}</span>,
                     },
                   ])}
-                  mobileRow={(channel, wide) => <ChannelPhoneRow channel={channel} wide={wide} />}
+                  mobileRow={(channel) => (
+                    <ChannelPhoneRow
+                      channel={channel}
+                      showState={stateFilter === 'all'}
+                      lived={lastColumn.toLowerCase()}
+                    />
+                  )}
                 />
-                {(channels.data.hasMore || pagination.hasPrevious) && (
-                  <CursorPagination
-                    className="pt-1"
-                    total={channels.data.total}
-                    totalLabel="channels"
-                    pageSize={pageSize}
-                    page={pagination.page}
-                    currentCount={channels.data.data.length}
-                    hasMore={channels.data.hasMore}
-                    hasPrevious={pagination.hasPrevious}
-                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
-                    onPrevious={pagination.goToPrevious}
-                  />
-                )}
+                {/* The controls board's pager for a ranked list (the channels by capacity). */}
+                {channelsAt && <Pager mode="pages" label="channels" {...channelsAt} />}
               </>
             )}
           </section>
         </div>
         <div id="evidence" className="scroll-mt-4">
-          <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+          {/* One column: how to read the graph is its key in tier 1 now (the plan's P4). */}
+          <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0">
             <DetailSection title="What the chain sees of Fiber">
               <Prose>
                 <p>
@@ -508,9 +553,6 @@ export default function FiberChannelsPage() {
                 </p>
                 {network.data && <FiberPartiesNote network={network.data} />}
               </Prose>
-            </DetailSection>
-            <DetailSection title="How to read the graph">
-              <FiberGraphNotes />
             </DetailSection>
           </DetailTier2>
         </div>

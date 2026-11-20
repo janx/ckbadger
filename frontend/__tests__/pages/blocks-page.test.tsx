@@ -4,16 +4,27 @@ import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtures/genesis-block';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { screen, waitFor, within } from '@testing-library/react';
+import {
+  atContainerWidth,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { contentPx, gapPx } from '@/__tests__/utils/tailwind-box';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { render } from '../utils/test-utils';
 import BlocksPage from '@/app/blocks/page';
 import { api, type Block } from '@/lib/api';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ROW_SEAL } from '@/components/ui/row-seal';
+import { PHONE_LINE_PX, ROW_LINE_PX } from '@/lib/type-metrics';
 import type { SealId } from '@/lib/seal/stones';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
@@ -54,7 +65,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const mockBlocksResponse = {
+const mockBlocksResponse = pagedRead({
   data: [
     {
       ...blockEvidence,
@@ -117,7 +128,7 @@ const mockBlocksResponse = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('BlocksPage', () => {
   beforeEach(() => {
@@ -126,6 +137,20 @@ describe('BlocksPage', () => {
   });
 
   // Lane L (charts ↔ topics): the blocks list links the charts drawn from blocks.
+  // The controls lane (C2, c2-lists), regression test first: a list with no row has no page to be
+  // on (0 pages), and the time pager refuses "page 1 of 0"; the page says it is empty and draws no
+  // pager, as an empty ranked list does.
+  it('says an empty list is empty and draws no pager for it', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...mockBlocksResponse,
+      data: [],
+      total: 0,
+    });
+    render(<BlocksPage />);
+    expect(await screen.findByText('No blocks indexed.')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'blocks' })).toBeNull();
+  });
+
   it('links every chart whose numbers come from blocks (lane L)', async () => {
     render(<BlocksPage />);
     const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
@@ -217,6 +242,34 @@ describe('BlocksPage · the genesis row', () => {
     expect(lines[1]).toEqual(['miner', 'miner Genesis', 'fees 0 CKB']);
     expect(lines[2][1]).toMatch(/· 1,236,271 B, 1,235,678 B overhead · 0 cycles · Genesis$/);
   });
+
+  // The lead's follow-up to lane P3: PhoneRow's quiet line is 13 px (the shared lane's 9470e172),
+  // and the hash, a value, reads at it: text-small on the hash itself, since Hash sets its own size
+  // (the body step by default), so the line's size cannot reach it (it was text-meta, the line's
+  // one 12 px value). The line's budget at 13 px: its parts never break inside (each is one unit)
+  // and the line wraps between them, so the widest part must fit the text column beside the stone,
+  // the window less its two 16 px gutters and the stone's 24: 304 px at 360, 264 at 320. The widest
+  // part is genesis's size, "1,236,271 B, 1,235,678 B overhead", 33 glyphs at 13 px, 257.4 px: 6.6
+  // px inside 320's 264 and 46.6 inside 360's 304 (the busiest of the others, "3,500,000,000
+  // cycles", 156; "1,500 proposals", 117; the hash, 85.8).
+  it('writes the phone row’s hash at the quiet line’s 13 px, the line’s widest part inside 320', async () => {
+    atContainerWidth(358);
+    render(<BlocksPage />);
+    const cards = await screen.findAllByTestId('block-row-mobile');
+    const figures = cards[2].querySelector('[data-line="figures"]') as HTMLElement;
+    const hash = figures.querySelector('[title]') as HTMLElement;
+    expect(hash).toHaveTextContent(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/);
+    expect(hash).toHaveClass('text-small');
+    expect(hash).not.toHaveClass('text-meta');
+    const column = (window: number) => window - 32 - ROW_SEAL.block.footprint;
+    expect([column(360), column(320)]).toEqual([304, 264]);
+    const widest = '1,236,271 B, 1,235,678 B overhead';
+    expect(figures).toHaveTextContent(widest);
+    expect(chars(widest.length, 13)).toBeCloseTo(257.4, 6);
+    expect(chars(widest.length, 13)).toBeLessThanOrEqual(column(320));
+    for (const part of ['3,500,000,000 cycles', '1,500 proposals', hash.textContent!])
+      expect(chars(part.length, 13)).toBeLessThan(chars(widest.length, 13));
+  });
 });
 
 // F2 blocks (BA-01/02/03/04/05/06/46): the approved Blocks v3 board.
@@ -247,7 +300,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       proposalsCount: 0,
     })
   );
-  const page = {
+  const page = pagedRead({
     data: [
       row(20_828_894, {
         size: 3917,
@@ -269,10 +322,21 @@ describe('BlocksPage · Blocks v3 board', () => {
       }),
     ],
     total: 20_828_902,
-    limit: 50,
+    limit: 2,
     hasMore: true,
     nextCursor: '20828892',
-  };
+  });
+  // A page of these rows as the API sends it, through the checker: a full page with more after it,
+  // at `nextCursor`, or the last where it is none (lane cd-fixes-controls, review-p-tests SHOULD-5:
+  // the tests spread the shared page with rows of their own and kept its page size and its "more")
+  const pageOf = (data: readonly Block[], nextCursor: string | null = page.nextCursor) =>
+    pagedRead({
+      ...page,
+      data: [...data],
+      limit: data.length,
+      hasMore: nextCursor !== null,
+      nextCursor,
+    });
   beforeEach(() => {
     vi.mocked(api.getBlocks).mockResolvedValue(page);
   });
@@ -293,21 +357,28 @@ describe('BlocksPage · Blocks v3 board', () => {
     const ths = Array.from(table.querySelectorAll('th'));
     const size = ths.find((th) => th.textContent?.startsWith('Size, bytes'))!;
     const cycles = ths.find((th) => th.textContent?.startsWith('Cycles'))!;
-    expect(size).toHaveTextContent(
-      'Size, bytes0' + resourceScale([3917, 641]).toLocaleString('en-US')
-    );
-    expect(cycles).toHaveTextContent(
-      'Cycles0' + resourceScale([6831940, 0]).toLocaleString('en-US')
-    );
+    // Re-pinned on purpose (the coordinator's ruling on F3-e): the heads' ticks in the tick form
+    // (they were the exact scale, "4,000" and "8,000,000")
+    const sizeScale = resourceScale([3917, 641]);
+    const cyclesScale = resourceScale([6831940, 0]);
+    expect(size).toHaveTextContent('Size, bytes0' + formatTick(sizeScale, sizeScale));
+    expect(cycles).toHaveTextContent('Cycles0' + formatTick(cyclesScale, cyclesScale));
     expect(size).toHaveClass('text-left');
-    for (const th of [size, cycles])
-      expect((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('120px');
+    // Re-pinned on purpose (readability F3-e): each track is its head's widest tick row, "0" and the
+    // widest scale at 12 px a glyph apart ("1,500,000": 79.2 px; "4,000,000,000": 108), not 120;
+    // re-pinned again by the coordinator's ruling: in the tick form ("0 1.5M", "0 4B") both rows
+    // stand inside the 48 px a bar keeps at least
+    const tracks = ['48px', '48px'];
+    [size, cycles].forEach((th, i) =>
+      expect((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(tracks[i])
+    );
     const bars = table.querySelectorAll('tbody [data-aligned-bar]');
     expect(bars).toHaveLength(4);
-    for (const bar of Array.from(bars)) {
+    Array.from(bars).forEach((bar, i) => {
       expect(bar.closest('td')).not.toHaveClass('text-right');
-      expect((bar.querySelector('[data-track]') as HTMLElement).style.width).toBe('120px');
-    }
+      // Size, then Cycles, on each row: the row's bars on their columns' tracks
+      expect((bar.querySelector('[data-track]') as HTMLElement).style.width).toBe(tracks[i % 2]);
+    });
   });
 
   it('shows the legend for block overhead and user transactions (BA-04)', async () => {
@@ -322,7 +393,9 @@ describe('BlocksPage · Blocks v3 board', () => {
   it('states the fullest block and the most work against the consensus limits (BA-02)', async () => {
     render(<BlocksPage />);
     expect(await screen.findByText(/^Size and cycles · Fullest of these 2/)).toHaveTextContent(
-      /^Size and cycles · Fullest of these 2: 3,917 bytes, 0\.66% of the 597,000-byte limit · most work: 6,831,940 cycles, 0\.20% of the 3,500,000,000-cycle limit$/
+      // lane exactness, part B2: 3,917 of 597,000 bytes is 0.6561…%, 0.65% (half up 0.66%); 6,831,940 of
+      // 3,500,000,000 cycles 0.1951…%, 0.19% (half up 0.20%)
+      /^Size and cycles · Fullest of these 2: 3,917 bytes, 0\.65% of the 597,000-byte limit · most work: 6,831,940 cycles, 0\.19% of the 3,500,000,000-cycle limit$/
     );
   });
 
@@ -343,28 +416,71 @@ describe('BlocksPage · Blocks v3 board', () => {
   });
 
   it('names the miner by its pool when pools.toml does, linked to the address (R-12)', async () => {
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      ...page,
-      data: [{ ...page.data[0], minerPool: 'Example Pool' }, page.data[1]],
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pageOf([{ ...page.data[0], minerPool: 'Example Pool' }, page.data[1]])
+    );
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const pool = within(table).getByRole('link', { name: 'Example Pool' });
     expect(pool).toHaveAttribute('href', `/mainnet/address/${miner}`);
-    expect(pool).toHaveAttribute('title', miner);
+    // re-pinned (lane P1 follow-up, MinerLink's title): the pool whole, then the address
+    expect(pool).toHaveAttribute('title', `Example Pool · ${miner}`);
     // T5: the block number is the row's one bright thing; a named pool reads in body ink.
-    expect(pool).toHaveClass('text-text');
+    // re-pinned on purpose (lists lane P3, the link-look gate): a link inside the cell's line, the
+    // inline look, its ink the cell's (it wrote text-text on itself)
+    expect(pool).toHaveClass('underline');
     expect(pool).not.toHaveClass('text-text-bright');
     // The unnamed miner keeps its address tail; nothing is guessed for it.
     expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
   });
 
-  it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
+  // Re-pinned on purpose (controls lane C2): the list pages with the controls board's cursor in
+  // time — its order in words, the page of the pages the served total makes at the served page
+  // size (20,828,902 ÷ 50: 416,578 whole pages and one more), "← newer" quiet and no control at
+  // the newest end, "older →" a way to go. It wrote "2 newest of 20,828,902" beside a disabled
+  // "Newer" and an "Older →" button, with no page.
+  it('pages as newest first: page 1 of 416,579, ← newer at its end, older → (BA-06)', async () => {
+    // a full first page of 50 (lane cd-fixes-controls, SHOULD-5: the shared page's two rows said
+    // more followed on a page of fifty)
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pageOf(Array.from({ length: 50 }, (_, i) => row(20_828_894 - i, { transactionSizes: [355] })))
+    );
     render(<BlocksPage />);
-    expect(await screen.findByText('2 newest of 20,828,902')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
-    expect(screen.queryByText(/Page 1 of/)).not.toBeInTheDocument();
+    const pager = await screen.findByRole('navigation', { name: 'blocks' });
+    expect(pager.textContent).toBe('newest first← newerpage 1 of 416,579older →');
+    expect(within(pager).queryByRole('button', { name: '← newer' })).toBeNull();
+    expect(within(pager).getByRole('button', { name: 'older →' })).toBeInTheDocument();
+    expect(screen.queryByText(/newest of/)).not.toBeInTheDocument();
+  });
+
+  // The controls lane (C2, c2-lists), written before the pager became the controls board's: older
+  // asks for the page after the cursor the list served, newer goes back to the page before it.
+  it('walks older by the cursor the list served, and newer back to the page before (BA-06)', async () => {
+    const older = pageOf(
+      [row(20_828_892, { transactionSizes: [355] }), row(20_828_891, { transactionSizes: [355] })],
+      '20828890'
+    );
+    vi.mocked(api.getBlocks).mockImplementation(async ({ cursor } = {}) =>
+      cursor === '20828892' ? older : page
+    );
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    expect(within(table).getByRole('link', { name: '#20,828,894' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getBlocks).toHaveBeenLastCalledWith({ cursor: '20828892', limit: 50 })
+    );
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,892',
+      })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,894',
+      })
+    ).toBeInTheDocument();
   });
 
   // F2 blocks visual pass (2026-10-30, live 1440 / 390): one-line rows and compact cards.
@@ -386,7 +502,10 @@ describe('BlocksPage · Blocks v3 board', () => {
   // T2: the 18 px line keeps the row at one line (13 px at its own 20.8 px line would add 2.8),
   // and the contents glyph sits in a flex box instead of on the text baseline, where its 18 px
   // inline box stretched the line to 23 px and the row to 48.
-  it('leads each row with the block number at 13 px bright, the hash 11 px dim (T5, T2)', async () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles items 1 and 2; it was "… the hash 11 px
+  // dim"): the hash is an id in a cell, the reading ink at the cell's 13 px; the number is still
+  // the row's one bright thing (T5)
+  it('leads each row with the block number at 13 px bright, the hash in the cell’s ink (T5, T2)', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const [first] = Array.from(table.querySelectorAll('tbody tr'));
@@ -394,14 +513,30 @@ describe('BlocksPage · Blocks v3 board', () => {
     const number = within(blockCell).getByRole('link', { name: '#20,828,894' });
     expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const hash = within(blockCell).getByTitle(page.data[0].hash);
-    expect(hash).toHaveClass('text-meta', 'text-text-dim');
+    expect(hash.className).not.toMatch(/text-meta|text-text-dim|text-text-bright/);
     expect(hash).not.toHaveClass('text-body');
     expect(contentsCell.firstElementChild).toHaveClass('flex');
     expect(contentsCell.querySelector('[data-contents-line]')).toBeInTheDocument();
   });
 
-  // Seals by kind (phase C1): each row leads with its block's stone (26 px, its hash and its
-  // transaction count), before the height; the height stays the row's link, the seal is an image.
+  // BRIEF-ink-size-roles items 1 and 2: a cell's content is the reading ink at 13 px, the cycles'
+  // state ("Not yet run"), genesis's miner and the reward's "in #N" with its link among it (they
+  // were quiet, the reward line at 12 px)
+  it('writes a cell’s states and the reward’s finality line in the reading ink at 13 px', async () => {
+    const unrun = { ...page.data[0], cycles: null, cyclesStatus: 'pending' as const };
+    const pending = { ...page.data[1], miningReward: null, rewardFinalizesAt: 20_828_905 };
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf([unrun, pending]));
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const state = within(table).getByText('Not yet run');
+    expect(state.className).not.toMatch(/text-text-dim|text-meta/);
+    const finality = within(table).getByRole('link', { name: '#20,828,905' }).parentElement!;
+    expect(finality.className).not.toMatch(/text-text-dim|text-meta/);
+  });
+
+  // Seals by kind (phase C1): each row leads with its block's stone (16 px since readability R6,
+  // its hash and its transaction count), before the height; the height stays the row's link, the
+  // seal is an image.
   it('leads every row with its block’s row seal, before the height link', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
@@ -411,9 +546,12 @@ describe('BlocksPage · Blocks v3 board', () => {
       const cell = tr.querySelector('td')!;
       const seal = expectOneRowSeal(tr, sealOf(page.data[i]));
       expect(cell).toContainElement(seal);
-      // one 18 px line keeps the row's height: the 26 px stone overhangs it by 4 px above and below
-      expect(ROW_SEAL.block.overhang).toBe(4);
-      expect(seal).toHaveClass('-my-[4px]');
+      // one 20 px line keeps the row's height: the 16 px stone stands centred on it, 2 px clear
+      // above and below (re-pinned on purpose, readability R6: the 26 px stone overhung it by 3 px
+      // above and below, `-my-[3px]`)
+      expect((ROW_LINE_PX - ROW_SEAL.block.height) / 2).toBe(2);
+      expect(seal).toHaveClass('h-row', 'items-center');
+      expect(seal.className).not.toMatch(/-my-/);
       const height = within(cell).getByRole('link', {
         name: `#${page.data[i].number.toLocaleString('en-US')}`,
       });
@@ -425,33 +563,47 @@ describe('BlocksPage · Blocks v3 board', () => {
   // The seal's footprint comes out of other columns' slack, so each table keeps the minimum width
   // it switches form at: the full table 1,230 px (Reward gave the old hash seal 22; Fees gives the
   // block stone's 7 more, 34 against 27), the 608 px table (Size · cycles gave 19 and gives 5,
-  // Miner 2; Height keeps its 2 px of room so its number never breaks).
-  it('budgets the seal in the Block column and keeps the table at 1,230 px', async () => {
+  // Miner 2). Corrected (review fb-tests 3): Height's 2 px of room went in F3-e (34a545c8), as
+  // every spare did; its number stays one unit by the table's rule, not by a spare (ListTable: no
+  // cell lets a figure break), and its budget is exact to the tenth (the 608 px table's test).
+  // re-pinned with readability R4 (lane F3, step 2): the key at 14 px, the table text 13, the hash 12: the derived columns grow with their text and the table needs
+  // 1,260 px (was 1,230), so the widest 1,232 px container draws the 608 px table.
+  // Re-pinned on purpose (readability F3-e): every column is its content (Block's 13 px spare and
+  // the spares of Reward and Fees went; Age, Contents, Size and Cycles, written by hand, hold their
+  // widest values; Miner is the flexible column), 1,284 px.
+  // Re-pinned on purpose (the coordinator's ruling: the bar heads in the tick form, their tracks
+  // 48 px): Size 176 → 145, Cycles 220 → 160, 1,193 px (renamed: "1,284 px").
+  // Re-pinned on purpose (readability R6): the block's row stone 26 → 16 px, its footprint 34 → 24,
+  // the Block column 230 → 220, the table 1,193 → 1,183 px (renamed: "1,193 px").
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 2: the hash beside the number is an id in a cell, 13 px, the Block column 220 → 226; the proposals and uncles under the age are figures, 13 px, Age · txs 122 → 126; the table 1,183 → 1,189 px, renamed: "1,183 px").
+  it('budgets the seal in the Block column and keeps the table at 1,189 px', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1189);
     const cols = Array.from(table.querySelectorAll('col')).map(
-      (c) => (c as HTMLElement).style.width
+      (c) => (c as HTMLElement).style.minWidth
     );
-    expect(cols).toEqual(['229px', '70px', '170px', '160px', '118px', '105px', '182px', '196px']);
-    // the Block column: 195 px of text and gap, and the stone's footprint, 26 + 8
-    expect(ROW_SEAL.block.footprint).toBe(34);
-    expect(cols[0]).toBe(`${195 + ROW_SEAL.block.footprint}px`);
+    expect(cols).toEqual(['226px', '110px', '194px', '118px', '126px', '110px', '145px', '160px']);
+    // the Block column: 195.4 px of text and gap rounded up, and the stone's footprint, 16 + 8
+    expect(ROW_SEAL.block.footprint).toBe(24);
+    expect(cols[0]).toBe(`${202 + ROW_SEAL.block.footprint}px`);
     // what the column with the stone and the column it took from hold, at 0.6 em a character
-    // (monospace) and the 16 px gap: Block, the stone, "#20,879,198" at 13 px, a space at 12 px
-    // and "0xd161...8fef" at 11 px; Fees, "999.99999999" at 12 px (every fee under 1,000 CKB)
+    // (monospace) and the 16 px gap: Block, the stone, "#20,879,198" at 14 px, a space at 13 px
+    // and the tight hash "0xd161…8fef" at 12 px, 11 characters with its one ellipsis (re-pinned,
+    // readability R4: the check counted 13, the three-dot form, which 6.6 px a glyph let pass);
+    // Fees, "999.99999999" at 13 px (every fee under 1,000 CKB)
     const px = cols.map((w) => Number.parseFloat(w));
     expect(
-      ROW_SEAL.block.footprint + chars(11, 13) + chars(1, 12) + chars(13, 11) + 16
+      ROW_SEAL.block.footprint + chars(11, 14) + chars(1, 13) + chars(11, 13) + 16
     ).toBeLessThanOrEqual(px[0]);
-    expect(chars(12, 12) + 16).toBeLessThanOrEqual(px[5]);
+    expect(chars(12, 13) + 16).toBeLessThanOrEqual(px[5]);
   });
 
   // The stone carries the block's transaction count (`transactionsCount`, as the API serves it):
   // 1 and 7 in rods, past nine a full block; the same stone in the table, the 608 px table and the
   // phone rows.
   it('writes each block’s transaction count on its stone: 1, 7 and 12 transactions', async () => {
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const rows = Array.from(table.querySelectorAll('tbody tr'));
@@ -474,7 +626,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     onTestFinished(() => spy.mockRestore());
     const uncounted = { ...page.data[0], transactionsCount: undefined } as unknown as Block;
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [uncounted, page.data[1]] });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf([uncounted, page.data[1]]));
     render(
       <ErrorBoundary fallbackRender={(error) => <p data-testid="refused">{error.message}</p>}>
         <BlocksPage />
@@ -498,7 +650,7 @@ describe('BlocksPage · Blocks v3 board', () => {
         proposalsCount: 0,
       })
     );
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: fifty, hasMore: false });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf(fifty, null));
     drawn.ms = 0;
     drawn.ids = [];
     const started = performance.now();
@@ -525,7 +677,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
     const table = screen.getByRole('table', { name: 'Latest blocks' });
     expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    // the controls board's pager (controls lane C2; it was the old pager's controls row)
+    const pager = screen.getByRole('navigation', { name: 'blocks' });
     expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -534,6 +687,328 @@ describe('BlocksPage · Blocks v3 board', () => {
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
     expect(within(note).getByText('3,917')).toHaveClass('text-text-bright');
     expect(within(note).getByText('6,831,940')).toHaveClass('text-text-bright');
+  });
+
+  // Readability F3-e, the coordinator's rulings on the blocks tables: (1) the bar heads write their
+  // ticks in the tick form, as every axis on the site does, so each track is the 48 px a bar keeps
+  // at least and the wide table is 1,193 px, a table at 1,232; (2) the 608 px table writes a
+  // block's transaction count under its age, the second line of one cell headed "Age · txs" (the
+  // row already has two lines: the hash under the height, cycles under size), every column at its
+  // honest budget. Re-pinned on purpose (readability R6): the block stone's footprint 34 → 24, so
+  // the wide table is 1,183 px and the 608 px table 585 (were 1,193 and 595; renamed).
+  describe('the rulings: tick-form heads and the 608 px table (readability F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    // re-pinned on purpose (BRIEF-ink-size-roles item 2: the Block column 220 → 226; renamed, it
+    // was "from 1,183 px")
+    it('draws the wide table from 1,189 px, its bars on 48 px tracks under tick-form heads', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      const size = ceil(48 + 10 + at('1,500,000', 13) + 16);
+      const cycles = ceil(48 + 10 + at('4,000,000,000', 13));
+      expect([size, cycles]).toEqual([145, 160]);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([
+        226,
+        110,
+        194,
+        118,
+        126,
+        110,
+        size,
+        cycles,
+      ]);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1189);
+      const ths = Array.from(table.querySelectorAll('th'));
+      for (const [head, values] of [
+        ['Size, bytes', [3917, 641]],
+        ['Cycles', [6831940, 0]],
+      ] as const) {
+        const th = ths.find((h) => h.textContent?.startsWith(head))!;
+        const ticks = th.querySelector('[data-scale-ticks]') as HTMLElement;
+        const scale = resourceScale([...values]);
+        expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual([
+          '0',
+          formatTick(scale, scale),
+        ]);
+        expect(ticks.style.width).toBe('48px');
+      }
+      for (const track of table.querySelectorAll<HTMLElement>('tbody [data-track]'))
+        expect(track.style.width).toBe('48px');
+    });
+
+    // re-pinned on purpose (BRIEF-ink-size-roles item 2: the hash beside the number is an id in a cell, 13 px, the Block column 220 → 226; the proposals and uncles under the age are figures, 13 px, Age · txs 122 → 126; renamed, it was "1,183, then 585, then rows")
+    it('changes form where each table stops fitting: 1,189, then 589, then rows', async () => {
+      for (const [width, form] of [
+        [1232, 'table'],
+        [1189, 'table'],
+        [1188, 'narrow-table'],
+        [608, 'narrow-table'],
+        [589, 'narrow-table'],
+        [588, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount } = render(<BlocksPage />);
+        await waitFor(() =>
+          expect(container.querySelector('[data-list-form]')).toHaveAttribute(
+            'data-list-form',
+            form
+          )
+        );
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.mocked(api.getBlocks).mockResolvedValue(page);
+      }
+    });
+
+    // re-pinned on purpose (BRIEF-ink-size-roles item 2: the proposals are a figure at the cell's
+    // 13 px, Age · txs 122 → 126; renamed, it was "585 px")
+    it('writes the count under the age in the 608 px table: five columns, 589 px', async () => {
+      atContainerWidth(608);
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).toEqual([
+        'Height',
+        'Age · txs',
+        'Miner',
+        'Fees, CKB',
+        'Size · cycles',
+      ]);
+      const budgets = [
+        // the stone and its gap beside "#99,999,999" at 14 px (its hash under it is narrower)
+        ceil(ROW_SEAL.block.footprint + at('#99,999,999', 14) + 16),
+        // "10y 364d ago" over the widest count and proposals, "9,999 · 1,500p", all at 13 px:
+        // 109.2, the wider line
+        ceil(Math.max(at('10y 364d ago', 13), at('9,999 · ', 13) + at('1,500p', 13)) + 16),
+        // the flexible column: an unnamed miner whole
+        ceil(at('ckb1…4s93hhsj', 13) + 16),
+        // fees under 1,000 CKB
+        ceil(at('999.99999999', 13) + 16),
+        // "3,500,000,000" (the cycle limit; genesis's "1,236,271 B" is narrower); the last column
+        ceil(at('3,500,000,000', 13)),
+      ];
+      expect(budgets).toEqual([133, 126, 118, 110, 102]);
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      expect(cols.map((c) => c.width)).toEqual(['133px', '126px', 'auto', '110px', '102px']);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(589);
+      // the age, then the count with its proposals: two lines, as the height and hash beside them
+      const [first, second] = Array.from(table.querySelectorAll('tbody tr'));
+      const lines = (tr: Element) =>
+        Array.from(tr.querySelectorAll('td')[1].querySelectorAll(':scope > * > *')).map(
+          (l) => l.textContent
+        );
+      expect(lines(first)).toEqual([expect.stringMatching(/ ago$/), '5 · 4p']);
+      expect(lines(second)).toEqual([expect.stringMatching(/ ago$/), '1']);
+    });
+  });
+
+  // Readability F3-e: every column of the wide table is budgeted from the widest value its
+  // formatter writes for the chain (lib/list-bounds.ts), at 0.6 em a glyph (14 px key, 13 px cells,
+  // 12 px hash, count and ticks) and the 16 px gap after every column but the last. The bars'
+  // tracks hold their heads' tick rows ("0", a glyph, the widest scale) whole. Re-pinned on purpose
+  // (the coordinator's ruling): the heads write their ticks in the tick form, so the tracks are 48
+  // px and the table needs 1,193 px, a table in the widest container, 1,232 at 1280 (it needed
+  // 1,284, and stopped there). Re-pinned on purpose (readability R6): the block stone's footprint
+  // 34 → 24, Block 230 → 220, the table 1,183 px (renamed: "1,193 px").
+  describe('every wide column budgeted from what it holds (readability F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    /** A column's minimum, as columnPx rounds it: to the hundredth, then up to a whole pixel. */
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    /** A head's tick row whole over its track: the ticks at 12 px, one glyph apart, 48 at least. */
+    const tickRow = (...ticks: string[]) => Math.max(48, at(ticks.join(' '), 12));
+    const budgets = [
+      // the stone and its gap, "#99,999,999" (eight digits) at 14 px, a space at 13, the tight hash
+      ceil(
+        ROW_SEAL.block.footprint + at('#99,999,999', 14) + chars(1, 13) + at('0x0000…d2de', 13) + 16
+      ),
+      // the widest age, "10y 364d ago" (two digits of years from genesis's tenth birthday)
+      ceil(at('10y 364d ago', 13) + 16),
+      // the 112 px glyph, its 8 px gap and the widest count, "9,999 tx" at 12 px
+      ceil(112 + 8 + at('9,999 tx', 12) + 16),
+      // the flexible column: an unnamed miner whole, "ckb1…4s93hhsj"; a pool name takes the rest
+      ceil(at('ckb1…4s93hhsj', 13) + 16),
+      // four whole digits of reward, every decimal
+      ceil(at('9,999.99999999', 13) + 16),
+      // fees under 1,000 CKB
+      ceil(at('999.99999999', 13) + 16),
+      // genesis's 1,236,271 bytes on a 1,500,000 scale: its tick row in the tick form ("0 1.5M"),
+      // the 10 px gap, its figure
+      ceil(tickRow('0', '1.5M') + 10 + at('1,500,000', 13) + 16),
+      // the cycle limit's 4,000,000,000 scale ("0 4B"), the last column (no gap after it)
+      ceil(tickRow('0', '4B') + 10 + at('4,000,000,000', 13)),
+    ];
+
+    // re-pinned on purpose (BRIEF-ink-size-roles item 2: the hash beside the number is an id in a cell, 13 px, the Block column 220 → 226; the proposals and uncles under the age are figures, 13 px, Age · txs 122 → 126; renamed, it was "1,183 px")
+    it('pins each column to its content and the table to their sum, 1,189 px', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(budgets).toEqual([226, 110, 194, 118, 126, 110, 145, 160]);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      // the Miner column takes what the container gives beyond the sum
+      expect(cols.map((c) => c.width)).toEqual([
+        '226px',
+        '110px',
+        '194px',
+        'auto',
+        '126px',
+        '110px',
+        '145px',
+        '160px',
+      ]);
+      expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1189);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1189);
+    });
+
+    it('draws each bar on a track its head’s widest tick row fits', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const ths = Array.from(table.querySelectorAll('th'));
+      for (const [head, track] of [
+        ['Size, bytes', tickRow('0', '1.5M')],
+        ['Cycles', tickRow('0', '4B')],
+      ] as const) {
+        const th = ths.find((h) => h.textContent?.startsWith(head))!;
+        expect(
+          Number.parseFloat((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width)
+        ).toBe(track);
+      }
+      expect([tickRow('0', '1.5M'), tickRow('0', '4B')]).toEqual([48, 48]);
+    });
+
+    it('lets a long pool name end in the one ellipsis, its title the miner', async () => {
+      const long = 'A Mining Pool Whose Name Is Longer Than Its Column';
+      vi.mocked(api.getBlocks).mockResolvedValue(
+        pageOf([{ ...page.data[0], minerPool: long }, page.data[1]])
+      );
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const pool = within(table).getByRole('link', { name: long });
+      expect(pool.closest('td')).toHaveClass('truncate');
+      // re-pinned (lane P1 follow-up, MinerLink's title; the F3-e note): the cell cuts the pool's
+      // name, and the title names it whole, then the address
+      expect(pool).toHaveAttribute('title', `${long} · ${miner}`);
+    });
+
+    // re-pinned on purpose (the coordinator's ruling): the table from 1,193 px, so at 1,232 too
+    // (renamed: "1,284 the table"); re-pinned on purpose (readability R6): from 1,183 px, the block
+    // stone's footprint 34 → 24 (renamed: "1,193 the table")
+    // re-pinned on purpose (BRIEF-ink-size-roles item 2: the table from 1,189 px; renamed, it was
+    // "1,183 the table")
+    it('changes form where the sum stops fitting: 1,189 the table, below it the 608 px table', async () => {
+      for (const [width, form] of [
+        [1232, 'table'],
+        [1189, 'table'],
+        [1188, 'narrow-table'],
+        [608, 'narrow-table'],
+        [358, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount } = render(<BlocksPage />);
+        await waitFor(() =>
+          expect(container.querySelector('[data-list-form]')).toHaveAttribute(
+            'data-list-form',
+            form
+          )
+        );
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.mocked(api.getBlocks).mockResolvedValue(page);
+      }
+    });
+  });
+
+  // A cell holds its content (components/ui/list-table.tsx; review fb-logic 3, the lead's ruling):
+  // an age is a figure, one unit; "this device's clock is behind" (29 characters, 226.2 px at 13
+  // px) is words and breaks between them in the 94 px Age column and the 106 px Age · txs column,
+  // where it stood on one line and drew some 130 px over the next column.
+  describe('a cell holds its content (the lead’s rulings on the fb reviews)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('lets the clock-behind sentence break between its words in both tables', async () => {
+      const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
+      for (const width of [1232, 608]) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], timestamp: ahead }, page.data[1]])
+        );
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const [first] = Array.from(table.querySelectorAll('tbody tr'));
+        const age = within(first.querySelectorAll('td')[1] as HTMLElement).getByText(CLOCK_BEHIND);
+        expect(age.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
+        expect(faultLines(cellFaults(table))).toEqual([]);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
+
+    // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+    // does with it today, for the lists page lane to rule on (no mechanism is built here). The
+    // nine-digit height "#100,000,000" (12 glyphs at 14 px, 100.8; the bound's 11 are 92.4) stays
+    // one figure on its line, as a figure does in every cell, and runs past its column's content
+    // box: in the wide table the Block column's box is 220 − 16 = 204 px, its line the stone (24),
+    // the number, a space (7.8) and the tight hash (79.2), 211.8: 7.8 px into its own 16 px gap;
+    // in the 608 px table the Height box is 133 − 16 = 117, the stone and the number 124.8: 7.8 px
+    // into its gap. Neither reaches the next column (it would from 16 px, a second glyph past).
+    // Re-pinned on purpose (readability R6): the stone's footprint 34 → 24 takes 10 px from the
+    // line and from the column alike (were 230 / 214 / 221.8 and 143 / 127 / 134.8), so the 7.8
+    // stays. Re-pinned on purpose (BRIEF-ink-size-roles item 2; renamed, it was "… 7.8 px into its
+    // gap"): the hash at the cell's 13 px (85.8) adds 6.6 px to the line, and the column, whose sum
+    // is now a whole 226 with no 0.6 px of rounding left over, 6: the wide table's line is 218.4 in a
+    // 210 px box, 8.4 px into its 16 px gap; the 608 px table's stays 7.8. Neither reaches the next
+    // column.
+    it('holds a height one glyph past its bound on one line, 8.4 and 7.8 px into its gap', async () => {
+      const at = (chars: number, px: number) => (chars * px * 3) / 5;
+      const stone = ROW_SEAL.block.footprint;
+      expect(stone).toBe(24);
+      for (const [width, column, line, into] of [
+        [1232, 226, stone + at(12, 14) + at(1, 13) + at(11, 13), 8.4],
+        [608, 133, stone + at(12, 14), 7.8],
+      ] as const) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([
+            row(100_000_000, {
+              size: 641,
+              overheadSize: 641,
+              userTransactionsSize: 0,
+              cycles: '0',
+              transactionSizes: [355],
+              proposalsCount: 0,
+            }),
+            page.data[1],
+          ])
+        );
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const cols = Array.from(table.querySelectorAll('col')).map((c) =>
+          Number.parseFloat((c as HTMLElement).style.minWidth)
+        );
+        expect(cols[0]).toBe(column);
+        const number = within(table).getByRole('link', { name: '#100,000,000' });
+        expect(number.closest('td')).toBe(table.querySelector('tbody td'));
+        expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+        const past = line - (column - 16);
+        expect(past).toBeCloseTo(into, 10);
+        expect(past).toBeLessThan(16);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
   });
 
   // Board L1 (2026-11-01 responsive plan): the phone row is three lines and 640 is a table.
@@ -570,7 +1045,9 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     // Follow-up: the head line carried the proposal and uncle counts too, so at 360 px (294 px of
     // text column, the 13 px height #20,987,284 85.8 px and the 12 px gap leaving 196.2, 27
-    // characters at 12 px) "4 txs · 1 proposal · 13s ago" (28) dropped under the height while
+    // characters at 12 px; re-pinned on purpose, readability R6: the 16 px stone leaves 304 px of
+    // text column at 360 and 334 at 390, so 206.2 and 236.2, 28 and 32 characters, where the 26 px
+    // stone left 294 and 324) "4 txs · 1 proposal · 13s ago" (28) dropped under the height while
     // "1 tx · 2m ago" stood beside it, and with an uncle it wrapped at 390 too. The head line now
     // holds the height, the transactions and the age; proposals and uncles join the quiet figures,
     // each count one unbroken unit, only when non-zero. jsdom cannot measure: the characters are the
@@ -595,7 +1072,7 @@ describe('BlocksPage · Blocks v3 board', () => {
         proposalsCount: 0,
         unclesCount: 0,
       };
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [busy, plain] });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf([busy, plain]));
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [head, , figures] = phoneLines(cards[0]);
@@ -611,17 +1088,25 @@ describe('BlocksPage · Blocks v3 board', () => {
       const [plainHead, , plainFigures] = phoneLines(cards[1]);
       expect(plainHead.right).toMatch(/^1\stx · \d+[smhd] ago$/);
       expect(plainFigures.left).not.toMatch(/proposal|uncle/);
-      // the worst realistic head: 85.8 + 12 + 17 × 7.2 = 220.2 px, inside 294 (and 324)
+      // the text column beside the stone: the window less the two 16 px gutters and the stone's
+      // footprint (re-pinned on purpose, readability R6: 304 and 334 px, were 294 and 324)
+      const [at360, at390] = [360, 390].map((w) => w - 32 - ROW_SEAL.block.footprint);
+      expect([at360, at390]).toEqual([304, 334]);
+      // the worst realistic head at the row's real steps (re-pinned on purpose, lists lane P3, B6's
+      // note: it counted the height at 13 px and the right part at 12, the steps before R4): the
+      // height at the key's 14 px, 92.4, the 12 px gap and "999 txs · 59m ago" at 13 px, 17 × 7.8 =
+      // 132.6: 237 px, inside 304 (and 334)
       const headWidth = (left: string, right: string) =>
-        chars(left.length, 13) + 12 + chars(right.length, 12);
-      expect(headWidth(head.left, head.right!)).toBeCloseTo(220.2, 6);
-      expect(headWidth(head.left, head.right!)).toBeLessThanOrEqual(294);
-      // the right part holds 27 characters at 360 and 31 at 390; the old head of this block was 42
-      expect(Math.floor((294 - chars(11, 13) - 12) / chars(1, 12))).toBe(27);
-      expect(Math.floor((324 - chars(11, 13) - 12) / chars(1, 12))).toBe(31);
+        chars(left.length, 14) + 12 + chars(right.length, 13);
+      expect(headWidth(head.left, head.right!)).toBeCloseTo(237, 6);
+      expect(headWidth(head.left, head.right!)).toBeLessThanOrEqual(at360);
+      // the right part holds 25 characters at 360 and 29 at 390 (re-pinned, the real steps: were 28
+      // and 32 at 12 px); the old head of this block was 42
+      expect(Math.floor((at360 - chars(11, 14) - 12) / chars(1, 13))).toBe(25);
+      expect(Math.floor((at390 - chars(11, 14) - 12) / chars(1, 13))).toBe(29);
       expect(
         headWidth(head.left, '999\u00a0txs · 12\u00a0proposals · 1\u00a0uncle · 59m ago')
-      ).toBeGreaterThan(324);
+      ).toBeGreaterThan(at390);
     });
 
     // Old issue: at 390 px "miner ckb1qzda0c...93hhsj" (180 px) and "fees 0.00001935 CKB" (134.4)
@@ -631,16 +1116,16 @@ describe('BlocksPage · Blocks v3 board', () => {
     // address of U-09, 4…6, the lead's ruling): the address's head after `ckb1` is its lock's code
     // hash, the same for every default-lock miner, and the tail (the checksum of the whole address)
     // tells miners apart. So the miner and any fee below 10 CKB (always eight decimals) hold one
-    // line at 390 and at 360 (294 px: 360 less the two 16 px gutters and the block stone's 26 + 8).
+    // line at 390 and at 360 (304 px: 360 less the two 16 px gutters and the block stone's 16 + 8;
+    // re-pinned on purpose, readability R6: 294 with the 26 px stone's 26 + 8).
     // jsdom cannot measure: the characters are the measure, 12 px at 7.2 px each, the unit at
     // 11 px. Lane B3's 8da9b2b5 turned this test round (renamed to "at 390 px", the fit at 360
     // asserted as a drop) to pass an 8…6 form; that was wrong and is undone here.
     it('keeps the miner and a fee below 10 CKB on one line at 390 and 360 px', async () => {
       atContainerWidth(358);
       const testnetMiner = 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgx3ze7p';
-      vi.mocked(api.getBlocks).mockResolvedValue({
-        ...page,
-        data: [
+      vi.mocked(api.getBlocks).mockResolvedValue(
+        pageOf([
           { ...page.data[0], totalFees: '999999999' },
           { ...page.data[1], minerPool: 'Example Pool', totalFees: '1935' },
           {
@@ -649,16 +1134,21 @@ describe('BlocksPage · Blocks v3 board', () => {
             hash: `0x${'7c'.repeat(32)}`,
             minerAddress: testnetMiner,
           },
-        ],
-      });
+        ])
+      );
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [unnamed, pooled, testnet] = cards.map((card) => phoneLines(card)[1]);
+      // at the row's real steps (re-pinned on purpose, lists lane P3, B6's note: it counted the line
+      // at 12 px and the unit at 11): the line at 13 px, the unit at 12, the 12 px gap
       const width = (text: string) =>
-        chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
-      const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
-      // the budget first, as the row writes the line: it fails at 8…6 (297.6 px) and holds at 4…6
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
+        chars(text.length - ' CKB'.length, 13) + (text.endsWith(' CKB') ? chars(4, 12) : 0);
+      const lineWidth = (left: string, right: string) => chars(left.length, 13) + 12 + width(right);
+      // the text column beside the stone at 360 and 390 (re-pinned, R6: were 294 and 324)
+      const [at360, at390] = [360, 390].map((w) => w - 32 - ROW_SEAL.block.footprint);
+      expect([at360, at390]).toEqual([304, 334]);
+      // the budget first, as the row writes the line: it failed at 8…6 (297.6 px) and holds at 4…6
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(at360);
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
         'miner',
         'miner ckb1…93hhsj',
@@ -667,41 +1157,109 @@ describe('BlocksPage · Blocks v3 board', () => {
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
       expect(testnet.left).toBe('miner ckt1…x3ze7p'); // testnet's prefix, same form
-      // the miner stays a link to its address, the full address its title
-      for (const [card, name, address] of [
-        [cards[0], 'ckb1…93hhsj', miner],
-        [cards[1], 'Example Pool', miner],
-        [cards[2], 'ckt1…x3ze7p', testnetMiner],
+      // the miner stays a link to its address, the full address its title (re-pinned, lane P1
+      // follow-up, MinerLink's title: a pool's name whole before it)
+      for (const [card, name, address, title] of [
+        [cards[0], 'ckb1…93hhsj', miner, miner],
+        [cards[1], 'Example Pool', miner, `Example Pool · ${miner}`],
+        [cards[2], 'ckt1…x3ze7p', testnetMiner, testnetMiner],
       ] as const) {
         const line = card.querySelector('[data-line="miner"]') as HTMLElement;
         const link = within(line).getByRole('link', { name });
         expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
-        expect(link).toHaveAttribute('title', address);
+        expect(link).toHaveAttribute('title', title);
         // one flex line: the miner on the left, the fees as its right part
         expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
       }
       // Readability R5 (re-pinned on purpose): a phone row's fee is the summary form, so a fee of
-      // 9.99999999 CKB is "fees 9.99 CKB": 122.4 + 12 + 91.2 = 225.6 px (it was 268.8 px, every
-      // decimal). The widest fee is now one under 1 CKB, which keeps its exact value — "fees
-      // 0.99999999 CKB" is 268.8 px, as the 8-decimal form was, 25.2 to spare at 360 and 55.2 at
-      // 390 — and from 1 CKB up the summary is shorter: 999.99 CKB is 240 px, 1,000,000 CKB 261.6.
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(225.6, 6);
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(268.8, 6);
-      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(240, 6);
-      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(261.6, 6);
-      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(294);
-      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px with the widest fee,
-      // past 294
-      expect(lineWidth('miner ckb1qzda…93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(294);
-      // with the tables' 10-character head and the widest fee it was 180 + 12 + 134.4 = 326.4 px,
-      // past both columns
-      expect(lineWidth('miner ckb1qzda0c...93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(324);
-      // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
-      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
-      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
+      // 9.99999999 CKB is "fees 9.99 CKB". At the real steps (re-pinned on purpose, lists lane P3):
+      // 132.6 + 12 + 99 = 243.6 px. The widest fee is one under 1 CKB, which keeps its exact value —
+      // "fees 0.99999999 CKB" is 290.4 px, 13.6 to spare at 360 and 43.6 at 390 — and from 1 CKB up
+      // the summary is shorter: 999.99 CKB is 259.2 px, 1,000,000 CKB 282.6.
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(243.6, 6);
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(at360);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(290.4, 6);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeLessThanOrEqual(at360);
+      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(259.2, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(282.6, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(at360);
+      // "miner Example Pool" with the fee: 140.4 + 12 + 145.8 = 298.2 px
+      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(298.2, 6);
+      expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(at360);
+    });
+
+    // Review rules-tests NOTE-3: two checks here compared literal strings with the 294 / 324 px
+    // columns of the 26 px stone, so nothing the page draws could fail them. The short form is R9's
+    // rule (an address keeps `ckb1…` and its tail: the head after `ckb1` is its lock's code hash,
+    // the same for every default-lock miner, so it tells no two miners apart), no longer the
+    // arithmetic's: at the old count above (12 px, the unit 11) lane B3's 8…6, "miner
+    // ckb1qzda…93hhsj", with the widest fee was 297.6 px, past the 294 the 26 px stone left at 360
+    // and inside the 304 the 16 px one leaves. The live property, on the rows the page draws at
+    // 390 and 360 and measured at their own steps (tailwind-box: the line at 13 px, 7.8 a glyph,
+    // the unit at 12, 7.2, the 12 px gap): the miner in the tight form, and its line with the
+    // widest fee, one under 1 CKB in its exact value, inside the text column beside the stone:
+    // "miner ckb1…93hhsj" 132.6 + 12 + "fees 0.99999999" 117 + " CKB" 28.8 = 290.4 px, in 304 at
+    // 360 and 334 at 390. (At these steps the 8…6 form would be 321.6 px and the row size's 4…8
+    // 306, both past 304.)
+    it.each([390, 360] as const)(
+      'writes the miner in the tight form at %i px, its line with the widest fee inside the column beside the stone',
+      async (viewport) => {
+        const content = viewport - 32;
+        atContainerWidth(content);
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], totalFees: '99999999' }])
+        );
+        render(<BlocksPage />);
+        const [card] = await screen.findAllByTestId('block-row-mobile');
+        const line = card.querySelector(':scope > [data-line="miner"]') as HTMLElement;
+        const [left, right] = Array.from(line.children) as HTMLElement[];
+        expect([left.textContent, right.textContent]).toEqual([
+          'miner ckb1…93hhsj',
+          'fees 0.99999999 CKB',
+        ]);
+        const column = content - ROW_SEAL.block.footprint;
+        expect(column).toBe(viewport === 390 ? 334 : 304);
+        const drawn =
+          contentPx(left, viewport) + gapPx(line, viewport) + contentPx(right, viewport);
+        expect(drawn).toBeCloseTo(290.4, 6);
+        expect(drawn).toBeLessThanOrEqual(column);
+      }
+    );
+
+    // Lane D4 (the phone-rows board, head()): the model row states its first line at its widest,
+    // the stone and its gap (24), "#99,999,999" at 14 px (92.4), the 12 px between the parts and
+    // "9,999 txs · 10y 364d ago" at 13 px (187.2): 315.6 of a 360 px phone's 328 px line. A row
+    // drawn with those values draws exactly that, so a wider value let in is past what the list
+    // states, and a wider bound stated does not load (phoneHead throws).
+    it('states its first line at the widest, 315.6 of 328 px, and draws the widest block in it', async () => {
+      atContainerWidth(PHONE_LINE_PX[360]);
+      const T = Date.parse('2030-11-14T12:00:02.000Z');
+      vi.useFakeTimers({ toFake: ['Date'], now: T });
+      try {
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([
+            {
+              ...page.data[0],
+              number: 99_999_999,
+              hash: `0x${'6f'.repeat(32)}`,
+              transactionSizes: Array<number>(9_999).fill(116),
+              transactionsCount: 9_999,
+              // ten years and 364 days on the UTC+8 calendar: the oldest age a live list writes
+              timestamp: '2019-11-15T12:00:01.000Z',
+            },
+          ])
+        );
+        render(<BlocksPage />);
+        const [card] = await screen.findAllByTestId('block-row-mobile');
+        const [head] = phoneLines(card);
+        expect([head.left, head.right]).toEqual(['#99,999,999', '9,999 txs · 10y 364d ago']);
+        expect(statedHeadPx(card)).toBe(315.6);
+        expect(phoneHeadPx(card, 360)).toBe(statedHeadPx(card));
+        expect(statedHeadPx(card)).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // The review's item H: a block row's age reads the page's one clock, so it moves with no data
@@ -712,10 +1270,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       const T = Date.parse('2026-11-14T12:00:00.000Z');
       vi.useFakeTimers({ toFake: ['Date'], now: T });
       try {
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [{ ...page.data[0], timestamp: new Date(T - 20_000).toISOString() }],
-        });
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], timestamp: new Date(T - 20_000).toISOString() }])
+        );
         render(<BlocksPage />);
         const [card] = await screen.findAllByTestId('block-row-mobile');
         expect(phoneLines(card)[0].right).toMatch(/ · 20s ago$/);
@@ -728,7 +1285,7 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     // Rubbing × Song print, phase 3: the phone row leads with the block's row seal in its own
     // column, before the height; the height is still the row's link. Seals by kind: the column
-    // is the 26 px stone and its 8 px gap.
+    // is the stone and its 8 px gap (16 px since readability R6; it was 26).
     it('leads each phone row with its block’s row seal, before the height', async () => {
       atContainerWidth(358);
       render(<BlocksPage />);
@@ -737,7 +1294,8 @@ describe('BlocksPage · Blocks v3 board', () => {
         const seal = expectOneRowSeal(card, sealOf(page.data[i]));
         expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
         expect(card.firstElementChild).toContainElement(seal);
-        // three lines hold the stone; no overhang
+        // three lines hold the stone, centred in a row line's box at the top; no overhang
+        expect(seal).toHaveClass('h-row', 'items-center');
         expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(card).getByRole('link', { name: /^#20,828,89/ }));
       });
@@ -745,7 +1303,7 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     it('writes the transaction count on each phone row’s stone: 1, 7 and 12 transactions', async () => {
       atContainerWidth(358);
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       expect(cards).toHaveLength(3);
@@ -759,37 +1317,48 @@ describe('BlocksPage · Blocks v3 board', () => {
       Array.from(table.querySelectorAll('tbody tr')).forEach((tr, i) => {
         const seal = expectOneRowSeal(tr, sealOf(page.data[i]));
         expect(tr.querySelector('td')).toContainElement(seal);
-        // two lines (height, hash) hold the stone; no overhang
+        // two lines (height, hash) hold the stone, centred on the height's line; no overhang
+        expect(seal).toHaveClass('h-row', 'items-center');
         expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(tr as HTMLElement).getAllByRole('link')[0]);
       });
       // R9 (re-pinned): Miner holds a 13-character address, 110 px (it was 154 for 17), so the
-      // table's minimum is 564 px (it was 608) and Size · cycles takes the rest
-      expect(Number.parseFloat(table.style.minWidth)).toBe(564);
+      // table's minimum is 564 px (it was 608) and Size · cycles takes the rest; re-pinned with readability R4 (lane F3, step 2): the key at 14 px, the table text 13, the hash 12:
+      // 587 px, still inside the 608 px band
+      // Re-pinned on purpose (the coordinator's ruling on F3-e): five columns at their honest
+      // budgets, the count under the age (Age 76 and Txs 48 → Age · txs 122), Fees 96 → 110,
+      // Height's and Size · cycles' 2 px spares gone, Miner the flexible column: 595 px
+      // Re-pinned on purpose (readability R6): the block stone 26 → 16 px, its footprint 34 → 24,
+      // Height 143 → 133, the table 585 px
+      // Re-pinned on purpose (BRIEF-ink-size-roles item 2): Age · txs 122 → 126, the table 589 px
+      expect(Number.parseFloat(table.style.minWidth)).toBe(589);
       const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-      // Height takes the stone's 7 px more than the old hash seal's; Size · cycles gave 5
-      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '110px', '96px', 'auto']);
-      expect(cols.map((c) => c.minWidth)).toEqual([
-        '138px',
-        '76px',
-        '48px',
-        '110px',
-        '96px',
-        '96px',
-      ]);
-      expect(cols[0].width).toBe(`${104 + ROW_SEAL.block.footprint}px`);
-      // what each column holds at 0.6 em a character: Height, the stone, "#20,879,198" at 13 px
-      // and the gap, with 2 px of room; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at
-      // 12 px and the gap; Size · cycles, "3,500,000,000" at 12 px (the last column, no gap)
+      expect(cols.map((c) => c.width)).toEqual(['133px', '126px', 'auto', '110px', '102px']);
+      expect(cols.map((c) => c.minWidth)).toEqual(['133px', '126px', '118px', '110px', '102px']);
+      expect(cols[0].width).toBe(`${109 + ROW_SEAL.block.footprint}px`);
+      // what each column holds at 0.6 em a character: Height, the stone, "#99,999,999" at 14 px
+      // and the gap; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at 13 px and the gap;
+      // Size · cycles, "3,500,000,000" at 13 px (the last column, no gap)
       const px = cols.map((c) => Number.parseFloat(c.minWidth));
-      expect(ROW_SEAL.block.footprint + chars(11, 13) + 16 + 2).toBeLessThanOrEqual(px[0]);
-      expect(chars(13, 12) + 16).toBeLessThanOrEqual(px[3]);
-      expect(chars(13, 12)).toBeLessThanOrEqual(px[5]);
+      // Height to the tenth (review fb-tests 3: the test, the comment and the budget say one
+      // thing): with pl-0 the content box is the column less its 16 px gap, 133 − 16 = 117.0; it
+      // holds the stone's 24 and "#99,999,999", 11 × 8.4 = 92.4, 116.4 in all, so 0.6 px stays
+      // free; the tight hash under the number, 11 × 7.2 = 79.2, is narrower. The column is that
+      // content and its gap rounded up, no spare: ceil(24 + 92.4 + 16) = ceil(132.4) = 133
+      // (re-pinned, R6: the stone's 34, 143 − 16 = 127.0, 126.4, ceil(142.4) = 143).
+      expect(ROW_SEAL.block.footprint).toBe(24);
+      expect(chars(11, 14)).toBeCloseTo(92.4, 10);
+      expect(px[0]).toBe(Math.ceil(ROW_SEAL.block.footprint + chars(11, 14) + 16));
+      expect(px[0] - 16 - (ROW_SEAL.block.footprint + chars(11, 14))).toBeCloseTo(0.6, 10);
+      // the hash under the number at the cell's 13 px (BRIEF-ink-size-roles), 85.8, still narrower
+      expect(chars(11, 13)).toBeLessThan(chars(11, 14));
+      expect(chars(13, 13) + 16).toBeLessThanOrEqual(px[2]);
+      expect(chars(13, 13)).toBeLessThanOrEqual(px[4]);
     });
 
     it('writes the transaction count on each stone of the 608 px table: 1, 7 and 12 transactions', async () => {
       atContainerWidth(608);
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       const rows = Array.from(table.querySelectorAll('tbody tr'));
@@ -797,14 +1366,15 @@ describe('BlocksPage · Blocks v3 board', () => {
       rows.forEach((tr, i) => expectOneRowSeal(tr, sealOf(counted[i])));
     });
 
-    it('draws the six-column table of board L1 in the 608 px band, without the reward', async () => {
+    // Re-pinned on purpose (the coordinator's ruling on F3-e): five columns, the transaction count
+    // the age's second line under "Age · txs" (renamed: "the six-column table of board L1").
+    it('draws the five-column table of board L1 in the 608 px band, without the reward', async () => {
       atContainerWidth(608);
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).toEqual([
         'Height',
-        'Age',
-        'Txs',
+        'Age · txs',
         'Miner',
         'Fees, CKB',
         'Size · cycles',
@@ -818,6 +1388,15 @@ describe('BlocksPage · Blocks v3 board', () => {
         'text-text-bright',
         'leading-row'
       );
+      // Regression (the lead's Chrome check, 2026-11-18): a block number is one figure and never
+      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short). Re-pinned on
+      // purpose (the lead's ruling on review fb-tests 5: a rule of the table, not of one link): the
+      // link's own whitespace-nowrap went; no cell of a list table lets a word or a figure break
+      // where it overflows, so nothing on the number's path to its cell can cut it.
+      const height = within(first as HTMLElement).getByRole('link', { name: '#20,828,894' });
+      for (let el: HTMLElement | null = height; el && el.tagName !== 'TR'; el = el.parentElement)
+        expect(el.className).not.toMatch(/break-words|break-all|overflow-wrap:anywhere/);
+      expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();
@@ -841,6 +1420,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       await screen.findByRole('table', { name: 'Latest blocks' });
       expect(screen.queryByLabelText('Legend')).toBeNull();
       narrow.unmount();
+      // the wide table from its 1,193 px minimum (re-pinned, readability R4: 1,232 held it at 1,230;
+      // F3-e: 1,260 → 1,284, every column its content; the coordinator's ruling: 1,193, its bar
+      // heads in the tick form), so at the widest container, 1,232
       atContainerWidth(1232);
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });

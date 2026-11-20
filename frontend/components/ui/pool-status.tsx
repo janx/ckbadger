@@ -73,8 +73,10 @@ export function PoolInterpretationNotice({
   if (reasons.length === 0) return null;
 
   return (
-    <span className={className ?? 'text-warning text-meta font-mono'}>
-      partial: {reasons.map(reasonText).join('; ')}
+    <span className={className ?? 'font-mono'}>
+      {/* a notice is a sentence: the warning ink at 13 px, the notice's own (the ink and size round,
+          the shared lane); a caller's class places it and may set its font, never its size or ink */}
+      <span className="text-warning text-small">partial: {reasons.map(reasonText).join('; ')}</span>
     </span>
   );
 }
@@ -98,10 +100,13 @@ export function PoolTruncatedNotice() {
  */
 export function PoolUnavailableNotice() {
   return (
-    // a sentence that explains why the list is short: the reading ink (R3)
+    // a sentence that explains why the list is short: the reading ink (R3); the strip spans the
+    // list, its sentence stands on the measure (R4)
     <div className="border-base-border bg-base-surface/50 text-text text-small border-b px-4 py-2 font-mono">
-      Pool view unavailable — the node could not be reached, so unconfirmed transactions are not
-      shown. Confirmed history below is unaffected.
+      <p className="max-w-measure">
+        Pool view unavailable — the node could not be reached, so unconfirmed transactions are not
+        shown. Confirmed history below is unaffected.
+      </p>
     </div>
   );
 }

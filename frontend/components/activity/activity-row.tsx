@@ -1,5 +1,6 @@
 'use client';
 import {
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -21,14 +22,17 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
+import { LockWordsView, lockNoun, namedLockWords, partyLock } from '@/components/ui/lock-kind';
+import { lockCallFacts } from '@/lib/lock-words';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
-import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
 import type {
+  ActivityItemType,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
@@ -47,9 +51,11 @@ import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { ShortId } from '@/components/ui/short-id';
-import { unitNode } from '@/components/ui/units';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
+import { useFromSm } from '@/hooks/useFromMd';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
@@ -87,6 +93,25 @@ function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
 }
 
 /**
+ * Line 1 of an activity row on a phone (the phone-rows board's head(): 262 of 328 px there for "CKB
+ * Transfer" beside "#21,009,129 · 50s ago"), at its widest: the class mark and its 8 px (24), the
+ * headline's first 12 characters at the key's 14 px (100.8), the 12 px between the parts and the
+ * evidence at the meta step, the widest block with the oldest age a live list writes, "#99,999,999
+ * · 10y 364d ago" (26 characters, 187.2): 324 of a 360 px phone's 328 px line (16 characters of
+ * headline at 390). A longer headline wraps between its words beside the evidence, which keeps its
+ * place on the line; so the headline's longest word and the evidence must fit together, "Withdraw"
+ * (67.2) the longest of the site's own headlines' words.
+ */
+const ACTIVITY_PHONE_HEAD_PX = phoneHead(
+  'activities',
+  16 +
+    8 +
+    textPx(12, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_BLOCK_NUMBER} · ${WIDEST_AGE}`.length, fontPx('meta'))
+);
+
+/**
  * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
  * evidence quiet on the right — block, tx hash, date — always there to verify it against.
  *
@@ -110,6 +135,7 @@ export function ActivityRowHead({
   layout = 'wrap',
   href,
   details,
+  detailsId,
   age = false,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
@@ -127,40 +153,53 @@ export function ActivityRowHead({
   href?: string;
   /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
   details?: readonly (ReactNode | DottedGroup)[];
+  /** The id of the element that holds `details`, which the head's names' fold controls. */
+  detailsId?: string;
   /** PA-22: a row of a live list says its age, the date-time its hover; else the date. */
   age?: boolean;
 }) {
   const line = layout === 'line';
   const linked = line && href !== undefined;
   const titleClass = cn('text-text-bright text-body font-medium', line && 'leading-row');
-  return (
+  // Below sm (the phone-rows board, PA-10): the headline and the evidence share line 1 and the line
+  // does not wrap its parts — the headline takes the room the evidence leaves it (basis 0) and
+  // wraps between its words; the evidence shrinks only where it alone is wider than the line (this
+  // device's clock behind), its list then breaking between its parts. What was called stands on a
+  // line of its own under it (`head-details`).
+  const fromSm = useFromSm();
+  const phone = line && !fromSm;
+  const headline = linked ? (
+    <Link
+      data-role="headline"
+      href={href}
+      // the row's key: the key look's bright ink (a link's ink is its look's)
+      look="key"
+      className={cn('text-body font-medium', line && 'leading-row')}
+    >
+      {title}
+    </Link>
+  ) : (
+    <span data-role="headline" className={titleClass}>
+      {title}
+    </span>
+  );
+  const head = (
     <div
       data-role="row-head"
+      data-head-px={phone ? ACTIVITY_PHONE_HEAD_PX : undefined}
       className={cn(
-        'flex flex-wrap items-baseline justify-between gap-x-4',
+        'flex items-baseline justify-between',
+        phone ? 'flex-nowrap gap-x-3' : 'flex-wrap gap-x-4',
         line ? 'leading-row gap-y-0' : 'gap-y-0.5'
       )}
     >
-      {line ? (
-        <span data-role="head-main" className="min-w-0">
-          <Dotted
-            parts={[
-              linked ? (
-                <Link
-                  data-role="headline"
-                  href={href}
-                  className={cn(titleClass, 'hover:text-jade transition-colors')}
-                >
-                  {title}
-                </Link>
-              ) : (
-                <span data-role="headline" className={titleClass}>
-                  {title}
-                </span>
-              ),
-              ...(details ?? []),
-            ]}
-          />
+      {phone ? (
+        <span data-role="head-main" className="min-w-0 flex-1 basis-0">
+          {headline}
+        </span>
+      ) : line ? (
+        <span id={detailsId} data-role="head-main" className="min-w-0">
+          <Dotted parts={[headline, ...(details ?? [])]} />
         </span>
       ) : (
         <span data-role="headline" className={titleClass}>
@@ -170,7 +209,9 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
+          // links and values (the block, the hash, the date or age, the pool's state): the row's
+          // reading ink at 13 px (BRIEF-ink-size-roles items 1 and 2: the evidence was quiet at 12)
+          className={cn('text-small', line && 'leading-row ml-auto', phone && 'min-w-0')}
         >
           {evidence}
         </span>
@@ -178,42 +219,56 @@ export function ActivityRowHead({
       {showEvidence && evidence === undefined && (
         <span
           data-role="evidence"
-          className={cn(
-            'text-text-dim text-meta shrink-0',
-            line && 'leading-row ml-auto whitespace-nowrap'
-          )}
+          // An item of the head's wrapping row that may shrink (lane B4 fix round: it was
+          // shrink-0, so it stood at its whole width, one line past a phone's): beside the headline
+          // while both fit, on its own line when not, where it takes the line's room. Its parts are
+          // a separated list (second fix round: the separators have one owner, and a line never
+          // starts or ends with one): it breaks between the parts, each separator hung before the
+          // part after it, and inside a part only where the part lets it (the block number has no
+          // space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
+          // device's clock is behind" break between its words).
+          // links and values (the block, the hash, the date or age, the pool's state): the row's
+          // reading ink at 13 px (BRIEF-ink-size-roles items 1 and 2: the evidence was quiet at 12)
+          className={cn('text-small', line && 'leading-row ml-auto', phone && 'min-w-0')}
         >
-          {blockNumber !== null ? (
-            <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-              {formatBlockNumber(blockNumber)}
-            </Link>
-          ) : poolStatus ? (
-            <PoolStatusBadge status={poolStatus} />
-          ) : (
-            <span>Unconfirmed</span>
-          )}
-          {' · '}
-          {!linked && (
-            <>
-              <Link
-                href={`/tx/${hash}`}
-                className="hover:text-jade text-text-dim transition-colors"
-              >
-                <ShortId value={hash} kind="hash" size="row" />
-              </Link>
-              {' · '}
-            </>
-          )}
-          {timestamp !== null ? (
-            <RowDate timestamp={timestamp} age={age} />
-          ) : timeAddedToPool ? (
-            <TimeInPool since={timeAddedToPool} />
-          ) : (
-            'Time unavailable'
-          )}
+          <Dotted
+            parts={[
+              blockNumber !== null ? (
+                // its ink said on itself, the evidence's (a part handed to the list)
+                <Link href={`/blocks/${blockNumber}`} look="inline">
+                  {formatBlockNumber(blockNumber)}
+                </Link>
+              ) : poolStatus ? (
+                <PoolStatusBadge status={poolStatus} />
+              ) : (
+                <span>Unconfirmed</span>
+              ),
+              !linked && (
+                <Link href={`/tx/${hash}`} look="inline">
+                  <ShortId value={hash} kind="hash" size="row" />
+                </Link>
+              ),
+              timestamp !== null ? (
+                <RowDate timestamp={timestamp} age={age} />
+              ) : timeAddedToPool ? (
+                <TimeInPool since={timeAddedToPool} />
+              ) : (
+                'Time unavailable'
+              ),
+            ]}
+          />
         </span>
       )}
     </div>
+  );
+  if (!phone || !details || details.length === 0) return head;
+  return (
+    <>
+      {head}
+      <div id={detailsId} data-role="head-details" className="text-small leading-row min-w-0">
+        <Dotted parts={details} />
+      </div>
+    </>
   );
 }
 
@@ -229,38 +284,61 @@ function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string
   );
 }
 
+/** A run of a head's script names: type scripts (a run's item types, the type calls) or locks. */
+interface ScriptRun {
+  kind: 'type' | 'lock';
+  parts: ReactNode[];
+}
+
+/** The fold of a head's script names: open or not, the way to turn it, the names' element. */
+export interface HeadFold {
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  controls: string;
+}
+
 /**
- * A run of calls as parts of the head's list. Over PARTICIPANT_LIMIT, the first five and an
- * explicit "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390),
- * written after the last name shown, so it never stands alone after a separator.
+ * The scripts a head names, by ONE rule for a row's head and a folded run's (the lead's final
+ * round, item 2: "the same list of the same things"): one list, in its runs' order (a run's item
+ * types first, then the type calls, then the lock calls), of at most PARTICIPANT_LIMIT names, six;
+ * over six, the first five and "+N more locks" (types, scripts: what the fold holds), the inline
+ * fold that opens the rest in place and folds it back (B#26: 29 lock calls, one per line at 390).
+ * The fold is written after the last name shown, so it never stands alone after a separator.
  */
-function foldedCalls(
-  parts: ReactNode[],
-  noun: 'types' | 'locks',
-  open: boolean,
-  onOpen: () => void
-): ReactNode[] {
-  const folded = !open && parts.length > PARTICIPANT_LIMIT;
-  if (!folded) return parts;
-  const shown = parts.slice(0, PARTICIPANT_LIMIT - 1);
-  const last = shown.length - 1;
-  return shown.map((part, i) =>
-    i < last ? (
-      part
-    ) : (
-      <>
-        {part}{' '}
-        <button
-          type="button"
-          aria-expanded={false}
-          onClick={onOpen}
-          className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
-        >
-          +{parts.length - shown.length} more {noun}
-        </button>
-      </>
-    )
-  );
+function headScripts(runs: readonly ScriptRun[], fold: HeadFold): DottedGroup[] {
+  const total = runs.reduce((n, r) => n + r.parts.length, 0);
+  const foldable = total > PARTICIPANT_LIMIT;
+  const keep = foldable && !fold.open ? PARTICIPANT_LIMIT - 1 : total;
+  const held = new Set<ScriptRun['kind']>();
+  let before = 0;
+  // one group a run in both states (an empty one draws nothing), so the fold's group keeps its
+  // place in the head's list and stays the same element as the names open and fold
+  const groups = runs.map((r) => {
+    const take = Math.max(0, Math.min(r.parts.length, keep - before));
+    before += r.parts.length;
+    if (take < r.parts.length) held.add(r.kind);
+    return detailRun(r.parts.slice(0, take));
+  });
+  if (!foldable) return groups;
+  const noun = held.size === 1 ? [...held][0] : 'script';
+  return [
+    ...groups,
+    // after the last name shown, joined to it: never alone after a separator
+    dottedGroup(
+      [
+        <FoldToggle
+          key="fold"
+          form="inline"
+          open={fold.open}
+          count={total - (PARTICIPANT_LIMIT - 1)}
+          singular={noun}
+          controls={fold.controls}
+          onToggle={fold.onToggle}
+        />,
+      ],
+      { role: 'names-fold', className: DETAIL, joined: true }
+    ),
+  ];
 }
 
 /** A called script as the row names it (T7): its name, its page, and the call with its full args. */
@@ -285,7 +363,12 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 }
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
-  const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName }, 'row');
+  // a lock's words and its page are the one decision's (lib/lock-words.ts), fed its code hash, hash
+  // type and the API's name together, as a list names locks: a lock on a registered code hash by
+  // another hash type is not that lock, so neither its words nor its link take the name (the lead's
+  // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
+  const words = namedLockWords(lockCallFacts(lc), 'column');
+  const name = lockNoun(words, 'row');
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
@@ -293,7 +376,7 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
     name,
     call: notDecoded ? `${call} ${notDecoded}` : call,
     href: getScriptDetailHref({
-      name: lc.scriptName,
+      name: words.form === 'not-indexed' ? undefined : (words.name ?? undefined),
       codeHash: lc.lockCodeHash,
       hashType: lc.lockHashType,
       scriptKind: 'lock',
@@ -302,11 +385,35 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
 }
 
 /**
- * The calls by name, once per script (name and page), in first-call order, each with its count
- * and every call it stands for. Without args on the row, two calls of one script would read
- * ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the same.
+ * The code a run's items and its DAO step carry (`itemTypes`), as its folded row names it: each code
+ * once, by the registry's name (else its short code hash), a link to its page.
  */
-function callNames(refs: CallRef[]): ReactNode[] {
+function itemTypeRef(t: ActivityItemType): CallRef {
+  const name = formatScriptRef(
+    { codeHash: t.typeCodeHash, scriptName: t.scriptName ?? undefined },
+    'row'
+  );
+  return {
+    name,
+    call: name,
+    href: getScriptDetailHref({
+      name: t.scriptName ?? undefined,
+      codeHash: t.typeCodeHash,
+      hashType: t.typeHashType,
+      scriptKind: 'type',
+    }),
+  };
+}
+
+/**
+ * The calls by name, once per script (name and page), in first-call order. On a row (`args`) each
+ * has its count and every call it stands for in its hover: without args on the row, two calls of
+ * one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the
+ * same. A folded run's head (`args` false) names the code its rows called, each once: its rows
+ * differ in how many cells carried a code (the fold compares the set, the lead's final round, item
+ * 1) and in their args, so no row's count or args are the run's.
+ */
+function callNames(refs: CallRef[], args: boolean): ReactNode[] {
   const groups: { name: string; href: string; calls: string[] }[] = [];
   for (const r of refs) {
     const same = groups.find((g) => g.name === r.name && g.href === r.href);
@@ -317,19 +424,24 @@ function callNames(refs: CallRef[]): ReactNode[] {
     <span key={`${g.href}:${g.name}`} className="whitespace-nowrap">
       <Link
         href={g.href}
-        title={g.calls.join('\n')}
-        className="text-text-dim hover:text-jade transition-colors"
+        title={args ? g.calls.join('\n') : undefined}
+        look="inline"
         onClick={(e) => e.stopPropagation()}
       >
         {g.name}
       </Link>
-      {g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
+      {/* a figure, the run's ink (BRIEF-ink-size-roles item 1) */}
+      {args && g.calls.length > 1 && <span> ×{g.calls.length}</span>}
     </span>
   ));
 }
 
-/** The voice of the tx-level facts after the headline: one run of them, named `detail`. */
-const DETAIL = 'text-text-dim text-small font-normal';
+/**
+ * The voice of the tx-level facts after the headline: one run of them, named `detail`. Script names
+ * as links and their counts, the reading ink (BRIEF-ink-size-roles item 1: a link is never quiet;
+ * the run was).
+ */
+const DETAIL = 'text-text text-small font-normal';
 
 function detailRun(parts: readonly ReactNode[]): DottedGroup {
   return dottedGroup(parts, { role: 'detail', className: DETAIL });
@@ -340,7 +452,7 @@ function times(part: ReactNode, count: number): ReactNode {
   return count > 1 ? (
     <>
       {part}
-      <span className="text-text-dim"> ×{count}</span>
+      <span> ×{count}</span>
     </>
   ) : (
     part
@@ -503,7 +615,9 @@ function ProtocolActionLine({
   }
   if (parts.length === 0) parts.push(action.label);
   return (
-    <div data-role="protocol-line" className="text-text-dim text-small leading-row pl-[18px]">
+    // a protocol action's facts, values and the deposit block's link: the reading ink
+    // (BRIEF-ink-size-roles item 1: the line was quiet)
+    <div data-role="protocol-line" className="text-text text-small leading-row pl-[18px]">
       <Dotted parts={withCount(parts, group.count)} />
     </div>
   );
@@ -528,28 +642,70 @@ function ProtocolActionList({
   );
   const amountWidth = widths.length ? Math.max(...widths) : 0;
   const labelChars = Math.max(...actions.map((a) => a.label.length));
+  const linesId = useId();
   return (
     <div data-role="protocol-list" className="flex min-w-0 flex-col">
-      <button
-        type="button"
-        data-role="protocol-list-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
-      >
-        {open ? 'fewer ↑' : `${runCount(actions)} ↓`}
-      </button>
-      {open &&
-        groups.map((g) => (
-          <ProtocolActionLine
-            key={g.key}
-            group={g}
-            named={!one}
-            labelChars={labelChars}
-            amountWidth={amountWidth}
-          />
-        ))}
+      {/* the one fold control (FoldToggle): "all 51 deposits ↓", "fewer ↑" */}
+      <div data-role="protocol-list-toggle" className="self-start pl-[18px]">
+        <FoldToggle
+          open={open}
+          count={actions.length}
+          singular={one ? actionNoun(actions[0].action) : 'action'}
+          controls={linesId}
+          onToggle={setOpen}
+        />
+      </div>
+      <div id={linesId} data-role="protocol-list-lines" className="flex min-w-0 flex-col">
+        {open &&
+          groups.map((g) => (
+            <ProtocolActionLine
+              key={g.key}
+              group={g}
+              named={!one}
+              labelChars={labelChars}
+              amountWidth={amountWidth}
+            />
+          ))}
+      </div>
     </div>
+  );
+}
+
+/** A protocol action read for its row's note, or the error it cannot be read with. */
+type ProtocolRead =
+  | { facts: ProtocolNoteFact[]; error?: undefined }
+  | { facts?: undefined; error: unknown };
+
+/** The one read of a protocol action for a row (its note's facts). */
+function readProtocolAction(action: Parameters<typeof protocolActionNoteFacts>[0]): ProtocolRead {
+  try {
+    return { facts: protocolActionNoteFacts(action, 'row', 'summary') };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/** Whether the one lock decision refuses a party's lock (its line then fails in its place). */
+function partyLockRefused(party: ParticipantInfo): boolean {
+  try {
+    partyLock(party);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether a row cannot read one of its protocol actions or one of its parties' locks: its row
+ * reports the error in its place (`activityDetails`; its party line, ruling D7), so a feed never
+ * folds it (lane B4 fix round, review NOTE 1). A folded run names no party (Gate B), so a refused
+ * lock inside a run would show only once the run is opened.
+ */
+export function rowReadFails(activity: ActivityBody): boolean {
+  return (
+    globalTxEvents(activity).some(
+      (e) => e.kind === 'protocol' && readProtocolAction(e.action).error !== undefined
+    ) || activity.participants.some(partyLockRefused)
   );
 }
 
@@ -562,7 +718,10 @@ function ProtocolActionList({
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
-  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void }
+  fold: HeadFold,
+  args = true,
+  /** A folded run's head: the code its rows' items carry, named first (`itemTypes`). */
+  itemTypes: readonly ActivityItemType[] = []
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -577,17 +736,16 @@ function activityDetails(
   const errors: ReactNode[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
-    let facts: ProtocolNoteFact[];
-    try {
-      facts = protocolActionNoteFacts(e.action, 'row');
-    } catch (error) {
+    const read = readProtocolAction(e.action);
+    if (read.facts === undefined) {
       errors.push(
         <div key={`p${i}`} data-role="detail-error" className="text-small pl-[18px]">
-          <ActivityReadError txHash={activity.txHash} error={error} />
+          <ActivityReadError txHash={activity.txHash} error={read.error} />
         </div>
       );
       return;
     }
+    const { facts } = read;
     actions.push({
       lineKey: protocolLineKey(e.action, e.action === primary),
       action: `${e.action.protocol}:${e.action.action}`,
@@ -596,33 +754,20 @@ function activityDetails(
       facts,
     });
   });
-  const calls: DottedGroup[] = [];
-  if (showScriptDetails && types.length > 0)
-    calls.push(
-      detailRun(
-        foldedCalls(callNames(types.map(typeCallRef)), 'types', folds.types, () =>
-          folds.open('types')
-        )
-      )
-    );
-  if (showScriptDetails && locks.length > 0) {
-    // "lock" names the run once, before its first name
-    const [first, ...rest] = foldedCalls(
-      callNames(locks.map(lockCallRef)),
-      'locks',
-      folds.locks,
-      () => folds.open('locks')
-    );
-    calls.push(
-      detailRun([
-        <>
-          {'lock '}
-          {first}
-        </>,
-        ...rest,
-      ])
-    );
-  }
+  const runs: ScriptRun[] = [
+    { kind: 'type', parts: callNames(itemTypes.map(itemTypeRef), args) },
+    ...(showScriptDetails
+      ? [
+          { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
+          // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
+          { kind: 'lock' as const, parts: callNames(locks.map(lockCallRef), args) },
+        ]
+      : []),
+  ];
+  const calls = headScripts(
+    runs.filter((r) => r.parts.length > 0),
+    fold
+  );
   return {
     actions,
     primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
@@ -631,26 +776,35 @@ function activityDetails(
   };
 }
 
-/** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
-export function formatOccupiedDelta(usedDelta: string): string {
-  const shannons = BigInt(usedDelta);
-  return shannons % SHANNONS_PER_CKB === BigInt(0)
-    ? formatSignedCkbInteger(shannons)
-    : formatSignedCkbExact(shannons);
+/**
+ * The party whose line's only movement is the fee (readability lane B4): its index, or null. Given
+ * a row that lists every party of the transaction with its change, CKB is conserved but for what
+ * enters (a cellbase's reward, a Nervos DAO withdrawal's compensation) and what leaves (the fee).
+ * When nothing entered, no item moved, and exactly one party's CKB changed and went down, that
+ * change is the fee exactly: its line says so, in the reading ink. Nothing is summed to find it.
+ */
+function feeOnlyParty(activity: ActivityBody): number | null {
+  if (activity.isCellbase) return null;
+  if (
+    activity.protocolActions.some(
+      (pa) => pa.protocol === 'dao' && pa.action === 'withdraw_complete'
+    )
+  )
+    return null;
+  let payer: number | null = null;
+  for (const [i, p] of activity.participants.entries()) {
+    if (p.itemDeltas.length > 0) return null;
+    const delta = BigInt(p.ckbDelta);
+    if (delta === BigInt(0)) continue;
+    if (delta > BigInt(0) || payer !== null) return null;
+    payer = i;
+  }
+  return payer;
 }
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
-
-/**
- * The lock kind as dim small caps after the address (material pass v2, move 5: boxes stay on
- * controls; the words are LockKind's default form, `.small-caps`), never a chip.
- */
-const LOCK_KIND = 'text-text-dim small-caps lowercase';
-/** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
-const LINE_BUTTON =
-  'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';
 
 /** One Layer-2 fact as one item of the participant line: it wraps whole, never inside. */
 function ItemOnLine({
@@ -667,13 +821,7 @@ function ItemOnLine({
 }) {
   return (
     <span data-role="item" className={cn('min-w-0 max-w-full', className)}>
-      <ItemDeltaFact
-        item={item}
-        size="row"
-        tone={tone}
-        symbol="dim"
-        showComposition={showComposition}
-      />
+      <ItemDeltaFact item={item} size="row" tone={tone} showComposition={showComposition} />
     </span>
   );
 }
@@ -704,6 +852,7 @@ function ItemsOnLine({
   itemTone,
   showComposition,
   className,
+  controls,
 }: {
   items: ItemDelta[];
   foldObjects: boolean;
@@ -711,10 +860,13 @@ function ItemsOnLine({
   itemTone: 'plain' | 'sign';
   showComposition: boolean;
   className?: string;
+  /** The id of the participant's line, which the objects' fold opens and folds. */
+  controls: string;
 }) {
   const [open, setOpen] = useState(false);
   const objects = items.filter((i) => i.kind === 'object');
-  const folded = foldObjects && !open && objects.length >= 2;
+  const foldable = foldObjects && objects.length >= 2;
+  const folded = foldable && !open;
   const lead = folded
     ? (objects.find((o) => o.kind === 'object' && o.objectId === focusItemId) ?? objects[0])
     : null;
@@ -730,16 +882,19 @@ function ItemsOnLine({
           className={className}
         />
       ))}
-      {folded && (
-        <button
-          type="button"
-          data-role="more-objects"
-          aria-expanded={false}
-          onClick={() => setOpen(true)}
-          className={cn(LINE_BUTTON, className)}
-        >
-          +{objects.length - 1} more {countNoun(objects.length - 1, 'object')}
-        </button>
+      {/* the rest of the batch inside the line: FoldToggle's inline form, which stays and folds
+          back (the lead's final round, item 3) */}
+      {foldable && (
+        <span data-role="more-objects" className={cn('inline-flex', className)}>
+          <FoldToggle
+            form="inline"
+            open={open}
+            count={objects.length - 1}
+            singular="object"
+            controls={controls}
+            onToggle={setOpen}
+          />
+        </span>
       )}
     </>
   );
@@ -756,9 +911,10 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
- * roles), the lock kind in small caps, a note the API attaches, the signed exact CKB, each item change
- * with its mark (signed, by sign; symbol dim), and the occupied change last at 11 px in the
- * dim ink (a figure: never the ghost, never the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
+ * roles), its lock's name in plain words when it is not the default lock (`partyLock`, R9), a note
+ * the API attaches, the signed CKB, each item change with its mark (signed, by sign; symbol dim),
+ * and the occupied change last at the meta step in the dim ink (a figure: never the ghost, never
+ * the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
@@ -772,54 +928,103 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
  */
 function ParticipantLine({
   p,
+  txHash,
   focus,
+  fee,
   foldObjects,
   focusItemId,
+  focusTokenTypeHash,
   itemTone,
   notes,
 }: {
   p: ActivityParticipant & { key: string };
+  /** The line's transaction, named where its figures are refused. */
+  txHash: string;
   focus: boolean;
+  /** Its only movement is the fee (`feeOnlyParty`): "fee" and the fee, in the reading ink. */
+  fee: boolean;
   foldObjects: boolean;
   focusItemId?: string;
+  /** The token the page is about: its amount leads the line, before the CKB (B4). */
+  focusTokenTypeHash?: string;
   itemTone: 'plain' | 'sign';
   notes?: ReadonlyMap<string, string>;
 }) {
   const [objectsOpen, setObjectsOpen] = useState(false);
+  const lineId = useId();
+  const leads = (i: ItemDelta) =>
+    focusTokenTypeHash !== undefined &&
+    i.kind === 'token' &&
+    i.typeScriptHash === focusTokenTypeHash;
+  const lead = p.itemDeltas.filter(leads);
+  const rest = p.itemDeltas.filter((i) => !leads(i));
   const phoneObjects = foldObjects && p.itemDeltas.some((i) => i.kind === 'object');
-  const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
+  const otherItems = rest.filter((i) => i.kind !== 'object');
   const lineTier = lineCompositionTier(p.itemDeltas);
   const showComposition = lineTier === null;
-  return (
-    <div
-      data-role="participant"
-      // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
-      // indent, so the continuation never reads as the next participant.
-      className="text-small leading-row flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px]"
+  const lock = partyLock(p);
+  const fromSm = useFromSm();
+  const party = (
+    <span
+      data-role="party"
+      data-party={p.key}
+      data-this-address={focus || undefined}
+      className={fromSm ? '-ml-3 max-w-full' : undefined}
     >
-      <span
-        data-role="party"
-        data-party={p.key}
-        data-this-address={focus || undefined}
-        className="-ml-3 max-w-full"
-      >
-        <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
-        {focus && <span className="sr-only">this address</span>}
-      </span>
-      {p.lockKind && (
-        <span data-role="lock-kind" className={LOCK_KIND}>
-          {p.lockKind}
-        </span>
-      )}
-      {p.lockHash !== null && notes?.has(p.lockHash) && (
-        <span data-role="participant-note" className="text-text-dim text-meta">
-          {notes.get(p.lockHash)}
-        </span>
-      )}
-      <span data-role="ckb">
-        {/* A feed line: the summary form (R5), the exact change in its title. */}
+      <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
+      {focus && <span className="sr-only">this address</span>}
+    </span>
+  );
+  const lockPart = lock && (
+    // LockKind's default form, never a chip (material pass v2, move 5: boxes stay on
+    // controls): plain words at the line's own size, only for a lock that is not the default
+    // (R9, lane B4)
+    <span data-role="lock-kind">
+      <LockWordsView words={lock} size="row" />
+    </span>
+  );
+  const notePart = p.lockHash !== null && notes?.has(p.lockHash) && (
+    // a note that is a sentence ("holds the class cell"): the line's reading ink at its 13 px
+    // (BRIEF-ink-size-roles items 2 and 3: it was quiet at 12)
+    <span data-role="participant-note">{notes.get(p.lockHash)}</span>
+  );
+  const ckb = (
+    <span
+      data-role="ckb"
+      data-fee={fee || undefined}
+      className={fromSm ? undefined : 'ml-auto shrink-0 whitespace-nowrap'}
+    >
+      {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
+          mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
+      {fee ? (
+        <>
+          <span data-role="fee-label" className="text-text-dim">
+            fee
+          </span>{' '}
+          <CkbAmount form="summary" shannons={-BigInt(p.ckbDelta)} signed={false} tone="plain" />
+        </>
+      ) : (
         <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
-      </span>
+      )}
+    </span>
+  );
+  const occupied = p.usedDelta !== '0' && (
+    <span
+      data-role="occupied"
+      className={cn('whitespace-nowrap tabular-nums', !fromSm && 'ml-auto')}
+    >
+      {/* the figure's label quiet at 12 px, the figure a value in the line's reading ink at its
+          13 px (BRIEF-ink-size-roles items 1 and 2: the whole was quiet at 12) */}
+      <span className="text-text-dim text-meta">occupied</span>{' '}
+      {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
+    </span>
+  );
+  const leadItems = lead.map((item, i) => (
+    // the page's own token, before the CKB that holds it (B4)
+    <ItemOnLine key={`lead${i}`} item={item} tone={itemTone} showComposition={showComposition} />
+  ));
+  const items = (
+    <>
       {phoneObjects && (
         <span
           data-role="phone-items"
@@ -828,50 +1033,94 @@ function ParticipantLine({
           {otherItems.map((item, i) => (
             <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
           ))}
-          <button
-            type="button"
-            data-role="object-count"
-            aria-expanded={objectsOpen}
-            onClick={() => setObjectsOpen((open) => !open)}
-            className={LINE_BUTTON}
-          >
-            {objectCountLabel(p.itemDeltas)}
-          </button>
+          {/* the objects as one signed count, the figure that stands for them folded: FoldToggle's
+              inline form in its words (the lead's final round, item 3) */}
+          <span data-role="object-count">
+            <FoldToggle
+              form="inline"
+              open={objectsOpen}
+              count={p.itemDeltas.filter((i) => i.kind === 'object').length}
+              singular="object"
+              words={objectCountLabel(p.itemDeltas)}
+              controls={lineId}
+              onToggle={setObjectsOpen}
+            />
+          </span>
         </span>
       )}
       <ItemsOnLine
-        items={p.itemDeltas}
+        items={rest}
         foldObjects={foldObjects}
         focusItemId={focusItemId}
         itemTone={itemTone}
         showComposition={showComposition}
         className={phoneObjects ? 'hidden md:inline-flex' : undefined}
+        controls={lineId}
       />
       {lineTier !== null && (
         <span data-role="composition" className="inline-flex">
           <CompositionBadge tier={lineTier} size="sm" />
         </span>
       )}
-      {p.usedDelta !== '0' && (
-        <span
-          data-role="occupied"
-          className="text-meta text-text-dim whitespace-nowrap tabular-nums"
-        >
-          occupied {formatOccupiedDelta(p.usedDelta)}
-        </span>
-      )}
-      {phoneObjects && objectsOpen && (
-        <div
-          data-role="phone-objects"
-          className="flex basis-full flex-wrap items-center gap-x-2.5 pl-2 md:hidden"
-        >
-          {p.itemDeltas
-            .filter((i) => i.kind === 'object')
-            .map((item, i) => (
-              <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
-            ))}
+    </>
+  );
+  const openObjects = phoneObjects && objectsOpen && (
+    <div
+      data-role="phone-objects"
+      className="flex basis-full flex-wrap items-center gap-x-2.5 pl-2 md:hidden"
+    >
+      {p.itemDeltas
+        .filter((i) => i.kind === 'object')
+        .map((item, i) => (
+          <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
+        ))}
+    </div>
+  );
+  // Below sm (the phone-rows board, PA-10): the party on one line, the address and its lock
+  // wrapping beside the CKB, which ends the line on the row's one right edge; what else it moved and
+  // its occupied bytes on the line under it, the bytes quiet at that line's right.
+  if (!fromSm) {
+    const moved = lead.length > 0 || rest.length > 0 || lineTier !== null;
+    return (
+      <div id={lineId} data-role="participant" className="text-small leading-row pl-[18px]">
+        <div data-role="party-line" className="flex flex-nowrap items-baseline gap-x-3">
+          <span className="min-w-0 flex-1 basis-0 [overflow-wrap:anywhere]">
+            {party}
+            {lockPart && <> {lockPart}</>}
+            {notePart && <> {notePart}</>}
+          </span>
+          {ckb}
         </div>
-      )}
+        {(moved || occupied) && (
+          <div
+            data-role="party-figures"
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-3"
+          >
+            {leadItems}
+            {items}
+            {occupied}
+          </div>
+        )}
+        {openObjects}
+      </div>
+    );
+  }
+  return (
+    <div
+      id={lineId}
+      data-role="participant"
+      // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
+      // indent, so the continuation never reads as the next participant.
+      className="text-small leading-row flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px]"
+    >
+      {party}
+      {lockPart}
+      {notePart}
+      {leadItems}
+      {ckb}
+      {items}
+      {occupied}
+      {openObjects}
     </div>
   );
 }
@@ -895,6 +1144,23 @@ function splitFocus<T extends ActivityParticipant>(
 }
 
 /**
+ * The parties a row's head shows, the one rule for an ordinary row and a folded run (lane B4 fix
+ * round, review NOTE 2): the focus first, always shown (consistency C3), then the others by
+ * `participantsToShow` (over six, the five largest, in the feed's order), and how many are folded.
+ */
+function partiesShown<T extends ActivityParticipant>(
+  participants: T[],
+  focusLockHash: string | undefined,
+  txHash: string,
+  expanded: boolean
+): { focus: (T & { key: string }) | null; shown: (T & { key: string })[]; hidden: number } {
+  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
+  const { shown, hidden } = participantsToShow(others, expanded);
+  return { focus, shown: focus === null ? shown : [focus, ...shown], hidden };
+}
+
+/**
  * Every participant, Layer 1 and Layer 2, one line each (D1: none is dropped). Named parties with
  * no change are listed — their zero is the fact. Over six, the five largest and an explicit "+N"
  * to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that participant
@@ -908,10 +1174,15 @@ function Participants({
   focusItemId,
   itemTone,
   notes,
+  feePayer,
+  focusTokenTypeHash,
 }: {
   participants: ActivityParticipant[];
   txHash: string;
   focusLockHash?: string;
+  /** The index of the party whose only movement is the fee (`feeOnlyParty`), or null. */
+  feePayer: number | null;
+  focusTokenTypeHash?: string;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -919,36 +1190,38 @@ function Participants({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
-  const { shown: shownOthers, hidden } = participantsToShow(others, expanded);
-  const shown = focus === null ? shownOthers : [focus, ...shownOthers];
-  const foldable = others.length > PARTICIPANT_LIMIT;
+  const listId = useId();
+  const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
+  const foldable = expanded || hidden > 0;
   if (participants.length === 0) return null;
   return (
-    <div data-role="participants" className="flex min-w-0 flex-col">
+    <div id={listId} data-role="participants" className="flex min-w-0 flex-col">
       {shown.map((p) => (
         <ParticipantLine
           key={p.key}
           p={p}
+          txHash={txHash}
           focus={p === focus}
+          fee={feePayer !== null && p.key === partyKey(participants[feePayer], feePayer)}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
+          focusTokenTypeHash={focusTokenTypeHash}
           itemTone={itemTone}
           notes={notes}
         />
       ))}
+      {/* the participants' way to go under their lines: FoldToggle's box, "all 8 participants ↓"
+          and "fewer ↑" on one button (the lead's final round, item 3) */}
       {foldable && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
-        >
-          {unitNode(
-            expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`
-          )}
-        </button>
+        <div className="self-start pl-[18px]">
+          <FoldToggle
+            open={expanded}
+            count={participants.length}
+            singular="participant"
+            controls={listId}
+            onToggle={setExpanded}
+          />
+        </div>
       )}
     </div>
   );
@@ -974,15 +1247,14 @@ export type ActivityRowProps = {
   showEvidence?: boolean;
   /** F2 blocks: the row's own evidence line (see `ActivityRowHead.evidence`). */
   evidence?: ReactNode;
-  /**
-   * F2 objects (IV-14, OB-12): was the lock kind's own grid column. Option A (T7) draws the lock
-   * kind as a tag on every participant line, so this no longer changes the row; kept so the
-   * callers that pass it need no change in this lane.
-   */
-  lockColumn?: boolean;
   /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
   foldObjects?: boolean;
   focusItemId?: string;
+  /**
+   * Readability B4: the token the page is about (a token page's feed). Its amount leads each
+   * participant line that moved it, the CKB after it; any other item keeps its place.
+   */
+  focusTokenTypeHash?: string;
   /**
    * Token amounts: by sign (jade +, rouge −) by default — an asset delta is a signed delta, like
    * the CKB beside it (T7 ruling, 2026-11-02; was the Address board only, BA-35). `plain` draws
@@ -998,6 +1270,12 @@ export type ActivityRowProps = {
   focusLockHash?: string;
   /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
   age?: boolean;
+  /**
+   * How many of the transaction's parties the row does not list with their changes (the address
+   * page lists its own party alone): a line is said to be the fee (`feeOnlyParty`) only on a row
+   * that lists every party, since an unlisted party's change is not known to it.
+   */
+  unlistedParties?: number;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -1017,18 +1295,21 @@ export function ActivityRow({
   evidence,
   foldObjects = false,
   focusItemId,
+  focusTokenTypeHash,
   itemTone = 'sign',
   participantNotes,
   focusLockHash,
   age = false,
+  unlistedParties = 0,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
-  const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
-    ...openRuns,
-    open: (run) => setOpenRuns((runs) => ({ ...runs, [run]: true })),
+    open: namesOpen,
+    onToggle: setNamesOpen,
+    controls: namesId,
   });
   // Lane F follow-up 2: over PARTICIPANT_LIMIT lines the run is a list under the head; two to six
   // stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
@@ -1069,16 +1350,12 @@ export function ActivityRow({
     >
       <ActivityRowHead
         layout="line"
-        title={
-          <>
-            {mark && <ClassMark kind={mark} className="mr-2" />}
-            {headline ?? activityHeadline(activity)}
-          </>
-        }
+        title={<ActivityTitle activity={activity} headline={headline} mark={markOverride} />}
         // A caller's own evidence (block, address pages) carries its own tx link; then the
         // headline stays text, which also keeps a headline with links of its own unnested.
         href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
         details={runs}
+        detailsId={namesId}
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
@@ -1100,8 +1377,175 @@ export function ActivityRow({
           focusItemId={focusItemId}
           itemTone={itemTone}
           notes={participantNotes}
+          feePayer={mode === 'cross-user' && unlistedParties === 0 ? feeOnlyParty(activity) : null}
+          focusTokenTypeHash={focusTokenTypeHash}
         />
       )}
     </RowArticle>
+  );
+}
+
+/** The mark a row's title carries: the caller's (null for none), else the activity's class. */
+function titleMark(activity: ActivityBody, mark: AssetClass | null | undefined): AssetClass | null {
+  return mark === undefined ? activityClassMark(activity) : mark;
+}
+
+/**
+ * A row's title as its head draws it: its class mark, then its headline (the feed's own words,
+ * else the activity's Layer-3 narrative). The one place a title is drawn, for a row and a run.
+ */
+export function ActivityTitle({
+  activity,
+  headline,
+  mark,
+}: {
+  activity: ActivityBody;
+  headline?: ReactNode;
+  mark?: AssetClass | null;
+}) {
+  const shownMark = titleMark(activity, mark);
+  return (
+    <>
+      {shownMark && <ClassMark kind={shownMark} className="mr-2" />}
+      {headline ?? activityHeadline(activity)}
+    </>
+  );
+}
+
+/**
+ * The same title in words, what a feed's runs compare (`lib/activity-runs.ts`): the class mark's
+ * name and the headline's words. `headlineText` is a feed's own headline in words, as it draws it.
+ */
+export function activityTitleText(
+  activity: ActivityBody,
+  headlineText?: string,
+  mark?: AssetClass | null
+): string {
+  const shownMark = titleMark(activity, mark);
+  return `${shownMark === null ? '' : `${shownMark}: `}${headlineText ?? activityHeadline(activity)}`;
+}
+
+/**
+ * A run of rows that did the same thing, folded (readability lane B4; the rule is
+ * `lib/activity-runs.ts`, the owner's of Gate B): one row that says what its rows did and called —
+ * the title, the scripts by the code they share (no row's args: those differ from row to row) —
+ * how many transactions it holds and how many participants they name, and the newest time (the
+ * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
+ * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
+ * fold control (`FoldToggle`: "all N transactions ↓", "fewer ↑"): it opens the ordinary rows in
+ * place, under it, and folds them again, stays where it is in both states and keeps the focus.
+ */
+export function FoldedActivityRow({
+  rows,
+  participants,
+  title,
+  showScriptDetails,
+  age,
+  className,
+  fresh = false,
+  open,
+  final,
+  controls,
+  onToggle,
+}: {
+  /** The run, newest first: at least two committed rows. */
+  rows: readonly ActivityRowData[];
+  /** How many parties its rows name, each once (`runParties`). */
+  participants: number;
+  /** The title its rows draw (`ActivityTitle`). */
+  title: ReactNode;
+  showScriptDetails: boolean;
+  /** As the feed's rows: the age on a live feed, else the date (PA-22). */
+  age: boolean;
+  /**
+   * The class its feed gives its rows, given to the run too: a neighbour's rows on an identity's
+   * feed are set back, and so is their run (the feed's one decision, R4).
+   */
+  className?: string;
+  fresh?: boolean;
+  open: boolean;
+  /**
+   * Whether its counts are the run's whole: false for a feed's last run of the rows read while
+   * older rows are unread (the next row may continue it), whose counts say "so far".
+   */
+  final: boolean;
+  /**
+   * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
+   * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
+   * leaves a run.
+   */
+  controls: string;
+  onToggle: () => void;
+}) {
+  const first = rows[0];
+  if (rows.length < 2)
+    throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
+  if (first.timestamp === null || first.blockNumber === null)
+    throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
+  if (participants < 1)
+    throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
+  if (first.itemTypes === null)
+    throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
+  // the script code is the same on every row of a run: the first row's item types and calls, by
+  // name, are the run's (with no row's count or args), by a row's head's one rule (`headScripts`):
+  // "Token transfer · Simple UDT"
+  const { calls: details } = activityDetails(
+    first,
+    showScriptDetails,
+    { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
+    false,
+    first.itemTypes
+  );
+  // a count of what is read, older rows unread, is not final, and says so (the lead's finding)
+  const soFar = final ? '' : ' so far';
+  const transactions = `${formatCount(rows.length, 'transaction')}${soFar}`;
+  const toggle = (
+    <FoldToggle
+      open={open}
+      count={rows.length}
+      singular="transaction"
+      soFar={!final}
+      controls={controls}
+      onToggle={onToggle}
+    />
+  );
+  return (
+    <article
+      data-role="activity-run"
+      data-run-count={rows.length}
+      className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
+    >
+      <ActivityRowHead
+        layout="line"
+        title={title}
+        details={details}
+        detailsId={namesId}
+        hash={first.txHash}
+        blockNumber={first.blockNumber}
+        timestamp={first.timestamp}
+        evidence={
+          <>
+            newest <RowDate timestamp={first.timestamp} age={age} />
+          </>
+        }
+      />
+      {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
+      <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
+        {/* "participants": every party its rows name, the count the stores can state today. The
+            owner's word is "senders" (a party one of whose cells the transaction consumed): it
+            becomes that count here once the indexer records, per participant, that its lock holds
+            an input (the per-participant input flag, a re-sync; the route then states it and
+            `runParties` counts the parties that sent). This is the one place that writes it. */}
+        <Dotted
+          parts={[
+            toggle,
+            open && transactions,
+            `${formatCount(participants, 'participant')}${soFar}`,
+          ]}
+        />
+      </div>
+    </article>
   );
 }

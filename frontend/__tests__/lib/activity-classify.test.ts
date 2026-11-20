@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobalActivity } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
-  return {
+  return activityRead({
     txHash: overrides.txHash ?? '0xtx',
     blockNumber: overrides.blockNumber ?? 10_000,
     txIndex: overrides.txIndex ?? 0,
@@ -11,6 +12,9 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
+    // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+    itemTypes: overrides.itemTypes ?? [],
+    itemTypesUnread: null,
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants ?? [
       {
@@ -24,13 +28,14 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
         tags: 0,
       },
     ],
-  };
+  });
 }
 
 describe('classifyActivity', () => {
   it('classifies DAO deposit from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -47,6 +52,7 @@ describe('classifyActivity', () => {
   it('classifies DAO withdraw request from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -63,6 +69,7 @@ describe('classifyActivity', () => {
   it('classifies DAO withdraw complete from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -79,6 +86,7 @@ describe('classifyActivity', () => {
   it('classifies token transfer via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
@@ -107,6 +115,7 @@ describe('classifyActivity', () => {
   it('classifies object action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.spore],
         participants: [
           {
             address: 'ckb1qtest',
@@ -127,6 +136,7 @@ describe('classifyActivity', () => {
   it('classifies identity action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.dotbit],
         participants: [
           {
             address: 'ckb1qtest',
@@ -186,6 +196,7 @@ describe('classifyActivity', () => {
   it('DAO deposit takes priority over token in same activity', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -216,6 +227,7 @@ describe('classifyActivity', () => {
   it('token takes priority over script call', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
@@ -247,6 +259,7 @@ describe('classifyActivity', () => {
   it('returns the first matching item delta for the classified type', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -269,6 +282,7 @@ describe('classifyActivity', () => {
   it('item delta takes priority over lock calls', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
@@ -285,6 +299,7 @@ describe('classifyActivity', () => {
         ],
         lockCalls: [
           {
+            lockScriptName: null,
             lockCodeHash: '0xintent',
             lockHashType: 'type',
             lockArgs: '0xargs',
@@ -305,7 +320,7 @@ describe('classifyActivity', () => {
             lockHashType: 'type',
             lockArgs: '0xargs',
             scriptHash: '0xhash',
-            scriptName: 'RGB++',
+            lockScriptName: 'RGB++',
           },
         ],
       })
@@ -334,6 +349,7 @@ describe('classifyActivity', () => {
   it('protocol action takes priority over item deltas', () => {
     const result = classifyActivity(
       makeActivity({
+        itemTypes: [ITEM_TYPE.xudt],
         protocolActions: [
           { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
         ],

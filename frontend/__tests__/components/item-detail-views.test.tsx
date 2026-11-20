@@ -3,7 +3,7 @@ import { render, screen, within, act, createTestQueryClient } from '@/__tests__/
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
-import { api } from '@/lib/api';
+import { api, type ItemCellVersion } from '@/lib/api';
 import { mockItemReads, dotcellItem } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
@@ -20,13 +20,24 @@ it('keeps object capacity primary, one versions heading and exact occupied value
   // F2 objects (OB-9): the versions are the board's "CKB held in its cell" — one heading for both.
   expect(await screen.findByLabelText(/cell versions$/)).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: /^Cell versions/ })).not.toBeInTheDocument();
-  // Phase 5 (D12): the board's heading is "CKB held", its rate and split the note beside it.
-  const held = screen.getAllByRole('heading', { name: 'CKB held' });
-  expect(held).toHaveLength(1);
-  expect(held[0].parentElement).toHaveTextContent('1 CKB per byte');
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.queryByRole('heading', { name: 'CKB held' })).toBeNull();
+  const history = screen.getByRole('region', { name: 'History' });
+  const heading = within(history).getByRole('heading', { name: 'History' });
+  expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
+  expect(heading.parentElement).not.toHaveTextContent(/occupied|free/);
   expect(
-    screen.getByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)
-  ).toHaveTextContent('229');
+    screen.queryByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)
+  ).toBeNull();
+  // the sentence computed from its points stands first in the section, before the versions
+  const sentence = history.querySelector('[data-role="history-sentence"]')!;
+  expect(
+    sentence.compareDocumentPosition(screen.getByLabelText(/cell versions$/)) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell.+229 occupied · 271 free/
+  );
   expect(
     screen.getByRole('region', { name: 'Raw item evidence' }).closest('[data-tier]')
   ).toHaveAttribute('data-tier', '2');
@@ -34,14 +45,23 @@ it('keeps object capacity primary, one versions heading and exact occupied value
 // A4 Chrome F4 (the other tier-2 grids): the raw evidence's out point set its tx hash at 13 px in
 // an 11 px line, 514.8 px, in a 460 px column at 1024 ((976 − 56) / 2): a scroll of 55 px. The hash
 // takes its line's 11 px: 66 × 6.6 = 435.6 px and ":N" after it, 448.8 px, within 460.
-it('sets the raw evidence’s out point at its line’s size, so a whole hash fits a 1024 column', async () => {
+// Re-pinned on purpose (lane P2's follow-up, item 8; 48da6a17 left it red, "expect(element)
+// .toHaveClass("text-meta")"): the out point's hash is a head's id (HeadId) in the 11 px line, its
+// index said in words before it; at 11 px it is 435.6 px, one line in the 460 px column at 1024,
+// two halves below 435.6
+// Re-pinned on purpose (the ink and size roles round): the out point is a link, at 13 px; its label
+// stays at 12 beside it. At 13 px its hash is 66 × 7.8 = 514.8 px: one line in the tier's 588 px
+// column at 1280, two halves of 257.4 px from 1024 (460) down, never a scroll (a head's id).
+it('sets the raw evidence’s out point as a link at 13 px, its label at 12', async () => {
   render(<SporeDetailView object={sporeDetailProducer} error={null} />);
   const evidence = await screen.findByRole('region', { name: 'Raw item evidence' });
-  const line = within(evidence).getByText(/^Outpoint/);
-  expect(line).toHaveClass('text-meta');
-  const hash = line.querySelector('[data-full-value]') as HTMLElement;
+  const label = within(evidence).getByText(/^Outpoint · output \d+ of$/);
+  expect(label).toHaveClass('text-meta', 'text-text-dim');
+  const line = label.parentElement!;
+  expect(line).toHaveClass('text-small');
+  const hash = line.querySelector('[data-head-id]') as HTMLElement;
   expect(hash).not.toBeNull();
-  expect(hash.className).not.toMatch(/(^|\s)text-(body|small|section)/);
+  expect(hash.className).not.toMatch(/(^|\s)text-(body|meta|section)/);
 });
 
 it('rejects impossible object capacity rather than clamping it', () => {
@@ -167,13 +187,34 @@ it("titles collection feed rows from the API's collectionContext, never the tx's
   const recent = await screen.findByRole('region', { name: 'Recent activity' });
   expect(await within(recent).findByText('Transferred 1')).toBeInTheDocument();
   expect(within(recent).queryByText(/^Object (mint|transfer|burn)$/)).toBeNull();
-  act(() =>
-    within(recent)
-      .getByRole('button', { name: /transactions →$/ })
-      .click()
-  );
+  // re-pinned on purpose (lane P2's follow-up, item 10): the fold's one control, "all N
+  // transactions ↓" under the rows (it was "N transactions →" in the heading's note)
+  act(() => screen.getByRole('button', { name: /^all \S+\stransactions ↓$/ }).click());
   const feed = await screen.findByRole('region', { name: 'What happened' });
   // The Transactions tab says the same thing per row.
   // Table and compact layouts both carry it.
   expect((await within(feed).findAllByText('Minted 1')).length).toBeGreaterThan(0);
+});
+
+// Lane P2's fifth round (item 2, MUST): a melted Spore's History said "The object's cell holds 320
+// CKB" under "No live cell holds capacity for this burned object." It says what its last cell held
+// when it was consumed, in the past tense.
+it('says what a melted object’s last cell held, in the past tense, under its History', async () => {
+  const live = (await api.getItemCellVersions('spore', sporeDetailProducer.sporeId)).data;
+  const consumed: ItemCellVersion[] = live.map((v) => ({
+    ...v,
+    isLive: false,
+    consumedByTx: v.consumedByTx ?? `0x${'56'.repeat(32)}`,
+    consumedAtBlock: v.consumedAtBlock ?? v.blockNumber + 1,
+  }));
+  vi.mocked(api.getItemCellVersions).mockResolvedValue({ data: consumed, total: consumed.length });
+  render(<SporeDetailView object={{ ...sporeDetailProducer, isLive: false }} error={null} />);
+  const history = await screen.findByRole('region', { name: 'History' });
+  await screen.findByLabelText(/cell versions$/);
+  const sentence = history.querySelector('[data-role="history-sentence"]')!;
+  expect(history).toHaveTextContent('No live cell holds capacity for this burned object.');
+  expect(sentence.textContent).toMatch(
+    /^The object’s (last )?cell held .+ CKB.* when it was consumed\./
+  );
+  expect(sentence.textContent).not.toMatch(/holds/);
 });

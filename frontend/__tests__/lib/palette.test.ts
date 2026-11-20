@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AMOUNT_INK } from '@/components/ui/ckb-amount';
+import { INLINE_UNDERLINE } from '@/components/ui/link';
 import { STEP_W } from '@/lib/pipeline/encoding';
 import { CODE_CLASS_KEYS } from '@/lib/design-tokens';
 import {
@@ -18,6 +19,7 @@ import {
   MATERIALS,
   overGround,
   PALETTE,
+  paletteKeyOf,
   PALETTE_KEYS,
   relativeLuminance,
   THEMES,
@@ -135,6 +137,20 @@ function rgbaAlpha(value: string): number {
   return Number(m[1]);
 }
 
+// Lane P1 (the cell microscope's ELF regions read their label's ink off a tone given as a colour):
+// the key a `color(key)` names, and nothing else.
+describe('paletteKeyOf', () => {
+  it('reads back the key of every colour the palette writes', () => {
+    for (const key of PALETTE_KEYS) expect(paletteKeyOf(color(key))).toBe(key);
+  });
+
+  it('refuses a colour that names no key', () => {
+    expect(() => paletteKeyOf('#97b9c4')).toThrow('palette: "#97b9c4" names no palette key');
+    expect(() => paletteKeyOf('var(--c-no-such-ink)')).toThrow('names no palette key');
+    expect(() => paletteKeyOf(alpha('jade', 0.5))).toThrow('names no palette key');
+  });
+});
+
 describe('the palette: one source for both themes', () => {
   it('defines every colour key in both themes as #rrggbb', () => {
     for (const theme of THEMES) {
@@ -190,6 +206,19 @@ describe('the palette: one source for both themes', () => {
     expect(PALETTE.light.mark).toBe('#b5331f');
     expect(PALETTE.dark.mark).not.toBe(PALETTE.dark.rouge);
     expect(PALETTE.light.mark).not.toBe(PALETTE.light.rouge);
+  });
+
+  // Lane c2-links, the coordinator's ruling: a link inside a line is underlined in the muted ink
+  // (1 px, 3 px under the text). The line is a shape, not a word: at least 3:1 on the four grounds
+  // in both themes, computed here so a later palette change cannot take it under the floor. (The
+  // board's slate-other line was 1.37–1.66:1 by night and 1.50–1.84:1 by day.)
+  it('keeps the underline of a link inside a line at a shape’s contrast on every ground', () => {
+    expect(INLINE_UNDERLINE).toBe('ink-muted');
+    for (const theme of THEMES)
+      for (const ground of GROUNDS) {
+        const ratio = contrastRatio(PALETTE[theme][INLINE_UNDERLINE], PALETTE[theme][ground]);
+        expect(ratio, `${theme} ${INLINE_UNDERLINE} on ${ground}`).toBeGreaterThanOrEqual(3);
+      }
   });
 
   it('is dark ink on paper by day and light ink on night by night', () => {
@@ -309,6 +338,7 @@ describe('the rubbing / Song print finish', () => {
 
   // Phase 4: the newest block's seal is pressed behind the 404 verse in the cinnabar mark at
   // `seal-press`; the verse's three inks, the dim facts and the links stay text-grade on a stroke.
+  // Since readability R6 the seal stands clear of the text; the press keeps this ceiling.
   it('presses the 404 seal faint: every ink of the verse and its facts is text-grade on a stroke', () => {
     for (const theme of THEMES) {
       const press = Number(MATERIALS[theme]['seal-press']);

@@ -2,8 +2,9 @@
 
 import { useId, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
+import Link, { type LinkLook } from '@/components/ui/link';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
+import { HeadId } from '@/components/ui/head-id';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { FiberSplitBar } from '@/components/fiber/fiber-split-bar';
@@ -51,9 +52,6 @@ export function formatEpochDelay(delay: FiberEpochDelay, raw: string): string {
   return `${relative ? 'relative' : 'absolute'} · ${epochs.toLocaleString('en-US')} + ${index}/${length} epoch${epochs === 1 && index === 0 ? '' : 's'}`;
 }
 
-/** A hash or output link in the boards' link cyan; the global `a:hover` jade still wins. */
-const LINK = inkStyle(BOARD_INKS.link);
-
 /**
  * A party by its address, else its lock hash, at the row size, as the hero's pair and the story
  * name it (R9; U-09: it was the last six characters alone on the split bar and the received
@@ -68,10 +66,13 @@ const partyId = (party: Party) =>
     <ShortId value={party.lockScriptHash} kind="hash" size="row" />
   );
 
-/** A party in a sentence or a row: the row size. */
-function PartyLink({ party, className }: { party: Party; className?: string }) {
+/**
+ * A party in a sentence or a row, at the row size: a link inside the line (`inline`) by default,
+ * or the row's key where it heads a row of the party's figures.
+ */
+function PartyLink({ party, look = 'inline' }: { party: Party; look?: LinkLook }) {
   return party.address ? (
-    <Link href={`/address/${party.address}`} className={className ?? 'hover:text-jade'}>
+    <Link href={`/address/${party.address}`} look={look}>
       <ShortId value={party.address} kind="address" size="row" />
     </Link>
   ) : (
@@ -79,8 +80,15 @@ function PartyLink({ party, className }: { party: Party; className?: string }) {
   );
 }
 
-const ckb = (shannons: string | bigint, signed = false) => (
-  <CkbAmount form="column" shannons={BigInt(shannons)} signed={signed} tone="plain" />
+/**
+ * The channel's own figures, exact (readability R5: the page of the thing itself), its trailing
+ * zeros dropped; a sentence's figure is the summary, its exact value in its title.
+ */
+const exact = (shannons: string | bigint, signed = false) => (
+  <CkbAmount form="exact" shannons={BigInt(shannons)} signed={signed} tone="plain" />
+);
+const summary = (shannons: string | bigint) => (
+  <CkbAmount form="summary" shannons={BigInt(shannons)} signed={false} tone="plain" />
 );
 
 /** The opening flows of the two observed parties, in their order, when both put CKB in. */
@@ -122,6 +130,27 @@ function split(channel: FiberChannelDetail, amounts: { party: Party; amount: big
   return channel.observedParties.length === 2 && amounts.length === 2 ? amounts : null;
 }
 
+/**
+ * Both observed parties' amounts in one stage, in the channel's party order, a party with none at
+ * zero (lane exactness, part A2, the pages review's NOTE 4: the sentence of what moved was drawn only where both had
+ * one, so a single-funded channel stated nothing, and a close that paid one side read as if nothing
+ * were known of it). Null where the stage is not observed or the channel has not two parties.
+ */
+function partyAmounts(
+  channel: FiberChannelDetail,
+  stage: Stage | undefined,
+  sign: 1 | -1
+): Split | null {
+  if (!stage || channel.observedParties.length !== 2) return null;
+  const paying = stageAmounts(channel, stage, sign);
+  return channel.observedParties.map((party) => ({
+    party,
+    amount:
+      paying.find((entry) => entry.party.lockScriptHash === party.lockScriptHash)?.amount ??
+      BigInt(0),
+  }));
+}
+
 function Summary({
   channel,
   evidence,
@@ -147,14 +176,16 @@ function Summary({
           : `${lifetime} later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of ${delay} the settlement paid it out.`;
   return (
     <p data-testid="channel-summary">
+      {/* readability R5: a sentence's figures take the summary form, their exact values in their
+          titles and in tier 1's opening flows */}
       {putIn.length > 0 && (
         <>
-          <PartyLink party={putIn[0].party} /> put {ckb(putIn[0].net)} net into the opening
+          <PartyLink party={putIn[0].party} /> put {summary(putIn[0].net)} net into the opening
           transaction
           {putIn.slice(1).map(({ party, net }) => (
             <span key={party.lockScriptHash}>
               {' '}
-              and <PartyLink party={party} /> {ckb(net)}
+              and <PartyLink party={party} /> {summary(net)}
             </span>
           ))}
           .{' '}
@@ -166,9 +197,8 @@ function Summary({
 }
 
 /**
- * The hero's lede (hierarchy v3, R13): the channel's story in one line (≤ 67 characters fill the
- * 560 px lede at 13 px); the
- * full story, with what each side put in, is the tier-2 `Summary`.
+ * The hero's lede (hierarchy v3, R13): the channel's story in one line (≤ 76 characters fill the
+ * measure, readability R4); the full story, with what each side put in, is the tier-2 `Summary`.
  */
 function ledeSentence(channel: FiberChannelDetail): string {
   const id = channel.channelId;
@@ -208,13 +238,103 @@ function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
 
 const STEP_WORDS = ['no', 'one', 'two', 'three', 'four'];
 
-/** "ppedrr received 899.99998733 CKB net" for each party paid in the final stage. */
+/**
+ * "ckb1…7sppedrr received 899.99 CKB net" for each party paid in the final stage: a line of a
+ * step's box, a sentence, so the summary form (R5), its exact value in its title.
+ */
 function receivedLines(channel: FiberChannelDetail, stage: Stage | undefined): ReactNode[] {
   return stageAmounts(channel, stage, 1).map(({ party, amount }) => (
     <span key={party.lockScriptHash}>
-      {partyId(party)} received {ckb(amount)} net
+      {partyId(party)} received {summary(amount)} net
     </span>
   ));
+}
+
+type Split = { party: Party; amount: bigint }[];
+
+/**
+ * What moved inside the channel, in one sentence (the readability plan's P4: "the Fiber channel
+ * page states what moved in a sentence"), from the stages' own party flows (the API's figures,
+ * the ones the split bars draw): what each party put in at the open and, once the channel paid
+ * out, what each got back at the close or the settlement, each party's figures as the chain shows
+ * them and a party with none "nothing" (lane exactness, part A2, NOTE 4: a single-funded channel, the usual shape,
+ * and a close that paid one side are said too). Nothing is added or subtracted in the page: the
+ * chain does not say which side paid the fees inside both figures, so the amount that changed sides
+ * is not a figure the page can state; the two figures stand side by side for each party instead.
+ * Summary form (R5: a sentence), each cut figure titled exact. Under 140 characters for two
+ * parties with seven-digit amounts (not a tier-1 prose block). Both splits are in the channel's
+ * party order, read by one function (`partyAmounts`).
+ */
+function WhatMoved({
+  channel,
+  opened,
+  paid,
+}: {
+  channel: FiberChannelDetail;
+  opened: Split;
+  paid: Split | null;
+}) {
+  const unpaid = channel.state === 'open' || channel.state === 'forceClosed';
+  const amount = (value: bigint) => (value > BigInt(0) ? summary(value) : 'nothing');
+  return (
+    <p data-testid="what-moved" className="text-text text-body max-w-measure">
+      {paid ? (
+        opened.map(({ party, amount: putIn }, i) => (
+          <span key={party.lockScriptHash}>
+            {i > 0 && '; '}
+            <PartyLink party={party} /> put in {amount(putIn)} and got back {amount(paid[i].amount)}
+          </span>
+        ))
+      ) : (
+        <>
+          <PartyLink party={opened[0].party} /> put in {amount(opened[0].amount)} and{' '}
+          <PartyLink party={opened[1].party} /> {amount(opened[1].amount)}
+          {unpaid && '; nothing has been paid out yet'}
+        </>
+      )}
+      .
+    </p>
+  );
+}
+
+/**
+ * A force-closed channel that waits (review fiber-channel-open: "the live commitment is the key
+ * fact, set out like every other card"): the commitment cell that holds the channel now, by its
+ * out point, what it holds and when it can pay out, first in tier 1. How the CKB inside it splits
+ * between the two parties is not on chain while the cell is live (lane exactness, part A, A5 iv):
+ * a commitment lock of the 57- or 58-byte layouts holds a 20-byte hash of the settlement, the split
+ * both last signed, and the settlement transaction that spends the cell reveals it and pays it
+ * out; the older layouts hold not even that. So no field can state it, and the page says what the
+ * chain holds instead.
+ */
+function LiveCommitment({
+  channel,
+  commitment,
+}: {
+  channel: FiberChannelDetail;
+  commitment: NonNullable<FiberChannelEvidence['currentCommitment']>;
+}) {
+  const delay = required(channel.delayEpochDecoded, 'a decoded delay', channel.channelId);
+  return (
+    <p data-testid="live-commitment" className="text-text text-body max-w-measure">
+      The live commitment{' '}
+      <Link
+        look="inline"
+        href={`/cell/${commitment.txHash}-${commitment.outputIndex}`}
+        title={`${commitment.txHash}:${commitment.outputIndex}`}
+      >
+        <ShortId value={commitment.txHash} kind="hash" size="row" />
+        <OutpointIndex index={commitment.outputIndex} />
+      </Link>{' '}
+      holds {summary(commitment.capacity)}. How it divides between the two is not on chain:{' '}
+      {commitment.settlementHash
+        ? 'the lock holds only a 20-byte hash of the split both last signed, and the settlement that spends this cell shows the amounts.'
+        : 'the settlement that spends this cell shows the amounts.'}{' '}
+      {commitment.readyEpoch
+        ? `The payout can be spent from epoch ${stageEpoch(commitment.readyEpoch, commitment.blockNumber)}.`
+        : `The payout waits ${epochDelayWords(delay)}${delay.relative ? ' after the commitment' : ''}.`}
+    </p>
+  );
 }
 
 interface StepSpec {
@@ -409,6 +529,13 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const atOpen = split(channel, stageAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1));
   const closing = finalStage(channel, evidence);
   const atClose = split(channel, stageAmounts(channel, closing, 1));
+  // each party's figures at the open and the close, a zero among them (NOTE 4); a channel whose
+  // opening paid nothing in is no channel the sentence can state
+  const openedAll = partyAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1);
+  const opened = openedAll?.some(({ amount }) => amount > BigInt(0)) ? openedAll : null;
+  const paid = opened ? partyAmounts(channel, closing, 1) : null;
+  // a force-closed channel that waits: its commitment cell holds the channel now
+  const live = channel.state === 'forceClosed' && tracked !== null && tracked.isLive;
   const commitmentStage =
     stageOf(evidence, STAGE_KEYS.commitment) ??
     (channel.state === 'forceClosed' || channel.state === 'settled'
@@ -427,6 +554,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const partyOf = (lockHash: string) =>
     channel.observedParties.find((party) => party.lockScriptHash === lockHash);
   const titleId = useId();
+  const flows = evidence?.openingPartyFlows ?? [];
   // Tier 2 (F2): every sentence that left tier 1, beside the lock evidence when it has loaded.
   const words = (
     <DetailSection title="The channel, in words">
@@ -441,12 +569,22 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             , so the other side can answer with a newer state.
           </p>
         )}
-        {atOpen && (
+        {opened && (
           <p>
             The chain never sees a Fiber payment, only the split when the channel opens and the
             split when it closes.
-            {atClose &&
+            {paid &&
               ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
+          </p>
+        )}
+        {/* The caveat of tier 1's "Opening transaction, per party" whole, on the measure (it was
+            one tier-2 line of 187 characters over the grid; review fiber-channel). */}
+        {flows.length > 0 && (
+          <p>
+            The opening transaction&apos;s parties are its non-Fiber locks, on its inputs or
+            outputs. An output-only lock did not necessarily sign it. Net input includes fees and
+            any unrelated outputs in the same transaction; it is not a proven channel balance or
+            payment.
           </p>
         )}
       </Prose>
@@ -465,15 +603,20 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </h1>
             <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>
           </div>
-          <p className="text-text-dim text-small mt-1.5 w-fit max-w-full break-all">
-            {channel.channelId}
-          </p>
-          <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{ledeSentence(channel)}</p>
+          {/* Lane P4 (review fiber-channel: "the full channel id at 11 px dim under the title"):
+              an id is a value, in the reading ink at the small step, in the head's designed lines
+              (one line where its 514.8 px fit, else the two halves, 0x and 32 digits over 32:
+              265.2 px at 13 px, inside a 358 px column with the copy's 32 px box and 8 px gap),
+              with the head's one copy. It was a quiet paragraph broken anywhere. */}
+          <div data-testid="channel-id" className="text-text text-small mt-1.5 min-w-0">
+            <HeadId value={channel.channelId} kind="hash" copy="copy channel id" />
+          </div>
+          <p className="text-text text-body max-w-measure mt-1.5">{ledeSentence(channel)}</p>
           <div data-role="figure" className="mt-9 min-w-0">
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">capacity</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
               <CapacityFigure channel={channel} />
-              <p data-testid="channel-pair" className="text-body min-w-0">
+              <p data-testid="channel-pair" className="text-body max-w-measure min-w-0">
                 {first && <PartyLink party={first} />}
                 {second && (
                   <>
@@ -500,42 +643,97 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </div>
           </div>
           {evidenceError && (
-            <p role="alert" className="text-rouge text-small mt-3 [overflow-wrap:anywhere]">
+            <p
+              role="alert"
+              className="text-rouge text-small max-w-measure mt-3 [overflow-wrap:anywhere]"
+            >
               Local node evidence unavailable: {evidenceError}
             </p>
           )}
         </section>
 
         <div className="mt-16 flex flex-col gap-[72px]">
-          {atOpen && (
+          {(opened || live) && (
             <DetailSection title="What moved inside the channel">
-              <div className="flex flex-col gap-4">
-                <FiberSplitBar
-                  left={{ name: partyId(atOpen[0].party), shannons: atOpen[0].amount }}
-                  right={{ name: partyId(atOpen[1].party), shannons: atOpen[1].amount }}
-                  note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
-                />
-                {atClose && closing && (
-                  <FiberSplitBar
-                    left={{ name: partyId(atClose[0].party), shannons: atClose[0].amount }}
-                    right={{
-                      name: partyId(atClose[1].party),
-                      shannons: atClose[1].amount,
-                    }}
-                    note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
-                      closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
-                    } transaction, payout and change alike`}
-                  />
-                )}
-              </div>
-              <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
-                The chain sees no Fiber payment, only the split at the open and at the close.
+              {live && tracked && <LiveCommitment channel={channel} commitment={tracked} />}
+              {opened && (
+                <div className={live ? 'mt-3.5' : undefined}>
+                  <WhatMoved channel={channel} opened={opened} paid={paid} />
+                </div>
+              )}
+              {atOpen && (
+                <>
+                  <div className="mt-[18px] flex flex-col gap-4">
+                    <FiberSplitBar
+                      left={{ name: partyId(atOpen[0].party), shannons: atOpen[0].amount }}
+                      right={{ name: partyId(atOpen[1].party), shannons: atOpen[1].amount }}
+                      note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
+                    />
+                    {atClose && closing && (
+                      <FiberSplitBar
+                        left={{ name: partyId(atClose[0].party), shannons: atClose[0].amount }}
+                        right={{
+                          name: partyId(atClose[1].party),
+                          shannons: atClose[1].amount,
+                        }}
+                        note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
+                          closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
+                        } transaction, payout and change alike`}
+                      />
+                    )}
+                  </div>
+                  <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
+                    The chain sees no Fiber payment, only the split at the open and the close.
+                  </p>
+                </>
+              )}
+            </DetailSection>
+          )}
+
+          {/* The plan's P4 sentence: per-party in, back and net in tier 1, the API's opening flows
+              (they were tier 2's, under a 187-character line of caveat); the caveat whole is tier
+              2's, one line of it here. The party is the row's key; the three figures are the
+              channel's own, exact, each part held whole on its line. */}
+          {flows.length > 0 && (
+            <DetailSection title="Opening transaction, per party">
+              <Grid>
+                {flows.map((flow) => {
+                  const party = partyOf(flow.lockScriptHash);
+                  return (
+                    <span key={flow.lockScriptHash} className="contents">
+                      <span>
+                        {party ? (
+                          <PartyLink party={party} look="key" />
+                        ) : (
+                          <ShortId value={flow.lockScriptHash} kind="hash" size="row" />
+                        )}
+                      </span>
+                      <span className="text-text">
+                        <span data-flow="in" className="whitespace-nowrap">
+                          in {exact(flow.openingInputCapacity)}
+                        </span>{' '}
+                        ·{' '}
+                        <span data-flow="back" className="whitespace-nowrap">
+                          back {exact(flow.openingOutputCapacity)}
+                        </span>{' '}
+                        ·{' '}
+                        <span data-flow="net" className="whitespace-nowrap">
+                          net {exact(flow.observedNetInput, true)}
+                        </span>
+                      </span>
+                    </span>
+                  );
+                })}
+              </Grid>
+              <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
+                Net input includes the fee and any unrelated outputs: not a proven balance.
               </p>
             </DetailSection>
           )}
 
           {/* Rubbing × Song print, phase 5 (D14): on chain, run on its steps - so far, while the
-              channel can still take another. */}
+              channel can still take another. The plan's P4: the timeline stays in tier 1; each
+              step's transaction, drawn whole, is tier 2's ("Each step, as a transaction"). */}
           <DetailSection
             title="On chain"
             args={
@@ -544,8 +742,18 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                 : `${STEP_WORDS[steps.length]} ${countNoun(steps.length, 'step')}`
             }
           >
+            <FiberChannelTimeline channel={channel} />
+          </DetailSection>
+        </div>
+      </div>
+
+      <div id="evidence" className="scroll-mt-4">
+        <DetailTier2>
+          {/* The plan's P4: each step's transaction, drawn whole with its cells, steps back from
+              tier 1 (review fiber-channel: every cell's lock, size and state, and the owner's
+              stone, the most saturated mark of the first screen); tier 1 keeps the timeline. */}
+          <DetailSection title="Each step, as a transaction">
             <div className="flex flex-col gap-[22px]">
-              <FiberChannelTimeline channel={channel} />
               {steps.map((step, index) => (
                 <FiberChannelStep
                   key={step.key}
@@ -563,11 +771,6 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
               ))}
             </div>
           </DetailSection>
-        </div>
-      </div>
-
-      <div id="evidence" className="scroll-mt-4">
-        <DetailTier2>
           {!evidence && words}
           {evidence && (
             <>
@@ -588,8 +791,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         </div>
                         <Link
                           href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
-                          className="break-all text-[color:var(--ink)]"
-                          style={LINK}
+                          look="inline"
+                          className="break-all"
                         >
                           {evidence.funding.lockCodeHash}
                         </Link>
@@ -605,8 +808,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             <span className="text-text-dim">Current commitment</span>
                             <Link
                               href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
-                              className="min-w-0 break-all text-[color:var(--ink)]"
-                              style={LINK}
+                              look="inline"
+                              className="min-w-0 break-all"
                             >
                               {tracked.txHash}
                               <OutpointIndex index={tracked.outputIndex} />
@@ -634,15 +837,15 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             <span className="text-text-dim">Commitment script</span>
                             <Link
                               href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
-                              className="min-w-0 break-all text-[color:var(--ink)]"
-                              style={LINK}
+                              look="inline"
+                              className="min-w-0 break-all"
                             >
                               {tracked.lockCodeHash}
                             </Link>
                           </Grid>
                         </div>
                       ) : (
-                        <p className="text-text-dim">No commitment cell has appeared on chain.</p>
+                        <p className="text-text">No commitment cell has appeared on chain.</p>
                       )}
                     </div>
                   </DetailSection>
@@ -684,47 +887,9 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                   </DetailSection>
                 </div>
               </div>
-              {evidence.openingPartyFlows.length > 0 && (
-                <DetailSection title="Opening transaction, per party">
-                  <p className="text-text-dim text-meta mb-2">
-                    Non-Fiber locks on the opening transaction’s inputs or outputs. An output-only
-                    lock did not necessarily sign it. Net input includes fees and any unrelated
-                    outputs in the same transaction; it is not a proven channel balance or payment.
-                  </p>
-                  <Grid>
-                    {evidence.openingPartyFlows.map((flow) => {
-                      const party = partyOf(flow.lockScriptHash);
-                      return (
-                        <span key={flow.lockScriptHash} className="contents">
-                          <span className="text-text-dim">
-                            {party ? (
-                              <PartyLink party={party} />
-                            ) : (
-                              <ShortId value={flow.lockScriptHash} kind="hash" size="row" />
-                            )}
-                          </span>
-                          <span className="text-text">
-                            <span data-flow="in" className="whitespace-nowrap">
-                              in {ckb(flow.openingInputCapacity)}
-                            </span>{' '}
-                            ·{' '}
-                            <span data-flow="back" className="whitespace-nowrap">
-                              back {ckb(flow.openingOutputCapacity)}
-                            </span>{' '}
-                            ·{' '}
-                            <span data-flow="net" className="whitespace-nowrap">
-                              net {ckb(flow.observedNetInput, true)}
-                            </span>
-                          </span>
-                        </span>
-                      );
-                    })}
-                  </Grid>
-                </DetailSection>
-              )}
               {evidence.settlementOutputs.length > 0 && (
                 <DetailSection title="Final transaction outputs">
-                  <p className="text-text-dim text-meta mb-2">
+                  <p className="text-text text-body max-w-measure mb-2">
                     All final transaction outputs are shown, the payouts and any change alike.
                   </p>
                   <Grid>
@@ -738,11 +903,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         );
                       return (
                         <span key={output.outputIndex} className="contents">
-                          <Link
-                            href={`/cell/${output.txHash}-${output.outputIndex}`}
-                            className="text-[color:var(--ink)]"
-                            style={LINK}
-                          >
+                          <Link href={`/cell/${output.txHash}-${output.outputIndex}`} look="key">
                             out #{output.outputIndex}
                           </Link>
                           <span className="text-text">
@@ -754,7 +915,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                                 <ShortId value={output.ownerLockHash} kind="hash" size="row" />
                               </span>
                             )}{' '}
-                            · {ckb(output.capacity)}
+                            · {exact(output.capacity)}
                           </span>
                         </span>
                       );

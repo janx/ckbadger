@@ -23,6 +23,12 @@ describe('daily activity chart adapter', () => {
         uniqueAddressCount: 4294967295,
         totalCkbMoved: '900719925474099300',
         scriptCounts: [],
+        // the API's sum of the eight kinds (8 × 4,294,967,295)
+        kindOccurrences: 34359738360,
+        // the API's DAO band, the three DAO counts summed by the route (lane D1's third round)
+        daoCount: 12884901885,
+        // the route's count of the day's user transactions (the P3 follow-up's 2b)
+        userTransactionCount: 4294967295,
       },
     ]);
     const volume = chartModel(
@@ -47,5 +53,33 @@ describe('daily activity chart adapter', () => {
     expect(
       [volume, types, addresses, ckb].every((model) => model.points[0].label === '2026-10-27')
     ).toBe(true);
+  });
+
+  // lane D1's third round, N7: an older API's day has no kindOccurrences or daoCount; the
+  // refusal names the field and says the API is older than the page (it read
+  // 'invalid decimal "undefined"')
+  it('refuses an older API by the field it does not send', async () => {
+    vi.spyOn(api, 'getDailyActivityStats').mockResolvedValue([
+      {
+        date: '20261027',
+        transferCount: 1,
+        daoDepositCount: 1,
+        daoWithdrawRequestCount: 0,
+        daoWithdrawCompleteCount: 0,
+        tokenCount: 0,
+        objectCount: 0,
+        identityCount: 0,
+        scriptCallCount: 0,
+        unknownCount: 0,
+        coinbaseCount: 1,
+        uniqueAddressCount: 1,
+        totalCkbMoved: '0',
+        scriptCounts: [],
+      } as never,
+    ]);
+    await expect(api.getActivityTypeBreakdownChart()).rejects.toThrow(
+      // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+      'daily activities on 20261027: the API sends no kindOccurrences: it is older than this page'
+    );
   });
 });

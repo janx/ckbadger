@@ -1,6 +1,7 @@
 // Lane L (L1): every input and output tile of a transaction names its cell by its out point, and
 // the out point is the link to the cell page (the position label "input 0" / "output 0" stays,
 // as text; the owner and the content keep their own links). The hover title is the full out point.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { CellTile } from '@/components/ui/cell-tile';
@@ -11,13 +12,15 @@ import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 // 32-byte hashes (4 + 25 + 3 bytes)
 const PREV = `0x9486132e${'00'.repeat(25)}87d667`;
 const HASH = `0xdcd14a81${'11'.repeat(25)}1a334d`;
-const ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74c';
+const LOCK = { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type' as const, args: '0x' };
+/** The real address of that lock (B4 second fix round: the one it had failed its checksum). */
+const ADDRESS = ckbAddress(LOCK);
 const cell = {
   capacity: '40000000000',
   commonKnowledgeSize: '97',
   display: null,
   address: ADDRESS,
-  lock: { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type', args: '0x' },
+  lock: LOCK,
 };
 /** The real script hash of that lock (blake2b, CKB personalisation). */
 const LOCK_HASH = '0x82cbea9785c59f24117b45294cff296e8ab0ac2f29bbfa78af6b01e4d5325644';
@@ -110,7 +113,7 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
           kind: 'ckb',
           content: 'CKB',
           capacity: '6100000000',
-          occupied: '6100000000',
+          occupiedBytes: '61',
           state: 'consumed',
         })}
       />

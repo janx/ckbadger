@@ -1,4 +1,6 @@
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import {
   ObjectGeneticsView,
   ObjectGeneticsEvidence,
@@ -14,6 +16,8 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { boxPx, gapPx, insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { NARROWEST_LINE_PX } from '@/lib/control-row-fit';
 import { fullText } from '@/__tests__/utils/full-text';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
@@ -33,10 +37,12 @@ describe('Independent DOB evidence', () => {
   // Midnight, continued (review 2026-11-03, item 5, move 3): the DNA gel is an instrument. An
   // object that is not BTC+CKB or pure CKB has no copper, so its gel sits in the one frame; a
   // BTC+CKB or pure-CKB object keeps its copper plate untouched.
+  // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its plate
+  // tinted by the object's composition as it was in tier 1
   it('puts the gel in the instrument frame, unless the object has its copper plate (move 3)', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     const { container, rerender } = render(
-      <ObjectGeneticsView evidence={data} subject="Spore" tier="decentralized_mixture" />
+      <ObjectGeneticsEvidence evidence={data} subject="Spore" tier="decentralized_mixture" />
     );
     const plate = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(plate).toHaveAttribute('data-gel-plate', 'frame');
@@ -46,7 +52,7 @@ describe('Independent DOB evidence', () => {
     expect(plate).not.toHaveClass('neon-edge-top');
     expect(plate).toContainElement(container.querySelector('[data-gene]') as HTMLElement);
     expect(plate.querySelector('.space-y-4')).toHaveClass('px-4', 'py-4', 'sm:px-5');
-    rerender(<ObjectGeneticsView evidence={data} subject="Spore" tier="btc_ckb" />);
+    rerender(<ObjectGeneticsEvidence evidence={data} subject="Spore" tier="btc_ckb" />);
     const copper = container.querySelector('[data-gel-plate]') as HTMLElement;
     expect(copper).toHaveAttribute('data-gel-plate', 'copper');
     expect(copper).not.toHaveAttribute('data-instrument-frame');
@@ -62,12 +68,13 @@ describe('Independent DOB evidence', () => {
     if (data.currentPattern.status !== 'dob') throw new Error('fixture');
     data.currentPattern.steps[0].bytes[0].declaredByteLength = '100';
     data.currentPattern.steps[0].bytes[0].truncated = true;
-    const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
+    render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/18446744073709551614/)).toBeInTheDocument();
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its hover there
+    const { container } = render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     fireEvent.focus(container.querySelector('[data-gene]')!);
     expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '0.15');
     expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
-    render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // B3 round 4, task 3: the decode time is one unit of its sentence (unitText), so the sentence
     // is read across that unit's span; the date-time itself never breaks.
     expect(screen.getByText(fullText(/decoded 2023-11-15 06:13:20 UTC\+8/))).toBeInTheDocument();
@@ -91,6 +98,9 @@ describe('Independent DOB evidence', () => {
     };
     render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/awaiting DOB execution/)).toBeInTheDocument();
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), the decoder's
+    // missing byte mapping said under it
+    render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // Lane E (C12 wording): the ruled sentence, the API's reason kept in the line's title.
     expect(
       screen.getByText(
@@ -103,7 +113,8 @@ describe('Independent DOB evidence', () => {
   it('preserves multiple VM values for one trait name', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.cachedVmTraits.traits.push({ name: 'Face', value: 'Green' });
-    const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
+    // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), its genes there
+    const { container } = render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     // F2 objects (OB-8): the gene reads its values plainly ("Cached VM result" was developer wording).
     expect(container.querySelector('[data-gene="Face"]')!.textContent).toContain('Blue · Green');
   });
@@ -324,6 +335,44 @@ describe('How an object is read (C5)', () => {
 });
 
 describe('Per-version raw protocol and item context', () => {
+  // The coordinator's Chrome check (lane c2-assets): a native select is as wide as its widest
+  // option and, where its well is narrower, clips its value without a mark, and a clipped number is
+  // another number ("block #15,064,08" for #15,064,087). The widest real option — a two-digit
+  // version, an eight-digit block, the current one — and the label it stands after hold the 328 px
+  // line of a 360 px phone, read from the drawn classes (the label, the gap, the well's border, the
+  // select's padding) and the glyphs of lib/type-metrics.ts.
+  it('holds its widest version and its label in a 360 px phone’s line', () => {
+    const protocol: ItemProtocol = structuredClone(didProtocolProducer);
+    const base = protocol.versions[0];
+    protocol.versions = Array.from({ length: 12 }, (_, i) => {
+      const v = structuredClone(base);
+      v.cell.txHash = `0x${(i + 1).toString(16).padStart(64, '0')}`;
+      v.cell.blockNumber = 21_016_890 + i;
+      v.cell.isLive = i === 11;
+      return v;
+    });
+    render(<ItemEvidence protocol={protocol} />);
+    const select = screen.getByRole<HTMLSelectElement>('combobox');
+    const well = select.parentElement!;
+    const pair = well.parentElement!;
+    const label = pair.querySelector('label')!;
+    const widest = Math.max(
+      ...Array.from(select.options, (o) => textRunPx(o.textContent!, select, 360))
+    );
+    const px =
+      boxPx(label, 360)! +
+      gapPx(pair, 360) +
+      insetsPx(well, 360).box +
+      insetsPx(select, 360).box +
+      widest;
+    expect(Math.round(px * 100) / 100).toBeLessThanOrEqual(NARROWEST_LINE_PX);
+    expect(Array.from(select.options, (o) => o.textContent)).toEqual([
+      ...Array.from({ length: 11 }, (_, i) => `${i + 1} · #21,016,${890 + i}`),
+      '12 · #21,016,901 · current',
+    ]);
+    expect(select).toHaveAccessibleName('version');
+  });
+
   it('switches canonical cell evidence while preserving lossless decoded integers', () => {
     const protocol: ItemProtocol = structuredClone(didProtocolProducer);
     const old = structuredClone(protocol.versions[0]);
@@ -332,8 +381,12 @@ describe('Per-version raw protocol and item context', () => {
     old.cell.isLive = false;
     protocol.versions.unshift(old);
     render(<ItemEvidence protocol={protocol} />);
-    expect(screen.getByRole('combobox')).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: `${old.cell.txHash}:0` } });
+    // re-pinned (lane c2-assets): the version select is the controls board's Select, named by the
+    // label it stands after, "version" (it was named by "Cell version" around it, then "cell
+    // version", which with the options' words left them no room on a phone)
+    const version = screen.getByRole('combobox', { name: 'version' });
+    expect(version).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
+    fireEvent.change(version, { target: { value: `${old.cell.txHash}:0` } });
     expect(screen.getByRole('heading', { name: /version 1/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: new RegExp(old.cell.txHash) })).toHaveAttribute(
       'href',
@@ -343,10 +396,36 @@ describe('Per-version raw protocol and item context', () => {
     // Lane E (C6): each folded script is its occupied bytes, one row per part (was a code hash /
     // args definition list).
     const lock = screen.getByText(/^lock script ·/).closest('details')!;
+    // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words at
+    // the control step, 13 px (they were 12, in the page's bright ink), in the tier's ink
+    expect(lock.querySelector('summary')).toHaveClass('text-small');
     expect(within(lock).getByRole('group', { name: 'lock script byte map' })).toBeInTheDocument();
     expect(within(lock).getByLabelText('lock script parts')).toHaveTextContent(
       protocol.versions[1].cell.lock.codeHash
     );
+  });
+
+  // Lane P2's follow-up (item 6): the lock script's name is the one decision's, off the cell's lock
+  // and its owner's address: a lock on the default lock's code hash by data is not the default
+  // lock, whose name the registry sends for that code hash (no cell's data hashes to it)
+  it('names the lock script through the decision, never the default lock’s name for a by-data lock', () => {
+    const protocol: ItemProtocol = structuredClone(didProtocolProducer);
+    const cell = protocol.versions[0].cell;
+    const args = `0x${'01'.repeat(20)}`;
+    Object.assign(cell, {
+      lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockName: 'Default Lock',
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+    });
+    const { unmount } = render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Unregistered');
+    unmount();
+    Object.assign(cell, {
+      lock: { ...cell.lock, hashType: 'type' },
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+    });
+    render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Default Lock');
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];
@@ -380,23 +459,38 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
 
   // Consistency round: the allele gel is its own section beside the DNA (C10), and only the three
   // genes that vary get a lane (C9), so at 358 px they fit one row.
+  // re-pinned on purpose (lane P2's follow-up, item 1): the sequencing gel stands in the evidence tier now (ObjectGeneticsEvidence), so the panel
+  // and the evidence are rendered together and the two gels are found in their own places
   it('fits 358 px: both gels drawn 1:1, the allele gel of the varying genes in one row, nothing to scroll', () => {
     stubChartWidth(358);
     render(
-      <ObjectGeneticsView
-        evidence={nervape3xGenetics}
-        subject="Nervape 3x #125"
-        collection={nervape3xInsights}
-        collectionName="Nervape 3x"
-        tier="btc_ckb"
-      />
+      <>
+        <ObjectGeneticsView
+          evidence={nervape3xGenetics}
+          subject="Nervape 3x #125"
+          collection={nervape3xInsights}
+          collectionName="Nervape 3x"
+          tier="btc_ckb"
+        />
+        <ObjectGeneticsEvidence
+          evidence={nervape3xGenetics}
+          subject="Nervape 3x #125"
+          tier="btc_ckb"
+        />
+      </>
     );
-    const section = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
+    const panel = screen.getByRole('region', { name: 'DNA 53 bytes · 6 genes' });
+    const section = screen.getByRole('region', { name: 'DNA evidence' });
     const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+    // tier 1 holds no byte-level plot
+    expect(panel.querySelector('svg')).toBeNull();
     // no minimum width and no sideways scroller anywhere in the panel
     for (const el of [section, among].flatMap((s) => Array.from(s.querySelectorAll('[class]'))))
       expect(el.getAttribute('class')).not.toMatch(/\bmin-w-\[|\boverflow-x-(auto|scroll)\b/);
-    const svgs = [section, among].flatMap((s) => Array.from(s.querySelectorAll('svg[role="img"]')));
+    const svgs = [
+      section.querySelector('[data-gel-plate] svg[role="img"]')!,
+      ...Array.from(among.querySelectorAll('svg[role="img"]')),
+    ];
     expect(svgs).toHaveLength(2);
     for (const svg of svgs) {
       expect(svg).toHaveAttribute('width', '358');
@@ -480,12 +574,99 @@ describe('How an object is read · a pattern declared in the description (Nervap
   });
 });
 
+// Readability F3-e: every column of the gene table budgeted from what it holds, at 0.6 em a glyph
+// (13 px cells) and the 16 px gap after every column but the last. Names, rules and what the
+// objects show are pattern text that ends in the one ellipsis (the row's title holds it): each
+// holds 12 characters at its minimum, the last ("found") is the flexible column; a byte range is
+// whole.
+describe('The DOB blueprint’s columns (readability F3-e)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const sample = {
+    id: HEADWEAR_OBJECT,
+    href: `/objects/${HEADWEAR_OBJECT}`,
+    dnaHex: headwearGenetics.dnaHex,
+    traits: headwearGenetics.cachedVmTraits.traits,
+    decodeStatus: 'decoded',
+  };
+  it('budgets every column of the gene table and changes form at their sum', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('x'.repeat(12), 13) + 16),
+      // a range of a DNA under 1,000 bytes
+      ceil(at('bytes 999–999', 13) + 16),
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('x'.repeat(12), 13)),
+    ];
+    expect(budgets).toEqual([110, 118, 110, 94]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(432);
+    for (const [width, form] of [
+      [560, 'table'],
+      [432, 'table'],
+      [431, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      stubChartWidth(width);
+      const { container, unmount } = render(
+        <CurrentPatternEvidence
+          pattern={headwearInsights.currentPattern}
+          genetics={headwearInsights.genetics}
+          sample={sample}
+          description={headwearDescription}
+        />
+      );
+      const list = container.querySelector('[data-list-form]')!;
+      expect(list).toHaveAttribute('data-list-form', form);
+      if (form === 'table') {
+        const cols = [...list.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+        expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+        expect(cols[3].width).toBe('auto');
+      }
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('The object page reads a declared pattern too (Nervape Headwear object)', () => {
   beforeEach(() => stubChartWidth(896));
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  // Readability F3-e: the DNA genes table's columns budgeted from what they hold (13 px cells, the
+  // 16 px gap after every column but the last): a name, a rule and this object's value hold 12
+  // characters at their minimum and end in the one ellipsis (the value is the flexible column);
+  // a byte range is whole, " · clipped" with it.
+  it('budgets every column of the DNA genes table (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('bytes 999–999 · clipped', 13) + 16),
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('x'.repeat(12), 13)),
+    ];
+    expect(budgets).toEqual([110, 196, 110, 94]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(510);
+    render(
+      <ObjectGeneticsEvidence
+        evidence={headwearGenetics}
+        subject="Nervape Headwear"
+        description={headwearDescription}
+      />
+    );
+    const genes = screen.getByRole('table', { name: 'DNA genes' });
+    const cols = [...genes.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(genes.style.minWidth)).toBe(510);
+  });
+
   it('runs the DNA command on its number too, when the object has one (phase 5, A13)', () => {
     render(
       <ObjectGeneticsView

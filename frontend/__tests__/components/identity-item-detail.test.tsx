@@ -9,6 +9,11 @@ import {
   dotbitV4ProtocolProducer,
   didProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { itemActivityFeedProducer } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 const mockFetchDetail = vi.fn(),
   mockFetchActivities = vi.fn();
@@ -84,13 +89,21 @@ it('resets the independent activity cursor when navigating to another identity',
   const first = { ...identityItem('dotbit'), bitCells: [] },
     second = { ...first, nftId: '0x' + 'ee'.repeat(20), name: 'bob.bit' };
   mockFetchDetail.mockImplementation(async (id: string) => (id === first.nftId ? first : second));
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    hasMore: true,
-    nextCursor: 'older',
-  });
+  // re-pinned (lane c2-assets): the page counts the identity's activities, 100 as on the other
+  // identity pages' tests; it said 0 with more after it, which the board's pager refuses ("page 1
+  // of 0") where the old one wrote nothing
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: 'older',
+    })
+  );
   const view = render(<IdentityItemDetail config={dotbitConfig} identityId={first.nftId} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenLastCalledWith('dotbit', first.nftId, {
       limit: 20,

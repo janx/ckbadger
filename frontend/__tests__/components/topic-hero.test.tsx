@@ -74,8 +74,10 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     // the title row, as the DAO page's: the h1 is a flex item, its box the size of its words
     expect(title.parentElement).toHaveClass('flex', 'items-baseline', 'justify-between');
     const lede = within(section).getByText(/^A Fiber channel touches the chain/);
-    // re-pinned with readability ruling R3: a lede is a sentence that explains, the reading ink
-    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
+    // re-pinned with readability ruling R3: a lede is a sentence that explains, the reading ink;
+    // re-pinned with R4 (lane B7): on the measure, 76 characters (it was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
+    expect(lede.className).not.toMatch(/max-w-\[/);
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
     // the one display figure, its unit a step quieter, its companion on the same baseline row
     const value = within(section).getByText('38');

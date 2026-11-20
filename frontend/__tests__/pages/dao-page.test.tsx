@@ -7,6 +7,8 @@ import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
+import { factsOf } from '@/__tests__/utils/facts';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -32,6 +34,8 @@ const stats = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  // the whole, the route's: 1 + 3 + 3 CKB (lane exactness, part A, A5 ii)
+  secondaryIssuance: '700000000',
   tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
@@ -57,12 +61,14 @@ describe('DaoPage', () => {
     vi.mocked(api.getDaoEvidence).mockResolvedValue(evidence);
     vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(history);
     vi.mocked(api.getDaoCirculationRatioChart).mockResolvedValue(ratio);
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [],
-      hasMore: false,
-      nextCursor: null,
-      limit: 12,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+        limit: 12,
+      })
+    );
     vi.mocked(api.getDaoArHistory).mockResolvedValue({
       anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
       days: [
@@ -95,12 +101,14 @@ describe('DaoPage', () => {
         freeCapacity: '989800000000',
       })
     );
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      hasMore: false,
-      nextCursor: null,
-      limit: 12,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+        limit: 12,
+      })
+    );
   });
 
   it('waits for the derived DAO evidence behind the banner, never its error (L1, L0)', async () => {
@@ -154,12 +162,16 @@ describe('DaoPage', () => {
       // decimals)
       'claimable now 400 CKB · 1 cell'
     );
-    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'depositors 2'
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(screen.getByRole('status', { name: 'History reading' }))).toContainEqual([
+      'depositors',
+      '2',
+    ]);
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(screen.getByRole('link', { name: 'Open source block' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/5'
     );
@@ -174,7 +186,9 @@ describe('DaoPage', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     const intro = within(hero).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
     expect(intro.textContent!.length).toBeLessThanOrEqual(90);
-    expect(within(intro).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(within(intro).getByRole('link', { name: 'How it works' })).toHaveAttribute(
       'href',
       '#evidence'
     );
@@ -186,7 +200,8 @@ describe('DaoPage', () => {
     expect(container.querySelector('[data-tier="1"]')).not.toHaveTextContent(former);
     expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(former);
     // "Explore DAO charts →" is kept, in the title row beside the range buttons (R13).
-    const charts = screen.getByRole('link', { name: 'Explore DAO charts →' });
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden (it was typed)
+    const charts = screen.getByRole('link', { name: 'Explore DAO charts' });
     expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
     expect(within(hero).getByRole('heading', { level: 1 }).parentElement).toContainElement(charts);
     // The whole page's tier 1: at most three caption-length prose blocks (§0, §4).
@@ -224,7 +239,9 @@ describe('DaoPage', () => {
       screen.getByText(/Protocol occupied \(U\) includes the genesis virtual occupied baseline/)
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('link', { name: 'Verify statistics anchor block #4 →' })
+      // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+      // its last word by a no-break space (it was typed into the words)
+      screen.getByRole('link', { name: 'Verify statistics anchor block #4' })
     ).toHaveAttribute('href', '/mainnet/blocks/4');
   });
 

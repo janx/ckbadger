@@ -28,7 +28,9 @@ function placeholders(source: string): string[] {
 }
 
 describe('field placeholders (U-01, R2)', () => {
-  const written = ['app', 'components']
+  // lib holds the header field's two placeholders since readability F3-f (lib/header-fit.ts: the
+  // header's budget floors the field at the short one), so the rule reads it too
+  const written = ['app', 'components', 'lib']
     .flatMap((dir) => files(join(root, dir)))
     .flatMap((file) =>
       placeholders(readFileSync(file, 'utf-8')).map((text) => ({

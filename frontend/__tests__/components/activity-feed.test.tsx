@@ -1,3 +1,6 @@
+// Re-pinned on purpose (lists lane P3, the link-look gate): "view all" is a way onward, its arrow
+// the look's (it typed " →" in a span of its own), so the link is found by its words.
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
@@ -6,7 +9,7 @@ import { server } from '@/__tests__/msw/server';
 import { feedSamples, latestActivities } from '@/__tests__/msw/fixtures/home';
 import { MINUS } from '@/lib/chart-ticks';
 import { ActivityFeed, FEED_ROWS } from '@/components/home/activity-feed';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
@@ -14,6 +17,8 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const API = '/api/:network/v1';
 
@@ -38,18 +43,27 @@ function tx(i: number): Transaction {
 function serveTransactions(txs: Transaction[]) {
   server.use(
     http.get(`${API}/transactions`, () =>
-      HttpResponse.json({
-        data: txs,
-        total: txs.length,
-        limit: 10,
-        hasMore: false,
-        nextCursor: null,
-      })
+      HttpResponse.json(
+        pagedRead({
+          data: txs,
+          total: txs.length,
+          limit: 10,
+          hasMore: false,
+          nextCursor: null,
+        })
+      )
     )
   );
 }
 
 const rows = () => screen.getByTestId('feed-rows').querySelectorAll('[data-feed-row]');
+
+/**
+ * A feed sample's party as its row writes it, by the seed the fixture spells its args from: `ckb1…`
+ * and the address's last 8 characters (R9; B4 re-pinned: the samples carry real addresses, whose
+ * last characters are their checksum).
+ */
+const shown = (seed: string) => `ckb1…${seededAddress(seed).slice(-8)}`;
 
 describe('ActivityFeed', () => {
   // The clock stands still in every test (Date only; timers stay real): a row's age and the
@@ -66,23 +80,36 @@ describe('ActivityFeed', () => {
 
   it('opens on Latest activity with real tab buttons and a view all link', async () => {
     render(<ActivityFeed />);
-    const tabs = screen.getByRole('group', { name: 'Feed' });
-    const activity = within(tabs).getByRole('button', { name: 'Latest activity' });
-    const transactions = within(tabs).getByRole('button', { name: 'Transactions' });
-    expect(activity).toHaveAttribute('aria-pressed', 'true');
-    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
-    // Phase 5 (H4): the tabs are a smaller row under the feed's heading, 13 px (body) at every
-    // width — the heading is the section's name now, not the tabs.
+    // re-pinned (lane C2 topics): the controls board's tab row, a tablist of tabs with
+    // aria-selected and one stop in the tab order (it was a group "Feed" of pressed buttons)
+    const tabs = screen.getByRole('tablist', { name: 'Feed' });
+    const activity = within(tabs).getByRole('tab', { name: 'Latest activity' });
+    const transactions = within(tabs).getByRole('tab', { name: 'Transactions' });
+    expect(activity).toHaveAttribute('aria-selected', 'true');
+    // re-pinned (lane C2 topics): the board's one tab: a 32 px target on the 2 px celadon line
+    // (it was 44 px, h-11)
+    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-8', 'whitespace-nowrap');
+    // Phase 5 (H4): the tabs are a row under the feed's heading, which is the section's name, not
+    // the tabs. Re-pinned (lane C2 topics): the board's tab row has one size, the section step
+    // from 640 and the body step below it (it was the body step at every width); a plain row,
+    // not a command line: the names keep their case and no prompt square leads them. Re-pinned
+    // again (lane c2-finish, rulings round 2, the owner's ruling by role): a plain row stands
+    // under its section's heading, so it takes the body step at every width (17 px from 640 put
+    // two heading-sized lines one over the other under "feed --last 8").
     expect(activity).toHaveClass('text-body');
-    expect(activity).not.toHaveClass('sm:text-section');
+    expect(activity.className).not.toMatch(/sm:text-section/);
+    expect(activity).not.toHaveClass('lowercase');
+    expect(tabs.querySelector('.section-mark')).toBeNull();
     expect(transactions).toHaveClass('whitespace-nowrap');
     // re-pinned (A4 Chrome sweep): the phrase may break; only its arrow is held to its last word
-    const viewAll = screen.getByRole('link', { name: 'view all →' });
+    const viewAll = screen.getByRole('link', { name: /^view all/ });
     expect(viewAll).not.toHaveClass('whitespace-nowrap');
     expect(viewAll.lastElementChild).toHaveClass('whitespace-nowrap');
-    expect(viewAll.lastElementChild!.textContent).toBe(' →');
-    expect(transactions).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    // re-pinned on purpose (lists lane P3): the onward look writes the arrow, held to its last word
+    // by a no-break space (ONWARD_GLUE), aria-hidden
+    expect(viewAll.lastElementChild!.textContent).toBe('\u00a0→');
+    expect(transactions).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/activities'
     );
@@ -103,7 +130,7 @@ describe('ActivityFeed', () => {
     expect(args).toHaveTextContent(/^--last 8$/);
     expect(args).toHaveClass('text-text-dim', 'font-normal', 'normal-case');
     // the note: the view-all link, at the row's right end, outside the heading's name
-    const link = screen.getByRole('link', { name: 'view all →' });
+    const link = screen.getByRole('link', { name: /^view all/ });
     const note = link.closest('[data-prompt-note]') as HTMLElement;
     expect(note).toHaveClass('ml-auto');
     expect(note.parentElement).toBe(heading.parentElement);
@@ -111,23 +138,29 @@ describe('ActivityFeed', () => {
     expect(screen.queryByRole('link', { name: /View all/ })).toBeNull();
     // the heading row first, then the tab row with its rule; no link left among the tabs
     const feed = screen.getByTestId('home-feed');
-    const [headRow, tabRow] = Array.from(feed.children) as HTMLElement[];
+    // re-pinned (lane C2 topics): under the heading row, the board's tab row with its panel; the
+    // rule is the tablist's own (it was a wrapper row around a group of buttons)
+    const [headRow, tabbed] = Array.from(feed.children) as HTMLElement[];
     expect(headRow).toHaveClass(ACTIVITY_HEAD_CLASS);
     expect(headRow).toContainElement(heading);
-    expect(tabRow).toContainElement(screen.getByRole('group', { name: 'Feed' }));
+    const tabRow = screen.getByRole('tablist', { name: 'Feed' });
+    expect(tabbed).toContainElement(tabRow);
+    expect(tabbed).toContainElement(screen.getByRole('tabpanel'));
     // the rule under the tabs is a row rule (R5, re-pinned on purpose: it was the hair)
     expect(tabRow).toHaveClass('border-b', 'border-row-rule');
     expect(within(tabRow).queryByRole('link')).toBeNull();
     // the note follows the tab; the heading stays the feed's
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
     expect(screen.getByRole('heading', { level: 2 })).toBe(heading);
   });
 
-  it('shows 8 activities: the narrative left, the raw evidence quiet on the right', async () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles items 1 and 2: the evidence's block link and age are a link and a
+  // value, the reading ink at 13 px; it was "… the raw evidence quiet on the right")
+  it('shows 8 activities: the narrative left, the evidence on the right in the reading ink', async () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
     const first = rows()[0] as HTMLElement;
@@ -135,7 +168,8 @@ describe('ActivityFeed', () => {
     expect(first.tagName).toBe('ARTICLE');
     expect(within(first).getByText('Script call')).toHaveAttribute('data-role', 'headline');
     const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
-    expect(evidence).toHaveClass('text-text-dim');
+    expect(evidence).not.toHaveClass('text-text-dim');
+    expect(evidence).toHaveClass('text-small');
     expect(within(evidence).getByRole('link', { name: '#20,819,142' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/20819142'
@@ -173,7 +207,12 @@ describe('ActivityFeed', () => {
     const call = within(type).getByRole('link', { name: '.bit Time Info' });
     expect(call.parentElement).toHaveClass('whitespace-nowrap');
     expect(call).toHaveAttribute('title', '.bit Time Info(0x00)');
-    expect(call).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lists lane P3, the link-look gate): a link inside its line, the inline
+    // look, its ink the detail run's (it wrote text-text-dim on itself). Re-pinned on purpose
+    // (BRIEF-ink-size-roles items 1 and 2: a link is never quiet): the detail run reads in the reading ink
+    expect(call).toHaveClass('underline');
+    expect(call.closest('[data-role="detail"]')).toHaveClass('text-text');
+    expect(call.closest('[data-role="detail"]')).not.toHaveClass('text-text-dim');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
   });
 
@@ -188,17 +227,18 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('DAO Withdraw Request')).toBeInTheDocument();
     const note = row.querySelector('[data-role="detail"]') as HTMLElement;
-    expect(note).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
-    // T7: the action's facts follow the headline inline, dim, quieter than the headline.
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
+    expect(note).toHaveTextContent('26,050 CKB · deposited at #19,695,550');
+    // T7: the action's facts follow the headline inline, quieter than the headline. Re-pinned on
+    // purpose (BRIEF-ink-size-roles item 1: the facts are values and the block a link, the reading
+    // ink; the headline stays the bright one): it was the dim ink
     expect(note.closest('[data-role="row-head"]')).not.toBeNull();
-    expect(note).toHaveClass('text-text-dim', 'text-small');
+    expect(note).toHaveClass('text-text', 'text-small');
+    expect(note).not.toHaveClass('text-text-dim');
     // Paid first, received next, the zero last.
     const parties = [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
-    expect(parties).toEqual([
-      expect.stringMatching(/hxw6h7$/),
-      expect.stringMatching(/r4p74p$/),
-      expect.stringMatching(/fxdtl8$/),
-    ]);
+    expect(parties).toEqual(['hxw6h7', 'r4p74p', 'fxdtl8'].map(shown));
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
     ];
@@ -215,16 +255,18 @@ describe('ActivityFeed', () => {
       '+412.3248675 CKB',
       null,
     ]);
-    // Occupied only where it changed: two of three.
+    // Occupied only where it changed: two of three, in bytes with their unit (B4 item 2,
+    // re-pinned on purpose: was "occupied −61" with no unit).
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
-      `occupied ${MINUS}61`,
-      'occupied +61',
+      // B4 second fix round (re-pinned on purpose): figure and unit joined by a no-break space
+      `occupied ${MINUS}61\u00a0B`,
+      'occupied +61\u00a0B',
     ]);
     expect(row).not.toHaveTextContent('+1 more');
   });
 
   it('shows an unreadable DAO step as an error in its row, naming the tx', async () => {
-    const broken = {
+    const broken = activityRead({
       ...feedSamples.daoWithdrawRequest,
       protocolActions: [
         {
@@ -234,7 +276,7 @@ describe('ActivityFeed', () => {
           metadata: { capacity: '1' },
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([broken])));
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
@@ -284,8 +326,10 @@ describe('ActivityFeed', () => {
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Fiber · Channel Close')).toBeInTheDocument();
+    // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
+    // exact value in its title (it was the padded column form in the line)
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'channel 0x0d3870bb…006e26:0 · 750.00000000 CKB'
+      'channel 0x0d3870bb…006e26:0 · 750 CKB'
     );
     expect(
       [
@@ -306,7 +350,9 @@ describe('ActivityFeed', () => {
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
     // T7: the calls by name, inline after the headline; the args are each name's hover.
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
+    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
     expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
@@ -326,18 +372,19 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede00…00e09f');
-    expect(within(row).getByRole('link', { name: '0xab0ede00…00e09f' })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: 'lock 0xab0ede00…00e09f' })).toHaveAttribute(
       'title',
-      `0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
+      `lock 0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
     // the summary form of a feed line (R5, re-pinned on purpose: was every decimal)
     expect(within(row).getByRole('link', { name: `${MINUS}36,583 Seal` })).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: '+36,583 Seal' })).toBeInTheDocument();
-    expect([...row.querySelectorAll('[data-party]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/j3pkeh$/),
-      expect.stringMatching(/3fzxu7$/),
-    ]);
+    expect([...row.querySelectorAll('[data-party]')].map((e) => e.textContent)).toEqual(
+      ['j3pkeh', '3fzxu7'].map(shown)
+    );
   });
 
   it('over six participants, shows the five largest and expands to all and back', async () => {
@@ -348,16 +395,17 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
-    const parties = () =>
-      [...row.querySelectorAll('[data-party]')].map((e) => e.textContent?.slice(-2));
+    const parties = () => [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     // The five largest |Δ| (900, 700, 500, 300, 200), paid first.
-    expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7']);
-    const more = within(row).getByRole('button', { name: '+3 participants' });
+    expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7'].map(shown));
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's box under the lines
+    const more = within(row).getByRole('button', { name: /^all 8\sparticipants ↓$/ });
     expect(more).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(more);
-    expect(parties()).toEqual(['p4', 'p6', 'p1', 'p8', 'p2', 'p5', 'p7', 'p3']);
-    const fewer = within(row).getByRole('button', { name: 'Show fewer participants' });
+    expect(parties()).toEqual(['p4', 'p6', 'p1', 'p8', 'p2', 'p5', 'p7', 'p3'].map(shown));
+    const fewer = within(row).getByRole('button', { name: 'fewer ↑' });
+    expect(fewer).toBe(more);
     expect(fewer).toHaveAttribute('aria-expanded', 'true');
 
     await user.click(fewer);
@@ -365,8 +413,9 @@ describe('ActivityFeed', () => {
   });
 
   it('shows token item deltas on the party line', async () => {
-    const token: GlobalActivity = {
+    const token: GlobalActivity = activityRead({
       ...latestActivities[2],
+      itemTypes: [ITEM_TYPE.xudt],
       participants: [
         {
           ...latestActivities[2].participants[0],
@@ -381,7 +430,7 @@ describe('ActivityFeed', () => {
           ],
         },
       ],
-    };
+    });
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([token])));
     render(<ActivityFeed />);
     const link = await screen.findByRole('link', { name: /SEAL/ });
@@ -396,12 +445,13 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
 
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
-    expect(screen.getByRole('button', { name: 'Transactions' })).toHaveAttribute(
-      'aria-pressed',
+    // re-pinned (lane C2 topics): a tab of the board's tab row, selected (it was a pressed button)
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(screen.getByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+      'aria-selected',
       'true'
     );
-    expect(screen.getByRole('link', { name: 'view all →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^view all/ })).toHaveAttribute(
       'href',
       '/mainnet/transactions'
     );
@@ -467,7 +517,7 @@ describe('ActivityFeed', () => {
       serveTransactions([served]);
       const { unmount } = render(<ActivityFeed />);
       await loadUnderStillClock(() => shown().length > 0);
-      fireEvent.click(screen.getByRole('button', { name: 'Transactions' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
       await loadUnderStillClock(() => shown()[0]?.getAttribute('data-tx-row') === served.hash);
       expectTitleTicks(() => rows()[0], served.hash);
       unmount();
@@ -480,7 +530,7 @@ describe('ActivityFeed', () => {
     const txs = [tx(1), tx(2)];
     serveTransactions(txs);
     render(<ActivityFeed />);
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(2));
     const row = document.querySelector(`[data-tx-row="${txs[1].hash}"]`) as HTMLElement;
     expect(row).toHaveAttribute('data-highlighted', 'false');
@@ -509,7 +559,7 @@ describe('ActivityFeed', () => {
     const txs = [tx(1), tx(2)];
     serveTransactions(txs);
     render(<ActivityFeed />);
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(2));
     const row = document.querySelector(`[data-tx-row="${txs[1].hash}"]`) as HTMLElement;
     act(() => usePipelineHoverStore.getState().pin({ kind: 'tx', hash: txs[1].hash }));
@@ -529,7 +579,7 @@ describe('ActivityFeed', () => {
         <ActivityFeed />
       </QueryClientProvider>
     );
-    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() => expect(rows()).toHaveLength(1));
 
     // What useRealtimeData does on a new_transaction message.
@@ -556,10 +606,15 @@ describe('ActivityFeed', () => {
   });
 });
 
+// B4 item 2 (re-pinned on purpose): occupied capacity is bytes, written with its unit, and a
+// change that is not whole bytes is refused (it was written as exact CKB, "+1.50000001");
+// __tests__/components/occupied-unit.test.tsx holds the rest.
 describe('formatOccupiedDelta', () => {
-  it('prints occupied capacity in whole CKB (it is bytes), and exactly if it ever is not', () => {
-    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61`);
-    expect(formatOccupiedDelta('32000000000')).toBe('+320');
-    expect(formatOccupiedDelta('150000001')).toBe('+1.50000001');
+  it('prints occupied capacity in whole bytes with their unit, and refuses what is not whole', () => {
+    expect(formatOccupiedDelta('-6100000000', 'tx 0xab')).toBe(`${MINUS}61\u00a0B`);
+    expect(formatOccupiedDelta('32000000000', 'tx 0xab')).toBe('+320\u00a0B');
+    expect(() => formatOccupiedDelta('150000001', 'tx 0xab')).toThrow(
+      'not a whole number of bytes'
+    );
   });
 });

@@ -4,22 +4,37 @@
  * at full size; a narrower box shows fewer bytes a row, never smaller ones.
  */
 
-import { charPx, withAllowance } from '@/lib/type-metrics';
+import { charPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** The advance of one glyph of the dump, set at the small step (`text-small`). */
-const DUMP_CHAR_PX = charPx('small');
+export const DUMP_CHAR_PX = charPx('small');
 /** One hex byte: two glyphs plus its 1 px padding on each side (`px-px`). */
 const HEX_CELL_PX = 2 * DUMP_CHAR_PX + 2;
 /** The gap between two hex bytes (`gap-1`). */
 const HEX_GAP_PX = 4;
 /** The ASCII column's margin, rule and padding (`ml-[18px] border-l pl-3.5`). */
 const ASCII_INSET_PX = 18 + 1 + 14;
-/** The offset column: `w-[62px]` for 0x0000, `w-[74px]` for 0x00000. */
-const OFFSET_PX = { 4: 62, 5: 74 } as const;
-/** The dump box's padding and border (`px-4`, 1 px border) around its rows. */
-export const HEX_BOX_INSET_PX = 2 * 16 + 2;
-/** Row lengths the dump uses, widest first; each divides the 24-byte excerpt alignment. */
-const ROW_BYTES = [24, 16, 8] as const;
+/**
+ * The offset column: its text ("0x0000", "0x00000") at the dump's size and an 18 px gap before the
+ * hex bytes, as the ASCII column keeps after them: 65 and 73 px at 13 px (62 and 74 when the dump
+ * was 12 px and the widths were written by hand).
+ */
+export const OFFSET_PX = {
+  4: Math.ceil(textPx(2 + 4, fontPx('small'))) + 18,
+  5: Math.ceil(textPx(2 + 5, fontPx('small'))) + 18,
+} as const;
+/**
+ * The frame between the measured box and the dump's rows, on both sides: the panel's 1 px border,
+ * the well's 8 px margin (`m-2`), its 1 px border and its 10 px padding (`px-2.5`). Lane P1
+ * follow-up: it was 34, the well's border and a 16 px padding alone, so a row it chose ran 18 px
+ * past the well (the 8-byte row, 329.2 px, scrolled the 306 px well at a 390 px phone).
+ */
+export const HEX_BOX_INSET_PX = 2 * (1 + 8 + 1 + 10);
+/**
+ * Row lengths the dump uses, widest first; 24, 8 and 4 divide the 24-byte excerpt alignment and 16
+ * fits it. 4 is a phone's (lane P1 follow-up): 211.6 px, whole at 320 px.
+ */
+const ROW_BYTES = [24, 16, 8, 4] as const;
 export type HexRowBytes = (typeof ROW_BYTES)[number];
 
 /** The drawn width of one dump row of `n` bytes: offset, hex bytes, ASCII column. */
@@ -30,23 +45,16 @@ export function hexRowWidth(n: number, digits: 4 | 5): number {
 }
 
 /**
- * The most bytes a row holds whole in a dump box `boxWidth` px wide: 24, else 16, else 8. Below
- * the 8-byte row's width (a 360 px phone) the 8-byte row stays and the raw bytes scroll inside
- * their own box, as raw data may.
+ * The most bytes a row holds whole in a dump box `boxWidth` px wide: 24, else 16, else 8, else 4.
+ * Below the 4-byte row's width (no phone's: 251.6 px with the frame, a 320 px page gives 288) the
+ * 4-byte row stays and the raw bytes scroll inside their own well, as raw data may.
  */
 export function hexRowBytes(boxWidth: number, digits: 4 | 5): HexRowBytes {
   if (!(boxWidth > 0)) throw new Error(`invalid cell byte box width ${boxWidth}`);
-  return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 8;
+  return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 4;
 }
 
-/**
- * The capacity map labels' allowance: the advance below was measured for the 10.5 px label the map
- * had before the type scale (6.3 px a glyph), and the label is `text-meta` (11 px, 6.6) since; the
- * budget kept its number, so it counts 0.3 px a glyph under the label it holds.
- */
-const MAP_LABEL_ALLOWANCE = -0.3;
-/** The advance a capacity-map label's minimum width is measured at, and the label's side padding. */
-export const MAP_CHAR_PX = withAllowance(charPx('meta'), MAP_LABEL_ALLOWANCE);
+/** A capacity-map label's side padding; the label is set at the meta step (`text-meta`). */
 export const MAP_PAD_PX = 4;
 
 /**
@@ -58,5 +66,5 @@ export const MAP_PAD_PX = 4;
  */
 export function mapSegmentMinWidth(label: string, floor: number): number {
   if (!label) throw new Error('capacity map part has no label');
-  return Math.max(floor, label.length * MAP_CHAR_PX + 2 * MAP_PAD_PX);
+  return Math.max(floor, textPx(label.length, fontPx('meta')) + 2 * MAP_PAD_PX);
 }

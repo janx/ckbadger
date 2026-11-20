@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -17,6 +18,7 @@ const version: ItemCellVersion = {
   ownerAddress: 'ckb1owner',
   capacity: '10000000001',
   occupiedCapacity: '6100000000',
+  freeCapacity: '3900000001',
   lock: { codeHash: '0x' + '56'.repeat(32), hashType: 'data1', args: '0x' + '78'.repeat(20) },
   type: null,
   anatomy: { capacityBytes: 8, lockBytes: 53, typeBytes: 0, dataBytes: 0 },
@@ -235,13 +237,22 @@ describe('Asset domain layout', () => {
 });
 describe('Canonical item cell versions', () => {
   it('preserves single-shannon capacity, the real outpoint, hash type and focus association', () => {
-    const second = { ...version, txHash: '0x' + '90'.repeat(32), blockNumber: 11 };
+    // re-pinned on purpose (lane p-assets): the owner's lock is the one decision's words, read
+    // off the owner's address, which must spell the cell's lock (it was 'ckb1owner', which the
+    // decision refuses)
+    const owner = ckbAddress({
+      codeHash: version.lock.codeHash,
+      hashType: 'data1',
+      args: version.lock.args,
+    });
+    const first = { ...version, ownerAddress: owner };
+    const second = { ...first, txHash: '0x' + '90'.repeat(32), blockNumber: 11 };
     render(
       <CellVersions
         subject="Object"
         history={{
           data: [
-            { ...version, isLive: false, consumedByTx: second.txHash, consumedAtBlock: 11 },
+            { ...first, isLive: false, consumedByTx: second.txHash, consumedAtBlock: 11 },
             second,
           ],
           total: 2,
@@ -259,7 +270,11 @@ describe('Canonical item cell versions', () => {
       'href',
       `/mainnet/cell/${second.txHash}-4`
     );
-    expect(versions.querySelector('a[href*="hashType=data1&kind=lock"]')).not.toBeNull();
+    // re-pinned on purpose (lane p-assets): a named lock is its name, its code hash in its hover
+    // (lock-kind.tsx's LockWordsView), no longer the API's name with a link to the script page
+    // by its hash type
+    expect(versions.querySelector('a[href*="hashType=data1&kind=lock"]')).toBeNull();
+    expect(screen.getAllByText('JoyID')[0]).toHaveAttribute('title', version.lock.codeHash);
     fireEvent.focus(versions.querySelectorAll('article')[1]);
     expect(versions.querySelectorAll('article')[0]).toHaveClass('opacity-35');
   });

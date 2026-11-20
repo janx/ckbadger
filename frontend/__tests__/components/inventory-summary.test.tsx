@@ -34,6 +34,12 @@ describe('Inventory global summary', () => {
       '90 of 200 collections are fully on-chain · so are 4,200 live objects · 17 await DOB decoding'
     );
     expect(screen.getByText(/Canonical asset totals/)).toHaveTextContent('#123');
+    // BRIEF-ink-size-roles items 1 and 3: the totals line is a sentence, the reading ink at 13 px,
+    // and its block link reads in it (it was the quiet ink at 12 px, the link with it)
+    const totals = screen.getByRole('region', { name: 'Inventory totals' });
+    expect(totals).toHaveClass('text-text', 'text-small');
+    expect(totals).not.toHaveClass('text-text-dim');
+    expect(screen.getByText(/Canonical asset totals/)).not.toHaveClass('text-meta');
     // Lane L: the block the totals are taken at is a link.
     expect(
       within(screen.getByText(/Canonical asset totals/)).getByRole('link', { name: '#123' })

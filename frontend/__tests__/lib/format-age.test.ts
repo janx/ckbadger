@@ -1,38 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { ageSeconds, formatAgeTwoUnits, formatSpan } from '@/lib/format-age';
+import { ageSeconds, formatSpan } from '@/lib/format-age';
 import { formatDurationMs, formatTimeAgo } from '@/lib/utils';
 
 const NOW = Date.parse('2026-10-25T11:43:55Z');
 
-describe('formatAgeTwoUnits (TX-18 facts rail)', () => {
-  it('reads days and hours, as the Transaction board does ("2d 20h ago")', () => {
-    expect(formatAgeTwoUnits('2026-10-22T14:43:55Z', NOW)).toBe('2d 21h ago');
-    expect(formatAgeTwoUnits(NOW - (2 * 86400 + 20 * 3600 + 59) * 1000, NOW)).toBe('2d 20h ago');
-  });
-  it('reads hours and minutes, then minutes and seconds, then seconds', () => {
-    expect(formatAgeTwoUnits(NOW - (3 * 3600 + 5 * 60) * 1000, NOW)).toBe('3h 5m ago');
-    expect(formatAgeTwoUnits(NOW - (4 * 60 + 2) * 1000, NOW)).toBe('4m 2s ago');
-    expect(formatAgeTwoUnits(NOW - 45 * 1000, NOW)).toBe('45s ago');
-  });
-  it('drops a zero second unit', () => {
-    expect(formatAgeTwoUnits(NOW - 2 * 86400 * 1000, NOW)).toBe('2d ago');
-  });
-  // Review 45fd finding 3 (ruling D4): the node's clock and this device's are two clocks, and CKB
-  // consensus itself accepts a block up to 15 s ahead of a node's clock.
-  it('reads a time up to 15 s ahead of this device as no age at all', () => {
-    expect(formatAgeTwoUnits(NOW + 2000, NOW)).toBe('0s ago');
-    expect(formatAgeTwoUnits(NOW + 5000, NOW)).toBe('0s ago');
-    expect(formatAgeTwoUnits(NOW + 15_000, NOW)).toBe('0s ago');
-  });
-  it('gives no relative age for a time further ahead: it says the device clock is behind', () => {
-    expect(formatAgeTwoUnits(NOW + 15_001, NOW)).toBe("this device's clock is behind");
-    expect(formatAgeTwoUnits(NOW + 16_000, NOW)).toBe("this device's clock is behind");
-    expect(formatAgeTwoUnits(NOW + 10 * 60 * 1000, NOW)).toBe("this device's clock is behind");
-  });
-  it('still refuses a timestamp it cannot read', () => {
-    expect(() => formatAgeTwoUnits('not a time', NOW)).toThrow('Invalid timestamp "not a time"');
-  });
-});
+// Lane D2 (gate D0′): the transaction's facts rail, the one reader of the two-unit age
+// (`formatAgeTwoUnits`, "2d 20h ago"), became the status strip, whose time takes the site's one
+// age (`Utc8Age`, "2d ago"). The formatter had no user left, so it went, and its tests with it
+// (the dead-exports gate's rule); the rules they also held — up to 15 s ahead reads as no age,
+// further ahead as the device clock behind, an unreadable time refused — are `ageSeconds`'s and
+// stay pinned below; the calendar years are pinned through the one form (`formatTimeAgo`).
 
 describe('ageSeconds (the one rule for a relative age)', () => {
   it('is whole seconds since the time, truncated', () => {
@@ -73,12 +50,13 @@ describe('one duration and age form (U-15)', () => {
     // the genesis block, 2019-11-16 05:21 UTC+8, read on 2026-11-14 12:00 UTC+8: 2,555 days
     const genesis = Date.parse('2019-11-16T05:21:00+08:00');
     const now = Date.parse('2026-11-14T12:00:00+08:00');
-    expect(formatAgeTwoUnits(genesis, now)).toBe('6y 363d ago');
     expect(formatTimeAgo(genesis, now)).toBe('6y 363d ago');
-    // a whole year, its day unit left out; a day short of it, still days and hours
+    // a whole year, its day unit left out; a day short of it, still days. Re-pinned on purpose
+    // (lane D2): read through the one form, `formatTimeAgo` (it was `formatAgeTwoUnits`, gone
+    // with the facts rail), whose years are the same calendar years
     const year = Date.parse('2025-11-14T12:00:00+08:00');
-    expect(formatAgeTwoUnits(year, now)).toBe('1y ago');
-    expect(formatAgeTwoUnits(year + 86_400_000, now)).toBe('364d ago');
+    expect(formatTimeAgo(year, now)).toBe('1y ago');
+    expect(formatTimeAgo(year + 86_400_000, now)).toBe('364d ago');
   });
 
   it('keeps the feed rows’ one unit under a year', () => {

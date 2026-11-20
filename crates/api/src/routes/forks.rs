@@ -225,6 +225,9 @@ pub struct ForkOverviewResponse {
     pub through_date: Option<String>,
     pub days: Vec<ForkDayResponse>,
     pub uncles_in_window: i64,
+    /// The window's canonical blocks, summed here (lane exactness, part A, A5 i): what the window's uncle rate
+    /// divides by (the page summed the days').
+    pub canonical_blocks_in_window: i64,
     pub node_switches_in_window: i64,
     pub node_switches_all_time: i64,
     /// Everything this node's persisted switch history says, over all events.
@@ -593,6 +596,7 @@ async fn get_forks_overview(
                 through_date: None,
                 days: Vec::new(),
                 uncles_in_window: 0,
+                canonical_blocks_in_window: 0,
                 node_switches_in_window: 0,
                 node_switches_all_time: 0,
                 node_record,
@@ -609,6 +613,7 @@ async fn get_forks_overview(
                 through_date: None,
                 days: Vec::new(),
                 uncles_in_window: 0,
+                canonical_blocks_in_window: 0,
                 node_switches_in_window: 0,
                 node_switches_all_time,
                 node_record,
@@ -641,6 +646,7 @@ async fn get_forks_overview(
         let mut day = start_day;
         let mut data = Vec::new();
         let mut uncles_in_window = 0i64;
+        let mut canonical_blocks_in_window = 0i64;
         let mut node_switches_in_window = 0i64;
         while day <= last_day {
             let (canonical_blocks, uncles) = match by_day.remove(&day) {
@@ -666,6 +672,7 @@ async fn get_forks_overview(
             };
             let node_switches = switches_by_day.remove(&day).unwrap_or(0);
             uncles_in_window = uncles_in_window.checked_add(i64::from(uncles)).ok_or_else(|| ApiError::internal("uncle count overflow"))?;
+            canonical_blocks_in_window = canonical_blocks_in_window.checked_add(i64::from(canonical_blocks)).ok_or_else(|| ApiError::internal("canonical block count overflow"))?;
             node_switches_in_window = node_switches_in_window.checked_add(i64::from(node_switches)).ok_or_else(|| ApiError::internal("node switch count overflow"))?;
             data.push(ForkDayResponse { date: day.format("%Y-%m-%d").to_string(), canonical_blocks, uncles, node_switches });
             day = day.succ_opt().ok_or_else(|| ApiError::internal("fork day overflow"))?;
@@ -675,6 +682,7 @@ async fn get_forks_overview(
             through_date: Some(last_day.format("%Y-%m-%d").to_string()),
             days: data,
             uncles_in_window,
+            canonical_blocks_in_window,
             node_switches_in_window,
             node_switches_all_time,
             node_record,

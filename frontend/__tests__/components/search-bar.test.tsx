@@ -85,6 +85,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { SearchBar } from '@/components/search-bar';
+import { WELL_MATERIAL } from '@/components/ui/text-field';
 
 describe('SearchBar', () => {
   afterEach(() => {
@@ -207,17 +208,18 @@ describe('SearchBar', () => {
   // holds about 105 px of text at 768–1023 (and less than the placeholder at 1024 beside the
   // network switcher), so it was cut mid-word there. The field measures its text box (the input's
   // content box, inside its borders and paddings) before paint and keeps it current, and draws the
-  // long placeholder only when the box holds all of it: 34 characters at 13 px, 0.6 em each, 265.2
-  // px; in the header's field from md (1 + 28 + 36 + 1 px of insets) that is 331.2 px wide.
+  // long placeholder only when the box holds all of it: 34 characters at 14 px (the body step since
+  // readability R4, re-pinned from 13 px and 265.2), 0.6 em each, 285.6 px; in the header's field
+  // from md (1 + 28 + 36 + 1 px of insets) that is 351.6 px wide.
   describe('chooses its placeholder by the measured text box, not a breakpoint', () => {
-    it('draws the short one just under 265.2 px of text box and the long one just over', () => {
+    it('draws the short one just under 285.6 px of text box and the long one just over', () => {
       vi.restoreAllMocks();
-      layOutField(330.5); // a 264.5 px text box
+      layOutField(351); // a 285 px text box
       const { unmount } = render(<SearchBar variant="compact" />);
       expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
       unmount();
       vi.restoreAllMocks();
-      layOutField(332); // 266 px
+      layOutField(352); // 286 px
       render(<SearchBar variant="compact" />);
       expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
     });
@@ -289,6 +291,20 @@ describe('SearchBar', () => {
     }
   });
 
+  // Lane C2 (topics): the controls board's field is the header search field's well, and the text
+  // field and the select draw it from one constant; the header's field is a combobox of its own
+  // (its cursor, its list), not a TextField, so it reads the same material and keeps its own box,
+  // focus look and behaviour. The home field keeps its approved jade border and glow, no well.
+  it('stands in the well of every field: the one material, the text field’s and the select’s', () => {
+    for (const variant of ['compact', 'default'] as const) {
+      const { unmount } = render(<SearchBar variant={variant} />);
+      const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+      expect(input, variant).toHaveClass(...WELL_MATERIAL.split(' '));
+      expect(input, variant).not.toHaveClass('well');
+      unmount();
+    }
+  });
+
   // TX-03 (Main.dc.html header): the compact search is a 36 px rounded field with one "/" key,
   // and the typed text is the input's own (no simulated command line). Review 2026-11-03, item 5,
   // move 4 ("the terminal speaks") gives the field its prompt back by design: a jade ">" before
@@ -297,10 +313,12 @@ describe('SearchBar', () => {
   it('draws the compact search as a prompt: ">", the typed text itself, a block cursor on focus and one "/" key', () => {
     render(<SearchBar variant="compact" />);
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
-    // material pass v2 (move 2): the field is a well (`.well`: dark inset glass, the row-rule
-    // border; square, ruling R1)
-    expect(input).toHaveClass('well', 'h-9');
-    expect(input).not.toHaveClass('bg-base-surface', 'border-base-border');
+    // material pass v2 (move 2): the field is a well (dark inset glass; square, ruling R1).
+    // Re-pinned on purpose (lane C2 topics): the well of every field, WELL_MATERIAL, its frame the
+    // controls board's line (border-base-border; it was the generic `.well`, whose frame is the
+    // subtler base-border-subtle), never the surface's fill
+    expect(input).toHaveClass(...WELL_MATERIAL.split(' '), 'h-9');
+    expect(input).not.toHaveClass('well', 'bg-base-surface');
     expect(input).toHaveClass(
       // the jade-tinted focus border and its soft ring
       'focus:border-jade/50',

@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type {
   ActivitySummary24h,
   CkbytesAllocation,
@@ -8,6 +9,7 @@ import type {
   TxStatsResponse,
   UncleRateChartResponse,
 } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 /**
  * The homepage's data, shaped like the live API (mainnet, 2026-10-24). Daily charts end on the
@@ -27,23 +29,27 @@ function chart(title: string, values: string[], yAxisLabel: string): ChartRespon
   return { title, yAxisLabel, data: values.map((value, i) => ({ date: days[i], value })) };
 }
 
+/**
+ * Each day's average block time in whole ms, as the route sends it (lane D1's third round, M1:
+ * it sent seconds at two decimals, rounded). The last day is 9.57 s.
+ */
 export const BLOCK_TIMES = [
-  '10.02',
-  '9.49',
-  '9.64',
-  '10.02',
-  '10.10',
-  '11.10',
-  '10.37',
-  '11.04',
-  '10.07',
-  '9.60',
-  '8.66',
-  '10.22',
-  '8.93',
-  '9.57',
+  '10020',
+  '9490',
+  '9640',
+  '10020',
+  '10100',
+  '11100',
+  '10370',
+  '11040',
+  '10070',
+  '9600',
+  '8660',
+  '10220',
+  '8930',
+  '9570',
 ];
-export const averageBlockTimeChart = chart('Average Block Time', BLOCK_TIMES, 'Seconds');
+export const averageBlockTimeChart = chart('Average Block Time', BLOCK_TIMES, 'Milliseconds');
 
 /** H/s (the unit BE-1 pins). The last day is 91.75 PH/s. */
 export const HASH_RATES = [
@@ -83,6 +89,15 @@ export const UNCLE_RATES = [
 export const uncleRateChart: UncleRateChartResponse = {
   ...chart('Uncle Rate', UNCLE_RATES, 'Uncle Rate'),
   orphanRateTarget: { numerator: 1, denominator: 40 },
+  // each day's operands, the route's (lane exactness, part A, A2): the share of 1,000,000 blocks
+  counts: chart('Uncle Rate', UNCLE_RATES, 'Uncle Rate').data.map((point) => ({
+    date: point.date,
+    // the share's six places are the uncles in a million blocks: 0.026371 is 26,371
+    uncles: Number(
+      `${point.value.split('.')[0]}${(point.value.split('.')[1] ?? '').padEnd(6, '0')}`
+    ),
+    blocks: 1_000_000,
+  })),
 };
 
 /** Knowledge size in whole CKB: +0.2–0.4M a day, one −8.94M day (drawn clipped). */
@@ -158,9 +173,10 @@ export const daoStatistics: DaoStatistics = {
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
-  activeDeposits: 22379,
   depositCellsCount: 20689,
   withdrawalRequestCellsCount: 1690,
+  // the route's: the live DAO cells, 20,689 + 1,690 (lane exactness, part A, A5 ii)
+  liveCellsCount: 22379,
   pendingWithdrawalCapacity: '90872260089687313',
   pendingWithdrawalCapacityCkb: '908722600.89687313',
   daoCapacity: '903761821733487013',
@@ -182,6 +198,8 @@ export const daoStatistics: DaoStatistics = {
   depositCompensationCkb: '1598388623.91653367',
   burnt: '674731136445379763',
   burntCkb: '6747311364.45379763',
+  // the route's whole, which the three parts make (lane exactness, part A, A5 ii)
+  secondaryIssuance: '930874961456346983',
   depositChange24h: '-2578825.48689593',
   depositorsChange24h: -3,
   claimedCompensationChange24h: '0',
@@ -252,6 +270,12 @@ export const activitySummary24h: ActivitySummary24h = {
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
   hoursCovered: 24,
+  // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
+  kindOccurrences: 7115,
+  daoCount: 8,
+  // the route's script calls (5,480 + 5,480 + 294 + 23 + 12 + 6 + 3 + 2) and its rest after five
+  scriptCalls: 11300,
+  scriptRest: { scripts: 3, calls: 11 },
 };
 
 /** 29 complete days, 09/25 … 10/23, oldest first; the last day has 6,691 activities. */
@@ -272,6 +296,11 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     uniqueAddressCount: 500,
     totalCkbMoved: '0',
     scriptCounts: [],
+    kindOccurrences: total,
+    daoCount: 0,
+    // the route's count of the day's user transactions (its transactions less its 9,800
+    // cellbases: the transaction-count chart's 9,800 + total)
+    userTransactionCount: total,
   };
 });
 
@@ -282,14 +311,12 @@ export const dailyTransactionCountChart: ChartResponse = chart(
   'Transactions'
 );
 
-const ADDRS = [
-  'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfkcv576ccddnn4quf2ga65xee2m26h7nq3q7ue',
-  'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2qf8keemy2p5uu0g0gn8cd4ju23s5269qsv05e',
-];
+// Real default-lock addresses (a row reads the lock off the address, lane B4).
+const ADDRS = [seededAddress('q3q7ue'), seededAddress('qsv05e')];
 
 /** Nine latest activities: .bit type calls, a DAO deposit and a plain transfer. */
 export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, i) => {
-  const base: GlobalActivity = {
+  const base: GlobalActivity = activityRead({
     txHash: `0x${String(i + 1).padStart(2, '0')}${'ab'.repeat(30)}${String(i).padStart(2, '0')}`,
     blockNumber: 20_819_142 - i,
     txIndex: 1,
@@ -313,6 +340,8 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
       },
     ],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [
       {
         address: ADDRS[i % 2],
@@ -325,11 +354,14 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         tags: 0,
       },
     ],
-  };
+  });
   if (i === 1) {
-    return {
+    return activityRead({
       ...base,
       typeCalls: [],
+      // the route names the DAO's code on a DAO step (the third read's T SHOULD-1: the deposit kept
+      // the .bit oracle's [], a key the API cannot send)
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',
@@ -342,7 +374,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         { ...base.participants[0], ckbDelta: '-10200001000' },
         { ...base.participants[0], address: ADDRS[1], ckbDelta: '0' },
       ],
-    };
+    });
   }
   if (i === 2) return { ...base, typeCalls: [] };
   return base;
@@ -356,8 +388,13 @@ function party(
   itemDeltas: GlobalActivity['participants'][number]['itemDeltas'] = []
 ): GlobalActivity['participants'][number] {
   return {
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
-    lockHash: `0x${tail.padStart(64, '0')}`,
+    address: seededAddress(tail),
+    // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
+    // is read as one): the tail's characters as hex, padded
+    lockHash: `0x${[...tail]
+      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+      .padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
     ckbDelta,
@@ -373,7 +410,7 @@ function sample(
   n: number,
   overrides: Partial<GlobalActivity> & Pick<GlobalActivity, 'participants'>
 ): GlobalActivity {
-  return {
+  return activityRead({
     txHash: `0x${String(n).padStart(2, '0')}${'cd'.repeat(30)}${String(n).padStart(2, '0')}`,
     blockNumber: 20_818_733 - n,
     txIndex: 1,
@@ -382,13 +419,16 @@ function sample(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     ...overrides,
-  };
+  });
 }
 
 /** Real shapes from the FE-7 mockup: DAO, Fiber, object, token, and an 8-party transaction. */
 export const feedSamples = {
   daoWithdrawRequest: sample(1, {
+    itemTypes: [ITEM_TYPE.dao],
     protocolActions: [
       {
         protocol: 'dao',
@@ -422,6 +462,7 @@ export const feedSamples = {
     ],
   }),
   objectTransfer: sample(3, {
+    itemTypes: [ITEM_TYPE.spore],
     typeCalls: [
       {
         typeCodeHash: '0xckbfs',
@@ -438,7 +479,7 @@ export const feedSamples = {
         // Revised R-8: 33 bytes — a raw prefix byte and a raw 32-byte hash.
         lockArgs: `0x0131da${'00'.repeat(28)}5d74`,
         scriptHash: '0xl1',
-        scriptName: 'Nervape Shadow Lock',
+        lockScriptName: 'Nervape Shadow Lock',
         decoded: { lock: 'shadow-lock', prefix: '0x01', hash: `0x31da${'00'.repeat(28)}5d74` },
         decodeError: null,
       },
@@ -454,8 +495,10 @@ export const feedSamples = {
     ],
   }),
   tokenTransfer: sample(4, {
+    itemTypes: [ITEM_TYPE.xudt],
     lockCalls: [
       {
+        lockScriptName: null,
         lockCodeHash: `0xab0ede${'00'.repeat(25)}e09f`,
         lockHashType: 'type',
         lockArgs: `0x4b0000${'00'.repeat(14)}838e`,

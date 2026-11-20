@@ -1,4 +1,5 @@
 'use client';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
@@ -7,6 +8,7 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { CkbAmount } from '@/components/ui/ckb-amount';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import {
   ScriptCustodyEvidence,
   immutableHow,
@@ -34,10 +36,15 @@ import {
 import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
-import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
+import {
+  HELD_PLOT_NAME,
+  HISTORY_PLOT_HEIGHT,
+  HeldSentence,
+} from '@/components/asset/asset-history';
 import { unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { charPx } from '@/lib/type-metrics';
+import { assertHeldSeries, heldPoint } from '@/lib/held-point';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -101,6 +108,29 @@ function holderSentence(custody: ScriptCustodyApi): string {
   return holderName(custody, 'row');
 }
 
+/**
+ * A sentence of the script's notes: a paragraph of its own at the body step on the measure, or a
+ * span inside a caller's paragraph (table-rows L1-5), the tag and its class chosen together (the
+ * measure gate reads a paragraph by its tag; review of the rules branch, tests SHOULD-1).
+ */
+function NoteSentence({
+  inline,
+  testId,
+  children,
+}: {
+  inline: boolean;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return inline ? (
+    <span data-testid={testId}>{children}</span>
+  ) : (
+    <p data-testid={testId} className="text-body max-w-measure">
+      {children}
+    </p>
+  );
+}
+
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
 export function ScriptSummarySentence({
   family,
@@ -121,18 +151,14 @@ export function ScriptSummarySentence({
         : 'guards';
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
-  const Sentence = inline ? 'span' : 'p';
   return (
-    <Sentence
-      data-testid="script-summary"
-      className={inline ? undefined : 'text-body max-w-[640px]'}
-    >
+    <NoteSentence inline={inline} testId="script-summary">
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
       <span className="text-text-bright">
         <CkbAmount
-          form="column"
+          form="summary"
           shannons={BigInt(family.ownedCapacitySum)}
           signed={false}
           tone="plain"
@@ -156,7 +182,7 @@ export function ScriptSummarySentence({
       {code === 'upgradable' && lineage && lineage.length === 1 && (
         <> Its code is upgradable by {holderSentence(lineage[0].custody)}.</>
       )}
-    </Sentence>
+    </NoteSentence>
   );
 }
 
@@ -192,9 +218,9 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
       companion={[
         <>
           in{' '}
-          <a href="#its-cells" className="hover:text-text-bright hover:underline">
+          <Link href="#its-cells" look="inline">
             {unitNode(formatCount(family.liveCellsCount, 'live cell'))}
-          </a>
+          </Link>
         </>,
         share && `${share} occupied`,
       ]}
@@ -266,10 +292,7 @@ export function ScriptHeroMetrics({
           label="Code cell held by"
           note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
         >
-          <Link
-            href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
-            className="hover:text-jade"
-          >
+          <Link look="key" href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}>
             {/* a hero tile: tight below sm, the row size from it (R9) */}
             <HolderName custody={last.custody} size={size} />
           </Link>
@@ -281,10 +304,15 @@ export function ScriptHeroMetrics({
           note={
             <>
               deployed in{' '}
+              {/* the deploying transaction opened at the code cell it created, which its page then
+                  never folds away (lane P2's third round, item 16: it linked the transaction bare) */}
               <Link
-                href={`/tx/${deployment.codeCellTxHash}`}
+                look="inline"
+                href={transactionAtCellHref(deployment.codeCellTxHash, {
+                  txHash: deployment.codeCellTxHash,
+                  index: deployment.codeCellOutputIndex,
+                })}
                 title={deployment.codeCellTxHash}
-                className="hover:text-jade"
               >
                 <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
               </Link>
@@ -356,8 +384,8 @@ function UpgradeLines({
   );
 }
 
-/** A version label's advance at the meta step (`text-meta`): whole pixels where Chromium snaps them. */
-export const LABEL_ADVANCE = snappedAdvancePx(fontPx('meta'));
+/** A version label's advance at the meta step (`text-meta`). */
+export const LABEL_ADVANCE = charPx('meta');
 /** px between a version label and its dashed line, and between two labels or a label and the name. */
 const LABEL_PAD = 4;
 const LABEL_GAP = 8;
@@ -423,9 +451,11 @@ function UpgradeLabels({
 }
 
 /**
- * The hero's picture (Script board History, hierarchy v3 R13): CKB in its cells with the occupied
- * part in jade (300 px, its name and values inside the plot), then occupied on its own scale; the
- * days its code was replaced dashed through both. One hover state for the whole history (`active`).
+ * The script's history (Script board History; readability R7: after the hero's metrics, 160 px
+ * under one sentence its points give, where it was the hero's 300 px picture): CKB in its cells
+ * with the occupied part in jade (its name and values inside the plot), then occupied on its own
+ * scale; the days its code was replaced dashed through both. One hover state for the whole history
+ * (`active`).
  */
 export function ScriptHistoryFigure({
   family,
@@ -443,13 +473,22 @@ export function ScriptHistoryFigure({
   onActive: (index: number | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  for (const key of ['used', 'unused'])
-    if (!chart.series.some((series) => series.key === key))
-      throw new Error(`${family.name} capacity history has no ${key} series`);
-  const data = chart.data.map((point) => ({
-    label: point.date,
-    values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
-  }));
+  // the held bands by the routes' names, an older API's used and unused refused by name (lane exactness, part B, the third read's S4)
+  assertHeldSeries(chart.series, `${family.name} capacity history`);
+  // each day's three figures, read once (the route states the whole beside its parts)
+  const helds = chart.data.map((point) =>
+    heldPoint(point.values, `${family.name} capacity history ${point.date}`)
+  );
+  const data = chart.data.map((point, i) => {
+    const held = helds[i];
+    return {
+      label: point.date,
+      values: {
+        occupiedCapacity: ckbDecimal(held.occupiedCapacity),
+        freeCapacity: ckbDecimal(held.freeCapacity),
+      },
+    };
+  });
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
   // The token and collection plots' name: the same stack (occupied, free above it) in the same
   // unit; the page's h1 says which script, and a script's name has no length bound (lane A5).
@@ -461,8 +500,8 @@ export function ScriptHistoryFigure({
     kind: 'stacked',
     bareTicks: true,
     series: [
-      { key: 'used', label: 'Occupied', color: DATA_COLOR },
-      { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+      { key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR },
+      { key: 'freeCapacity', label: 'Free', color: HELD_CAPACITY_COLOR },
     ],
   };
   const occupied: ChartValueAxisInput = {
@@ -471,7 +510,7 @@ export function ScriptHistoryFigure({
     unit: 'CKB',
     kind: 'area',
     bareTicks: true,
-    series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
+    series: [{ key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR }],
   };
   // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
   // crossed them), bare, each plot's name saying CKB once; the upgrade lines and labels start
@@ -484,36 +523,49 @@ export function ScriptHistoryFigure({
     onActiveIndexChange: onActive,
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
+  // R7: the sentence over the plots, from the series' own points: CKB held is each day's
+  // `capacity`, which the route states beside its parts (the page sums nothing)
+  const days = chart.data.map((point, i) => ({
+    date: point.date,
+    held: BigInt(helds[i].capacity),
+  }));
   return (
-    <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
-      <UpgradeLines
-        upgradeList={upgradeList}
-        position={position}
-        attribute="data-upgrade-line"
-        left={plotLeft}
-      />
-      <UpgradeLabels
-        upgradeList={upgradeList}
-        position={position}
-        width={width}
-        plotName={plotName}
-        left={plotLeft}
-      />
-      <Chart
-        {...shared}
-        {...held}
-        subtitle="Occupied and free capacity, indexed chain day"
-        plotName={plotName}
-        height={300}
-      />
-      <div className="mt-2">
+    <div className="min-w-0">
+      {days.length > 0 && (
+        <div className="mb-3">
+          <HeldSentence days={days} />
+        </div>
+      )}
+      <div ref={ref} data-testid="script-history" className="relative min-w-0">
+        <UpgradeLines
+          upgradeList={upgradeList}
+          position={position}
+          attribute="data-upgrade-line"
+          left={plotLeft}
+        />
+        <UpgradeLabels
+          upgradeList={upgradeList}
+          position={position}
+          width={width}
+          plotName={plotName}
+          left={plotLeft}
+        />
         <Chart
           {...shared}
-          {...occupied}
-          subtitle="Occupied capacity on its own scale"
-          plotName="CKB occupied by those cells' own bytes"
-          height={96}
+          {...held}
+          subtitle="Occupied and free capacity, indexed chain day"
+          plotName={plotName}
+          height={HISTORY_PLOT_HEIGHT}
         />
+        <div className="mt-2">
+          <Chart
+            {...shared}
+            {...occupied}
+            subtitle="Occupied capacity on its own scale"
+            plotName="CKB occupied by those cells' own bytes"
+            height={96}
+          />
+        </div>
       </div>
     </div>
   );
@@ -537,58 +589,90 @@ export function ScriptHistoryReading({
 }) {
   const index = active ?? chart.data.length - 1;
   const point = chart.data[index];
-  const used = point ? BigInt(point.values.used) : null;
-  const unused = point ? BigInt(point.values.unused) : null;
+  const parts = point ? heldPoint(point.values, `history ${point.date}`) : null;
+  const used = parts ? BigInt(parts.occupiedCapacity) : null;
+  const unused = parts ? BigInt(parts.freeCapacity) : null;
+  // the whole the day's cells hold, as the route states it (the page sums nothing)
+  const held = parts ? BigInt(parts.capacity) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+  // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)
+  const codeShown =
+    lineage !== null && chart.data.some((p) => deploymentOnDay(lineage, p.date) !== null);
+  const swatch = (color: string) => (
+    <span
+      aria-hidden="true"
+      className="mr-1.5 inline-block h-2 w-2"
+      style={{ backgroundColor: color }}
+    />
+  );
   return (
     <div
       role="status"
       aria-live="polite"
       aria-label="History reading"
       data-testid="script-history-reading"
-      className="border-row-rule text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
+      className="border-row-rule text-small mt-2.5 border-t pt-2"
     >
-      {point && used !== null && unused !== null ? (
-        <>
-          <span className="text-text-bright">
-            {unitNode(point.date)}
-            {active === null && <span className="text-text-dim"> · last full day</span>}
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span>CKB held</span>{' '}
-            <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-2 w-2"
-              style={{ backgroundColor: DATA_COLOR }}
-            />
-            <span>occupied</span>{' '}
-            <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-2 w-2"
-              style={{ backgroundColor: HELD_CAPACITY_COLOR }}
-            />
-            <span>free</span>{' '}
-            <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
-          </span>
-          {deployment && (
-            <span className="flex items-baseline gap-1.5">
-              <span>code</span>{' '}
-              <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
-              {/* tight: the readout is tier 1's, within its 160-character budget
-                  (__tests__/utils/hierarchy.ts), which the row size passes (162 for JoyID) */}
-              <span>held by {holderName(deployment.custody, 'tight')}</span>
-            </span>
-          )}
-        </>
+      {point && used !== null && unused !== null && held !== null ? (
+        // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): five
+        // facts in a row of their own words. A series' swatch leads its value.
+        <DetailFacts
+          facts={[
+            {
+              label: 'day',
+              value: (
+                <>
+                  {unitNode(point.date)}
+                  {active === null && <span className="text-text-dim"> · last full day</span>}
+                </>
+              ),
+            },
+            {
+              label: 'CKB held',
+              value: <CkbAmount form="exact" shannons={held} signed={false} tone="plain" />,
+            },
+            {
+              label: 'occupied',
+              value: (
+                <>
+                  {swatch(DATA_COLOR)}
+                  <CkbAmount form="exact" shannons={used} signed={false} tone="plain" />
+                </>
+              ),
+            },
+            {
+              label: 'free',
+              value: (
+                <>
+                  {swatch(HELD_CAPACITY_COLOR)}
+                  <CkbAmount form="exact" shannons={unused} signed={false} tone="plain" />
+                </>
+              ),
+            },
+            ...(deployment
+              ? [
+                  {
+                    label: 'code',
+                    value: (
+                      <>
+                        {version ? `v${version}` : 'unresolved'}{' '}
+                        {/* tight: the readout is tier 1's (it kept a 160-character budget as one
+                            line, __tests__/utils/hierarchy.ts) */}
+                        <span className="text-text-dim">held by</span>{' '}
+                        <span className="text-text">{holderName(deployment.custody, 'tight')}</span>
+                      </>
+                    ),
+                  },
+                ]
+              : // a range with a deployed day shows the fact on it: its row keeps its place here
+                codeShown
+                ? [{ label: 'code', reserved: true as const }]
+                : []),
+          ]}
+        />
       ) : (
-        <span>No capacity history in this range.</span>
+        <span className="text-text-dim">No capacity history in this range.</span>
       )}
     </div>
   );
@@ -615,32 +699,30 @@ export function ScriptHistoryNotes({
   const peak = chart?.totalPeak;
   const capacity = BigInt(family.ownedCapacitySum);
   const occupiedNow = BigInt(family.ownedKnowledgeSum);
-  const Sentence = inline ? 'span' : 'p';
-  const block = inline ? undefined : 'text-body max-w-[640px]';
   return (
     <>
-      <Sentence className={block}>
+      <NoteSentence inline={inline}>
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-text">free</span> is CKB its owners keep there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
-      </Sentence>
+      </NoteSentence>
       {inline && peak && ' '}
       {peak && (
-        <Sentence data-testid="script-history-peak" className={block}>
+        <NoteSentence inline={inline} testId="script-history-peak">
           CKB held peaked at{' '}
-          <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
+          <CkbAmount form="summary" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
           {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
               · occupied is now{' '}
-              <CkbAmount form="column" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
+              <CkbAmount form="summary" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
               {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
           {inline && '.'}
-        </Sentence>
+        </NoteSentence>
       )}
     </>
   );
@@ -674,7 +756,7 @@ export function ScriptCustodyFigure({
     const classes = family.codeClasses ?? [];
     if (classes.length && classes.every((row) => isImmutableClass(row.class)))
       return (
-        <p data-role="caption" className="text-body max-w-[640px]">
+        <p data-role="caption" className="text-body max-w-measure">
           No one. {family.name} cells name their code by its data hash, or through a code cell that
           can never be spent, so the code they run cannot be replaced.
         </p>
@@ -746,7 +828,8 @@ export function ScriptCustodyFigure({
                 {signingText(holder)}
               </div>
             )}
-            <div className="text-text-dim text-meta mt-0.5">
+            {/* what it signed, a value: the reading ink at 13 px (ink and size roles) */}
+            <div className="text-text mt-0.5">
               {holder.signed.length
                 ? `signed ${versionList(holder.signed)}`
                 : holder.neverSigned
@@ -759,11 +842,7 @@ export function ScriptCustodyFigure({
                 className="mt-3 space-y-1.5"
               >
                 {keyRows[i].map((key) => (
-                  <li
-                    key={key}
-                    data-kept={kept(i, key)}
-                    className="text-meta flex items-center gap-2"
-                  >
+                  <li key={key} data-kept={kept(i, key)} className="flex items-center gap-2">
                     <svg width="8" height="8" aria-hidden="true" className="shrink-0">
                       <circle
                         cx="4"
@@ -783,7 +862,7 @@ export function ScriptCustodyFigure({
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="text-meta border-text-ghost text-text mt-3 border border-dashed p-3">
+              <div className="border-text-ghost text-text max-w-measure mt-3 border border-dashed p-3">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}
@@ -791,13 +870,13 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text-dim text-meta mt-2.5">
+        <p key={handover.day} className="text-text text-small max-w-measure mt-2.5">
           ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
           {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
           {handover.total - handover.common} of {handover.total}
         </p>
       ))}
-      <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
         Whoever can spend its code cell can put new code in it, and every {family.name} cell runs it
         from the next block. {NUMBER_WORDS[holders.length] ?? holders.length}{' '}
         {allMultisig
@@ -830,20 +909,18 @@ export function ScriptCustodyMechanism({
   /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
   inline?: boolean;
 }) {
-  const Sentence = inline ? 'span' : 'p';
   return (
     <>
       {lineage && (
-        <Sentence className={inline ? undefined : 'text-body max-w-[640px]'}>
+        <NoteSentence inline={inline}>
           {family.name} cells point at their code through one code cell&apos;s type id, not at a
           fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
           cell runs the new code from the next block.
-        </Sentence>
+        </NoteSentence>
       )}
       {inline && lineage && ' '}
-      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
-        Code versions: {unitText(binaries)}.
-      </Sentence>
+      {/* the code versions are values: the reading ink (R3), as the sentences around them */}
+      <NoteSentence inline={inline}>Code versions: {unitText(binaries)}.</NoteSentence>
     </>
   );
 }
@@ -860,14 +937,14 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedCapacitySum)}
         signed={false}
         tone="plain"
       />
       ,{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(family.ownedKnowledgeSum)}
         signed={false}
         tone="plain"
@@ -879,7 +956,7 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
 
 export function blockLink(block: number): ReactNode {
   return (
-    <Link href={`/blocks/${block}`} className="text-text hover:text-jade">
+    <Link look="inline" href={`/blocks/${block}`}>
       {formatBlockNumber(block)}
     </Link>
   );

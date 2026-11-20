@@ -790,14 +790,15 @@ describe('PipelinePanel static render', () => {
     const count = el.querySelector('[data-count]') as SVGTextElement;
     expect(count.textContent).toBe('+280');
     expect(count).toHaveAttribute('text-anchor', 'end');
-    // measured at the sizes they are drawn in: the number text-small (12 px), the "+N" text-meta
-    expect(number).toHaveClass('text-small');
+    // measured at the sizes they are drawn in: the number and the "+N" text-meta (12 px; the number
+    // was text-small when that was 12 px, re-pinned with readability R4)
+    expect(number).toHaveClass('text-meta');
     expect(count).toHaveClass('text-meta');
     const x = (t: Element) => Number(t.getAttribute('x'));
     const w = (t: Element, size: string) => (t.textContent ?? '').length * GLYPH[size];
     expect(x(number)).toBe(8);
     expect(
-      x(count) - w(count, 'text-meta') - (x(number) + w(number, 'text-small'))
+      x(count) - w(count, 'text-meta') - (x(number) + w(number, 'text-meta'))
     ).toBeGreaterThanOrEqual(4);
     // a plate hiding fewer keeps its stone and its number at 27
     const tip = card(svg, T);
@@ -840,26 +841,30 @@ describe('PipelinePanel static render', () => {
   });
 
   // Re-pinned with lane P from 11 px / 400: the boards' `.no` (Plate.dc.html, PlatePhone.dc.html)
-  // is 12 px / 500, a block's number and NEXT's, in both orientations.
+  // is 12 px / 500, a block's number and NEXT's, in both orientations. Re-pinned with readability
+  // R4: 12 px is the meta step now (text-small is 13), and the canvas keeps its 12 px numbers.
   it('writes the block and NEXT numbers in the card headers at 12 px, 500', async () => {
     const svg = await renderPanel();
     expect(card(svg, T).querySelector('[data-block-number]')).toHaveClass(
-      'text-small',
+      'text-meta',
       'font-medium'
     );
     const nextNumber = within(svg.querySelector('[data-next]') as unknown as HTMLElement).getByText(
       `…${String(T + 1).slice(-4)}`
     );
-    expect(nextNumber).toHaveClass('text-small', 'font-medium');
+    expect(nextNumber).toHaveClass('text-meta', 'font-medium');
     // in the window too: the same size, weight and ink, on its gilt (direction G: the word gold
     // would be 4.2 : 1 on the gilt by night and 3.8 by day, so a number never turns gold)
     hoverStoreSet({ block: null, tx: null, window: T + 1 });
     expect(card(svg, T - 1).querySelector('[data-strap]')).not.toBeNull();
     const inWin = card(svg, T - 1).querySelector('[data-block-number]');
-    expect(inWin).toHaveClass('fill-text-bright', 'text-small', 'font-medium');
+    expect(inWin).toHaveClass('fill-text-bright', 'text-meta', 'font-medium');
     hoverStoreSet({ block: null, tx: null, window: null });
+    // every number at 12 px: the meta step since readability R4 (re-pinned: it was "never the
+    // meta step", when that was 11 px), never the small step, 13 px
     for (const el of svg.querySelectorAll('[data-block-number]')) {
-      expect(el).not.toHaveClass('text-meta');
+      expect(el).toHaveClass('text-meta', 'font-medium');
+      expect(el).not.toHaveClass('text-small');
     }
   });
 
@@ -1485,6 +1490,10 @@ describe('PipelinePanel static render', () => {
     server.use(http.get('/api/:network/v1/pipeline', () => new Promise<Response>(() => {})));
     render(<PipelinePanel />);
     expect(screen.getByTestId('pipeline-loading')).toBeInTheDocument();
+    // a loading line is a sentence, the reading ink, one rule site-wide (the lead's follow-up to lane
+    // P3; it was the quiet ink)
+    expect(screen.getByTestId('pipeline-loading')).toHaveClass('text-text');
+    expect(screen.getByTestId('pipeline-loading')).not.toHaveClass('text-text-dim');
     const tip = screen.getByTestId('pipeline-tip');
     expect(tip).toHaveTextContent(/^--tip —$/);
     expect(within(tip).queryByRole('link')).toBeNull();
@@ -2938,6 +2947,15 @@ describe('PipelinePanel interactions', () => {
     tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
     expect(screen.queryByTestId('pipeline-legend')).toBeNull();
+    // BRIEF-ink-size-roles item 2: the readout's link and the pinned item's facts are a link's
+    // words and values, 13 px (the line was 12 px); its eyebrow and its tag are labels, 12 px
+    const line = screen.getByTestId('pipeline-selection');
+    expect(line).toHaveClass('text-small');
+    expect(line).not.toHaveClass('text-meta');
+    expect(within(line).getByRole('link', { name: 'open tx ↗' }).className).not.toMatch(
+      /text-meta/
+    );
+    expect(within(line).getByText('Selected')).toHaveClass('text-meta');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(usePipelineHoverStore.getState().pinned).toBeNull();
@@ -3081,7 +3099,8 @@ const withTwoUncles = (s: PipelineSnapshot): PipelineSnapshot => ({
 });
 
 /** The px a word advances per glyph at its size class: 0.6 em of JetBrains Mono. */
-const GLYPH: Readonly<Record<string, number>> = { 'text-meta': 0.6 * 11, 'text-small': 0.6 * 12 };
+// re-pinned with readability R4: the canvas's words are text-meta, 12 px (was 11)
+const GLYPH: Readonly<Record<string, number>> = { 'text-meta': 0.6 * 12, 'text-small': 0.6 * 13 };
 
 /**
  * The extent of everything the canvas draws, in canvas px, through the translations of the groups
@@ -3379,7 +3398,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     expect(nextBox.style.getPropertyValue('fill')).toBe('none');
     expect(rectOf(nextBox)).toEqual(asRect(cardBox('column', PHONE_W, 44, true)));
     const nextNumber = within(next as unknown as HTMLElement).getByText(tail4(T + 1));
-    expect(nextNumber).toHaveClass('fill-text-dim', 'text-small', 'font-medium');
+    expect(nextNumber).toHaveClass('fill-text-dim', 'text-meta', 'font-medium');
     expect([nextNumber.getAttribute('x'), nextNumber.getAttribute('y')].map(Number)).toEqual([
       COL.nameX,
       columnHeadAt({ h: 44, uncles: [] }).y,
@@ -3406,7 +3425,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
       // the number after the stone, 12 px / 500 in the bright ink, on the middle of the line
       const num = el.querySelector('[data-block-number]') as SVGTextElement;
       expect(num.textContent).toBe(tail4(c.block.number));
-      expect(num).toHaveClass('fill-text-bright', 'text-small', 'font-medium');
+      expect(num).toHaveClass('fill-text-bright', 'text-meta', 'font-medium');
       expect([num.getAttribute('x'), num.getAttribute('y')].map(Number)).toEqual([27, 25.5]);
     });
     // The cellbase diamond starts each line at x 126; the tip's three dots are at 74, 83, 92.
@@ -3554,7 +3573,9 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     const svg = await renderPanel(quiet);
     const host = rowOf(T - 1);
     const u = host.uncles[0];
-    expect(u).toMatchObject({ line: 'tx', x: 279, y: 16, w: 71, h: 12 });
+    // re-pinned (readability R4): "uncle" is 36 px at 12 px (33 at 11), so the uncle is 74 px and
+    // ends the line from 276 (was 71 from 279)
+    expect(u).toMatchObject({ line: 'tx', x: 276, y: 16, w: 74, h: 12 });
     const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle.closest('[data-words]')).not.toBeNull();
     expect(uncle).toHaveAttribute('pointer-events', 'visiblePainted');
@@ -3565,15 +3586,15 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     expect(word).toHaveClass('text-meta');
     // its word on the line, beside the number
     expect([word.getAttribute('x'), word.getAttribute('y')].map(Number)).toEqual([
-      279,
+      276,
       columnHeadAt(host).y,
     ]);
     expect(uncle.querySelectorAll('rect, path, circle, [data-stone], [data-sq]')).toHaveLength(0);
     // its two dots after the word, centred on the line
     const dots = [...card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')];
     expect(dots.map((d) => Number(d.getAttribute('cx')) - G.chip / 2)).toEqual([
-      u.x + 37,
-      u.x + 46,
+      u.x + 40,
+      u.x + 49,
     ]);
     for (const d of dots) expect(Number(d.getAttribute('cy'))).toBe(host.h / 2);
     expect(card(svg, T - 1).querySelectorAll('[data-stone]')).toHaveLength(1);
@@ -3594,7 +3615,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     // both uncles under the line, from x 126, their words and dots on their own line's middle
     expect(host.uncles.map((u) => [u.line, u.x, u.y])).toEqual([
       ['own', 126, 42],
-      ['own', 201, 42],
+      ['own', 204, 42],
     ]);
     for (const u of host.uncles) {
       const word = el.querySelector(`[data-uncle="${u.index}"] text`) as SVGTextElement;

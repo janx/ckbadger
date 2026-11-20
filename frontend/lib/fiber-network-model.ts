@@ -1,11 +1,13 @@
 import type { FiberNetwork, FiberPair, FiberParty } from '@/lib/api';
 import { connectedComponents, kamadaKawaiLayout, type LayoutPoint } from '@/lib/graph-layout';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { snappedAdvancePx } from '@/lib/type-metrics';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 /** A party's label: its last six characters, at the label size, under a 3 px halo. */
 const LABEL_CHARS = 6;
 const LABEL_HALO = 3;
+/** The open-channel ring is drawn at r + 3 with a 1.2 px stroke: it reaches r + 4. */
+const RING = 4;
 
 /**
  * The Fiber network as the chain sees it (Fiber board V65): every party a node, every pair that
@@ -22,16 +24,18 @@ export const FIBER_GRAPH = {
   /** From this canvas width the islands keep the right strip; narrower, they sink under (R4). */
   sideFrom: 720,
   /**
-   * Half of a six-character label at the label size (7 px a character, as Chromium snaps 11 px)
-   * with its 3 px halo, rounded up: 23.
+   * Half of a six-character label at the label size (0.6 em a character) with its 3 px halo,
+   * rounded up: 24 at 12 px.
    */
-  labelHalf: Math.ceil((LABEL_CHARS * snappedAdvancePx(SVG_TEXT.label) + LABEL_HALO) / 2),
-  /** A label's baseline under its circle; its descenders reach 4 px further. */
-  labelDrop: 14,
+  labelHalf: Math.ceil((textPx(LABEL_CHARS, SVG_TEXT.label) + LABEL_HALO) / 2),
+  /**
+   * A label's baseline under its circle: its tight line starts under the ring's reach (r + 4), so
+   * the baseline is the ring and the line's ascent under the circle (15.4 px at 12 px; it was 14,
+   * the line reaching 1 px into the ring).
+   */
+  labelDrop: RING + lineAscentPx(SVG_TEXT.label),
 } as const;
 const SIDE_SLOT = 110;
-/** The open-channel ring is drawn at r + 3 with a 1.2 px stroke. */
-const RING = 4;
 /** Space between two islands in the row under the main component, and between rows. */
 const ISLAND_GAP = 16;
 /** Two parties of a two-party island sit this far apart. */
@@ -164,7 +168,7 @@ const radius = (party: FiberParty) => 5 + 2.2 * Math.sqrt(party.channels);
 /** How far a party reaches sideways from its centre: its ring, or half its label. */
 const reachX = (r: number) => Math.max(r + RING, FIBER_GRAPH.labelHalf);
 const reachUp = (r: number) => r + RING;
-const reachDown = (r: number) => r + FIBER_GRAPH.labelDrop + 4;
+const reachDown = (r: number) => r + FIBER_GRAPH.labelDrop + descentPx(SVG_TEXT.label);
 
 /**
  * How far a party of radius `r` reaches from its centre: its ring or half its label across, its
@@ -329,8 +333,9 @@ export function fiberGraphLayout(data: FiberGraphData, width: number): FiberGrap
     }
     height = Math.ceil(bottom);
     if (rest.length) {
-      const noteY = bottom + 14 + 11;
-      islandsNote = { x: 0, y: Math.round(noteY), anchor: 'start' };
+      // the note's label line 14 px under the main component, the islands 6 px under the note
+      const noteTop = bottom + 14;
+      islandsNote = { x: 0, y: noteTop + lineAscentPx(SVG_TEXT.label), anchor: 'start' };
       // Pack the islands into rows left to right (biggest island first), then
       // draw each row on one centre line so its islands read level.
       const slots = rest.map((members) => {
@@ -354,7 +359,7 @@ export function fiberGraphLayout(data: FiberGraphData, width: number): FiberGrap
         rows[rows.length - 1].push(slot);
         used += ISLAND_GAP + slot.w;
       }
-      let rowTop = noteY + 10;
+      let rowTop = noteTop + tightLinePx(SVG_TEXT.label) + 6;
       let rowH = 0;
       rows.forEach((row, i) => {
         if (i > 0) rowTop += rowH + ISLAND_GAP;

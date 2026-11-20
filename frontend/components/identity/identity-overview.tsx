@@ -1,8 +1,16 @@
 import type { ReactNode } from 'react';
+import { HeadId } from '@/components/ui/head-id';
+import { PartReadError, readPart } from '@/components/read-failure';
 import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
+import {
+  cellLockSentence,
+  cellOwnerLockPart,
+  partyLockSentence,
+  PartyLockWords,
+} from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
@@ -66,13 +74,16 @@ function heldFact(protocol: IdentityProtocol, isLive: boolean): AssetMetric {
   };
 }
 
+/**
+ * The expiry as a metric, or none (lane P2's follow-up, a standing cause): a version that stores no
+ * expiry has nothing for the metric to say ("Expires · not recorded"); the page's sentence says it,
+ * "Version N of its cell records no expiry.", once.
+ */
+function expiryFacts(term: IdentityTerm, now: number, grace?: number): AssetMetric[] {
+  return term.kind === 'unrecorded' ? [] : [expiryFact(term, now, grace)];
+}
+
 function expiryFact(term: IdentityTerm, now: number, grace?: number): AssetMetric {
-  if (term.kind === 'unrecorded')
-    return {
-      label: 'Expires',
-      value: 'not recorded',
-      note: `version ${term.version} stores no expiry`,
-    };
   if (term.kind !== 'term') throw new Error('expiry fact of an identity without a term');
   const expired = now >= term.expiresAt,
     days = termDays(term.expiresAt, now),
@@ -108,7 +119,11 @@ function blockFact(label: string, timestamp: string | number, block: number): As
     label,
     title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
     value: <NoBreak>{formatUtc8Date(timestamp)}</NoBreak>,
-    note: <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>,
+    note: (
+      <AppLink look="inline" href={`/blocks/${block}`}>
+        {formatBlockNumber(block)}
+      </AppLink>
+    ),
   };
 }
 
@@ -117,8 +132,10 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
   return {
     label: 'Owner',
     size: 'body',
-    value: <Address address={cell.ownerAddress} size="row" className="text-body" />,
-    note: `${cell.lockName ?? 'lock not named'}${note}`,
+    value: <Address address={cell.ownerAddress} size="row" look="key" className="text-body" />,
+    // the owner's lock by the one decision (lane B4; lane p-assets: it wrote the API's name, "lock
+    // not named" where it had none): nothing for the default lock, so the note is its words alone
+    note: [cellOwnerLockPart(cell), note],
   };
 }
 
@@ -127,9 +144,7 @@ function physicalSince(protocol: IdentityProtocol, first: string) {
     protocol.versions.map((v) => v.cell),
     (c) => c.ownerLockHash
   );
-  return run.changes === 0
-    ? ` · since ${first}`
-    : ` · since ${formatUtc8Date(run.since.timestamp)}`;
+  return run.changes === 0 ? `since ${first}` : `since ${formatUtc8Date(run.since.timestamp)}`;
 }
 
 /** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
@@ -156,27 +171,52 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
   ];
 }
 
+/**
+ * A `.cell` party whose 20-byte prefix the API resolved to no one lock, in the one word its fact,
+ * its line and the summary say (lane P2's fifth round, NOTE 7: the summary said "a lock not
+ * indexed owns it" beside the fact's "no uniquely resolved lock").
+ */
+const UNRESOLVED_PARTY_NOTE = 'prefix · lock not uniquely resolved';
+const UNRESOLVED_PARTY_PHRASE = 'a lock not uniquely resolved';
+
+/**
+ * A `.cell` party's lock in the summary's sentence (`partyLockSentence`), or the words of a prefix
+ * resolved to no one lock; an API older than this page is refused by name (item 3).
+ */
+function partyClause(party: DotCellPartyRef): string {
+  return party.lockHash ? partyLockSentence(party, 'row') : UNRESOLVED_PARTY_PHRASE;
+}
+
 /** A `.cell` named party as a metric: the resolved address, else the 20-byte prefix (C7). */
+/**
+ * A `.cell` party's fact. Its owner line is drawn as every identity page's owner line is (lane D2,
+ * PB-22: one owner line on the four pages): an address is the `Address` at the row size in the
+ * body step, its lock named in the note (`ownerFact`); a lock the API resolved to no address is
+ * its hash, linked; a bare prefix is the prefix, unlinked.
+ */
 function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
   return {
     label,
     size: 'body',
-    value: party.lockHash ? (
-      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-        <Hash
-          hash={party.address ?? party.lockHash}
-          kind={party.address ? 'address' : 'hash'}
-          size="row"
-          copyable={false}
-          className="text-body"
-        />
+    value: party.address ? (
+      <Address address={party.address} size="row" look="key" className="text-body" />
+    ) : party.lockHash ? (
+      <AppLink look="key" href={`/address/${party.lockHash}`}>
+        <Hash hash={party.lockHash} kind="hash" size="row" className="text-body" />
       </AppLink>
     ) : (
-      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
+      // a 20-byte prefix whole, as a head's id (lane P2's follow-up, item 8: it was a box that
+      // scrolled): 42 characters at 13 px, 327.6 px, one line from 360, two halves at 320
+      <HeadId value={party.hashPrefix} kind="hash" />
     ),
-    note: party.lockHash
-      ? (party.scriptName ?? 'lock not named')
-      : 'prefix · no uniquely resolved lock',
+    // the party's lock by the one decision (lane P2's third round, item 12), its refusal in its
+    // place (item 3 of the fifth round); a prefix no lock answers uniquely, in the one word the
+    // summary says too (NOTE 7)
+    note: party.lockHash ? (
+      <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+    ) : (
+      UNRESOLVED_PARTY_NOTE
+    ),
   };
 }
 
@@ -187,21 +227,23 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
 export function PartyLine({ party, size }: { party: DotCellPartyRef; size: ShortSize }) {
   return party.lockHash ? (
     <>
-      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
+      <AppLink look="inline" href={`/address/${party.address ?? party.lockHash}`}>
         <Hash
           hash={party.address ?? party.lockHash}
           kind={party.address ? 'address' : 'hash'}
           size={size}
-          copyable={false}
           className="text-body"
         />
       </AppLink>
-      <Sub>{party.scriptName ?? 'lock not named'}</Sub>
+      <Sub>
+        <PartyLockWords party={party} where={`party ${party.hashPrefix}`} />
+      </Sub>
     </>
   ) : (
     <>
-      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
-      <Sub>prefix · no uniquely resolved lock</Sub>
+      {/* the prefix whole, as a head's id (lane P2's follow-up, item 8) */}
+      <HeadId value={party.hashPrefix} kind="hash" />
+      <Sub>{UNRESOLVED_PARTY_NOTE}</Sub>
     </>
   );
 }
@@ -228,17 +270,18 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
     size: 'body',
     value:
       bitCells.length === 0 ? (
-        <span className="text-text-dim">none</span>
+        <span className="text-text">none</span>
       ) : (
         <span className="flex flex-col gap-0.5">
           {bitCells.map((c) => (
             <span key={c.id}>
-              <AppLink href={`/identities/bit-cell/${c.id}`}>
+              <AppLink look="key" href={`/identities/bit-cell/${c.id}`}>
                 {c.name ?? <ShortId value={c.id} kind="hash" size="row" />}
               </AppLink>
-              <span className="text-text-dim font-normal">
-                {' '}
-                · expires <NoBreak>{formatUtc8Date(c.expiredAt * 1000)}</NoBreak>
+              {/* the label quiet, the date a value in the reading ink (ink roles) */}
+              <span className="font-normal">
+                <span className="text-text-dim"> · expires</span>{' '}
+                <NoBreak>{formatUtc8Date(c.expiredAt * 1000)}</NoBreak>
               </span>
             </span>
           ))}
@@ -265,11 +308,9 @@ export function identityFacts({
       return [
         ownerFact(
           protocol,
-          sameKey
-            ? ' · owner and manager are the same key'
-            : ' · owner and manager are different keys'
+          sameKey ? 'owner and manager are the same key' : 'owner and manager are different keys'
         ),
-        expiryFact(term, now),
+        ...expiryFacts(term, now),
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),
         {
           label: 'Records',
@@ -292,17 +333,17 @@ export function identityFacts({
         mint = protocol.versions[0].cell;
       return [
         ownerFact(protocol, physicalSince(protocol, 'minting')),
-        expiryFact(term, now),
+        ...expiryFacts(term, now),
         blockFact('Minted', mint.timestamp, mint.blockNumber),
         {
           label: '.bit account',
           size: 'body',
           value: d.linkedAccount ? (
-            <AppLink href={`/identities/dotbit/${d.linkedAccount.id}`}>
+            <AppLink look="key" href={`/identities/dotbit/${d.linkedAccount.id}`}>
               {d.linkedAccount.name ?? d.linkedAccount.id}
             </AppLink>
           ) : (
-            <span className="text-text-dim">not indexed</span>
+            <span className="text-text">not indexed</span>
           ),
           note: d.linkedAccount ? (d.linkedAccount.isLive ? 'live' : 'not live') : undefined,
         },
@@ -333,15 +374,18 @@ export function identityFacts({
       return [
         partyFact('Owner', dotcell.owner),
         partyFact('Manager', dotcell.manager),
-        expiryFact(term, now, term.kind === 'term' ? term.graceEnd : undefined),
+        ...expiryFacts(term, now, term.kind === 'term' ? term.graceEnd : undefined),
         blockFact('Registered', first.timestamp, createdAtBlock),
         {
           label: 'Records',
           value: stored.length.toLocaleString('en-US'),
           note: `${plural(records.addresses.length, 'address', 'addresses')} · ${plural(records.profile.length, 'profile key', 'profile keys')}`,
         },
+        // Lane P2's follow-up (a standing cause): two facts were one metric, "Sub-names · for
+        // sale", "none · no"; each is its own, and a name not for sale draws no sale metric (the
+        // page's "For sale" section says the price of one that is)
         {
-          label: 'Sub-names · for sale',
+          label: 'Sub-names',
           size: 'body',
           value: (
             <span className="text-text">
@@ -349,20 +393,23 @@ export function identityFacts({
                 ? 'none'
                 : dotcell.childrenHasMore
                   ? `${children.toLocaleString('en-US')} and more`
-                  : children.toLocaleString('en-US')}{' '}
-              · {dotcell.sale ? 'yes' : 'no'}
+                  : children.toLocaleString('en-US')}
             </span>
           ),
         },
+        ...(dotcell.sale
+          ? [
+              {
+                label: 'For sale',
+                size: 'body' as const,
+                value: <span className="text-text">yes</span>,
+              },
+            ]
+          : []),
         heldFact(protocol, isLive),
       ];
     }
   }
-}
-
-function lockPhrase(name: string | null) {
-  if (!name) return 'an unnamed lock';
-  return name.toLowerCase().endsWith('lock') ? `the ${name}` : `a ${name} lock`;
 }
 
 /** The one-paragraph summary under an identity's title (ID-C5), every clause an API fact. */
@@ -416,8 +463,9 @@ export function IdentitySummary({
             <NoBreak>{formatUtc8Date(Number(d.registeredAt) * 1000)}</NoBreak>
           </B>
           {renewals ? ` and renewed ${times(renewals)}` : ''}
+          {/* R8: that it is no longer a live account is the page's lede, said once */}
           {!isLive ? (
-            '; it is no longer a live account. '
+            '. '
           ) : term.kind === 'term' ? (
             <>, {termClause(now >= term.expiresAt ? '' : 'it is ')}. </>
           ) : (
@@ -439,38 +487,49 @@ export function IdentitySummary({
       break;
     }
     case 'bit_cell': {
-      const d = protocol.versions.at(-1)!.decoded,
-        mint = protocol.versions[0].cell;
+      const mint = protocol.versions[0].cell;
       const owners = ownerRun(
         protocol.versions.map((v) => v.cell),
         (c) => c.ownerLockHash
       );
-      const wallet = mint.lockName
-        ? `a ${mint.lockName} wallet`
-        : 'a wallet whose lock is not named';
+      // the locks it was minted into and is held under now, in the one decision's sentence form
+      // (lane P2's follow-up, item 6); a refusal says so in its place (ruling D7)
+      const lockOf = (cell: typeof mint) => {
+        const read = readPart(() => cellLockSentence(cell, 'row'));
+        return read.error === undefined ? (
+          read.value
+        ) : (
+          <PartReadError
+            what="the lock"
+            where={`cell ${cell.txHash}:${cell.outputIndex}`}
+            error={read.error}
+          />
+        );
+      };
       body = (
         <>
           Minted on{' '}
           <B>
             <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
           </B>{' '}
-          into <B>{wallet}</B>
+          into <B>{lockOf(mint)}</B>
+          {/* R8: that the cell is no longer live, or outlives its account, is the page's lede */}
           {unitNode(
-            !isLive
-              ? '; the cell is no longer live. '
-              : owners.changes === 0
-                ? ' that still holds it. '
-                : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `
+            !isLive ? (
+              '. '
+            ) : owners.changes === 0 ? (
+              ' that still holds it. '
+            ) : (
+              <>
+                ; since <NoBreak>{formatUtc8Date(owners.since.timestamp)}</NoBreak>{' '}
+                {lockOf(owners.since)} holds it.{' '}
+              </>
+            )
           )}
           {term.kind === 'term' && (
             <>
               {now >= term.expiresAt ? (
-                <>
-                  {termClause('', "The name's")}
-                  {d.linkedAccount && !d.linkedAccount.isLive
-                    ? '; the .bit account is no longer live, but this cell remains.'
-                    : '.'}
-                </>
+                <>{termClause('', "The name's")}.</>
               ) : (
                 <>It is {termClause('')}.</>
               )}
@@ -517,7 +576,7 @@ export function IdentitySummary({
             </>
           )}
           {names.length > 0 && <> It names {listJoin(names)}.</>}
-          {isLive ? ' It has no expiry date.' : ' It is no longer live.'}
+          {/* R8: whether it is live, and that it has no expiry, is the page's lede */}
         </>
       );
       break;
@@ -542,11 +601,31 @@ export function IdentitySummary({
             <>
               It changed hands {times(owners.changes)}; since{' '}
               <NoBreak>{formatUtc8Date(owners.since.cell.timestamp)}</NoBreak>{' '}
-              <B>{lockPhrase(d.owner.scriptName)}</B> owns it
-              {d.manager.hashPrefix !== d.owner.hashPrefix
-                ? ` while ${lockPhrase(d.manager.scriptName)} manages its records`
-                : ''}
-              .{' '}
+              {/* the locks by the one decision's sentence form (lane P2's third round, item 12;
+                  a second lockPhrase here wrote "the Default Lock" and "an unnamed lock") */}
+              {(() => {
+                // the two parties' locks read once, a refusal in the clause's place (item 3)
+                const read = readPart(() => ({
+                  owner: partyClause(d.owner),
+                  manager:
+                    d.manager.hashPrefix !== d.owner.hashPrefix ? partyClause(d.manager) : null,
+                }));
+                if (read.error !== undefined)
+                  return (
+                    <PartReadError
+                      what="who owns it"
+                      where={`party ${d.owner.hashPrefix}`}
+                      error={read.error}
+                    />
+                  );
+                return (
+                  <>
+                    <B>{read.value.owner}</B> owns it
+                    {read.value.manager ? ` while ${read.value.manager} manages its records` : ''}
+                    .{' '}
+                  </>
+                );
+              })()}
             </>
           )}
           {coins.length === 0
@@ -563,7 +642,7 @@ export function IdentitySummary({
     <p
       data-testid="identity-summary"
       aria-label={`${subject} in brief`}
-      className="text-text text-body mt-1.5 max-w-[820px] leading-relaxed"
+      className="text-text text-body max-w-measure mt-1.5 leading-relaxed"
     >
       {body}
     </p>

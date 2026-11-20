@@ -63,7 +63,11 @@ async fn supply_and_secondary_history_exclude_in_progress_tip_day() {
             "trailing blockless days must carry exact state: {path}"
         );
         if path == "total-supply" {
-            assert_eq!(json["data"][0]["values"]["nervosdao"], "123.00000001");
+            // re-pinned for the four bands (lane D1, second follow-up): the DAO's deposits are
+            // keyed daoDeposited (were nervosdao)
+            assert_eq!(json["data"][0]["values"]["daoDeposited"], "123.00000001");
+            // its DAO cells are its deposits: nothing withdrawing (lane exactness, part B1)
+            assert_eq!(json["data"][0]["values"]["daoWithdrawing"], "0");
         }
         if path == "secondary-issuance" {
             assert_eq!(json["data"][0]["values"]["mining"], "1.50000001");
@@ -169,7 +173,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
     assert_eq!(second_data.len(), 1);
     // Canonical chart date format, converted from the RocksDB day key.
     assert_eq!(second_data[0]["date"], "2024-01-15");
-    assert_eq!(second_data[0]["value"], "12.00");
+    // re-pinned for lane D1's third round (M1): the day's average in whole ms (was "12.00" s)
+    assert_eq!(second_data[0]["value"], "12000");
 }
 
 /// Regression (STATS-013): the indexed tip block's day is still in progress, so
@@ -202,7 +207,8 @@ async fn test_average_block_time_chart_excludes_the_in_progress_tip_day() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
         json["data"],
-        serde_json::json!([{ "date": "2024-01-15", "value": "9.60", "value2": null }]),
+        // re-pinned for lane D1's third round (M1): whole ms (was "9.60" s)
+        serde_json::json!([{ "date": "2024-01-15", "value": "9600", "value2": null }]),
         "the tip block's day is in progress and must not be charted: {json}"
     );
 }
@@ -290,6 +296,402 @@ async fn test_removed_cell_age_chart_routes_return_not_found() {
         let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "uri={uri}");
+    }
+}
+
+/// CKB as the routes write it, in shannons: "12.5" is 1,250,000,000.
+fn ckb_shannons(text: &str) -> i128 {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let fraction = format!("{fraction:0<8}");
+    whole.parse::<i128>().unwrap() * 100_000_000 + fraction.parse::<i128>().unwrap()
+}
+
+/// A store older than `protocol_deposited`'s writer has days without it, and the Supply chart
+/// cannot draw its five bands from them: it refuses with the date and the re-sync words, and
+/// never falls back to four (lane exactness, part B1). The seed is this file's earlier four-band one, whose
+/// snapshot has no `protocol_deposited`.
+#[tokio::test]
+async fn total_supply_refuses_a_snapshot_without_protocol_deposited() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, 1_589_276_230_000),
+            (1, 1_590_137_711_584),
+            (2, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    let secondary_pool = 300_00000003i128;
+    let snapshot = DaoDailySnapshot {
+        date: "2020-05-12".to_string(),
+        total_deposited: 250_50000000,
+        depositors_count: 3,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 250_50000000,
+        total_issuance: genesis_burnt + 1300_00000003,
+        secondary_pool,
+        occupied_capacity: 0,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 100_00000001,
+        frozen_phase1_compensation: 0,
+        cumulative_depositors: 3,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    // the two days a block was mined on, each with its snapshot (the route fills the days between)
+    for (date, date_key) in [("2020-05-12", "20200512"), ("2020-05-22", "20200522")] {
+        store
+            .put_daily_stats(
+                date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        let row = DaoDailySnapshot {
+            date: date.to_string(),
+            ..snapshot.clone()
+        };
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/total-supply").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("2020-05-12"), "{message}");
+    assert!(message.contains("protocol_deposited"), "{message}");
+    assert!(
+        message.contains("delete RocksDB and re-sync from genesis"),
+        "{message}"
+    );
+}
+
+/// A DAO's life on three days, seeded through the indexer's own reducer
+/// (`reduce_dao_daily_snapshot`), so each snapshot is the row the indexer writes (lane exactness, part B1):
+///
+/// - 2020-05-12: three deposits, of 300, 250 and 100 CKB;
+/// - 2020-05-15: a withdrawal request on the 250;
+/// - 2020-05-20: that withdrawal completed (its 1.5 CKB of compensation claimed), and a request on
+///   the 100.
+///
+/// C is the genesis burn and 2,000, 2,100 and 2,200 CKB; S is 300, 320 and 330 CKB, of which the
+/// compensation not yet claimed is 10.00000001, 12.5 and 13 CKB. The tip is on 2020-05-25.
+fn seed_dao_life(store: &Arc<CkbadgerStore>) {
+    use ckbadger_store::dao_snapshot::{
+        reduce_dao_daily_snapshot, DaoObservationKind, DaoSnapshotDelta, DaoSnapshotObservation,
+    };
+    seed_genesis_baseline(store);
+    let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let noon = |date: &str| -> i64 {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(utc8)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    };
+    seed_block_headers_at(
+        store,
+        &[
+            (0, noon("2020-05-12")),
+            (1, noon("2020-05-15")),
+            (2, noon("2020-05-20")),
+            (3, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    let ckb = ckb_shannons;
+    // (date, deposits' Δ, DAO cells' Δ, C over the genesis burn, S, unclaimed, of it still
+    // accruing on deposits, claimed)
+    let days = [
+        (
+            "2020-05-12",
+            ckb("650"),
+            ckb("650"),
+            ckb("2000"),
+            ckb("300"),
+            ckb("10.00000001"),
+            ckb("10.00000001"),
+            0,
+        ),
+        (
+            "2020-05-15",
+            -ckb("250"),
+            0,
+            ckb("2100"),
+            ckb("320"),
+            ckb("12.5"),
+            ckb("11"),
+            0,
+        ),
+        (
+            "2020-05-20",
+            -ckb("100"),
+            -ckb("250"),
+            ckb("2200"),
+            ckb("330"),
+            ckb("13"),
+            ckb("12.4"),
+            ckb("1.5"),
+        ),
+    ];
+    let mut previous: Option<DaoDailySnapshot> = None;
+    for (number, (date, deposits, cells, issued, pool, unclaimed, accruing, claimed)) in
+        days.into_iter().enumerate()
+    {
+        let mut field = [0u8; 32];
+        for (index, value) in [
+            u64::try_from(genesis_burnt + issued).unwrap(),
+            10_000_000_000_000_000,
+            u64::try_from(pool).unwrap(),
+            504_000_000_000_000_000,
+        ]
+        .iter()
+        .enumerate()
+        {
+            field[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        let snapshot = reduce_dao_daily_snapshot(
+            previous.as_ref(),
+            DaoSnapshotDelta {
+                active_capacity: deposits,
+                protocol_capacity: cells,
+                gross_deposits: deposits.max(0),
+                ..Default::default()
+            },
+            DaoSnapshotObservation {
+                kind: DaoObservationKind::SealedDay,
+                date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+                block_number: number as i64,
+                chain_time_ms: noon(date),
+                dao_field: &field,
+                daily_depositor_addresses: 0,
+                compensation: ckbadger_store::DaoCompensationBreakdown {
+                    claimed,
+                    unclaimed,
+                    active_unmade: accruing,
+                },
+            },
+        )
+        .unwrap();
+        let date_key = date.replace('-', "");
+        store
+            .put_daily_stats(
+                &date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&snapshot).unwrap(),
+            )
+            .unwrap();
+        previous = Some(snapshot);
+    }
+}
+
+/// The Supply chart draws C in five bands that make it (lane exactness, part B1, the lead's brief): the CKB outside
+/// the Nervos DAO (`outsideDao`, circulating − protocol_deposited), the deposits (`daoDeposited`,
+/// total_deposited), the CKB in withdrawal requests (`daoWithdrawing`, protocol_deposited −
+/// total_deposited), the DAO compensation not yet claimed and the burnt; and it sends C and the
+/// protocol circulation, C − genesis burnt − S. On the seed each day's five bands differ from one
+/// another, and they make C to the shannon.
+#[tokio::test]
+async fn total_supply_draws_five_bands_that_make_c() {
+    let store = test_store();
+    seed_dao_life(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/total-supply").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let keys: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "outsideDao",
+            "daoDeposited",
+            "daoWithdrawing",
+            "unclaimedCompensation",
+            "burnt"
+        ]
+    );
+    let labels: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Outside the Nervos DAO",
+            "Deposited in the Nervos DAO",
+            "Withdrawing from the Nervos DAO",
+            "Unclaimed DAO compensation",
+            "Burnt"
+        ]
+    );
+    let points = json["data"].as_array().unwrap();
+    let dates: Vec<&str> = points
+        .iter()
+        .map(|point| point["date"].as_str().unwrap())
+        .collect();
+    let expected_dates: Vec<String> = (12..=24).map(|day| format!("2020-05-{day:02}")).collect();
+    assert_eq!(dates, expected_dates, "{json}");
+    for point in points {
+        let values = &point["values"];
+        let date = point["date"].as_str().unwrap();
+        // (outside, deposited, withdrawing, unclaimed, burnt, C, circulating) from the day of the
+        // seed's last change
+        let expected = match date {
+            "2020-05-12" | "2020-05-13" | "2020-05-14" => {
+                // 1,700 circulates: 650 in deposit cells, none in requests, 1,050 outside
+                [
+                    "1050",
+                    "650",
+                    "0",
+                    "10.00000001",
+                    "8400000289.99999999",
+                    "8400002000",
+                    "1700",
+                ]
+            }
+            "2020-05-15" | "2020-05-16" | "2020-05-17" | "2020-05-18" | "2020-05-19" => {
+                // 1,780 circulates: the 250 requested left the deposits and is still in a DAO cell
+                [
+                    "1130",
+                    "400",
+                    "250",
+                    "12.5",
+                    "8400000307.5",
+                    "8400002100",
+                    "1780",
+                ]
+            }
+            _ => {
+                // 1,870 circulates: the 250 withdrawn left the DAO; the 100 requested is withdrawing
+                [
+                    "1470",
+                    "300",
+                    "100",
+                    "13",
+                    "8400000317",
+                    "8400002200",
+                    "1870",
+                ]
+            }
+        };
+        for (key, value) in keys
+            .iter()
+            .chain(["totalIssuance", "circulating"].iter())
+            .zip(expected)
+        {
+            assert_eq!(values[*key], value, "{key} on {date}: {point}");
+        }
+        // the five make C, to the shannon, and every two of them differ
+        let bands: Vec<i128> = keys
+            .iter()
+            .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            bands.iter().sum::<i128>(),
+            ckb_shannons(values["totalIssuance"].as_str().unwrap()),
+            "{point}"
+        );
+        for (i, a) in bands.iter().enumerate() {
+            for b in &bands[i + 1..] {
+                assert_ne!(a, b, "two bands alike on {date}: {point}");
+            }
+        }
+        // what circulates is outside the DAO, deposited or withdrawing
+        assert_eq!(
+            bands[0] + bands[1] + bands[2],
+            ckb_shannons(values["circulating"].as_str().unwrap()),
+            "{point}"
+        );
+    }
+}
+
+/// The wholes the supply pages' sentences state are the routes' (the D1 hand-back, item 2): total
+/// supply sends C, the DAO field's total issuance of each day; secondary issuance sends the total of
+/// its three destinations, in shannons.
+#[tokio::test]
+async fn supply_and_secondary_issuance_state_their_wholes() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let issued: std::collections::HashMap<String, i128> = store
+        .list_dao_daily_snapshots()
+        .unwrap()
+        .into_iter()
+        .map(|snapshot| (snapshot.date.clone(), snapshot.total_issuance))
+        .collect();
+    let app = create_router(test_config(store)).await;
+
+    let (status, supply) = get_json(&app, "/charts/total-supply").await;
+    assert_eq!(status, StatusCode::OK, "{supply}");
+    let mut checked = 0;
+    for point in supply["data"].as_array().unwrap() {
+        let total = point["values"]["totalIssuance"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no totalIssuance at {point}"));
+        if let Some(c) = issued.get(point["date"].as_str().unwrap()) {
+            assert_eq!(ckb_shannons(total), *c, "{point}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no snapshot day to compare: {supply}");
+
+    let (status, issuance) = get_json(&app, "/charts/secondary-issuance").await;
+    assert_eq!(status, StatusCode::OK, "{issuance}");
+    // lane exactness, part A2 (the test review's NOTE-3): the loop meets points, or it asserts nothing
+    assert!(
+        !issuance["data"].as_array().unwrap().is_empty(),
+        "{issuance}"
+    );
+    for point in issuance["data"].as_array().unwrap() {
+        let values = &point["values"];
+        let parts = ["burnt", "compensation", "mining"]
+            .iter()
+            .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
+            .sum::<i128>();
+        // re-pinned for lane D1's third round (S1): one whole, the protocol total, which the
+        // three destinations make (it read componentsTotalShannons, a second total)
+        assert_eq!(point["protocolTotalShannons"], parts.to_string(), "{point}");
+        assert!(point.get("componentsTotalShannons").is_none(), "{point}");
     }
 }
 
@@ -501,6 +903,121 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     assert_eq!(capacity_data[0]["values"]["top2"], "600");
     assert_eq!(capacity_data[0]["values"]["top3"], "500");
     assert_eq!(capacity_data[0]["values"]["others"], "0");
+}
+
+/// The chart page draws a ranked history as its five largest and one band for the rest (the
+/// chart-hero board, lane D1). That band is a new figure: this route computes it per day from the
+/// exact shannons (the day's total less the five largest), so the page never sums twenty series.
+/// Seven scripts here: the rest is ranks six and seven and the API's own remainder.
+#[tokio::test]
+async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
+    let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
+    // knowledge 700, 600, …, 100; capacity 1,000 more than its knowledge
+    let scripts: Vec<(Vec<u8>, i128)> = (0..7u8)
+        .map(|i| (vec![0x40 + i; 32], 700 - 100 * i128::from(i)))
+        .collect();
+    for (i, (code_hash, knowledge)) in scripts.iter().enumerate() {
+        store
+            .put_script_info_direct(
+                code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    name: Some(format!("Script {}", i + 1)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                code_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: code_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    lock_owned_capacity_sum: knowledge + 1_000,
+                    lock_owned_knowledge_sum: *knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_daily_delta(
+                code_hash,
+                1,
+                false,
+                20240101,
+                &ScriptDailyDelta {
+                    owned_capacity_delta: knowledge + 1_000,
+                    owned_knowledge_delta: *knowledge,
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/most-utilized-scripts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    for (scope, rest) in [("usedShare", "300"), ("capacityShare", "2300")] {
+        let chart = &json[scope];
+        let bands: Vec<(String, Vec<String>)> = chart["bands"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{scope} has no bands"))
+            .iter()
+            .map(|band| {
+                (
+                    band["key"].as_str().unwrap().to_string(),
+                    band["members"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|m| m.as_str().unwrap().to_string())
+                        .collect(),
+                )
+            })
+            .collect();
+        let one = |key: &str| (key.to_string(), vec![key.to_string()]);
+        assert_eq!(
+            bands,
+            vec![
+                one("top0"),
+                one("top1"),
+                one("top2"),
+                one("top3"),
+                one("top4"),
+                (
+                    "rest".to_string(),
+                    vec!["top5".to_string(), "top6".to_string(), "others".to_string()]
+                ),
+            ],
+            "{scope}"
+        );
+        // the rest band is named like the API's own remainder
+        assert_eq!(chart["bands"][5]["label"], "Others", "{scope}");
+        // the five drawn ranks' total, which the page's "the five largest hold" states (lane D1's
+        // third round, M2): the day's total less the rest
+        let drawn = if scope == "usedShare" { "2500" } else { "7500" };
+        assert_eq!(chart["data"][0]["values"]["drawnTotal"], drawn, "{scope}");
+        assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
+        // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
+        assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
+        // the whole the page's shares divide by: the day's total, the route's own figure
+        let total = if scope == "usedShare" { "2800" } else { "9800" };
+        assert_eq!(chart["data"][0]["values"]["total"], total, "{scope}");
+        assert_eq!(chart["series"].as_array().unwrap().len(), 8, "{scope}");
+    }
 }
 
 #[tokio::test]
@@ -1122,6 +1639,245 @@ async fn test_charts_block_time_distribution_with_data() {
     assert_eq!(point_2s["value"], "50.000");
 }
 
+/// A block-interval share is a percentage a chart page states, cut at its three decimals and never
+/// rounded (the D1 hand-back, item 1): two of three intervals of 1 s is 66.666…%, "66.666" (half up
+/// it read "66.667").
+#[tokio::test]
+async fn test_charts_block_time_distribution_cuts_its_shares() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // epoch 0 complete (intervals 1 s, 1 s, 2 s); the tip in epoch 1
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 2_000, 0),
+        (3, 4_000, 0),
+        (4, 5_000, 1),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: epoch,
+                epoch_index: 0,
+                epoch_length: 4,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: ts_ms,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/block-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let value = |date: &str| {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|point| point["date"] == date)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("1.0"), "66.666");
+    assert_eq!(value("2.0"), "33.333");
+}
+
+/// The day's average block interval is sent as the whole ms the store derives
+/// (`DailyStats::avg_block_time_ms`), never rounded to seconds (lane D1's third round, M1): 19,910
+/// ms over two intervals is 9,955 ms, which half up at two decimals of a second read "9.96".
+#[tokio::test]
+async fn average_block_time_sends_the_days_average_in_whole_ms() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                blocks_count: 3,
+                block_time_sum_ms: 19_910,
+                block_time_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "9955", "{json}");
+}
+
+/// Block intervals: a share is of every interval of the window, the ones beyond the drawn 50 s
+/// too, which the route counts and states (lane D1's third round, S4: said, not drawn); and the
+/// route states the window's complete epochs. Intervals 1 s, 1 s and 63 s: 1.0 s holds 66.666 %,
+/// 63 s is beyond the range.
+#[tokio::test]
+async fn block_time_distribution_shares_are_of_every_interval_of_the_window() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 2_000, 0),
+        (3, 65_000, 0),
+        (4, 66_000, 1),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: epoch,
+                epoch_index: 0,
+                epoch_length: 4,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: ts_ms,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/block-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let value = |date: &str| {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|point| point["date"] == date)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("1.0"), "66.666", "{json}");
+    assert_eq!(json["intervals"], 3, "{json}");
+    assert_eq!(json["beyondRange"], 1, "{json}");
+    assert_eq!(json["epochs"], 1, "{json}");
+    // lane exactness, part A2 (the routes review's N5): each bucket's count of intervals, so a tie is read from
+    // the counts, not from the cut shares (two of the three intervals in the 1.0 s bucket)
+    let counts = json["bucketCounts"].as_array().expect("bucketCounts");
+    assert_eq!(counts.len(), 501, "{json}");
+    assert_eq!(counts[10], 2, "{json}");
+    assert_eq!(
+        counts.iter().map(|c| c.as_u64().unwrap()).sum::<u64>(),
+        2,
+        "{json}"
+    );
+}
+
+/// Secondary issuance sends one whole (lane D1's third round, S1): the protocol total, `miner + S +
+/// claimed`, which the three destinations partition (`cum_dao_compensation = claimed +
+/// unclaimed`), checked per day. A seed whose secondary fields are none of them zero: miner
+/// 150.00000001, S 300.00000003 of which 100.00000001 unclaimed, 50 claimed.
+#[tokio::test]
+async fn secondary_issuance_states_one_whole_its_destinations_make() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, 1_589_276_230_000),
+            (1, 1_590_137_711_584),
+            (2, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    let snapshot = DaoDailySnapshot {
+        date: String::new(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 50_00000000,
+        cumulative_deposit_amount: 0,
+        total_issuance: genesis_burnt + 1300_00000003,
+        secondary_pool: 300_00000003,
+        occupied_capacity: 0,
+        cum_miner_secondary: 150_00000001,
+        cum_dao_compensation: 150_00000001,
+        cum_treasury: 0,
+        unclaimed_compensation: 100_00000001,
+        frozen_phase1_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    for (date, date_key) in [("2020-05-12", "20200512"), ("2020-05-22", "20200522")] {
+        store
+            .put_daily_stats(
+                date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        let row = DaoDailySnapshot {
+            date: date.to_string(),
+            ..snapshot.clone()
+        };
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/secondary-issuance").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    // lane exactness, part A2 (NOTE-3): the loop meets points
+    assert!(!json["data"].as_array().unwrap().is_empty(), "{json}");
+    for point in json["data"].as_array().unwrap() {
+        let values = &point["values"];
+        assert_eq!(values["compensation"], "150.00000001", "{point}");
+        assert_eq!(values["mining"], "150.00000001", "{point}");
+        assert_eq!(values["burnt"], "200.00000002", "{point}");
+        // one whole, which the three destinations make
+        assert_eq!(point["protocolTotalShannons"], "50000000004", "{point}");
+        assert!(point.get("componentsTotalShannons").is_none(), "{point}");
+    }
+}
+
+/// The share series' routes cut at their precision, never round (lane D1's third round, S9):
+/// two uncles in three blocks is 0.666666… of a block, cut 0.666666 (half up 0.666667).
+#[tokio::test]
+async fn uncle_rate_cuts_its_fraction() {
+    let store = test_store();
+    store
+        .put_daily_block_stats(
+            "20240115",
+            &DailyBlockStats {
+                difficulty_sum: 300,
+                block_count: 3,
+                total_uncles: 2,
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "0.666666", "{json}");
+}
+
 /// Regression: every date-keyed chart emits ONE canonical date format
 /// (`YYYY-MM-DD`). Five endpoints used to leak the raw RocksDB `YYYYMMDD` day
 /// key because their formatter only replaced `-` with `/`, which is a no-op on
@@ -1238,7 +1994,9 @@ async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
             // CH-21: every chart response names its series' peaks.
             "peak": { "date": "2024-01-15", "value": "0.025000" },
             "peak2": null,
-            "orphanRateTarget": { "numerator": 1, "denominator": 40 }
+            "orphanRateTarget": { "numerator": 1, "denominator": 40 },
+            // lane exactness, part A, A2: each day's operands, so "over the target" is counted on integers
+            "counts": [{ "date": "2024-01-15", "uncles": 250, "blocks": 10000 }]
         })
     );
 

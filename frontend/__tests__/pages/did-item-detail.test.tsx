@@ -1,12 +1,17 @@
-import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import Page from '@/app/identities/did/[identityId]/client-page';
-import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { api, ApiRequestError, type ItemCellVersion, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import {
   didProtocolProducer as evidence,
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 let query = '';
 const replace = vi.fn();
@@ -64,12 +69,14 @@ it('keeps recycled identity history while showing no live capacity', async () =>
 });
 it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
   query = 'activity_cursor=100:0';
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...itemActivityFeedProducer,
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   render(<Page identityId={evidence.itemId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
@@ -77,7 +84,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
       cursor: '100:0',
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
       limit: 20,
@@ -98,7 +105,7 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
     })),
   });
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
   // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
   // count is not shown at all rather than as "Not computed".
@@ -114,14 +121,18 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
   });
 });
 it('starts a new identity on its own first cursor page', async () => {
-  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
-    ...emptyPage(),
-    total: 100,
-    hasMore: true,
-    nextCursor: '90:0',
-  });
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      // a full page of one captured activity with more after it (lane cd-fixes-controls,
+      // SHOULD-5: an empty page that said more followed, a page the API cannot send)
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: true,
+      nextCursor: '90:0',
+    })
+  );
   const { rerender } = render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
       limit: 20,
@@ -191,12 +202,21 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   await waitFor(() =>
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.test')
   );
-  expect(
-    screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
-  ).toHaveTextContent('.test');
+  // re-pinned on purpose (lane P2's third round, item 6): the handle is the title whole, in the
+  // title's ink; its personal data server's domain is no standard's suffix and is not drawn in the
+  // rose a .bit's or a .cell's suffix takes (the review: it read as a top-level domain)
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^alice\.test$/);
+  expect(screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')).toBeNull();
   // The DID string is the identity line under the title (with copy), not the title.
   expect(screen.getByRole('heading', { level: 1 }).closest('header')).toHaveTextContent(
     'did:ckb:ceirceirceirceirceirceirceirceir'
+  );
+  // Lane c2-finish, item 4: the DID is the head's id as every head's is (HeadId: one line or
+  // equal lines, never a scroller; it was HexCode's own-box scroller, copied by a click on it),
+  // the copy button after it
+  expectHeadId('did:ckb:ceirceirceirceirceirceirceirceir');
+  expect(screen.getByRole('heading', { level: 1 }).closest('header')).toContainElement(
+    screen.getByRole('button', { name: 'copy DID' })
   );
   const doc = screen.getByRole('region', { name: 'DID document' });
   expect(doc).toHaveTextContent('at://alice.test');
@@ -206,4 +226,82 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   expect(among).toHaveTextContent('this one');
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('Expiry');
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('none');
+});
+
+/**
+ * Versions of one cell, oldest first, the last live: the same capacity, byte counts and lock
+ * address throughout, each given its own data hash (and its own type, where `types` says so), as a
+ * name's cell is recreated under one lock by a transfer, a renewal or an edit of the same length.
+ */
+function sameShapeVersions(
+  base: ItemCellVersion,
+  dataHashes: readonly string[],
+  types: readonly (ItemCellVersion['type'] | undefined)[] = []
+): ItemCellVersions {
+  const data = dataHashes.map((dataHash, i): ItemCellVersion => {
+    const last = i === dataHashes.length - 1;
+    return {
+      ...base,
+      txHash: `0x${String(i + 1)
+        .padStart(2, '0')
+        .repeat(32)}`,
+      outputIndex: 0,
+      blockNumber: 100 + i,
+      txIndex: 0,
+      dataHash,
+      type: types[i] ?? base.type,
+      isLive: last,
+      consumedByTx: last
+        ? null
+        : `0x${String(i + 2)
+            .padStart(2, '0')
+            .repeat(32)}`,
+      consumedAtBlock: last ? null : 101 + i,
+    };
+  });
+  return { data, total: data.length };
+}
+const hashOf = (b: string) => `0x${b.repeat(32)}`;
+
+// Lane P2's fifth round (item 1, MUST): a did:ckb document edited to the same length keeps the
+// cell's capacity, byte counts and lock, and changes its data: never folded as "the same bytes".
+it('never folds a document edited to the same length', async () => {
+  const base = evidence.versions[0].cell as ItemCellVersion;
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(
+    sameShapeVersions(base, [hashOf('d1'), hashOf('d2'), hashOf('d3'), hashOf('d4')])
+  );
+  render(<Page identityId={evidence.itemId} />);
+  const list = await screen.findByLabelText(/cell versions$/);
+  expect(within(list).getAllByRole('article')).toHaveLength(4);
+  expect(list.querySelector('[data-versions-fold]')).toBeNull();
+});
+
+// Lane P2's fifth round (NOTE 8): an activity feed opened at a URL cursor on its oldest page (no
+// more after it) drew no pager, so it had no way back to the newest page; "← newer" stands there,
+// taking the feed to its newest page, and "older →" is an end that cannot be taken.
+it('keeps the way to the newest page on a feed opened at a URL cursor on its oldest page', async () => {
+  query = 'activity_cursor=10:0';
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
+  render(<Page identityId={evidence.itemId} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: '10:0',
+    })
+  );
+  fireEvent.click(await screen.findByRole('button', { name: '← newer' }));
+  expect(screen.queryByRole('button', { name: 'older →' })).toBeNull();
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: undefined,
+    })
+  );
 });

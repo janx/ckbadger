@@ -392,6 +392,35 @@ struct Day {
     supply: String,
     capacity: String,
     occupied_capacity: String,
+    /// The free part, `capacity - occupied_capacity`, stated here so a page subtracts nothing
+    /// (lane P2's third round, item 13).
+    free_capacity: String,
+}
+impl Day {
+    /// A day's point: what the token's cells hold, the part they occupy and the free rest, which
+    /// make the whole; an occupied part above the whole is refused with the token and the day.
+    fn held(
+        hash: &[u8],
+        date: impl std::fmt::Display,
+        supply: String,
+        capacity: i128,
+        occupied: i128,
+    ) -> anyhow::Result<Self> {
+        // the one free part (lane exactness, part B5: `free_part`, the cell versions' and the histories' too)
+        let free = crate::utils::assets::free_part(capacity, occupied).map_err(|error| {
+            anyhow::anyhow!(
+                "token history: {error}: token=0x{} date={date}",
+                hex::encode(hash)
+            )
+        })?;
+        Ok(Self {
+            date: date.to_string(),
+            supply,
+            capacity: capacity.to_string(),
+            occupied_capacity: occupied.to_string(),
+            free_capacity: free.to_string(),
+        })
+    }
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -555,32 +584,35 @@ fn build_history(state: &AppState, hash: &[u8]) -> Result<History, crate::respon
             if let Some((mut fill, ref fill_supply, fill_capacity, fill_occupied)) = cursor {
                 fill = fill.succ_opt().context("token history date overflow")?;
                 while fill < *date {
-                    daily.push(Day {
-                        date: fill.to_string(),
-                        supply: fill_supply.clone(),
-                        capacity: fill_capacity.to_string(),
-                        occupied_capacity: fill_occupied.to_string(),
-                    });
+                    daily.push(Day::held(
+                        hash,
+                        fill,
+                        fill_supply.clone(),
+                        fill_capacity,
+                        fill_occupied,
+                    )?);
                     fill = fill.succ_opt().context("token history date overflow")?;
                 }
             }
-            daily.push(Day {
-                date: date.to_string(),
-                supply: supply.to_string(),
-                capacity: capacity.to_string(),
-                occupied_capacity: occupied.to_string(),
-            });
+            daily.push(Day::held(
+                hash,
+                date,
+                supply.to_string(),
+                *capacity,
+                *occupied,
+            )?);
             cursor = Some((*date, supply.to_string(), *capacity, *occupied));
         }
         if let Some((mut fill, fill_supply, fill_capacity, fill_occupied)) = cursor {
             fill = fill.succ_opt().context("token history date overflow")?;
             while fill <= last {
-                daily.push(Day {
-                    date: fill.to_string(),
-                    supply: fill_supply.clone(),
-                    capacity: fill_capacity.to_string(),
-                    occupied_capacity: fill_occupied.to_string(),
-                });
+                daily.push(Day::held(
+                    hash,
+                    fill,
+                    fill_supply.clone(),
+                    fill_capacity,
+                    fill_occupied,
+                )?);
                 fill = fill.succ_opt().context("token history date overflow")?;
             }
         }
@@ -1118,5 +1150,35 @@ mod batch_tests {
         let error = walk(&store, 100).err().unwrap().to_string();
         assert!(error.contains("timestamp mismatch"), "{error}");
         assert!(error.contains(&hex::encode(tx_hash(2))), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod day_tests {
+    use super::Day;
+
+    /// Lane P2's third round (item 13): a day states its free part beside the occupied, the two
+    /// making the whole; an occupied part above the whole is refused, never repaired.
+    #[test]
+    fn a_day_states_its_free_part_and_refuses_an_occupied_above_the_whole() {
+        let day = Day::held(&[0x71; 32], "2026-10-01", "100".into(), 1000, 600).unwrap();
+        assert_eq!(
+            (
+                day.capacity.as_str(),
+                day.occupied_capacity.as_str(),
+                day.free_capacity.as_str()
+            ),
+            ("1000", "600", "400")
+        );
+        let error = Day::held(&[0x71; 32], "2026-10-02", "100".into(), 500, 600)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            // re-pinned for lane exactness, part B5: the one helper's words (were "does not fit the capacity")
+            error.contains("occupied 600 is not within the capacity 500"),
+            "{error}"
+        );
+        assert!(error.contains("date=2026-10-02"), "{error}");
     }
 }

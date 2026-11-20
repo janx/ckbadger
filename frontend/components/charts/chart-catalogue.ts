@@ -5,10 +5,46 @@ export type ChartPayload =
   | Awaited<ReturnType<typeof api.getCellCountChart>>
   | Awaited<ReturnType<typeof api.getMostUtilizedScriptsChart>>
   | Awaited<ReturnType<typeof api.getMinerAddressDistributionChart>>
-  | Awaited<ReturnType<typeof api.getUncleRateChart>>;
+  | Awaited<ReturnType<typeof api.getUncleRateChart>>
+  | Awaited<ReturnType<typeof api.getCellSizeDistributionChart>>
+  | Awaited<ReturnType<typeof api.getBlockTimeDistributionChart>>;
+
+/**
+ * What the daily activity charts count (lane D1, second follow-up, item 2), in one place. The route
+ * sums the day's eight activity kinds (`kindOccurrences`), and until `fix/activity-kinds` (ruled by
+ * the owner, waiting for a re-sync) makes the kinds partition the day's activities, an activity of
+ * two kinds counts under both (2026-11-18: the activity filter's All read 6,122, the kinds summed
+ * 6,196). So the series is the day's kind counts and the words say that; no word claims a number of
+ * activities. When `fix/activity-kinds` merges, these words return: noun 'activities', perDay
+ * 'activities a day', subtitle 'Activities per day', note none (drop both charts' `countNote`), and
+ * Activities' head eyebrow may read 'recorded in a day' again (chart-head.ts; 'counted' stays true).
+ */
+/**
+ * The one stack that draws six bands under the board's rule of five (rule 5; the lead's ruling,
+ * lane D1's third round, T's MUST-1): Activity by type's six activity kinds are the site's own
+ * closed set, each with its class colour and its filter chip, and none of them is "others"; five
+ * and "others" would hide one named kind behind a word. An exception to a rule the owner passed:
+ * the owner's to confirm at the gate. Every other stack, classed or not, draws at most five.
+ */
+export const SIX_KINDS_SLUG = 'activity-type-breakdown';
+
+export const ACTIVITY_COUNT_WORDS = {
+  noun: 'kind counts',
+  perDay: 'kind counts a day',
+  subtitle: 'Kind counts per day',
+  note: 'An activity of two kinds counts under both.',
+} as const;
 
 export type ChartVisual = 'line' | 'bars' | 'stacked' | 'ranked';
-export type ChartScale = 'raw' | 'shannons' | 'hash-rate' | 'difficulty' | 'fraction-percent';
+export type ChartScale =
+  | 'raw'
+  | 'shannons'
+  | 'hash-rate'
+  | 'difficulty'
+  | 'fraction-percent'
+  // a duration in whole ms, shown in seconds or hours (lane D1's third round, M1)
+  | 'ms-seconds'
+  | 'ms-hours';
 export type ChartSource =
   | 'blocks'
   | 'cells'
@@ -23,8 +59,29 @@ export interface ChartDefinition {
   slug: string;
   title: string;
   subtitle: string;
-  /** The Charts board's short card subtitle: what is counted, and the unit the headline is in. */
+  /**
+   * The index card's caption (lane D1, the chart-hero board, rule 9): what the card's figure is,
+   * written to stand with the head's date on one 12 px line of the narrowest card, never cut
+   * (`__tests__/components/charts/chart-card-head.test.tsx` holds every caption to it).
+   */
   cardSubtitle: string;
+  /**
+   * The plot's name before its span (lane D1, rule 4): the unit said once, in words where it is a
+   * count (`PH/s`, `transactions a day`); its ticks are bare numbers.
+   */
+  plotUnit: string;
+  /**
+   * Drawn on a log scale until the reader picks linear (CH-08, rule 6): a series that spans orders of
+   * magnitude, where a linear axis flattens every day under one spike.
+   */
+  logScale?: true;
+  /**
+   * A sentence the page's head ends with, said once, where what the series counts needs it (the
+   * activity charts' `ACTIVITY_COUNT_WORDS.note`).
+   */
+  countNote?: string;
+  /** The unit of a stack's whole where it is not its bands' (Activity by type: kind counts). */
+  wholeUnit?: string;
   /** The index card draws only the newest N points, exactly as served (CH-13); the detail all. */
   cardDays?: number;
   section: string;
@@ -66,7 +123,9 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'transaction-count',
     title: 'Transactions',
     subtitle: 'Confirmed transactions per day',
-    cardSubtitle: 'per day',
+    cardSubtitle: 'confirmed a day',
+    plotUnit: 'transactions a day',
+    logScale: true,
     section: section.activity,
     visual: 'line',
     unit: 'transactions',
@@ -82,7 +141,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'active-addresses',
     title: 'Active addresses',
     subtitle: 'Addresses taking part, per day',
-    cardSubtitle: 'per day',
+    cardSubtitle: 'active a day',
+    plotUnit: 'addresses a day',
     section: section.activity,
     visual: 'line',
     unit: 'addresses',
@@ -98,7 +158,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'ckb-volume',
     title: 'CKB moved',
     subtitle: 'CKB moved per day',
-    cardSubtitle: 'per day, CKB',
+    cardSubtitle: 'CKB moved a day',
+    plotUnit: 'CKB moved a day',
     section: section.activity,
     visual: 'bars',
     unit: 'CKB',
@@ -113,11 +174,14 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'activity-volume',
     title: 'Activities',
-    subtitle: 'Activities per day',
-    cardSubtitle: 'per day',
+    subtitle: ACTIVITY_COUNT_WORDS.subtitle,
+    cardSubtitle: ACTIVITY_COUNT_WORDS.perDay,
+    plotUnit: ACTIVITY_COUNT_WORDS.perDay,
+    countNote: ACTIVITY_COUNT_WORDS.note,
+    logScale: true,
     section: section.activity,
     visual: 'line',
-    unit: 'activities',
+    unit: ACTIVITY_COUNT_WORDS.noun,
     scale: 'raw',
     source: 'activities',
     evidenceHref: '/activities',
@@ -129,8 +193,12 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'activity-type-breakdown',
     title: 'Activity by type',
-    subtitle: 'Activities per day, by type',
-    cardSubtitle: 'per day',
+    subtitle: `${ACTIVITY_COUNT_WORDS.subtitle}, by kind`,
+    cardSubtitle: 'largest kind a day',
+    plotUnit: `${ACTIVITY_COUNT_WORDS.perDay}, by kind`,
+    countNote: ACTIVITY_COUNT_WORDS.note,
+    // a band is the activities of its kind; the stack sums the kinds
+    wholeUnit: ACTIVITY_COUNT_WORDS.noun,
     section: section.activity,
     visual: 'stacked',
     unit: 'activities',
@@ -146,7 +214,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'cell-count',
     title: 'Live cells',
     subtitle: 'Live cells, count',
-    cardSubtitle: 'count',
+    cardSubtitle: 'live cells',
+    plotUnit: 'live cells',
     section: section.activity,
     visual: 'line',
     unit: 'cells',
@@ -167,7 +236,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'hodl-wave',
     title: 'HODL wave',
     subtitle: 'CKB by time since it last moved',
-    cardSubtitle: 'CKB by time since it last moved',
+    cardSubtitle: 'unmoved 3 y or more',
+    plotUnit: '% of all CKB, by time since it last moved',
     section: section.activity,
     visual: 'stacked',
     unit: '%',
@@ -188,7 +258,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'total-supply',
     title: 'Supply',
     subtitle: 'CKB issued, by where it is',
-    cardSubtitle: 'CKB issued, by where it is',
+    cardSubtitle: 'circulating',
+    plotUnit: 'CKB issued, by where it is',
     section: section.dao,
     visual: 'stacked',
     unit: 'CKB',
@@ -204,7 +275,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'total-deposit',
     title: 'DAO deposits',
     subtitle: 'CKB locked in Nervos DAO',
-    cardSubtitle: 'CKB locked',
+    cardSubtitle: 'deposited in the DAO',
+    plotUnit: 'CKB deposited in the Nervos DAO',
     section: section.dao,
     visual: 'line',
     unit: 'CKB',
@@ -227,7 +299,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     title: 'Deposited per day',
     subtitle: 'CKB deposited into Nervos DAO per day',
     // CH-13 (Charts.dc.html): the card shows the last 60 complete days; the detail all of them.
-    cardSubtitle: 'CKB, last 60 days',
+    cardSubtitle: 'deposited a day, last 60 d',
+    plotUnit: 'CKB deposited a day',
     cardDays: 60,
     section: section.dao,
     visual: 'bars',
@@ -250,7 +323,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'nominal-apc',
     title: 'Nominal APC',
     subtitle: '% a year, by year since genesis',
-    cardSubtitle: '% a year, by year since genesis',
+    cardSubtitle: 'a year, the model today',
+    plotUnit: '% a year',
     section: section.dao,
     visual: 'line',
     unit: '%',
@@ -266,7 +340,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'inflation-rate',
     title: 'Inflation',
     subtitle: 'Trailing 365 days, %, real dashed',
-    cardSubtitle: 'trailing 365 d, %, real dashed',
+    cardSubtitle: 'nominal, trailing 365 d',
+    plotUnit: '% over the trailing 365 days',
     section: section.dao,
     visual: 'line',
     unit: '%',
@@ -283,7 +358,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'secondary-issuance',
     title: 'Secondary issuance',
     subtitle: 'CKB since genesis, by destination',
-    cardSubtitle: 'CKB since genesis, by destination',
+    cardSubtitle: 'issued since genesis',
+    plotUnit: 'CKB issued since genesis, by destination',
     section: section.dao,
     visual: 'stacked',
     unit: 'CKB',
@@ -299,7 +375,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'circulation-ratio',
     title: 'DAO / circulation',
     subtitle: 'Current DAO deposits as share of circulating CKB',
-    cardSubtitle: 'DAO deposits / circulating CKB, %',
+    cardSubtitle: 'of circulating CKB',
+    plotUnit: '% of circulating CKB in the Nervos DAO',
     section: section.dao,
     visual: 'line',
     unit: '%',
@@ -315,7 +392,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'knowledge-size',
     title: 'Knowledge size',
     subtitle: 'CKB occupied by live cells',
-    cardSubtitle: 'CKB occupied by live cells',
+    cardSubtitle: 'occupied by live cells',
+    plotUnit: 'CKB occupied by live cells',
     section: section.knowledge,
     visual: 'line',
     unit: 'CKB',
@@ -342,7 +420,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'common-knowledge-composition',
     title: 'Knowledge by kind',
     subtitle: 'CKB occupied, by what the cell holds',
-    cardSubtitle: 'CKB occupied, by what the cell holds',
+    cardSubtitle: 'largest kind',
+    plotUnit: 'CKB occupied, by what the cell holds',
     section: section.knowledge,
     visual: 'stacked',
     unit: 'CKB',
@@ -363,7 +442,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'most-utilized-scripts',
     title: 'Scripts',
     subtitle: 'Share of common knowledge, top scripts',
-    cardSubtitle: 'share of knowledge, top 5',
+    cardSubtitle: 'largest script',
+    plotUnit: 'CKB',
     section: section.knowledge,
     visual: 'ranked',
     unit: 'CKB',
@@ -384,7 +464,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'most-utilized-assets',
     title: 'Assets',
     subtitle: 'Share of common knowledge, top assets',
-    cardSubtitle: 'share of knowledge, top 5',
+    cardSubtitle: 'largest asset',
+    plotUnit: 'CKB',
     section: section.knowledge,
     visual: 'ranked',
     unit: 'CKB',
@@ -405,7 +486,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'cell-size-distribution',
     title: 'Cell size',
     subtitle: 'Live cells by occupied size, CKB',
-    cardSubtitle: 'live cells by occupied size, CKB',
+    cardSubtitle: 'live cells, most common size',
+    plotUnit: 'live cells, by occupied size',
     section: section.knowledge,
     visual: 'bars',
     unit: 'cells',
@@ -432,7 +514,9 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'capacity-turnover-ratio',
     title: 'Capacity turnover',
     subtitle: 'Weekly share of live capacity moved',
-    cardSubtitle: 'weekly, % of live capacity moved',
+    cardSubtitle: 'weekly, of live capacity',
+    plotUnit: '% of live capacity moved',
+    logScale: true,
     section: section.knowledge,
     visual: 'line',
     unit: '%',
@@ -450,7 +534,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'address-cohort-retention',
     title: 'Cohort retention',
     subtitle: 'Common knowledge / balance, % by first-seen month',
-    cardSubtitle: 'knowledge / balance, % by first-seen month',
+    cardSubtitle: 'occupied share, last cohort',
+    plotUnit: '% of its balance occupied',
     section: section.knowledge,
     visual: 'bars',
     unit: '%',
@@ -472,7 +557,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'hash-rate',
     title: 'Hash rate',
     subtitle: 'Daily network estimate, PH/s',
-    cardSubtitle: 'daily, PH/s',
+    cardSubtitle: 'daily estimate',
+    plotUnit: 'PH/s',
     section: section.work,
     visual: 'line',
     unit: 'PH/s',
@@ -488,7 +574,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'difficulty',
     title: 'Difficulty',
     subtitle: 'Daily average difficulty, P',
-    cardSubtitle: 'daily, P',
+    cardSubtitle: 'daily average',
+    plotUnit: 'P',
     section: section.work,
     visual: 'line',
     unit: 'P',
@@ -504,7 +591,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'uncle-rate',
     title: 'Uncle rate',
     subtitle: 'Daily, %, against the consensus target',
-    cardSubtitle: 'daily, %, against the consensus target',
+    cardSubtitle: 'daily, against its target',
+    plotUnit: '% of blocks',
     section: section.work,
     visual: 'line',
     unit: '%',
@@ -520,7 +608,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'miner-address-distribution',
     title: 'Miners',
     subtitle: 'Share of blocks mined over the last 7 days',
-    cardSubtitle: 'share of blocks, last 7 days',
+    cardSubtitle: 'largest miner',
+    plotUnit: 'blocks',
     section: section.work,
     visual: 'ranked',
     unit: 'blocks',
@@ -536,11 +625,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'average-block-time',
     title: 'Block time',
     subtitle: 'Daily average, seconds',
-    cardSubtitle: 'daily average, s',
+    cardSubtitle: 'daily average',
+    plotUnit: "s, the day's average",
     section: section.blocks,
     visual: 'line',
     unit: 's',
-    scale: 'raw',
+    scale: 'ms-seconds',
     source: 'blocks',
     evidenceHref: '/blocks',
     evidenceLabel: 'Blocks',
@@ -552,11 +642,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'epoch-time-length',
     title: 'Epoch length',
     subtitle: 'Hours each completed epoch took',
-    cardSubtitle: 'hours, against the consensus target',
+    cardSubtitle: 'hours an epoch took',
+    plotUnit: 'h each epoch took',
     section: section.blocks,
     visual: 'line',
     unit: 'h',
-    scale: 'raw',
+    scale: 'ms-hours',
     source: 'blocks',
     evidenceHref: '/blocks',
     evidenceLabel: 'Blocks',
@@ -573,8 +664,10 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'block-time-distribution',
     title: 'Block intervals',
-    subtitle: 'Share of blocks by seconds since their parent, last 42 complete epochs',
-    cardSubtitle: '% of blocks by seconds, last 42 epochs',
+    // the route clamps the window to the complete epochs there are; the head names how many (S4)
+    subtitle: 'Share of blocks by seconds since their parent, up to the last 42 complete epochs',
+    cardSubtitle: 'most common interval',
+    plotUnit: '% of blocks, by seconds since their parent',
     section: section.blocks,
     visual: 'bars',
     unit: '%',
@@ -590,7 +683,8 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'epoch-time-distribution',
     title: 'Epoch durations',
     subtitle: 'Completed epochs by hours taken',
-    cardSubtitle: 'epochs by hours',
+    cardSubtitle: 'most common duration',
+    plotUnit: 'epochs, by hours taken',
     section: section.blocks,
     visual: 'bars',
     unit: 'epochs',

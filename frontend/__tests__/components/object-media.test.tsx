@@ -75,12 +75,27 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
     'https://omiga.io/info/dobs/0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998'
   );
   expectViewImageButton(view);
-  expect(view.closest('figure')).toBe(
-    screen.getByText(/Its image lives on Bitcoin/).closest('figure')
+  // Re-pinned on purpose (lane P2's follow-up, item 2): where the picture comes from is a note,
+  // in the quiet ink, after the way to the picture, and said once — the copper 22 px title "Its
+  // image lives on Bitcoin" in a copper box over it and a caption that said it again ("This
+  // object points to Bitcoin") took the eye before the object's facts (the review's REPORT, the
+  // object page: "a notice about what is missing outweighed the facts")
+  const note = screen.getByText(/Its image lives on Bitcoin/);
+  expect(note).toHaveTextContent(
+    'Its image lives on Bitcoin; CKBadger reads CKB only and does not fetch it.'
   );
+  // re-pinned on purpose (the ink and size roles round): the caption is a sentence, the reading
+  // ink at 13 px (it was quiet at 12); still after the way to the picture, no copper, no box, once
+  expect(note).toHaveClass('text-text');
+  expect(note.closest('figcaption')).toHaveClass('text-small', 'max-w-measure');
+  expect(note).not.toHaveClass('text-text-dim', 'text-meta');
+  expect(note).not.toHaveClass('text-copper');
+  expect(note.closest('figure')).not.toHaveClass('border');
+  expect(view.closest('figure')).toBe(note.closest('figure'));
+  expect(view.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getAllByText(/Bitcoin;|points to Bitcoin/)).toHaveLength(1);
   expect(screen.queryByRole('link', { name: /View on Omiga/ })).toBeNull();
   expect(container.querySelector('img')).toBeNull();
-  expect(screen.getByText(/Its image lives on Bitcoin/)).toHaveClass('text-copper');
 });
 /** The one "View image" button: filled jade, 36 px, 13 px text, external, its source beneath. */
 function expectViewImageButton(view: HTMLElement) {
@@ -217,20 +232,21 @@ it('shows the first reference and the action under the title, the rest in the di
       contentHex={null}
     />
   );
-  const title = screen.getByText('Its image lives on Bitcoin');
-  const box = title.closest('figure')!;
+  const note = screen.getByText(/Its image lives on Bitcoin/);
+  const box = note.closest('figure')!;
   const follows = (a: Node, b: Node) =>
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-  // title → the first reference (its URI, then its inscription) → the action
-  const uri = within(box).getByText(`btcfs://${txid}i0`);
+  // re-pinned on purpose (lane P2's follow-up, item 2): the action where the picture would stand,
+  // then the note and the first reference's inscription (it was title → URI → inscription →
+  // action); the raw URI is said once, in the disclosure, with every source's
   const inscription = within(box).getByRole('link', {
     // U-09 (re-pinned): the txid at the row size (it was 4…4)
     name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗',
   });
   const view = within(box).getByRole('link', { name: 'View image ↗' });
-  expect(follows(title, uri)).toBe(true);
-  expect(follows(uri, inscription)).toBe(true);
-  expect(follows(inscription, view)).toBe(true);
+  expect(follows(view, note)).toBe(true);
+  expect(follows(note, inscription)).toBe(true);
+  expect(within(box).queryByText(`btcfs://${txid}i0`)).toBeNull();
   // the further references are not in the box
   expect(box).not.toHaveTextContent(later);
   expect(box).not.toHaveTextContent(malformed);
@@ -238,6 +254,16 @@ it('shows the first reference and the action under the title, the rest in the di
   // they are in the disclosure that follows it, whole: URI and reading
   const details = screen.getByText(fullText('Media dependencies · 3 sources')).closest('details')!;
   expect(follows(box, details)).toBe(true);
+  // the library's inner disclosure in tier 1 (lane cd-fixes-controls, the disclosure sweep): its
+  // words at the control step, 13 px, and the reading ink (they were 12 px in the page's bright
+  // ink); re-pinned on purpose (the ink and size roles round): a reference's URI is a value, the
+  // reading ink at 13 px (the references were 12 px); its scheme, location and tier the label at 12
+  const words = details.querySelector('summary')!;
+  expect(words).toHaveClass('text-small', 'text-text');
+  expect(within(details).getByText(later).closest('ul')!.parentElement).toHaveClass(
+    'text-small',
+    'text-text'
+  );
   expect(within(details).getByText(later)).toBeInTheDocument();
   expect(
     within(details).getByRole('link', { name: 'Bitcoin tx ababababab…ababab · inscription i3 ↗' })
@@ -346,7 +372,7 @@ it('reads a ;-list of inscriptions one reading each, and keeps the notice for a 
       contentHex={null}
     />
   );
-  const box = screen.getByText('Its image lives on Bitcoin').closest('figure')!;
+  const box = screen.getByText(/Its image lives on Bitcoin/).closest('figure')!;
   expect(
     within(box).getByRole('link', { name: 'Bitcoin tx 0bfb6dd6b0…f15719 · inscription i0 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);

@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
+import {
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+  stubLayoutWidths,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
+import { shortenAddress } from '@/lib/shorten';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
@@ -124,7 +132,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
       'JoyID decides who can spend 161,049 live cells'
     );
     expect(within(paragraph).getByTestId('script-history-peak')).toHaveTextContent(
-      /CKB held peaked at 456,002,179\.570* CKB on 2026-10-29/
+      // re-pinned on purpose (lane P2's follow-up, item 5): a sentence writes the summary form (it was
+      // "456,002,179.57000000")
+      /CKB held peaked at 456,002,179 CKB on 2026-10-29/
     );
     expect(paragraph).toHaveTextContent('A cell must hold enough CKB to pay for its own bytes.');
     expect(paragraph).toHaveTextContent(
@@ -169,6 +179,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     // the former definition list, per reference, in one fold
     const full = within(facts).getByText('Each reference in full').closest('details')!;
     expect(full).not.toHaveAttribute('open');
+    // the library's inner disclosure in tier 2 (lane cd-fixes-controls, the disclosure sweep): its
+    // words 13 px in the quiet ink, as they were (they took the 13 px from the section around them)
+    expect(full.querySelector('summary')).toHaveClass('text-small', 'text-text-dim');
     const list = full.querySelector('dl')!;
     expect(
       within(list)
@@ -192,5 +205,229 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0 · dep type code · the live code cell of the current version'
     );
     expect(dd('held by')).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
+  });
+});
+
+// Readability F3-e: every column of the family page's tables budgeted from the widest value it
+// writes, at 0.6 em a glyph (keys 14 px, cells 13, heads, tags and notes 12) and the 16 px gap after
+// every column but the last; a table's flexible column takes a stated minimum and the rest of the
+// container. Each list changes form where the sum of its columns stops fitting.
+describe('Script page · the family tables budgeted from what they hold (readability F3-e)', () => {
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  const sum = (budgets: number[]) => budgets.reduce((s, w) => s + w, 0);
+  const references = [
+    // its head, wider than "data1"
+    ceil(at('hash type', 12)) + 16,
+    // the code hash at the row size
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    // its head, wider than a reference's live cells (seven digits)
+    ceil(Math.max(at('live cells', 12), at('9,999,999', 13))) + 16,
+    // the code cell's out point at the row size (an index of two digits) and " +9" more
+    ceil(at('0x12345678…abcdef:99 +9', 13) + 16),
+    // the flexible column, the last: its head, and nine characters of the holder's words
+    ceil(Math.max(at('held by', 12), at('x'.repeat(9), 13))),
+  ];
+  const versions = [
+    // its head, wider than "v99" at 14 px
+    ceil(Math.max(at('v99', 14), at('Version', 12)) + 16),
+    // the date
+    ceil(at('2023-10-07', 13) + 16),
+    // the block
+    ceil(at('#99,999,999', 13) + 16),
+    // the out point at the row size, its 8 px gap and a "+9" tag
+    ceil(at('0x12345678…abcdef:99', 13) + 8 + at('+9', 12) + 12 + 16),
+    // the flexible column: a holder by its kind and its tight id, "multisig 0x1234…abcd"
+    ceil(at('multisig 0x1234…abcd', 13) + 16),
+    // "consumed in" and the replacing transaction at the row size
+    ceil(at('consumed in 0x12345678…abcdef', 13) + 16),
+    // eight digits of live cells, or "unavailable"; the last column
+    ceil(Math.max(at('99,999,999', 13), at('unavailable', 13))),
+  ];
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 2: a link and a cell's value are never the
+  // meta size): "current" and the block link under the date read at the cell's 13 px, 67 → 71 and
+  // 96 → 102; the narrow table's sum is 580 (it was 570), within the 608 px of board L7's 640
+  const narrowVersions = [
+    // "v99", "current" under it at the cell's 13 px
+    ceil(Math.max(at('v99', 13), at('current', 13)) + 16),
+    // the date, the block link under it at the cell's 13 px
+    ceil(Math.max(at('2023-10-07', 13), at('#99,999,999', 13)) + 16),
+    // the flexible column: the out point at the row size; its notes and the hash wrap under it
+    ceil(at('0x12345678…abcdef:99', 13) + 16),
+    // a status breaks before the hash it names; the hash is one unit
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    ceil(Math.max(at('99,999,999', 13), at('unavailable', 13))),
+  ];
+  const cells = [
+    // the out point at 14 px, an index of four digits
+    ceil(at('0x12345678…abcdef:9999', 14) + 16),
+    // the owner's address at the row size
+    ceil(at('ckb1…4s93hhsj', 13) + 16),
+    // the flexible column: a type's code hash at the row size (a name takes the rest, wrapping)
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    // the anatomy bar (48 px at least), or "unavailable" when it is not known
+    ceil(Math.max(48, at('unavailable', 13)) + 16),
+    // a cell's capacity under ten billion CKB, every decimal, and its unit
+    ceil(at('9,999,999,999.99999999', 13) + at(' CKB', 12) + 16),
+    // occupied bytes under ten million, or "unavailable"
+    ceil(Math.max(at('9,999,999 B', 13), at('unavailable', 13)) + 16),
+    // the block and the date, the last column
+    ceil(at('#99,999,999 · 2026-11-02', 13)),
+  ];
+
+  const mount = async (list: number) => {
+    stubLayoutWidths({ chart: 900, list });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+    const shown = render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    return shown;
+  };
+  /** The form the list labelled `label` chose. */
+  const formOf = async (label: string) =>
+    (
+      await waitFor(() => {
+        const list =
+          screen.queryByRole('table', { name: label }) ??
+          screen.queryByRole('list', { name: `${label}, compact` });
+        if (!list) throw new Error(`no ${label}`);
+        return list;
+      })
+    )
+      .closest('[data-list-form]')!
+      .getAttribute('data-list-form');
+  const minWidths = (label: string) =>
+    Array.from(screen.getByRole('table', { name: label }).querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.minWidth)
+    );
+  /** At each container width, the form each named list chose. */
+  const formsAt = async (cases: readonly (readonly [number, Record<string, string>])[]) => {
+    for (const [list, expected] of cases) {
+      const { unmount } = await mount(list);
+      for (const [label, form] of Object.entries(expected))
+        expect(await formOf(label), `${label} at ${list}`).toBe(form);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('pins every column of the four tables to its content', async () => {
+    expect(references).toEqual([81, 149, 88, 196, 71]);
+    expect(versions).toEqual([67, 94, 102, 207, 172, 243, 86]);
+    expect(narrowVersions).toEqual([71, 102, 172, 149, 86]);
+    expect(cells).toEqual([201, 118, 149, 102, 217, 102, 188]);
+    expect([sum(references), sum(versions), sum(narrowVersions), sum(cells)]).toEqual([
+      585, 971, 580, 1077,
+    ]);
+    await mount(1248);
+    await formOf('Its cells');
+    expect(minWidths('Registered references')).toEqual(references);
+    expect(minWidths('Code versions')).toEqual(versions);
+    expect(minWidths('Its cells')).toEqual(cells);
+    // Registered references stays a table in tier 2's right column at 1280, (1232 − 56) / 2
+    expect(sum(references)).toBeLessThanOrEqual((1232 - 56) / 2);
+  });
+
+  it('draws the 608 px versions table from its own columns', async () => {
+    await mount(608);
+    expect(await formOf('Code versions')).toBe('narrow-table');
+    expect(minWidths('Code versions')).toEqual(narrowVersions);
+  });
+
+  it('changes Its cells and the versions to their next form where their sums stop fitting', async () => {
+    await formsAt([
+      [1232, { 'Its cells': 'table', 'Code versions': 'table' }],
+      [1077, { 'Its cells': 'table' }],
+      [1076, { 'Its cells': 'rows' }],
+    ]);
+  });
+
+  // re-pinned on purpose and renamed (BRIEF-ink-size-roles item 2; it was "… to rows below 570"):
+  // the narrow table's sum is 580
+  it('changes the versions to the 608 px table below 971 and to rows below 580', async () => {
+    await formsAt([
+      [971, { 'Code versions': 'table' }],
+      [970, { 'Code versions': 'narrow-table' }],
+      [580, { 'Code versions': 'narrow-table' }],
+      [579, { 'Code versions': 'rows' }],
+    ]);
+  });
+
+  it('changes Registered references to rows below 585, and every list on a phone', async () => {
+    await formsAt([
+      [585, { 'Registered references': 'table' }],
+      [584, { 'Registered references': 'rows' }],
+      [358, { 'Its cells': 'rows', 'Code versions': 'rows', 'Registered references': 'rows' }],
+    ]);
+  });
+});
+
+// Lane D4 (the phone-rows board): a script's cells on a phone were five lines (PA-08), the owner and
+// the type joined by a bare "· —" where there is none (PA-09). The row is the board's three parts:
+// the out point and the cell's capacity; who owns it, the type that also guards it and where it was
+// made, each after its name (a cell with no type script says nothing of one); the list's one bar,
+// what the cell holds, with the bytes it occupies named.
+describe('Script page · its cells on a phone (lane D4)', () => {
+  beforeEach(() => {
+    stubLayoutWidths({ chart: 326, list: 358 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three parts at 358 px: out point and capacity, owner · type · created, the bar and its bytes', async () => {
+    render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    const section = document.getElementById('its-cells')!;
+    const rows = await within(section).findAllByTestId('script-cell-row-mobile');
+    const [plain, typed] = fixture.cells.data;
+    expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['cell', 'head', '0x44e5…517f:1', '153.99 CKB'],
+      [
+        'held',
+        'body',
+        `owner ${shortenAddress(plain.address, 'tight')} · created #11,141,234`,
+        null,
+      ],
+      ['anatomy', 'quiet', '', '63 B occupied'],
+    ]);
+    expect(dottedItems(rows[1].querySelector('[data-line="held"]')!)).toEqual([
+      `owner ${shortenAddress(typed.address, 'tight')}`,
+      'type COTA',
+      'created #11,286,483',
+    ]);
+    // no bare dash where a cell has no type script (PA-09)
+    expect(rows[0].textContent).not.toContain('—');
+    // every figure after its name, the name in the quiet ink
+    const labels = Array.from(rows[1].querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['owner', 'type', 'created', 'occupied']);
+    for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');
+    // the list's one bar stands on line 3 beside the bytes that name it
+    expect(
+      rows[0].querySelector('[data-line="anatomy"] [data-part="left"]')!.children
+    ).toHaveLength(1);
+    // the out point is the row's key, its one bright thing
+    expect(statedHeadPx(rows[0])).toBe(276.6);
+    expect(phoneHeadPx(rows[0], 360)).toBeLessThanOrEqual(statedHeadPx(rows[0]));
   });
 });

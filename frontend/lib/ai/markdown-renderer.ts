@@ -1,4 +1,5 @@
 import { CHART_ROUTES } from '@/lib/ai/page-registry';
+import { lockCallFacts, lockNoun, namedLockWords, partyLockWordsText } from '@/lib/lock-words';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
@@ -278,9 +279,10 @@ function renderActivityDetail(activity: GlobalActivity): string {
   }
 
   if (classified.primaryLockCall) {
-    return (
-      classified.primaryLockCall.scriptName ?? hashShort(classified.primaryLockCall.lockCodeHash)
-    );
+    // the one lock decision's words, fed the lock's code hash, hash type and name together, as the
+    // page's row writes a called lock (activity-row.tsx `lockCallRef`): a lock on a registered code
+    // hash by another hash type is not that lock (the lead's final round, item 7)
+    return lockNoun(namedLockWords(lockCallFacts(classified.primaryLockCall), 'column'), 'row');
   }
 
   return '-';
@@ -313,14 +315,20 @@ function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   });
 }
 
+/**
+ * A chart's points with its columns named by its axes (lane exactness, part A2, N8: the two duration charts send whole
+ * ms, and a reader got 14418000 under a bare "value").
+ */
 function renderChartData(chart: ChartResponse): string {
   const rows = chart.data
     .slice(0, 120)
     .map((point) => [point.date, point.value, point.value2 ?? '-']);
+  const value = chart.yAxisLabel ? `value (${chart.yAxisLabel})` : 'value';
+  const value2 = chart.y2AxisLabel ? `value2 (${chart.y2AxisLabel})` : 'value2';
   return [
     `## ${chart.title}`,
     '',
-    markdownTable(['date', 'value', 'value2'], rows),
+    markdownTable(['date', value, value2], rows),
     '',
     `Total points: ${chart.data.length}`,
   ].join('\n');
@@ -1554,11 +1562,11 @@ export async function renderMarkdownPage(
             ['ownerHashPrefix', item.owner.hashPrefix],
             ['ownerLockHash', item.owner.lockHash ?? '-'],
             ['ownerAddress', item.owner.address ?? '-'],
-            ['ownerScriptName', item.owner.scriptName ?? '-'],
+            ['ownerLock', item.owner.lockHash ? partyLockWordsText(item.owner, 'row') : '-'],
             ['managerHashPrefix', item.manager.hashPrefix],
             ['managerLockHash', item.manager.lockHash ?? '-'],
             ['managerAddress', item.manager.address ?? '-'],
-            ['managerScriptName', item.manager.scriptName ?? '-'],
+            ['managerLock', item.manager.lockHash ? partyLockWordsText(item.manager, 'row') : '-'],
           ]
         ),
         '',
@@ -1861,7 +1869,11 @@ export async function renderMarkdownPage(
             ['totalDeposited', stats.totalDeposited],
             ['totalDepositedCkb', stats.totalDepositedCkb],
             ['totalDepositors', stats.totalDepositors],
-            ['activeDeposits', stats.activeDeposits],
+            // the live DAO cells once, with their two parts, as the DAO page states them (lane exactness, part A2, S2:
+            // the legacy activeDeposits counts the withdrawal requests too)
+            ['depositCellsCount', stats.depositCellsCount],
+            ['withdrawalRequestCellsCount', stats.withdrawalRequestCellsCount],
+            ['liveCellsCount', stats.liveCellsCount],
             ['totalCompensationPaid', stats.totalCompensationPaid],
             ['totalCompensationPaidCkb', stats.totalCompensationPaidCkb],
             ['unclaimedCompensation', stats.unclaimedCompensation],

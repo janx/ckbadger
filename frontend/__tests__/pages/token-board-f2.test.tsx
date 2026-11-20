@@ -2,6 +2,8 @@
 // rows with a lock-kind column and the token mark (IV-14), metadata provenance from the API (IV-26),
 // the paged supply events and history line (IV-27, IV-17), holders in the token colour (IV-18), the
 // rail with D8's "Not established" sentences (IV-19, D8), header (IV-16) and tier 2 (IV-20).
+import { ckbAddress, JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -16,6 +18,8 @@ import {
   type GlobalActivity,
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -82,6 +86,7 @@ const history: TokenHistory = {
       supply: '1000000000000',
       capacity: '50000000000001',
       occupiedCapacity: '15300000000000',
+      freeCapacity: '34700000000001',
     },
   ],
   weeklyTransactions: [{ weekStart: '2024-01-01', transactionsCount: 5 }],
@@ -89,8 +94,8 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
-const activity: GlobalActivity = {
+const empty = pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null });
+const activity: GlobalActivity = activityRead({
   txHash: other,
   blockNumber: 12345,
   txIndex: 0,
@@ -110,8 +115,10 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [ITEM_TYPE.xudt],
+  itemTypesUnread: null,
   protocolActions: [],
-};
+});
 
 const event = (i: number, kind: 'mint' | 'burn') => ({
   txHash: '0x' + String(i).padStart(2, '0').repeat(32),
@@ -123,8 +130,9 @@ const event = (i: number, kind: 'mint' | 'burn') => ({
   amount: '100000000',
   supplyAfter: '1000000000000',
   lockHash: other,
-  address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
-  lockCodeHash: `0x${'9b'.repeat(32)}`,
+  // B4 fix round: a real JoyID address (a row reads its lock off its address)
+  address: seededAddress('test', JOYID_CODE_HASH),
+  lockCodeHash: JOYID_CODE_HASH,
   lockKind: 'JoyID',
 });
 describe('Token board (F2 objects)', () => {
@@ -138,6 +146,7 @@ describe('Token board (F2 objects)', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,
@@ -157,8 +166,9 @@ describe('Token board (F2 objects)', () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({
       ...empty,
       data: [
-        {
+        activityRead({
           ...activity,
+          itemTypes: [ITEM_TYPE.xudt],
           typeCalls: [
             {
               typeCodeHash: other,
@@ -172,7 +182,7 @@ describe('Token board (F2 objects)', () => {
             ...p,
             lockKind: 'UTXOSwap Intent Lock',
           })),
-        },
+        }),
       ],
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
@@ -221,14 +231,16 @@ describe('Token board (F2 objects)', () => {
   });
 
   it('pages the supply events and words the history line (IV-27, IV-17)', async () => {
-    vi.mocked(api.getTokenSupplyEvents).mockImplementation(async (_, p) => ({
-      ...empty,
-      total: 3,
-      limit: 2,
-      data: p?.cursor ? [event(3, 'burn')] : [event(1, 'mint'), event(2, 'mint')],
-      hasMore: !p?.cursor,
-      nextCursor: p?.cursor ? null : '999:2',
-    }));
+    vi.mocked(api.getTokenSupplyEvents).mockImplementation(async (_, p) =>
+      pagedRead({
+        ...empty,
+        total: 3,
+        limit: 2,
+        data: p?.cursor ? [event(3, 'burn')] : [event(1, 'mint'), event(2, 'mint')],
+        hasMore: !p?.cursor,
+        nextCursor: p?.cursor ? null : '999:2',
+      })
+    );
     render(<TokenDetailPage typeHash={hash} />);
     const history = await screen.findByRole('region', { name: 'History' });
     expect(history).toHaveTextContent('2 mints · 1 burn · 1,000 transfers');
@@ -239,7 +251,12 @@ describe('Token board (F2 objects)', () => {
     fireEvent.click(await within(history).findByText('Every change to the supply (3)'));
     const table = within(history).getByRole('table', { name: 'Mints and burns' });
     expect(within(table).getAllByText('Mint')).toHaveLength(2);
-    fireEvent.click(within(history).getByRole('button', { name: 'Next' }));
+    // re-pinned (lane c2-assets): the supply events are newest first, so the controls board's
+    // pager says where the list is and goes "older →" (was a "Next" button)
+    expect(within(history).getByRole('navigation', { name: 'supply changes' })).toHaveTextContent(
+      'page 1 of 2'
+    );
+    fireEvent.click(within(history).getByRole('button', { name: 'older →' }));
     await waitFor(() =>
       expect(api.getTokenSupplyEvents).toHaveBeenLastCalledWith(hash, {
         limit: 20,
@@ -269,6 +286,19 @@ describe('Token board (F2 objects)', () => {
     expect(bar.querySelector('[data-segment]')).toHaveStyle({ backgroundColor: 'var(--c-token)' });
     expect(bar).toHaveAccessibleName(/Other 710 1.70%/);
     expect(screen.queryByText('Remaining holders')).not.toBeInTheDocument();
+  });
+
+  // Readability R7 (lane p-assets): who holds it first, then the history, 160 px under one sentence
+  // its points give; the history stood first under the metrics.
+  it('draws the history after who holds it, under one sentence (R7)', async () => {
+    render(<TokenDetailPage typeHash={hash} />);
+    const history = await screen.findByRole('region', { name: 'History' });
+    const holders = screen.getByRole('heading', { name: 'Who holds it' });
+    expect(
+      holders.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(document.querySelector('[data-tier="1"]')).toContainElement(history);
+    expect(await within(history).findByTestId('history-sentence')).toHaveTextContent(/^CKB held: /);
   });
 
   it('keeps issuer and cap "Not established" and says why (D8, IV-19)', async () => {
@@ -356,13 +386,14 @@ describe('Token board (F2 objects)', () => {
   // Responsive gate (2026-11-01): the issuer's full address inside the args note had no break
   // opportunity and pushed the page 76 px past 640 and 326 px past 390.
   it('wraps the issuer address in the args note inside its box', async () => {
-    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
+    // B4 fix round: a real default-lock address with long args, still one run with no break
+    const address = ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args: `0x${'ab'.repeat(40)}` });
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       issuer: {
         lockHash: other,
         address,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
         lockKind: 'Default Lock',
       },
     });

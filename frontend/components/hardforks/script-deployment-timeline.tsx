@@ -97,7 +97,7 @@ export function ScriptDeploymentTimeline({
 
   if (marks.length === 0) {
     return (
-      <p className="text-text-dim text-small">
+      <p className="text-text text-small">
         No named script-version code-cell deployments are indexed yet.
       </p>
     );
@@ -131,7 +131,7 @@ export function ScriptDeploymentTimeline({
   };
   const left = inset?.left ?? 0;
   const right = inset?.right ?? 0;
-  const caption = label ?? `known script versions · ${marks.length.toLocaleString()}`;
+  const caption = label ?? `known script versions · ${marks.length.toLocaleString('en-US')}`;
   // Too little room beside the strip (a phone): the label goes above it.
   const labelAbove = left < 80;
 
@@ -233,7 +233,7 @@ export function DeploymentEvidence({
       </ReadoutRow>
       {selected && (
         <>
-          <p className="text-text-dim mt-2 max-w-[70ch] leading-relaxed">
+          <p className="text-text max-w-measure mt-2 leading-relaxed">
             Earliest indexed code-cell creation for this named version. This is a code-cell event,
             not proof that a script instance used a particular VM or that the code remains live.
           </p>
@@ -243,29 +243,24 @@ export function DeploymentEvidence({
               <Utc8DateTime timestamp={selected.timestampMs} />
             </dd>
             <dt className="text-text-dim">Epoch</dt>
-            <dd>{selected.epochNumber.toLocaleString()}</dd>
+            <dd>{selected.epochNumber.toLocaleString('en-US')}</dd>
             <dt className="text-text-dim">Version</dt>
             <dd className="break-all font-mono">{selected.versionHash}</dd>
             <dt className="text-text-dim">Evidence</dt>
-            {/* Plain ink: no coloured words in the hardforks page's tier 1 (R11). */}
-            <dd className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
-              <Link
-                href={`/scripts/${encodeURIComponent(selected.familyName)}`}
-                className="text-text hover:text-text-bright hover:underline"
-              >
+            {/* Plain ink: no coloured words in the hardforks page's tier 1 (R11): links inside
+                the line, in its reading ink and underlined (the inline look). */}
+            <dd className="text-text flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+              <Link href={`/scripts/${encodeURIComponent(selected.familyName)}`} look="inline">
                 {selected.familyName} family
               </Link>
               <Link
                 href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
-                className="text-text hover:text-text-bright hover:underline"
+                look="inline"
               >
                 Code cell <ShortId value={selected.codeCellTxHash} kind="hash" size="row" />
                 <OutpointIndex index={selected.codeCellOutputIndex} />
               </Link>
-              <Link
-                href={`/blocks/${selected.blockNumber}`}
-                className="text-text hover:text-text-bright hover:underline"
-              >
+              <Link href={`/blocks/${selected.blockNumber}`} look="inline">
                 Block {formatBlockNumber(selected.blockNumber)}
               </Link>
             </dd>

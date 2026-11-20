@@ -80,7 +80,8 @@ const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
 const GHOST_ALLOWLIST: Allowlist = {
   'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
-  'components/asset/asset-feed.tsx': [separator('> · </span>')],
+  // components/asset/asset-feed.tsx left (lane P2's follow-up, item 10): the heading note's
+  // separator went with its two buttons, the newest rows' fold is one control under them
   'components/asset/detail-shell.tsx': [separator('>/</span>')],
   'components/asset/genetics.tsx': [arrow('aria-hidden="true"')],
   // the mechanism chain's arrow (the amounts' padding zeros are ckb-amount.tsx's)
@@ -96,8 +97,7 @@ const ALPHA_INK_ALLOWLIST: Allowlist = {};
 
 const LINKED =
   'a linked highlight: while the reader points at (or pins) one part, the others fade back; their own focus, not a set-back state';
-const HOVER =
-  'hover feedback on a control or a copyable hash: the pointer’s state, gone when it leaves';
+const HOVER = 'hover feedback on a control: the pointer’s state, gone when it leaves';
 const NO_WORDS = 'fades no word: the element is a mark, an icon or a bar';
 const linked = (anchor: string): Allowed => ({ reason: LINKED, anchor });
 const hover = (anchor: string): Allowed => ({ reason: HOVER, anchor });
@@ -122,7 +122,8 @@ const OPACITY_ALLOWLIST: Allowlist = {
     linked('dim(on)'),
   ],
   'components/ui/composition-set.tsx': [noWords('<CompositionMark')],
-  'components/ui/hex-display.tsx': [hover('copyable && ')],
+  // components/ui/hex-display.tsx's copyable hover went with the click-to-copy of an id (lane
+  // c2-finish, rulings round 1)
 };
 
 /**

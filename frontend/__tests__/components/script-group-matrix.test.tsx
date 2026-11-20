@@ -1,9 +1,14 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
+import {
+  cellsInWords,
+  ScriptGroupMatrix,
+  type MatrixGroup,
+} from '@/components/transaction/script-group-matrix';
 import { txLinks } from '@/lib/tx-detail-model';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { TYPE_SCALE, type TypeStep } from '@/lib/type-scale';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const inputs = [
   { id: 'in:0', top: 'CKBFS', label: 'in #0', cap: '195' },
@@ -117,6 +122,36 @@ describe('ScriptGroupMatrix (TX-13, TX-21)', () => {
     expect(onHover).toHaveBeenLastCalledWith({ t: 'cell', id: 'in:1' });
     fireEvent.mouseLeave(document.querySelector('[data-column="in:1"]')!);
     expect(onHover).toHaveBeenLastCalledWith(null);
+  });
+
+  // Review of phases C and D, NOTE 10 (lane P1): where the page has no inspector (the cell page's
+  // developer tier, no `onHover`) nothing in the matrix answers a focus, so nothing in it is a tab
+  // stop of its own: a column head and a row took one each and did nothing. The links in it stay.
+  it('makes no tab stop of a column head or a row where the page has no inspector', () => {
+    const { container } = render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={inputs}
+        outputs={outputs}
+        groups={groups}
+        lit={null}
+      />
+    );
+    expect(container.querySelectorAll('[tabindex]')).toHaveLength(0);
+    // with an inspector, each head and each row is one
+    const inspected = render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={inputs}
+        outputs={outputs}
+        groups={groups}
+        lit={null}
+        onHover={() => {}}
+      />
+    );
+    expect(inspected.container.querySelectorAll('[tabindex="0"]')).toHaveLength(
+      inputs.length + outputs.length + groups.length
+    );
   });
 
   it('refuses a group that names a cell the transaction does not have', () => {
@@ -287,6 +322,12 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
       'pubkey hash 0x55c5…a0b9'
     );
     expect(lock.querySelector('[data-line="evidence"]')).toHaveTextContent('dep group 0x71a7…:0');
+    // lane P1, the ink and size roles: the cycles figure, the runs sentence and the evidence line's
+    // ids and code link take the list's 13 px (each set the meta step, 12 px)
+    for (const line of ['head', 'runs', 'evidence'])
+      for (const el of lock.querySelectorAll(`[data-line="${line}"], [data-line="${line}"] *`))
+        expect(el).not.toHaveClass('text-meta');
+    expect(typeStepOf(within(head as HTMLElement).getByText(/cycles$/))).toBe('small');
   });
 
   it('keeps a group that did not run, dimmer, saying which outputs it guards', () => {
@@ -370,5 +411,46 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
     );
     expect(sizes.length).toBeGreaterThan(0);
     expect(sizes.every((s) => s >= 11)).toBe(true);
+    // lane P1, the ink and size roles: a cell's name in its head (a link to the cell once it is
+    // one) at 13 px (it was the head row's 12); its side and capacity stay the head's 12 px labels
+    const cells = Array.from(header.querySelectorAll('[data-column]'));
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells)
+      expect(Array.from(cell.children).map(typeStepOf)).toEqual(['meta', 'small', 'meta']);
+  });
+});
+
+// Lane P1 (lane D3's note: the long transaction's default lock "runs in input 0, 1, …, 157", about
+// ten lines long): a group's cells beyond three on a side are said as their count and their
+// ranges, the count a unit (its number and noun joined by a no-break space, as every count's);
+// three or fewer stay listed.
+describe('cellsInWords: a long side as its count and its ranges (P1)', () => {
+  const cols = (side: 'in' | 'out', n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${side}:${i}`, top: '', label: '', cap: '' }));
+  const ids = (side: 'in' | 'out', at: readonly number[]) => at.map((i) => `${side}:${i}`);
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  it('lists three cells or fewer, as before', () => {
+    expect(cellsInWords(ids('in', [0, 1, 2]), cols('in', 3), [])).toBe('input 0, 1, 2');
+    expect(
+      cellsInWords([...ids('in', [0]), ...ids('out', [0])], cols('in', 1), cols('out', 1))
+    ).toBe('input 0 → output 0');
+  });
+  it('says 158 inputs as their count and one range', () => {
+    expect(cellsInWords(ids('in', range(0, 157)), cols('in', 158), [])).toBe(
+      '158\u00a0inputs: 0 to 157'
+    );
+  });
+  it('joins the ranges and the lone cells of a broken run, each side alike', () => {
+    expect(
+      cellsInWords(
+        [...ids('in', [0, 1, 2, 3, 7, 9, 10, 11, 12]), ...ids('out', [1])],
+        cols('in', 13),
+        cols('out', 2)
+      )
+    ).toBe('9\u00a0inputs: 0 to 3, 7, 9 to 12 → output 1');
+    expect(cellsInWords(ids('out', [0, 2, 4, 6]), [], cols('out', 7))).toBe(
+      '4\u00a0outputs: 0, 2, 4, 6'
+    );
   });
 });

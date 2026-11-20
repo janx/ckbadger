@@ -8,23 +8,27 @@ export interface InventorySummaryNoticeProps {
   summary: InventorySummary;
   assetType: 'token' | 'object' | 'identity';
 }
-/** The quiet line under each view: what it lists and the canonical anchor of its totals. */
+/**
+ * The lines under each view: what it lists and the canonical anchor of its totals. Sentences, the
+ * reading ink at 13 px, the block link in their ink (BRIEF-ink-size-roles items 1 and 3: they were
+ * the quiet ink, the totals line at 12 px).
+ */
 export function InventorySummaryNotice({ summary, assetType }: InventorySummaryNoticeProps) {
   return (
-    <section aria-label="Inventory totals" className="text-text-dim text-small space-y-2">
+    <section aria-label="Inventory totals" className="text-text text-small space-y-2">
       {assetType === 'identity' && (
         // F2 objects (IV-12): the Identities board's one line.
-        <p>
+        <p className="max-w-measure">
           {summary.counts.identity.toLocaleString('en-US')} naming systems · every identity’s record
           lives in its cell on CKB
         </p>
       )}
-      <p className="text-meta">
+      <p className="max-w-measure">
         Canonical asset totals
         {summary.anchor ? (
           <>
             {' '}
-            at block <BlockLink number={summary.anchor.blockNumber} />
+            at block <BlockLink look="inline" number={summary.anchor.blockNumber} />
           </>
         ) : (
           ' · empty index'

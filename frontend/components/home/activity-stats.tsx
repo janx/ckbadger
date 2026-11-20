@@ -12,20 +12,14 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import {
-  activityTypeShares,
-  nonCellbaseCount,
-  scriptShares,
-  totalActivities,
-} from '@/lib/activity-stats';
+import { activityTypeShares, scriptShares } from '@/lib/activity-stats';
 import {
   api,
+  dayUserTransactions,
   type ActivitySummary24h,
   type DailyActivityStats,
-  type ChartResponse,
 } from '@/lib/api';
 import { dayLabel } from '@/lib/daily-series';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { cn } from '@/lib/utils';
@@ -53,11 +47,8 @@ export function ActivityStats() {
           command="activity"
           args="--24 h"
           note={
-            <Link
-              href="/charts"
-              className="text-interactive hover:text-jade text-small transition-colors"
-            >
-              charts →
+            <Link href="/charts" look="onward" className="text-small">
+              charts
             </Link>
           }
         />
@@ -70,7 +61,8 @@ export function ActivityStats() {
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
+      {/* an empty-state line, the reading ink (BRIEF-ink-size-roles item 3) */}
+      {d.state === 'empty' && <div className="text-small">{d.message}</div>}
       {d.state === 'ready' && <Summary view={d.view} />}
       <DailyActivityFigure />
     </div>
@@ -89,7 +81,7 @@ interface SummaryView {
 }
 
 function summaryView(s: ActivitySummary24h): SummaryView {
-  const scripts = scriptShares(s.scriptCounts, 5);
+  const scripts = scriptShares(s);
   const rows: RankedRow[] = scripts.top.map((r) => ({
     key: r.key,
     label: r.label,
@@ -107,7 +99,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   }
   return {
     activities: s.activityCount,
-    occurrences: totalActivities(s),
+    occurrences: s.kindOccurrences,
     addresses: s.uniqueAddressCount,
     ckbMoved: {
       text: ckbAmountText(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
@@ -117,7 +109,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
       key: r.key,
       label: r.label,
       count: r.count,
-      total: totalActivities(s),
+      total: s.kindOccurrences,
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,
@@ -179,29 +171,18 @@ interface DailyView {
   max: number;
 }
 
-/** Activities per day, oldest first; the last day is the headline. Days must be in order. */
-export function dailyActivityView(
-  days: DailyActivityStats[],
-  transactions: ChartResponse
-): DailyView | null {
+/**
+ * Activities per day, oldest first; the last day is the headline. A day's bar is the route's count
+ * of its user transactions (`userTransactionCount`). Days must be in order.
+ */
+export function dailyActivityView(days: DailyActivityStats[]): DailyView | null {
   if (days.length === 0) return null;
   for (let i = 1; i < days.length; i++) {
     if (days[i].date <= days[i - 1].date) {
       throw new Error(`daily activity days out of order: ${days[i - 1].date} then ${days[i].date}`);
     }
   }
-  const counts = new Map<string, string>();
-  for (const point of transactions.data) {
-    const date = point.date.replaceAll('-', '');
-    if (counts.has(date)) throw new Error(`Duplicate daily transaction count for ${date}`);
-    counts.set(date, point.value);
-  }
-  const totals = days.map((day) => {
-    const value = counts.get(day.date.replaceAll('-', ''));
-    if (value === undefined) throw new Error(`Missing daily transaction count for ${day.date}`);
-    const count = Number(exactUnsignedInteger(value, `transaction count on ${day.date}`));
-    return nonCellbaseCount(count, day.coinbaseCount, day.date);
-  });
+  const totals = days.map(dayUserTransactions);
   const bars = days.map((day, i) => ({
     label: dayLabel(day.date),
     value: totals[i],
@@ -220,23 +201,12 @@ export function dailyActivityView(
 function DailyActivityFigure() {
   const { data, error } = useQuery({
     queryKey: ['home-daily-activity', 30],
-    queryFn: async () => {
-      const [days, transactions] = await Promise.all([
-        api.getDailyActivityStats(30),
-        api.getTransactionCountChart(),
-      ]);
-      return { days, transactions };
-    },
+    queryFn: () => api.getDailyActivityStats(30),
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
   const d = useMemo(
-    () =>
-      derive(
-        { data, error },
-        ({ days, transactions }) => dailyActivityView(days, transactions),
-        'No daily activity.'
-      ),
+    () => derive({ data, error }, (days) => dailyActivityView(days), 'No daily activity.'),
     [data, error]
   );
   const v = viewOf(d);

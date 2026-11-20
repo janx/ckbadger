@@ -1,10 +1,11 @@
 export type CapacityRangeKey = '30d' | '90d' | '1y' | 'all';
 
+/** The script pages' capacity range, in the one spelling of a span (components/ui/range-select.tsx). */
 export const CAPACITY_RANGE_OPTIONS: ReadonlyArray<{ key: CapacityRangeKey; label: string }> = [
-  { key: '30d', label: '30D' },
-  { key: '90d', label: '90D' },
-  { key: '1y', label: '1Y' },
-  { key: 'all', label: 'ALL' },
+  { key: '30d', label: '30 d' },
+  { key: '90d', label: '90 d' },
+  { key: '1y', label: '1 y' },
+  { key: 'all', label: 'all' },
 ];
 
 function formatUtcDate(date: Date): string {

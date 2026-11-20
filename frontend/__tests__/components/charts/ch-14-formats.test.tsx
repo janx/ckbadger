@@ -58,15 +58,24 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     expect(await card('hash-rate', line(['2026-11-13'], ['845690000000000000']))).toBe(
       '845.69 PH/s'
     );
-    expect(await card('average-block-time', line(['2026-11-13'], ['10.43']))).toBe('10.43 s');
-    expect(await card('epoch-time-length', line(['15204'], ['3.95']))).toBe('3.95 h');
-    expect(await card('transaction-count', line(['2026-11-13'], ['16826']))).toBe(
-      '16,826 transactions'
-    );
+    // each duration in the whole ms the route sends (lane D1's third round, M1)
+    expect(await card('average-block-time', line(['2026-11-13'], ['10430']))).toBe('10.43 s');
+    // the API's consensus target travels with the epoch lengths (the page's sentence reads it)
+    expect(
+      await card('epoch-time-length', {
+        ...line(['15204'], ['14220000']),
+        target: { seconds: 14400, hours: '4.00' },
+      })
+    ).toBe('3.95 h');
+    // Re-pinned for lane D1 (rule 9): a count stands bare under its noun, the card's title
+    // ("Transactions 16,826"; was "16,826 transactions", the noun twice on one line)
+    expect(await card('transaction-count', line(['2026-11-13'], ['16826']))).toBe('16,826');
     expect(
       await card('uncle-rate', {
         ...line(['2026-11-13'], ['0.0255']),
         orphanRateTarget: { numerator: 1, denominator: 40 },
+        // the day's operands, the route's (lane exactness, part A, A2): 255 of 10,000
+        counts: [{ date: '2026-11-13', uncles: 255, blocks: 10_000 }],
       })
     ).toBe('2.55%');
   });
@@ -74,12 +83,13 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
   it('writes the SI symbols s and h, never the words', async () => {
     expect(CHART_BY_SLUG.get('average-block-time')!.unit).toBe('s');
     expect(CHART_BY_SLUG.get('epoch-time-length')!.unit).toBe('h');
+    // each day's average in the whole ms the route sends (lane D1's third round, M1)
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(
-      line(['2026-11-12', '2026-11-13'], ['10.1', '10.43'])
+      line(['2026-11-12', '2026-11-13'], ['10100', '10430'])
     );
     render(<ChartDetail slug="average-block-time" />);
-    const readings = await screen.findByRole('group', { name: 'Block time readings' });
-    expect(readings).toHaveTextContent('2026-11-1310.43 s');
+    // re-pinned for lane D1: the head's one figure (was the readings group)
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('10.43 s');
     expect(document.body).not.toHaveTextContent(/\d (seconds|hours)\b/);
   });
 
@@ -94,7 +104,15 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { transfer: '100', dao: '300', udt: '50', nftSpore: '40', otherContracts: '10' },
+          values: {
+            transfer: '100',
+            dao: '300',
+            udt: '50',
+            nftSpore: '40',
+            otherContracts: '10',
+            // the day's knowledge size, the route's (the D1 hand-back, item 2)
+            knowledgeSize: '500',
+          },
         },
       ],
     });
@@ -108,6 +126,7 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     const uncle = chartModel(CHART_BY_SLUG.get('uncle-rate')!, {
       ...line(['2026-11-13'], ['0.0255']),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [{ date: '2026-11-13', uncles: 255, blocks: 10_000 }],
     });
     expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50%' }]);
     const axis = chartValueAxis({
@@ -121,10 +140,17 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     vi.mocked(api.getUncleRateChart).mockResolvedValue({
       ...line(['2026-11-12', '2026-11-13'], ['0.025', '0.0255']),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [
+        { date: '2026-11-12', uncles: 250, blocks: 10_000 },
+        { date: '2026-11-13', uncles: 255, blocks: 10_000 },
+      ],
     });
     render(<ChartDetail slug="uncle-rate" />);
-    const readings = await screen.findByRole('group', { name: 'Uncle rate readings' });
-    expect(readings).toHaveTextContent('2026-11-132.55%');
-    expect(screen.getByText('Last change').nextElementSibling).toHaveTextContent('+0.05%');
+    // Re-pinned for lane D1 (rule 2): the figure, then the sentence against the target (was the
+    // readings group and "Last change +0.05%")
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('2.55%');
+    expect(document.querySelector('[data-role="sentence-words"]')).toHaveTextContent(
+      'Over the 2.50% target on 1 of the last 2 days.'
+    );
   });
 });

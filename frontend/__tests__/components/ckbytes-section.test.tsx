@@ -1,10 +1,16 @@
+// Re-pinned on purpose (lists lane P3: the three DAO figures of the home page each say what they
+// count): the allocation's DAO part is "DAO free", the DAO cells' free CKB, beside "in all DAO
+// cells" (it was "Nervos DAO" and "locked"); the DAO block's figure is "in deposit cells".
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
 import { ckbytesAllocation, daoStatistics } from '@/__tests__/msw/fixtures/home';
-import { CkbytesSection } from '@/components/home/ckbytes-section';
+import { CkbytesSection, changeView } from '@/components/home/ckbytes-section';
+import { fontPx, textPx } from '@/lib/type-metrics';
+import type { TypeStep } from '@/lib/type-scale';
+import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { MINUS } from '@/lib/chart-ticks';
 import type { CkbytesAllocation } from '@/lib/api';
@@ -64,19 +70,58 @@ describe('CkbytesSection', () => {
   // PA-19 (UI review 2026-11-14): at 390 the supply figure filled the line and its "CKB" went to
   // the caption's line, 3 px off its baseline; at 360 the figure itself, 23 characters at 26 px
   // (355.2 px with its −0.01 em tracking), could break inside (overflow-wrap: anywhere). The same
-  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.8 px), the
-  // decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 326 at 360, and the figure
+  // rule as the scripts pages: below 640 the decimals are 13 px, so the integer (214.76 px), the
+  // decimals (67.86) and " CKB" at 13 px (30.16) take 312.78 px of the 328 at 360, and the figure
   // and its unit are one unbreakable unit; "in circulation" moves under it whole.
-  it('keeps the supply figure and its unit one unit, the decimals 13 px below 640 (PA-19)', async () => {
+  // re-pinned on purpose (the lead's final round, item 5): at 320 the figure and its unit ran 14 px
+  // past the window (main 9): a 320 px window's line is 288 px, the figure alone 282.62 (the
+  // integer 214.76 and the decimals 67.86) and with " CKB" 312.78. The figure stays one unbreakable
+  // run, exact to the shannon; its unit goes under it where they cannot share the line, as a chart
+  // head's unit does on a phone, and beside it where they can (312.78 in a 360 px window's 328).
+  it('keeps the supply figure whole and lets its unit go under it where the line cannot hold both (PA-19)', async () => {
     render(<CkbytesSection />);
     const total = await screen.findByTestId('ckbytes-circulating');
     expect(total).not.toHaveClass('[overflow-wrap:anywhere]');
     expect(total.children).toHaveLength(2);
-    const figure = total.firstElementChild as HTMLElement;
+    const pair = total.firstElementChild as HTMLElement;
+    expect(pair).not.toHaveClass('whitespace-nowrap');
+    expect(pair).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
+    const [figure, unit] = [...pair.children] as HTMLElement[];
     expect(figure).toHaveClass('whitespace-nowrap');
-    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125 CKB$/);
-    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-body');
+    expect(figure).toHaveTextContent(/^49,868,783,034\.50933125$/);
+    // re-pinned on purpose (the third read's T NOTE-6): the decimals are small below 640, so the
+    // figure alone holds a 320 px window's line (at body, 14 px, it was 288.02 px in 288)
+    expect(within(figure).getByText('.50933125')).toHaveClass('text-text-dim', 'max-sm:text-small');
+    // the one break of the pair is the space before its unit
+    expect(unit.textContent).toBe(' CKB');
+    expect(unit).toHaveClass('text-text-dim', 'text-[0.5em]');
+    expect(unit).not.toHaveClass('whitespace-nowrap');
     expect(total.lastElementChild).toBe(within(total).getByTestId('ckbytes-label'));
+    // the arithmetic below 640, read from the component's classes and the type scale (the third
+    // read's T NOTE-6: it computed its own 26 px and 13 px, so it could not fail when the page
+    // changed): the row's step below 640 and its tracking, an em of the row's size inherited as a
+    // length by every glyph; the decimals' step below 640; the unit's em of the row's size
+    const step = (classes: string, pattern: RegExp) => {
+      const found = classes
+        .split(/\s+/)
+        .map((c) => pattern.exec(c)?.[1])
+        .find(Boolean);
+      if (!found) throw new Error(`no ${pattern} in "${classes}"`);
+      return found;
+    };
+    const rowPx = fontPx(step(total.className, /^text-(\w+)$/) as TypeStep);
+    const track = Number(step(total.className, /^tracking-\[(-?[\d.]+)em\]$/)) * rowPx;
+    const decimals = within(figure).getByText('.50933125');
+    const decimalsPx = fontPx(step(decimals.className, /^max-sm:text-(\w+)$/) as TypeStep);
+    const unitPx = Number(step(unit.className, /^text-\[([\d.]+)em\]$/)) * rowPx;
+    const run = (text: string, px: number) => textPx(text.length, px) + text.length * track;
+    const alone = run('49,868,783,034', rowPx) + run('.50933125', decimalsPx);
+    const withUnit = alone + run(' CKB', unitPx);
+    expect(Math.round(alone * 100) / 100).toBe(282.62);
+    expect(Math.round(withUnit * 100) / 100).toBe(312.78);
+    expect(alone).toBeLessThanOrEqual(containerContentPx(320));
+    expect(withUnit).toBeGreaterThan(containerContentPx(320));
+    expect(withUnit).toBeLessThanOrEqual(containerContentPx(360));
   });
 
   // A4 Chrome F1: the figure (nowrap) and the label (nowrap) followed each other with no
@@ -89,10 +134,11 @@ describe('CkbytesSection', () => {
     const total = await screen.findByTestId('ckbytes-circulating');
     expect(total).toHaveClass('flex', 'flex-wrap', 'gap-x-3');
     expect(total).not.toHaveClass('whitespace-nowrap');
-    const [figure, label] = [...total.children] as HTMLElement[];
-    expect(figure).toHaveClass('whitespace-nowrap');
+    const [pair, label] = [...total.children] as HTMLElement[];
+    // re-pinned on purpose (the lead's final round, item 5): the figure inside its pair is nowrap
+    expect(pair.firstElementChild).toHaveClass('whitespace-nowrap');
     expect(label).toBe(within(total).getByTestId('ckbytes-label'));
-    expect(figure).not.toContainElement(label);
+    expect(pair).not.toContainElement(label);
     // nothing between the row and the page lays the two out on one unbreakable line
     for (let el: HTMLElement | null = total; el; el = el.parentElement)
       expect(el).not.toHaveClass('whitespace-nowrap');
@@ -160,7 +206,7 @@ describe('CkbytesSection', () => {
     expect(body.children).toHaveLength(3);
     expect(allocation).toContainElement(screen.getByTestId('ckbytes-circulating'));
     expect(allocation).toContainElement(screen.getByRole('img', { name: /^Knowledge/ }));
-    expect(allocation).toContainElement(screen.getByRole('button', { name: /^Nervos DAO/ }));
+    expect(allocation).toContainElement(screen.getByRole('button', { name: /^DAO free/ }));
     expect(allocation).toHaveClass('lg:col-start-1', 'lg:row-start-1');
     expect(note).toBe(screen.getByRole('complementary', { name: 'Note' }));
     expect(note.tagName).toBe('ASIDE');
@@ -182,20 +228,29 @@ describe('CkbytesSection', () => {
     const formula = screen.getByTestId('ckbytes-formula');
     expect(note.firstElementChild).toBe(comment);
     expect(comment.nextElementSibling).toBe(formula);
-    expect(comment).toHaveClass('max-w-[60ch]');
+    // re-pinned with readability R4 (lane B7): the comment's paragraph stands on the measure, which
+    // the Comment sets itself (the note gave it max-w-[60ch])
+    expect(comment.className).not.toMatch(/max-w-/);
+    expect(comment.querySelector('p')).toHaveClass('max-w-measure');
     // the real minus sign, as the board writes it; the block as text, its link is the note's
     expect(formula.textContent).toBe(
       `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`
     );
-    // R4 (re-pinned on purpose): the formula is information, in the dim ink
-    expect(formula).toHaveClass('text-text-dim', 'text-meta', 'font-mono');
+    // R4 (re-pinned on purpose): the formula is information, in the dim ink. Re-pinned on purpose
+    // (BRIEF-ink-size-roles item 3): it is the figure's caption, where the figure comes from with the block it is read at,
+    // the reading ink at 13 px
+    expect(formula).toHaveClass('text-small', 'font-mono');
+    expect(formula.className).not.toMatch(/text-text-dim|text-meta/);
     expect(within(formula).queryByRole('link')).toBeNull();
   });
 
   it('draws the three served parts, which partition circulation exactly', async () => {
     render(<CkbytesSection />);
     const bar = await screen.findByRole('img', {
-      name: 'Knowledge 0.30 percent, free 83.22 percent, Nervos DAO 16.48 percent',
+      // lane exactness, part B2: of 49,868,783,034.50933125 CKB circulating, free 41,499,405,173.07133425 is
+      // 83.2172…%, 83.21% (half up 83.22%), DAO free 8,218,243,616.437997 16.4797…%, 16.47% (half up
+      // 16.48%); knowledge 151,134,245 is 0.3030…%, 0.30% either way
+      name: 'Knowledge 0.30 percent, free 83.21 percent, DAO free 16.47 percent',
     });
     expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade');
     expect(bar.querySelector('[data-segment="knowledge"]')).not.toHaveClass('min-w-[3px]');
@@ -228,12 +283,12 @@ describe('CkbytesSection', () => {
     );
     expect(document.querySelector('[data-legend="Free"]')).toHaveTextContent(
       // compact, cut (readability R5, re-pinned on purpose: 41,499,405,173 CKB was 41.50B, rounded)
-      'Free41.49B CKB83.22%'
+      'Free41.49B CKB83.21%'
     );
     // The DAO part is the DAO cells' free capacity; their whole capacity is context only.
-    expect(document.querySelector('[data-legend="Nervos DAO"]')).toHaveTextContent(
+    expect(document.querySelector('[data-legend="DAO free"]')).toHaveTextContent(
       // compact, cut (R5, re-pinned on purpose: the DAO's free part was 8.22B, rounded up)
-      'Nervos DAO8.21B CKB16.48% · 8.22B locked'
+      'DAO free8.21B CKB16.47% · 8.22B in all DAO cells'
     );
   });
 
@@ -254,7 +309,7 @@ describe('CkbytesSection', () => {
     expect(Number.parseFloat(knowledge.style.width)).toBeLessThan(0.01);
     expect(Number.parseFloat(free.style.width)).toBeGreaterThan(99.99);
     expect(bar.querySelector('[data-segment="dao"]')).toBeNull();
-    expect(bar).toHaveAccessibleName(/Nervos DAO 0\.00 percent/);
+    expect(bar).toHaveAccessibleName(/DAO free 0\.00 percent/);
   });
 
   it('uses the served free part, never a remainder of its own', async () => {
@@ -282,7 +337,7 @@ describe('CkbytesSection', () => {
     expect(comment).not.toHaveTextContent('#20,820,045');
     // it sits with the allocation it describes, after the legend: the first thing of the note
     // that follows the allocation (phase 5, H3: the note is the board's aside)
-    const legend = document.querySelector('[data-legend="Nervos DAO"]')!.parentElement!;
+    const legend = document.querySelector('[data-legend="DAO free"]')!.parentElement!;
     expect(legend.nextElementSibling).toBeNull();
     const note = legend.parentElement!.nextElementSibling as HTMLElement;
     expect(note).toHaveAttribute('aria-label', 'Note');
@@ -361,11 +416,13 @@ describe('CkbytesSection', () => {
       expect(screen.getByTestId('home-dao-change-headline')).toHaveTextContent('+168,366')
     );
     const svg = within(fig).getByRole('img');
-    // Hovering the last bar (centre at x ≈ 268) reads its exact change, decimals dim.
+    // Hovering the last bar (centre at x ≈ 268) reads its exact change. Re-pinned on purpose
+    // (BRIEF-ink-size-roles items 1 and 2, with R5): its decimals in its ink at its size (they were
+    // dim at 12 px)
     fireEvent.pointerMove(svg, { clientX: 268 });
     const headline = screen.getByTestId('home-dao-change-headline');
     expect(headline).toHaveTextContent('+168,366.47983386');
-    expect(within(headline).getByText('.47983386')).toHaveClass('text-text-dim', 'text-meta');
+    expect(headline.innerHTML).not.toMatch(/text-meta|text-text-dim/);
     expect(screen.getByTestId('home-dao-change-subtitle')).toHaveTextContent('10/23');
     fireEvent.pointerLeave(svg);
     expect(headline).toHaveTextContent(/^\+168,366$/);
@@ -382,13 +439,22 @@ describe('CkbytesSection', () => {
     expect(terms).toEqual(['Estimated APC', 'Depositors', 'Active deposits', 'Change in 24 h']);
     expect(dao).toHaveTextContent('1.99%');
     expect(dao).toHaveTextContent(`16,673 ${MINUS}3 in 24 h`);
-    expect(dao).toHaveTextContent('22,379');
+    // re-pinned on purpose (lane exactness, part B5): "Active deposits" counts the deposit cells
+    // (`depositCellsCount`, 20,689), as the figure above it does; it read the legacy
+    // activeDeposits, the live DAO cells (22,379: 20,689 deposits + 1,690 withdrawal requests),
+    // which the route no longer sends
+    expect(dao).toHaveTextContent('Active deposits20,689');
+    expect(dao).not.toHaveTextContent('22,379');
     const change = within(dao).getByTestId('home-dao-change-24h');
     expect(change).toHaveTextContent(`${MINUS}2,578,825 CKB`);
     expect(change).toHaveClass('text-negative');
     expect(change).toHaveAttribute('title', `${MINUS}2,578,825.48689593 CKB`);
     expect(dao).not.toHaveTextContent(/Avg deposit/i);
-    expect(within(dao).getByRole('link', { name: 'DAO details →' })).toHaveAttribute(
+    // the readability plan's P3: the figure says what it counts, the deposit cells (requests under
+    // way apart; the allocation's "DAO free" and "in all DAO cells" are the other two)
+    expect(dao).toHaveTextContent(/^Nervos DAOin deposit cells/);
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    expect(within(dao).getByRole('link', { name: /^DAO details/ })).toHaveAttribute(
       'href',
       '/mainnet/dao'
     );
@@ -448,22 +514,24 @@ describe('CkbytesSection allocation highlight', () => {
     fireEvent.pointerEnter(seg('free'));
     expectHighlighted(seg, 'free');
     const free = legend(/^Free/);
-    expect(free).toHaveTextContent('Free41,499,405,173.07133425 CKB83.22%');
+    expect(free).toHaveTextContent('Free41,499,405,173.07133425 CKB83.21%');
     expect(within(free).getByText('Free')).toHaveClass('text-text-bright');
 
     fireEvent.pointerLeave(seg('free'));
     expectNoHighlight(seg);
     // compact, cut (R5, re-pinned on purpose: was 41.50B, rounded up)
-    expect(free).toHaveTextContent('Free41.49B CKB83.22%');
+    expect(free).toHaveTextContent('Free41.49B CKB83.21%');
     expect(within(free).getByText('Free')).toHaveClass('text-text');
   });
 
   it('highlights the segment of a hovered legend item', async () => {
     const { seg } = await renderBar();
-    const dao = legend(/^Nervos DAO/);
+    const dao = legend(/^DAO free/);
     fireEvent.pointerEnter(dao);
     expectHighlighted(seg, 'dao');
-    expect(dao).toHaveTextContent('Nervos DAO8,218,243,616.43799700 CKB16.48% · 8.22B locked');
+    expect(dao).toHaveTextContent(
+      'DAO free8,218,243,616.43799700 CKB16.47% · 8.22B in all DAO cells'
+    );
     fireEvent.pointerLeave(dao);
     expectNoHighlight(seg);
   });
@@ -504,5 +572,23 @@ describe('CkbytesSection allocation highlight', () => {
     fireEvent.click(free);
     fireEvent.pointerLeave(free, { pointerType: 'mouse' });
     expectNoHighlight(seg);
+  });
+});
+
+// BRIEF-ink-size-roles items 1 and 2 (with R5: an amount is one ink): a day's exact change in the
+// change chart's readout is a value, its decimals in its ink at its size (they were quiet at 12 px)
+describe('the CKBytes change readout', () => {
+  it('writes a day’s exact change in one ink and one size, its decimals with its whole', () => {
+    const view = changeView({
+      name: 'CKBytes',
+      unit: 'CKB',
+      data: [
+        { date: '2026-10-01', value: '100.00000000' },
+        { date: '2026-10-02', value: '112.34567891' },
+      ],
+    } as never)!;
+    const { container } = render(<>{view.points[0].readout.value}</>);
+    expect(container).toHaveTextContent('+12.34567891');
+    expect(container.innerHTML).not.toMatch(/text-meta|text-text-dim/);
   });
 });

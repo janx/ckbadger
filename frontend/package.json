@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/build-agent.mjs",
     "start": "vite preview",
-    "lint": "eslint app components hooks lib src",
+    "lint": "eslint app components hooks lib src proof",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

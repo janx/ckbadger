@@ -255,8 +255,38 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         after_block: Option<i64>,
     ) -> anyhow::Result<TxActionsPage> {
+        let rows = self.stored_tx_actions_recent(limit, cursor, after_block)?;
+        self.complete_tx_actions(rows)
+    }
+
+    /// [`Self::list_tx_actions_recent`] with the `tx_index` entries its
+    /// completion read, one per row and in its order: one `activities` walk and
+    /// one `tx_index` read for the page, for a reader that lists the
+    /// transactions themselves. Each row takes its transaction hash from its
+    /// own entry (`tx_actions_from_stored`), so the two name one transaction by
+    /// construction and the reader has nothing to compare.
+    pub fn list_tx_actions_recent_with_entries(
+        &self,
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(TxActions, TxIndexEntry)>> {
+        let rows = self.stored_tx_actions_recent(limit, cursor, None)?;
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _)| (*b, *t)).collect();
+        let entries = self.tx_index_entries_at("activities", &positions)?;
+        let (actions, _) = self.tx_actions_from_stored(rows, &entries)?;
+        Ok(actions.into_iter().zip(entries).collect())
+    }
+
+    /// The stored `activities` rows newest first, strictly older than `cursor`
+    /// and above `after_block`, at most `limit`: not completed.
+    fn stored_tx_actions_recent(
+        &self,
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        after_block: Option<i64>,
+    ) -> anyhow::Result<Vec<(i64, i32, StoredTxActions)>> {
         if limit == 0 {
-            return Ok((Vec::new(), std::collections::HashMap::new()));
+            return Ok(Vec::new());
         }
 
         let start_key = cursor
@@ -290,8 +320,7 @@ impl CkbadgerStore {
                 break;
             }
         }
-
-        self.complete_tx_actions(rows)
+        Ok(rows)
     }
 
     /// Positions `(block_num, tx_idx)` of one global activity bucket, newest
@@ -692,6 +721,39 @@ mod tests {
                 chain_time_ms: actions.timestamp,
             },
         );
+    }
+
+    /// The routes' review, NOTE 1 (the P3 follow-up): the user transactions read `tx_index` twice
+    /// for a page. The recent page comes with the entries its completion read, one per row, in
+    /// order and at the row's own position: one `activities` walk, one `tx_index` read.
+    #[test]
+    fn recent_page_comes_with_the_index_entries_its_completion_read() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for (block, index, byte) in [(7, 0, 0x71), (7, 2, 0x72), (9, 1, 0x91)] {
+            seed_activity(&mut batch, &make_tx_actions(block, index, byte));
+        }
+        batch.commit().unwrap();
+
+        let page = store.list_tx_actions_recent_with_entries(2, None).unwrap();
+        let read: Vec<(i64, i32, u8, u8)> = page
+            .iter()
+            .map(|(actions, entry)| {
+                (
+                    actions.block_number,
+                    actions.tx_index,
+                    actions.tx_hash[0],
+                    entry.tx_hash[0],
+                )
+            })
+            .collect();
+        assert_eq!(read, vec![(9, 1, 0x91, 0x91), (7, 2, 0x72, 0x72)]);
+        let older = store
+            .list_tx_actions_recent_with_entries(2, Some((7, 2)))
+            .unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!((older[0].0.block_number, older[0].1.tx_hash[0]), (7, 0x71));
     }
 
     #[test]

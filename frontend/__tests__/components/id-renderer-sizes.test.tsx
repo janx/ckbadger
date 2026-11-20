@@ -21,9 +21,9 @@ describe('HexCode and Hash write a hash at a size', () => {
   it('at head, row and tight', () => {
     render(
       <>
-        <HexCode value={HASH} size="head" copyable={false} />
-        <Hash hash={HASH} size="row" copyable={false} />
-        <Hash hash={HASH} size="tight" copyable={false} />
+        <HexCode value={HASH} size="head" />
+        <Hash hash={HASH} size="row" />
+        <Hash hash={HASH} size="tight" />
       </>
     );
     expect(screen.getByText('0x8e4f9c6f1a…92a3b4c5')).toHaveAttribute('data-nobreak');
@@ -33,19 +33,19 @@ describe('HexCode and Hash write a hash at a size', () => {
 
   it('take no length', () => {
     // @ts-expect-error a length is not a prop of HexCode
-    render(<HexCode value={HASH} size="tight" startChars={20} copyable={false} />);
+    render(<HexCode value={HASH} size="tight" startChars={20} />);
     // @ts-expect-error a length is not a prop of Hash
-    render(<Hash hash={HASH} size="tight" endChars={2} copyable={false} />);
-    render(<Hash hash={HASH} size="tight" {...LENGTHS} copyable={false} />);
+    render(<Hash hash={HASH} size="tight" endChars={2} />);
+    render(<Hash hash={HASH} size="tight" {...LENGTHS} />);
     expect(screen.getAllByText('0x8e4f…b4c5')).toHaveLength(3);
   });
 
   it('take a size or truncate={false}, never neither', () => {
     // a size left out fails fast, at the type and at run time
     // @ts-expect-error a shortened hash names its size
-    expect(() => render(<Hash hash={HASH} copyable={false} />)).toThrow(/no size/);
+    expect(() => render(<Hash hash={HASH} />)).toThrow(/no size/);
     // @ts-expect-error a whole hash has no size
-    render(<Hash hash={HASH} truncate={false} size="row" copyable={false} />);
+    render(<Hash hash={HASH} truncate={false} size="row" />);
     expect(screen.getAllByText(HASH)).toHaveLength(1);
   });
 });
@@ -54,9 +54,9 @@ describe('Address writes an address at a size', () => {
   it('at head, row and tight, the full address in its title', () => {
     render(
       <>
-        <Address address={ADDRESS} size="head" />
-        <Address address={ADDRESS} size="row" />
-        <Address address={ADDRESS} size="tight" />
+        <Address look="key" address={ADDRESS} size="head" />
+        <Address look="key" address={ADDRESS} size="row" />
+        <Address look="key" address={ADDRESS} size="tight" />
       </>
     );
     const links = screen.getAllByRole('link');
@@ -71,15 +71,15 @@ describe('Address writes an address at a size', () => {
 
   it('takes no length', () => {
     // @ts-expect-error a length is not a prop of Address
-    render(<Address address={ADDRESS} size="row" startChars={8} endChars={6} />);
-    render(<Address address={ADDRESS} size="row" {...LENGTHS} />);
+    render(<Address look="key" address={ADDRESS} size="row" startChars={8} endChars={6} />);
+    render(<Address look="key" address={ADDRESS} size="row" {...LENGTHS} />);
     for (const link of screen.getAllByRole('link')) expect(link.textContent).toBe('ckb1…4c0cgwga');
   });
 });
 
 describe('HexDisplay and ShortId take the same sizes', () => {
   it('HexDisplay draws the hash at its size with the one ellipsis', () => {
-    const { container } = render(<HexDisplay value={HASH} size="row" copyable={false} />);
+    const { container } = render(<HexDisplay value={HASH} size="row" />);
     expect(container).toHaveTextContent('0x8e4f9c6f…a3b4c5');
     // @ts-expect-error a length is not a prop of HexDisplay
     render(<HexDisplay value={HASH} size="row" startChars={4} />);

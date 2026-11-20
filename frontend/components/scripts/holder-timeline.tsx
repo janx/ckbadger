@@ -10,7 +10,7 @@ import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
-import { LABEL_LINE_PX, fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { LABEL_LINE_PX, fontPx, textPx } from '@/lib/type-metrics';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -35,14 +35,14 @@ export interface HolderTimelineProps {
 const PAST_FILL = ['var(--c-base-border)', 'var(--c-slate-other)'] as const;
 const CURRENT_FILL = 'var(--c-slate-ckb)';
 /** A segment's words: the small step (12 px) with 6 px each side. */
-const LABEL_PX = fontPx('small');
+export const LABEL_PX = fontPx('small');
 const LABEL_PAD = 6;
 /** A version tick's words: the meta step (11 px), 4 px after the tick, 8 px apart from the next. */
-const TICK_PX = fontPx('meta');
+export const TICK_PX = fontPx('meta');
 const TICK_PAD = 4;
 const TICK_GAP = 8;
 /** Rows of version ticks stack a tight label line apart (`leading-label`). */
-const TICK_ROW_PX = LABEL_LINE_PX;
+export const TICK_ROW_PX = LABEL_LINE_PX;
 
 function day(ms: number): string {
   return formatUtc8Date(ms);
@@ -116,9 +116,7 @@ function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): 
     keyed ? shortenHash(holder.custody.lockArgs!, 'tight') : '',
   ];
   return (
-    candidates.find(
-      (text) => text && text.length * snappedAdvancePx(LABEL_PX) + 2 * LABEL_PAD <= px
-    ) ?? ''
+    candidates.find((text) => text && textPx(text.length, LABEL_PX) + 2 * LABEL_PAD <= px) ?? ''
   );
 }
 
@@ -158,7 +156,7 @@ function versionTicks(
     const text = `${versions.join(' · ')} ${date}`;
     if (width === null)
       return { key: date, versions: versions.join(' · '), date, at, row: 0, anchorRight: false };
-    const w = text.length * snappedAdvancePx(TICK_PX) + TICK_PAD;
+    const w = textPx(text.length, TICK_PX) + TICK_PAD;
     const x = (at / 100) * width;
     const anchorRight = x + w > width;
     const [start, end] = anchorRight ? [x - w, x] : [x, x + w];
@@ -290,7 +288,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
         </span>
         <TapOrHoverHint className="ml-auto" />
       </div>
-      <p data-role="caption" className="text-text text-body mt-3 max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure mt-3">
         Whoever can spend the code cell can put new code in it; every {family.name} cell runs the
         new code from the next block.
       </p>

@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
-import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
-import { unitNode } from '@/components/ui/units';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -14,6 +13,7 @@ const FIRST_OBSERVATIONS = 10;
 /** The arrows are Discovery address-book reports, never observed p2p connections. */
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
+  const listId = useId();
   const queryClient = useQueryClient();
   const read = useQuery({
     queryKey: ['network', 'advertisements', roundId],
@@ -28,33 +28,33 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
   }, [data, roundId, queryClient]);
   // awaited, not isLoading: a read paused offline or between retries is still awaited
   if (isAwaited(read))
-    return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
+    return <p className="text-text text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
-      <p role="alert" className="text-negative text-small">
+      <p role="alert" className="text-negative text-small max-w-measure">
         Advertisement evidence unavailable: {String(error)}
       </p>
     );
   if (!data || data.roundId !== roundId)
     return (
-      <p role="status" className="text-text-dim text-small">
+      <p role="status" className="text-text text-small">
         Crawler round changed; refreshing advertisement evidence…
       </p>
     );
   const visible = showAll ? data.edges : data.edges.slice(0, FIRST_OBSERVATIONS);
   return (
     <div className="min-w-0">
-      <p className="text-text-dim text-body mb-4 max-w-4xl">
-        {data.distinctPeerPairs.toLocaleString()} unique advertiser → target peer pairs across{' '}
-        {data.edges.length.toLocaleString()} retained endpoint alias observations in completed round
-        #{roundId}. Each row is one address-book report — who named whom — never a connection, so
-        none of it is drawn as a link. Retention and later updates can remove earlier evidence; this
-        is a subset of what the crawler heard in that round.
+      <p className="text-text text-body max-w-measure mb-4">
+        {data.distinctPeerPairs.toLocaleString('en-US')} unique advertiser → target peer pairs
+        across {data.edges.length.toLocaleString('en-US')} retained endpoint alias observations in
+        completed round #{roundId}. Each row is one address-book report — who named whom — never a
+        connection, so none of it is drawn as a link. Retention and later updates can remove earlier
+        evidence; this is a subset of what the crawler heard in that round.
       </p>
       {visible.length === 0 ? (
-        <p className="text-text-dim text-small">No retained advertisement edges for this round.</p>
+        <p className="text-text text-small">No retained advertisement edges for this round.</p>
       ) : (
-        <div role="list" aria-label="Directed advertiser to advertised endpoint graph">
+        <div id={listId} role="list" aria-label="Directed advertiser to advertised endpoint graph">
           {visible.map((edge) => (
             <div
               role="listitem"
@@ -78,25 +78,26 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
               >
                 <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>
-              <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
+              <span className="text-text text-small min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
               </span>
             </div>
           ))}
         </div>
       )}
+      {/* The fold both ways, in the form gate B passed for the rows' fold: FoldToggle's box, "all
+          25 observations ↓" then "fewer ↑" back to the first ten, one button that keeps its
+          focus (the lead's final round, item 3: the Pager's part and a second button swapped). */}
       {data.edges.length > FIRST_OBSERVATIONS && (
-        <button
-          type="button"
-          onClick={() => setShowAll((value) => !value)}
-          className="text-jade text-meta mt-3 underline underline-offset-2"
-        >
-          {unitNode(
-            showAll
-              ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
-              : `Show all ${formatCount(data.edges.length, 'observation')}`
-          )}
-        </button>
+        <div className="mt-3">
+          <FoldToggle
+            open={showAll}
+            count={data.edges.length}
+            singular="observation"
+            controls={listId}
+            onToggle={setShowAll}
+          />
+        </div>
       )}
     </div>
   );

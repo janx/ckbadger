@@ -6,9 +6,9 @@ import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager, type PagerProps } from '@/components/ui/pager';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
@@ -16,11 +16,13 @@ import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, WIDEST_SIBLING_GAP, shortChars } from '@/lib/list-bounds';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
@@ -43,6 +45,16 @@ function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
     header: column.header ?? <span>{column.label}</span>,
   }));
 }
+
+/**
+ * The branch switches' columns, each budgeted from the widest value it holds (readability F3-e) at
+ * the row's body step (14 px), a meta line at 12 and the gap after every column but the last.
+ */
+const body = (chars: number) => textPx(chars, fontPx('body'));
+/** The fork glyph's width (components/forks/fork-glyph.tsx draws it on a 210 px viewBox). */
+const FORK_GLYPH_PX = 210;
+/** A time on the UTC+8 clock to the second, "2026-10-22 22:43:55": 19 characters at every time. */
+const SEEN_CHARS = formatUtc8DateTime(0).slice(0, 19).length;
 
 /** R15: a topic page shows a list's first rows; the rest expand in place (there is no list page). */
 const PREVIEW_ROWS = 5;
@@ -140,6 +152,35 @@ function competingLine(record: ForkNodeRecord): string | null {
     .join(' · ');
 }
 
+/** The branch switches' total: the API serves it on every page, and a page without it is refused. */
+function switchesTotal(total: number | undefined): number {
+  if (total === undefined) throw new Error('Forks list response has no total');
+  return total;
+}
+
+/**
+ * The pager's short-list form while the first page's first five stand for the list, in its exact
+ * words: "all N branch switches ↓" where the page holds every switch the API counts (it must then
+ * hold as many rows as the served total), else "next K ↓", K the page's rows past the five, after
+ * which the time pager stands.
+ */
+function firstPageMore(
+  read: { data: readonly ReorgEvent[]; total?: number; hasMore: boolean },
+  onShow: () => void
+): Extract<PagerProps, { mode: 'more' }> {
+  if (read.hasMore)
+    return { mode: 'more', next: { count: read.data.length - PREVIEW_ROWS, onShow } };
+  const total = switchesTotal(read.total);
+  if (total !== read.data.length)
+    throw new Error(
+      `Forks list: the first page holds ${read.data.length} switches and no more, but the total is ${total}`
+    );
+  return {
+    mode: 'more',
+    all: { count: total, singular: 'branch switch', plural: 'branch switches', onShow },
+  };
+}
+
 const seenWhen = (event: ReorgEvent) => formatUtc8DateTime(event.detectedAt).slice(0, 19);
 
 /**
@@ -153,7 +194,7 @@ function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean
   return (
     <span>
       {href ? (
-        <Link href={href} className="text-text hover:text-jade">
+        <Link href={href} look="inline">
           {unitText(when)}
         </Link>
       ) : (
@@ -185,14 +226,19 @@ function switchTitle(event: ReorgEvent, now: number): string {
   ].join(' · ');
 }
 
-/** The row's key (table-rows T5): the fork point, bright at the row's body size. */
+/**
+ * The row's key (table-rows T5): the fork point, bright at the row's body size; under it how deep
+ * the switch went, in words (the review: "depth 1" was not explained).
+ */
 function ForkPoint({ event }: { event: ReorgEvent }) {
   return (
     <span>
-      <Link href={`/blocks/${event.forkPointNumber}`} className="text-text-bright hover:text-jade">
+      <Link href={`/blocks/${event.forkPointNumber}`} look="key">
         {formatBlockNumber(event.forkPointNumber)}
       </Link>
-      <span className="text-text-dim text-meta block w-fit">depth {event.depth}</span>
+      <span className="text-text-dim text-meta block w-fit">
+        {unitNode(`${formatCount(event.depth, 'block')} deep`)}
+      </span>
     </span>
   );
 }
@@ -234,8 +280,9 @@ function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactN
         `Fork ${formatBlockNumber(event.forkPointNumber)}: miner lock ${hash} and address ${address} disagree`
       );
     return address ? (
-      // T5: the fork point is the row's one bright thing; the miners read in body ink.
-      <MinerLink address={address} pool={pool} size={size} className="text-text" />
+      // T5: the fork point is the row's one bright thing; the miners read in the line's ink, links
+      // inside a line
+      <MinerLink address={address} pool={pool} size={size} look="inline" />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
@@ -290,16 +337,23 @@ function Fate({ event }: { event: ReorgEvent }) {
   return (
     <span>
       {uncleInBlock !== null ? (
-        // R11: neutral words; the glyph's arrow keeps the jade
-        <Link href={`/blocks/${uncleInBlock}`} className="text-text hover:underline">
-          {`${words} in ${formatBlockNumber(uncleInBlock)} (+${uncleInBlock - event.forkPointNumber - 1})`}
-        </Link>
+        // R11: neutral words; the glyph's arrow keeps the jade. The review: "(+2)" was not
+        // explained; how many blocks later the uncle was taken is said in words
+        <>
+          <span className="text-text">{words} in </span>
+          <Link href={`/blocks/${uncleInBlock}`} look="inline">
+            {formatBlockNumber(uncleInBlock)}
+          </Link>
+          <span className="text-text-dim text-meta block w-fit">
+            {unitNode(`${formatCount(uncleInBlock - event.forkPointNumber - 1, 'block')} after it`)}
+          </span>
+        </>
       ) : (
         <span className="text-text">{words}</span>
       )}
       <span className="text-text-dim text-meta block w-fit">
         {noncellbaseTransactions === 0
-          ? 'cellbase only'
+          ? 'held no transaction but its cellbase'
           : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
       </span>
     </span>
@@ -335,8 +389,10 @@ function ShapeKey() {
 }
 
 export default function ForksPage() {
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const walk = useCursorPagination(limit);
+  const { cursor, hasPrevious } = walk;
   const pin = useForkDaysPin();
   const [expanded, setExpanded] = useState(false);
   const overview = useQuery({
@@ -345,7 +401,7 @@ export default function ForksPage() {
   });
   const events = useQuery({
     queryKey: ['forks', cursor, limit],
-    queryFn: () => api.getForks({ cursor, limit }),
+    queryFn: walk.ask((cursor) => api.getForks({ cursor, limit })),
     placeholderData: keepPreviousData,
   });
   const data = overview.data;
@@ -355,7 +411,7 @@ export default function ForksPage() {
       `Fork overview: days hold ${switches} switches but the window says ${data.nodeSwitchesInWindow}`
     );
   const competing = data ? competingLine(data.nodeRecord) : null;
-  // Collapsed to the first rows until "Show all" (R15); a later page is always shown whole.
+  // Collapsed to the first rows until "all … ↓" (R15); a later page is always shown whole.
   const collapsed =
     !expanded &&
     !hasPrevious &&
@@ -370,9 +426,12 @@ export default function ForksPage() {
   // again only when one of the titles shown changes (lane E4).
   const now = useClockTime((t) => shown.map((e) => switchTitle(e, t)).join('\n'));
   const total = events.data?.total;
+  // where the list stands in time (lib/pagination.ts): its page and the pages its served total
+  // makes at the served page size; nothing for a list on one page, an empty one too
+  const switchesAt = events.data ? timePageAt('branch switches', events.data, walk) : null;
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
+      <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-8">
         {/* Hierarchy v3 (R13): the uncle rate and the days under it are the hero; the concept,
             the chart's long caption and the list's record note are tier 2. */}
         <div data-tier="1" className="min-w-0">
@@ -382,25 +441,25 @@ export default function ForksPage() {
             lede={
               <>
                 Two blocks, one height: one stays, one is an uncle.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                <Link href="#evidence" look="onward">
+                  How it works
+                </Link>
               </>
             }
             figure={data ? uncleRate(data) : undefined}
             picture={
               isAwaited(overview) ? (
-                <p role="status" className="text-text-dim text-small">
+                <p role="status" className="text-text text-small">
                   Loading fork history…
                 </p>
               ) : overview.error ? (
-                <p role="alert" className="text-rouge text-small">
+                <p role="alert" className="text-rouge text-small max-w-measure">
                   Fork history unavailable: {(overview.error as Error).message}
                 </p>
               ) : data && data.days.length ? (
                 <ForkDaysPlot days={data.days} pin={pin} />
               ) : (
-                <p className="text-text-dim text-small">No completed fork days are indexed.</p>
+                <p className="text-text text-small">No completed fork days are indexed.</p>
               )
             }
             reading={
@@ -408,8 +467,8 @@ export default function ForksPage() {
               data.days.length > 0 && (
                 <div data-role="reading">
                   <ForkDaysReading days={data.days} pin={pin} />
-                  <p className="text-text text-body mt-3.5 max-w-[640px]">
-                    Uncles are the complete record; this node sees only the forks it had to switch.
+                  <p className="text-text text-body max-w-measure mt-3.5">
+                    Uncles are the complete record; this node sees only forks it had to switch.
                   </p>
                 </div>
               )
@@ -431,7 +490,7 @@ export default function ForksPage() {
             </div>
             {isAwaited(events) && <p role="status">Loading branch switches…</p>}
             {events.error && (
-              <p role="alert" className="text-rouge text-small">
+              <p role="alert" className="text-rouge text-small max-w-measure">
                 Branch switches unavailable: {(events.error as Error).message}
               </p>
             )}
@@ -448,37 +507,51 @@ export default function ForksPage() {
                       key: 'seen',
                       className: ROW,
                       label: 'Seen (UTC+8)',
-                      minWidth: 160,
+                      // the time to the second (19 characters at 14 px, 159.6) and the gap; it
+                      // was 160, the gap uncounted
+                      minWidth: columnPx(body(SEEN_CHARS) + CELL_GAP_PX),
                       render: (e) => <Seen event={e} compact />,
                     },
                     {
                       key: 'fork',
                       className: ROW,
                       label: 'Fork point',
-                      minWidth: 120,
+                      // the fork point, "#99,999,999" (92.4; its depth a meta line under it), and
+                      // the gap; it was 120
+                      minWidth: columnPx(body(WIDEST_BLOCK_NUMBER.length) + CELL_GAP_PX),
                       render: (e) => <ForkPoint event={e} />,
                     },
                     {
                       key: 'shape',
                       className: ROW,
                       label: 'Shape',
-                      minWidth: 226,
+                      // the 210 px glyph and the gap
+                      minWidth: columnPx(FORK_GLYPH_PX + CELL_GAP_PX),
                       render: (e) => <Shape event={e} />,
                     },
                     {
                       key: 'miners',
                       className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
-                      // two unnamed miners at the row size: 13 + 4 + 13 characters at 13 px
-                      // (234 px; R9, it was 17 + 4 + 17, 296 px, in 312) and the padding
-                      minWidth: 250,
+                      // The flexible column (readability F3-e: a pool name has no bound): two
+                      // unnamed miners at the row size, 13 + " vs " + 13 characters at the row's
+                      // 14 px (252), and the gap; it takes what the container gives beyond the
+                      // sum. It was 250, budgeted at 13 px.
+                      minWidth: columnPx(
+                        body(2 * shortChars(SHORT_FORMS.row.address) + ' vs '.length) + CELL_GAP_PX
+                      ),
+                      width: 'auto',
                       render: (e) => <Miners event={e} size="row" />,
                     },
                     {
                       key: 'apart',
                       className: ROW,
                       label: 'Found apart',
-                      minWidth: 100,
+                      // "999,999 ms" at 13 px (78), wider than the head's words, and the gap; it
+                      // was 100
+                      minWidth: columnPx(
+                        textPx(WIDEST_SIBLING_GAP.length, fontPx('small')) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (e) => <FoundApart event={e} />,
                     },
@@ -486,7 +559,19 @@ export default function ForksPage() {
                       key: 'fate',
                       className: ROW,
                       label: 'What became of it',
-                      minWidth: 210,
+                      // The widest of its two lines: the fate "uncle inclusion still possible"
+                      // (252 at 14 px), or a deep switch's "indexed #99,999,999 → node
+                      // #99,999,999" on its meta line (38 characters at 12 px, 273.6, the wider);
+                      // the last column, no gap. It was 210, which broke both lines.
+                      minWidth: columnPx(
+                        Math.max(
+                          body('uncle inclusion still possible'.length),
+                          textPx(
+                            `indexed ${WIDEST_BLOCK_NUMBER} → node ${WIDEST_BLOCK_NUMBER}`.length,
+                            fontPx('meta')
+                          )
+                        )
+                      ),
                       render: (e) => <Fate event={e} />,
                     },
                   ])}
@@ -504,31 +589,24 @@ export default function ForksPage() {
                     </div>
                   )}
                 />
+                {/* The controls board's pager: the short list's own form while the first five
+                    stand for the list ("all 18 branch switches ↓", or "next 45 ↓" where the list
+                    is longer than a page), then a cursor in time, newest first (switchesAt). */}
                 {collapsed ? (
-                  <button
-                    type="button"
-                    aria-expanded={false}
-                    onClick={() => setExpanded(true)}
-                    className="text-text hover:text-text-bright text-small mt-3 hover:underline"
-                  >
-                    {total === undefined
-                      ? 'Show all branch switches ↓'
-                      : `Show all ${total.toLocaleString('en-US')} branch switches ↓`}
-                  </button>
-                ) : (
-                  <div className="mt-5">
-                    <CursorPagination
-                      total={events.data.total}
-                      totalLabel="switches"
-                      pageSize={limit}
-                      page={page}
-                      currentCount={events.data.data.length}
-                      hasMore={events.data.hasMore}
-                      hasPrevious={hasPrevious}
-                      onNext={() => goToNext(events.data!.nextCursor)}
-                      onPrevious={goToPrevious}
-                    />
+                  <div className="mt-3">
+                    <Pager {...firstPageMore(events.data, () => setExpanded(true))} />
                   </div>
+                ) : (
+                  switchesAt && (
+                    <div className="mt-5">
+                      <Pager
+                        mode="time"
+                        label="branch switches"
+                        order="newest first"
+                        {...switchesAt}
+                      />
+                    </div>
+                  )
                 )}
               </>
             )}
@@ -562,9 +640,10 @@ export default function ForksPage() {
               <DetailSection title="How the chart is drawn">
                 <Prose>
                   <p>
-                    In the chart each grey bar is a day&apos;s uncles on chain and the jade inside
-                    it this node&apos;s branch switches that day; point at a day, or focus the chart
-                    and use ← → to step through the days.
+                    In the chart each grey bar is a day&apos;s uncle rate, its uncles over its
+                    blocks, against the dashed target of one in 40; under it, in jade on a scale of
+                    its own, this node&apos;s branch switches that day. Point at a day, or focus the
+                    chart and use ← → to step through the days.
                   </p>
                   {data && <p>Days: {data.scope}.</p>}
                 </Prose>
