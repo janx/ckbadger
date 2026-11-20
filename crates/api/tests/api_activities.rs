@@ -4099,3 +4099,262 @@ async fn item_types_a_row_the_stores_cannot_place_stands_alone() {
         "{json}"
     );
 }
+
+// ── Lane feed, ruling 14 of gate P: a row states how many parties it has, sends in full only the
+//    parties it draws, and names every party by its short id ──────────────────────────────────
+
+/// How many parties the many-party row holds: more than a Godwoken row's 600 to 770.
+const MANY_PARTIES: usize = 720;
+
+/// The lock hash of party `i` of the many-party row: its first two bytes are `i`, so the parties
+/// sort by `i` (the indexer's order) and each has its own 20-byte short id.
+fn many_party_lock(i: usize) -> [u8; 32] {
+    let mut hash = [0x5a; 32];
+    hash[0] = u8::try_from(i >> 8).unwrap();
+    hash[1] = u8::try_from(i & 0xff).unwrap();
+    hash
+}
+
+/// The many-party row's parties: the five largest CKB changes are 400 (+5,000 CKB) and 100 to 103
+/// (−1,000 CKB and a little more each); 104 is the sixth largest (−900 CKB); 7, 101 and 650 moved a
+/// token (101 is also one of the five largest); every other party changed by a few shannons.
+fn many_party_actions(tx_hash: &[u8]) -> TxActions {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_TOKEN};
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0x7e; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let participants = (0..MANY_PARTIES)
+        .map(|i| {
+            let shannons = i128::try_from(i).unwrap();
+            let ckb_delta: i128 = match i {
+                400 => 500_000_000_000,
+                100..=103 => -100_000_000_000 - shannons,
+                104 => -90_000_000_000,
+                _ => 1_000 + shannons,
+            };
+            let item_deltas = match i {
+                7 => vec![token(50, true)],
+                101 => vec![token(10, true)],
+                650 => vec![token(60, false)],
+                _ => vec![],
+            };
+            ParticipantDelta {
+                id: ParticipantId::Lock(many_party_lock(i)),
+                ckb_delta,
+                used_delta: 0,
+                tags: if item_deltas.is_empty() { 0 } else { TAG_TOKEN },
+                item_deltas,
+                roles: 0,
+            }
+        })
+        .collect();
+    TxActions {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: vec![0xb7; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    }
+}
+
+/// `["0x<the first 20 bytes of the lock hash>", tags]`: a party's short id as the route sends it.
+fn short_id(lock: &[u8; 32], tags: u16) -> serde_json::Value {
+    serde_json::json!([format!("0x{}", hex::encode(&lock[..20])), tags])
+}
+
+/// Ruling 14 of gate P (the owner, 2026-11-20): `/activities?filter=token` answered 8.25 MB for one
+/// page of 50, every field of each of a Godwoken row's 600 to 770 parties (about 680 bytes a
+/// party). A row now states its exact `participantCount`; sends in full only the parties a row
+/// draws, by one stated rule (the five largest CKB changes, the fee payer, every party whose items
+/// moved; a row of at most six parties draws them all), in the transaction's order, each once; and
+/// names EVERY party by its short id with its tags, which the page's fold counts distinct parties
+/// from. The serialized row stays within 52 bytes a party and 8 KB, which the old shape (every
+/// party in full) does not.
+#[tokio::test]
+async fn a_many_party_row_states_its_count_draws_by_the_rule_and_names_every_party() {
+    let store = test_store();
+    let tx_hash = vec![0xa7; 32];
+    let actions = many_party_actions(&tx_hash);
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+
+    assert_eq!(row["participantCount"], MANY_PARTIES, "participantCount");
+    // every party, by its short id and its tags, in the transaction's order
+    let expected_ids: Vec<serde_json::Value> = actions
+        .participants
+        .iter()
+        .enumerate()
+        .map(|(i, p)| short_id(&many_party_lock(i), p.tags))
+        .collect();
+    assert_eq!(row["partyIds"], serde_json::Value::Array(expected_ids));
+
+    // the drawn set: the five largest (100, 101, 102, 103, 400; not the sixth, 104), every party
+    // whose items moved (7, 101, 650), 101 once though it is in both, in the transaction's order
+    let drawn: Vec<String> = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap().to_string())
+        .collect();
+    let expected_drawn: Vec<String> = [7, 100, 101, 102, 103, 400, 650]
+        .iter()
+        .map(|i| format!("0x{}", hex::encode(many_party_lock(*i))))
+        .collect();
+    assert_eq!(drawn, expected_drawn);
+    // no party paid the fee alone: many changed
+    assert_eq!(row["feePayer"], serde_json::Value::Null);
+    // every item a drawn party moved carries its movement in the whole transaction (−50 −10 +60)
+    for p in row["participants"].as_array().unwrap() {
+        for item in p["itemDeltas"].as_array().unwrap() {
+            assert_eq!(item["movement"], "transfer", "{item}");
+        }
+    }
+
+    let row_bytes = serde_json::to_string(row).unwrap().len();
+    let id_bytes = serde_json::to_string(&row["partyIds"]).unwrap().len();
+    assert!(
+        id_bytes <= 52 * MANY_PARTIES,
+        "the id list takes {id_bytes} bytes for {MANY_PARTIES} parties"
+    );
+    assert!(
+        row_bytes <= 52 * MANY_PARTIES + 8 * 1024,
+        "the row takes {row_bytes} bytes for {MANY_PARTIES} parties"
+    );
+}
+
+/// The same activity on the transaction's own page draws every party (that page lists each one's
+/// change), with the same count and ids; an address's feed states the count, every party's id and
+/// the fee payer beside the address's own changes, and sends no other party in full: its row
+/// draws the address's party alone (the route's `participants` of the other parties is gone).
+#[tokio::test]
+async fn the_transaction_page_draws_every_party_and_an_address_row_names_them_by_id() {
+    let store = test_store();
+    let tx_hash = vec![0xa8; 32];
+    let actions = many_party_actions(&tx_hash);
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let focus = many_party_lock(600);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(&focus, 10, 0, &AddrTxValue::new(1_600, true, true, 0));
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &focus);
+    let app = create_router(test_config(store)).await;
+
+    let own_uri = format!("/transactions/0x{}/activity", hex::encode(&tx_hash));
+    let (status, own) = get_json(&app, &own_uri).await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert_eq!(own["participantCount"], MANY_PARTIES, "participantCount");
+    assert_eq!(own["participants"].as_array().unwrap().len(), MANY_PARTIES);
+    assert_eq!(own["partyIds"].as_array().unwrap().len(), MANY_PARTIES);
+
+    let feed_uri = format!("/addresses/0x{}/activities", hex::encode(focus));
+    let (status, feed) = get_json(&app, &feed_uri).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let row = &feed["data"][0];
+    assert_eq!(row["ckbDelta"], "1600", "ckbDelta");
+    assert_eq!(row["participantCount"], MANY_PARTIES, "participantCount");
+    assert_eq!(row["partyIds"].as_array().unwrap().len(), MANY_PARTIES);
+    assert_eq!(row["partyIds"][600], short_id(&focus, 0));
+    assert_eq!(row["feePayer"], serde_json::Value::Null);
+    assert!(
+        row.get("participants").is_none(),
+        "the address row sends no other party in full"
+    );
+}
+
+/// The fee payer (the party whose only movement is the fee): stated by the route from every party,
+/// and drawn. Only the payer's CKB changed and nothing else moved: a row of two parties names it;
+/// a row of eight draws it once though it is also the largest change, beside the four next
+/// largest (all zero: the earliest four). A party that received, an item moved, and a Nervos DAO
+/// withdrawal (whose compensation enters) leave no fee payer.
+#[tokio::test]
+async fn the_route_states_the_fee_payer_from_every_party_and_draws_it() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+
+    let party = |i: u8, ckb_delta: i128| ParticipantDelta {
+        id: ParticipantId::Lock([0x10 + i; 32]),
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags: 0,
+        roles: 0,
+    };
+    let row = |n: u8, participants: Vec<ParticipantDelta>| TxActions {
+        tx_hash: vec![0xe0 + n; 32],
+        block_hash: vec![0xc0 + n; 32],
+        block_number: 100 + i64::from(n),
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants,
+    };
+    let lock_of = |i: u8| format!("0x{}", hex::encode([0x10 + i; 32]));
+
+    let two = row(1, vec![party(0, 0), party(1, -1_000)]);
+    let eight = row(
+        2,
+        (0..8)
+            .map(|i| party(i, if i == 6 { -2_000 } else { 0 }))
+            .collect(),
+    );
+    let received = row(3, vec![party(0, -1_000), party(1, 500)]);
+    let mut moved = row(4, vec![party(0, -1_000), party(1, 0)]);
+    moved.participants[1].item_deltas = vec![ItemDelta {
+        item_id: vec![0x7e; 32],
+        kind: ItemKind::Token,
+        magnitude: 5,
+        negative: false,
+    }];
+    let mut withdrawal = row(5, vec![party(0, -1_000)]);
+    withdrawal.protocol_actions = vec![ProtocolAction::new(
+        "dao",
+        "withdraw_complete",
+        serde_json::json!({}),
+    )];
+
+    let store = test_store();
+    for actions in [&two, &eight, &received, &moved, &withdrawal] {
+        seed_named_tx(&store, actions.block_number, &actions.tx_hash, actions);
+    }
+    let app = create_router(test_config(store)).await;
+    let own =
+        |actions: &TxActions| format!("/transactions/0x{}/activity", hex::encode(&actions.tx_hash));
+    let (_, json) = get_json(&app, &own(&two)).await;
+    assert_eq!(json["feePayer"], lock_of(1), "{json}");
+    let (_, json) = get_json(&app, "/activities?limit=10").await;
+    let eight_hash = format!("0x{}", hex::encode(&eight.tx_hash));
+    let eight_row = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["txHash"] == eight_hash)
+        .unwrap();
+    assert_eq!(eight_row["feePayer"], lock_of(6), "{eight_row}");
+    let drawn: Vec<&str> = eight_row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["lockHash"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        drawn,
+        [lock_of(0), lock_of(1), lock_of(2), lock_of(3), lock_of(6)]
+    );
+    for none in [&received, &moved, &withdrawal] {
+        let (_, json) = get_json(&app, &own(none)).await;
+        assert_eq!(json["feePayer"], serde_json::Value::Null, "{json}");
+    }
+}
