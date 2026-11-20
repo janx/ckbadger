@@ -204,6 +204,35 @@ pub(crate) fn open_api_domain_store(
     Ok(Arc::new(store))
 }
 
+/// Where the API stands with the stores it serves.
+pub enum ApiStoreReadiness {
+    /// The indexer has not created both stores yet (a `CURRENT` file missing).
+    NotCreated,
+    /// Both stores exist and the domain store holds no row and no layout
+    /// stamp yet.
+    NotStamped,
+    /// The domain store is open (secondary) and the API may serve it.
+    Ready(Arc<CkbadgerStore>),
+}
+
+/// The API's one reading of its stores' state (the decision `run_api` makes
+/// before it serves).
+pub fn api_store_readiness(
+    domain_data_path: &str,
+    append_only_data_path: &str,
+    store_runtime_config: StoreRuntimeConfig,
+) -> Result<ApiStoreReadiness> {
+    if !(Path::new(domain_data_path).join("CURRENT").exists()
+        && Path::new(append_only_data_path).join("CURRENT").exists())
+    {
+        return Ok(ApiStoreReadiness::NotCreated);
+    }
+    Ok(ApiStoreReadiness::Ready(open_api_domain_store(
+        domain_data_path,
+        store_runtime_config,
+    )?))
+}
+
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let addr = format!("{}:{}", config.host, config.port);
@@ -608,6 +637,100 @@ mod tests {
             .set_store_layout(ckbadger_store::STORE_LAYOUT + 1)
             .unwrap();
         assert!(ensure_store_layout_readable(&store).is_err());
+    }
+
+    fn api_test_stores() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append = dir.path().join("append-only");
+        (dir, domain, append)
+    }
+
+    fn api_readiness_of(domain: &Path, append: &Path) -> Result<ApiStoreReadiness> {
+        api_store_readiness(
+            domain.to_str().unwrap(),
+            append.to_str().unwrap(),
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    fn create_api_test_stores(domain: &Path, append: &Path) {
+        CkbadgerStore::open_domain(domain).unwrap();
+        CkbadgerStore::open_append_only(append).unwrap();
+    }
+
+    /// resync fix round N7 (the lead's rule: a fresh start is never read as an
+    /// old store): what the API's open sees and does in each state of the
+    /// stores, while the indexer of orchestrator mode is still creating them.
+    /// (a) no store yet: wait. (b) both stores created, no row and no stamp
+    /// (the indexer has not stamped it yet): wait, as for (a). (c) stamped
+    /// with this build's layout: serve. State (d) is the next test.
+    #[test]
+    fn the_apis_open_waits_for_stores_the_indexer_has_not_created_or_stamped() {
+        // (a) the indexer has not created the stores
+        let (_dir, domain, append) = api_test_stores();
+        assert!(matches!(
+            api_readiness_of(&domain, &append).unwrap(),
+            ApiStoreReadiness::NotCreated
+        ));
+
+        // (b) created, no row, no stamp yet: waits like (a)
+        let (_dir, domain, append) = api_test_stores();
+        create_api_test_stores(&domain, &append);
+        assert!(
+            matches!(
+                api_readiness_of(&domain, &append).unwrap(),
+                ApiStoreReadiness::NotStamped
+            ),
+            "a store the indexer has not stamped yet is waited for, not served"
+        );
+
+        // (c) stamped with this build's layout: served
+        let (_dir, domain, append) = api_test_stores();
+        create_api_test_stores(&domain, &append);
+        CkbadgerStore::open_domain(&domain)
+            .unwrap()
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+        assert!(matches!(
+            api_readiness_of(&domain, &append).unwrap(),
+            ApiStoreReadiness::Ready(_)
+        ));
+    }
+
+    /// resync fix round N7, state (d): a store with rows and no stamp, or
+    /// another stamp, is an old store: the API's open refuses it as
+    /// rebuild-required (exit 78, as the indexer's refusal is), both layouts
+    /// named, with the way out.
+    #[test]
+    fn the_apis_open_refuses_an_old_store_as_rebuild_required() {
+        for stamp in [None, Some(7)] {
+            let (_dir, domain, append) = api_test_stores();
+            create_api_test_stores(&domain, &append);
+            {
+                let primary = CkbadgerStore::open_domain(&domain).unwrap();
+                primary.set_network_identity("mainnet").unwrap();
+                if let Some(stamp) = stamp {
+                    primary.set_store_layout(stamp).unwrap();
+                }
+            }
+            let error = match api_readiness_of(&domain, &append) {
+                Ok(_) => panic!("a store stamped {stamp:?} with rows must be refused"),
+                Err(error) => error,
+            };
+            assert!(
+                ckbadger_indexer::lifecycle::is_rebuild_required(&error),
+                "stamp {stamp:?}: the refusal is rebuild-required (exit 78): {error:#}"
+            );
+            let words = error.to_string();
+            assert!(
+                words.contains(&format!(
+                    "this build reads and writes store layout {}",
+                    ckbadger_store::STORE_LAYOUT
+                )) && words.contains("re-sync from genesis"),
+                "{words}"
+            );
+        }
     }
 
     /// resync fix round T3 (tests report SHOULD-3): the API cannot hold the

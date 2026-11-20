@@ -1016,6 +1016,66 @@ mod tests {
         }
     }
 
+    /// resync fix round N7: the TUI reads the domain store's layout when it
+    /// opens it (read-only), at start and when the store appears later. A
+    /// store of another layout is not shown as this build's: the network's
+    /// row is the refusal, both layouts and the store named, with the way out,
+    /// and nothing of that store is read.
+    #[tokio::test]
+    async fn the_tui_refuses_a_store_of_another_layout_and_names_it() {
+        let stamp_seven = |domain: &Path| {
+            let primary = CkbadgerStore::open_domain(domain).unwrap();
+            primary.set_network_identity("mainnet").unwrap();
+            primary.set_store_layout(7).unwrap();
+        };
+        let assert_refused = |row: anyhow::Result<super::SyncStatusRow>, domain: &Path| {
+            let words = match row {
+                Ok(_) => panic!("a store stamped 7 is shown as if it were this build's"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(
+                words.contains("store layout 7")
+                    && words.contains(&format!(
+                        "this build reads and writes store layout {}",
+                        ckbadger_store::STORE_LAYOUT
+                    ))
+                    && words.contains("delete RocksDB and re-sync from genesis")
+                    && words.contains(domain.to_str().unwrap()),
+                "{words}"
+            );
+        };
+
+        // The store is there when the TUI starts.
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append = dir.path().join("append-only");
+        stamp_seven(&domain);
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain.to_str().unwrap(),
+            append.to_str().unwrap(),
+        )
+        .await;
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        assert_refused(row, &domain);
+        assert!(db.store_handle().is_none(), "nothing of that store is read");
+
+        // The store appears after the TUI started (the late open).
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append = dir.path().join("append-only");
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain.to_str().unwrap(),
+            append.to_str().unwrap(),
+        )
+        .await;
+        stamp_seven(&domain);
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        assert_refused(row, &domain);
+        assert!(db.store_handle().is_none(), "nothing of that store is read");
+    }
+
     #[test]
     fn parse_epoch_full() {
         assert_eq!(

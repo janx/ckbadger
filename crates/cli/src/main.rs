@@ -1158,27 +1158,38 @@ async fn print_single_network_sync_status(workdir: &Path) -> Result<()> {
         &secondary_path,
         store_runtime_config(&config.store, workdir)?,
     ) {
-        Ok(store) => match store.get_sync_status() {
-            Ok(status) => {
-                println!("Sync status:");
-                println!("  Tip block:           {}", status.tip_block_number);
-                println!("  Total transactions:  {}", status.total_transactions);
-                println!("  Total cells created: {}", status.total_cells_created);
-                println!("  Total cells consumed:{}", status.total_cells_consumed);
-                if status.deep_fork_detected {
-                    println!("  WARNING: deep fork detected");
-                }
+        Ok(store) => {
+            for line in sync_status_report(&store, &store_paths.domain_data) {
+                println!("{line}");
             }
-            Err(e) => {
-                println!("Could not read sync status: {}", e);
-            }
-        },
+        }
         Err(e) => {
             println!("Could not open store: {} (has the indexer run yet?)", e);
         }
     }
 
     Ok(())
+}
+
+/// The lines `ckbadger status` prints for the domain store opened at
+/// `domain_data_path`.
+fn sync_status_report(store: &CkbadgerStore, _domain_data_path: &Path) -> Vec<String> {
+    match store.get_sync_status() {
+        Ok(status) => {
+            let mut lines = vec![
+                "Sync status:".to_string(),
+                format!("  Tip block:           {}", status.tip_block_number),
+                format!("  Total transactions:  {}", status.total_transactions),
+                format!("  Total cells created: {}", status.total_cells_created),
+                format!("  Total cells consumed:{}", status.total_cells_consumed),
+            ];
+            if status.deep_fork_detected {
+                lines.push("  WARNING: deep fork detected".to_string());
+            }
+            lines
+        }
+        Err(e) => vec![format!("Could not read sync status: {}", e)],
+    }
 }
 
 /// Aggregate `status` across all networks in an orchestrator root: query the
@@ -2241,6 +2252,43 @@ fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// resync fix round N7: `ckbadger status` checks the store's layout after
+    /// opening it (read-only) and, on a store of another layout, prints the
+    /// refusal with the way out instead of that store's tip.
+    #[test]
+    fn status_names_a_store_of_another_layout_instead_of_its_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        store.set_store_layout(7).unwrap();
+        assert_eq!(
+            super::sync_status_report(&store, path),
+            vec![
+                format!("Sync status: refused (domain store {})", path.display()),
+                format!(
+                    "  {}",
+                    ckbadger_store::StoreLayoutMismatch { found: Some(7) }
+                ),
+            ],
+            "the refusal, not the old store's tip"
+        );
+
+        // A fresh store (no row, no stamp yet) is a fresh start, not an old
+        // store: its (empty) status is shown.
+        let fresh = tempfile::tempdir().unwrap();
+        let fresh_store = ckbadger_store::CkbadgerStore::open_domain(fresh.path()).unwrap();
+        assert_eq!(
+            super::sync_status_report(&fresh_store, fresh.path())[0],
+            "Sync status:"
+        );
+
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+        assert_eq!(super::sync_status_report(&store, path)[0], "Sync status:");
+    }
+
     use super::*;
     use clap::CommandFactory;
     use std::path::Path;

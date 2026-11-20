@@ -1856,10 +1856,25 @@ mod tests {
             classify_child_exit(&indexer, true, Some(0)),
             ChildExitAction::CleanHandoff
         );
+        // Re-pinned on purpose (resync fix round N7): the indexer's and the
+        // API's refusal of an old store are one case to the operator, so an
+        // API that exits rebuild-required is blocked like the indexer, never
+        // restarted into the same refusal (it was "an indexer-specific
+        // lifecycle state").
         assert_eq!(
             classify_child_exit(&api, false, Some(rebuild_code)),
-            ChildExitAction::Restart,
-            "rebuild-required is an indexer-specific lifecycle state"
+            ChildExitAction::BlockRebuildRequired,
+            "the API's refusal of an old store blocks it, as the indexer's does"
+        );
+        // A child that holds no chain store has no such state.
+        let frontend = ChildSpec {
+            label: "frontend".to_string(),
+            service: "frontend".to_string(),
+            workdir: "/tmp".to_string(),
+        };
+        assert_eq!(
+            classify_child_exit(&frontend, false, Some(rebuild_code)),
+            ChildExitAction::Restart
         );
     }
 
