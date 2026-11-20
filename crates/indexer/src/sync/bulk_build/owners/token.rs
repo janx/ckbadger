@@ -37,10 +37,18 @@ pub(crate) struct TokenOwner {
     /// (block, transaction, output); the rule
     /// (`token_helpers::token_max_supply_claim`) picks the token's at finalize.
     max_supply_observations: FxHashMap<Vec<u8>, crate::sync::token_helpers::MaxSupplyClaims>,
-    /// The current transaction's Unique Cell infos (by 20-byte type args), in
-    /// output order: an extension binds only within the creating transaction,
-    /// as live binds it. Cleared and reused per transaction.
-    tx_unique_infos: Vec<(InternId, crate::sync::token_helpers::UniqueTokenInfo)>,
+    /// The current transaction's Unique Cell candidates
+    /// (`token_helpers::unique_cell_candidate`), in output order: type args,
+    /// type code hash, hash type, info. An extension binds only within the
+    /// creating transaction, as live binds it, and only the Unique Cell by
+    /// its pair (`token_helpers::bound_unique_cell`). Cleared and reused per
+    /// transaction.
+    tx_unique_infos: Vec<(
+        InternId,
+        InternId,
+        i16,
+        crate::sync::token_helpers::UniqueTokenInfo,
+    )>,
     /// Resolved on-chain token info (keyed by token type_hash).
     token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
     /// One transaction's `TOKEN_DAILY` contribution per token, folded here
@@ -172,15 +180,22 @@ impl TokenOwner {
         let Some(type_args_id) = cell.type_args_id else {
             return;
         };
-        let type_args = ctx.resolve_identity(type_args_id);
-        if type_args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
+        let Some(info) = crate::sync::token_helpers::unique_cell_candidate(
+            ctx.resolve_identity(type_args_id),
+            &cell.data,
+        ) else {
             return;
-        }
-        let Some(info) = crate::sync::token_helpers::parse_unique_cell_token_info(&cell.data)
+        };
+        // A typed cell's facts carry its code hash and hash type with its
+        // args (one script); they are kept for the pair the extension rule
+        // reads, with no lookup here.
+        let (Some(type_code_hash_id), Some(type_hash_type)) =
+            (cell.type_code_hash_id, cell.type_hash_type)
         else {
             return;
         };
-        self.tx_unique_infos.push((type_args_id, info));
+        self.tx_unique_infos
+            .push((type_args_id, type_code_hash_id, type_hash_type, info));
     }
 
     /// The extension binding, by the live rule
@@ -208,14 +223,15 @@ impl TokenOwner {
             if args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
                 continue;
             }
-            // Last Unique Cell output with these args, as live's per-tx map.
-            let Some(info) = self
-                .tx_unique_infos
-                .iter()
-                .rev()
-                .find(|(id, _)| ctx.resolve_identity(*id) == args.as_slice())
-                .map(|(_, info)| info.clone())
-            else {
+            // The extension rule (`token_helpers::bound_unique_cell`, live's
+            // too): the last Unique Cell by its pair with these args.
+            let Some(info) = crate::sync::token_helpers::bound_unique_cell(
+                self.tx_unique_infos.iter(),
+                args.as_slice(),
+                |(args_id, ..)| ctx.resolve_identity(*args_id),
+                |(_, code_hash_id, hash_type, _)| (ctx.resolve_identity(*code_hash_id), *hash_type),
+            )
+            .map(|(.., info)| info.clone()) else {
                 continue;
             };
             if let Some(total_supply) = info.total_supply {
@@ -256,11 +272,14 @@ impl TokenOwner {
         // Exactly one distinct parsed info among Unique-Cell-typed outputs.
         let mut unique_info: Option<crate::sync::token_helpers::UniqueTokenInfo> = None;
         for cell in tx.cells.iter() {
-            let Some(type_code_hash_id) = cell.type_code_hash_id else {
+            let (Some(type_code_hash_id), Some(type_hash_type)) =
+                (cell.type_code_hash_id, cell.type_hash_type)
+            else {
                 continue;
             };
-            if !crate::sync::token_helpers::is_unique_cell_code_hash(
+            if !crate::sync::token_helpers::is_unique_cell(
                 ctx.resolve_identity(type_code_hash_id),
+                type_hash_type,
             ) {
                 continue;
             }

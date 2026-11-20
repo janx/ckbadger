@@ -72,7 +72,12 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   (`TokenInfo::attach_label`), so a token's first block is the block of
 ///   its first cell on both paths and a claim made before it is never kept on
 ///   its row. A store stamped 7 holds label rows with first block 0, from
-///   which live admitted a claim made before the token existed.
+///   which live admitted a claim made before the token existed. And the
+///   xUDT-extension claimant bound by its script (fix round S1): an
+///   extension's cell is the Unique Cell by its registered pair, the last
+///   such output with the extension's args giving the bound metadata and the
+///   claim on both paths; a store stamped 7 took a claim and metadata from
+///   any cell with those 20 bytes of args.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
@@ -86,7 +91,8 @@ pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by th
      one activity kind, the senders bit on participants, a token's max supply its first claim \
      at or after its first block on both sync paths, made by the token's owner lock, protocols \
      recognised by their pair, the recognised type codes that ran on each activity, a token \
-     row only once the chain holds the token, its label attached by the writer that creates it";
+     row only once the chain holds the token, its label attached by the writer that creates it, \
+     an xUDT extension's Unique Cell bound by its pair";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

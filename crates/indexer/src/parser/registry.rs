@@ -166,12 +166,20 @@ fn slug_to_standard_lock(slug: &str) -> Option<StandardLock> {
     })
 }
 
-/// What a registered pair runs, for the indexer: a protocol's script, or a
-/// standard lock.
+/// The registry file stem of the Unique Cell (`docs/metadata/scripts/unique-cell.toml`).
+const UNIQUE_CELL_SLUG: &str = "unique-cell";
+
+/// What a registered pair runs, for the indexer: a protocol's script, a
+/// standard lock, or the Unique Cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisteredScript {
     Protocol(ProtocolScript),
     StandardLock(StandardLock),
+    /// The Unique Cell type script: a token-info cell whose args the script
+    /// derives itself (Type ID-like), so it is the one cell an xUDT
+    /// extension can name by its args (resync fix round S1). No protocol
+    /// ([`ProtocolRegistry::protocol`] is `None` for it) and no lock.
+    UniqueCell,
 }
 
 /// The scripts the indexer recognises, keyed by the pair CKB names a script
@@ -221,6 +229,7 @@ impl ProtocolRegistry {
             let script = match (slug_to_protocol(slug), slug_to_standard_lock(slug)) {
                 (Some(protocol), _) => RegisteredScript::Protocol(protocol),
                 (None, Some(lock)) => RegisteredScript::StandardLock(lock),
+                (None, None) if slug == UNIQUE_CELL_SLUG => RegisteredScript::UniqueCell,
                 (None, None) => continue,
             };
             for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
@@ -279,6 +288,10 @@ impl ProtocolRegistry {
                 "protocol registry missing required-core protocol {required:?} — check docs/metadata/scripts"
             );
         }
+        assert!(
+            by_pair.values().any(|s| *s == RegisteredScript::UniqueCell),
+            "protocol registry missing the Unique Cell — check docs/metadata/scripts/unique-cell.toml"
+        );
         Self { by_pair }
     }
 
@@ -307,8 +320,15 @@ impl ProtocolRegistry {
     pub fn protocol(&self, code_hash: &[u8], hash_type: i16) -> Option<ProtocolScript> {
         match self.script(code_hash, hash_type)? {
             RegisteredScript::Protocol(protocol) => Some(protocol),
-            RegisteredScript::StandardLock(_) => None,
+            RegisteredScript::StandardLock(_) | RegisteredScript::UniqueCell => None,
         }
+    }
+
+    /// Whether the pair runs the Unique Cell ([`Self::script`]): the one
+    /// recognition of a Unique Cell, for the xUDT extension binding and claim
+    /// and the issuance co-occurrence binding, on both sync paths.
+    pub fn is_unique_cell(&self, code_hash: &[u8], hash_type: i16) -> bool {
+        self.script(code_hash, hash_type) == Some(RegisteredScript::UniqueCell)
     }
 
     /// Whether the pair runs `protocol` ([`Self::script`]).
@@ -332,7 +352,7 @@ impl ProtocolRegistry {
                 RegisteredScript::Protocol(protocol) => {
                     Some(((code_hash.as_slice(), *hash_type), *protocol))
                 }
-                RegisteredScript::StandardLock(_) => None,
+                RegisteredScript::StandardLock(_) | RegisteredScript::UniqueCell => None,
             })
     }
 }
@@ -506,6 +526,45 @@ pub static SCRIPT_LAYOUTS: LazyLock<ScriptLayouts> = LazyLock::new(ScriptLayouts
 mod tests {
     use super::*;
     use crate::rpc::parse_hex_to_bytes;
+
+    /// resync fix round S1: the Unique Cell is recognised by its pair, by the
+    /// one pair rule: each network's registered reference (mainnet: the
+    /// binary 0x2c8c… by data1; testnet: 0x8e34… by type) and each version's
+    /// binary by every data hash type (mainnet 0x2c8c…, testnet 0xcc25…).
+    /// The mainnet binary by `type`, or the testnet reference by a data hash
+    /// type, runs no Unique Cell; it is no protocol and no lock.
+    #[test]
+    fn the_unique_cell_runs_only_at_its_registered_pairs() {
+        let mainnet = parse_hex_to_bytes(
+            "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628",
+        );
+        let testnet_reference = parse_hex_to_bytes(
+            "0x8e341bcfec6393dcd41e635733ff2dca00a6af546949f70c57a706c0f344df8b",
+        );
+        let testnet_binary = parse_hex_to_bytes(
+            "0xcc2518c2c1384f2473c96f63c4e74074984296f358512ee7f54c848d4c135040",
+        );
+        for (code_hash, hash_type, runs) in [
+            (&mainnet, 0, true),
+            (&mainnet, 2, true),
+            (&mainnet, 4, true),
+            (&mainnet, 1, false),
+            (&testnet_reference, 1, true),
+            (&testnet_reference, 0, false),
+            (&testnet_reference, 2, false),
+            (&testnet_binary, 2, true),
+            (&testnet_binary, 1, false),
+        ] {
+            assert_eq!(
+                PROTOCOL_REGISTRY.is_unique_cell(code_hash, hash_type),
+                runs,
+                "0x{} by {hash_type}",
+                hex::encode(code_hash)
+            );
+            assert_eq!(PROTOCOL_REGISTRY.protocol(code_hash, hash_type), None);
+            assert!(!PROTOCOL_REGISTRY.is_standard_lock(code_hash, hash_type));
+        }
+    }
 
     #[test]
     fn ckbfs_deployments_have_one_canonical_protocol_identity() {

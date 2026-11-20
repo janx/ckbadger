@@ -13451,10 +13451,13 @@ mod tests {
             }
         }
 
+        /// The Unique Cell by its registered pair (the mainnet binary by
+        /// data1; resync fix round S1, re-pinned from `type`, which runs no
+        /// Unique Cell).
         fn unique_type_script() -> Script {
             Script {
                 code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
-                hash_type: "type".to_string(),
+                hash_type: "data1".to_string(),
                 args: format!("0x{}", "9a".repeat(20)),
             }
         }

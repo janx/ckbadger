@@ -452,7 +452,14 @@ family attribution fails with reference, binary and block context instead of bei
 
 A token's `max_supply` is a claim the chain makes about it: an Omnilock supply-info cell (lock in
 supply mode, its own type script named in the lock args, data naming the token's type hash), or a
-Unique Cell an xUDT output's extension names in the same transaction. The rule, the same for live
+Unique Cell an xUDT output's extension names in the same transaction. The extension's cell is bound
+by its script, not by its 20 bytes of args (resync fix round S1, `token_helpers::bound_unique_cell`,
+both paths): of the transaction's outputs with those args and token-info data, the LAST whose type
+script is the Unique Cell by its registered pair (`ProtocolRegistry::is_unique_cell`; the mainnet
+binary by data1, data or data2, the testnet reference by type or its binary by a data hash type)
+gives both the token's bound metadata and, where it carries a total supply, the claim; a cell with
+those args under any other type script binds and claims nothing. The issuance co-occurrence binding
+recognises the Unique Cell by the same pair. The rule, the same for live
 sync and bulk build (`token_helpers::token_max_supply_claim`, with the token's row), is: the first
 claim in chain order (block, transaction, output) at or after the token's first BLOCK (the block of
 its first cell), however the live path cut its batches. The rule is by block, so that it cannot
@@ -480,7 +487,7 @@ data names the token. So an Omnilock claim counts for a token only when the toke
 the info cell: one comparison. A claim that fails it is ignored, like a claim before the token's
 first block, and the next one counts; a token whose type args are shorter than 32 bytes names no
 owner and takes no Omnilock claim. An xUDT extension's claim is bound by construction: the token's
-own output names the Unique Cell.
+own output names the Unique Cell, and only the Unique Cell by its registered pair claims.
 
 Not read (a limit, not built): RFC 0042 allows the info cell to sit under another lock than its
 Omnilock (the Omnilock names it by its type script). Such an info cell makes no claim here, so that
@@ -539,7 +546,8 @@ namespace includes:
   (`tx_actions` `recognized_type_codes`, below) and marks a party a script call when a recognised
   type it ran moved none of its items; layout 8 (resync fix round M1) writes a `tokens` row only for
   a token the chain holds, its curated label kept in `token_labels` and attached by the writer that
-  creates the row; a store stamped 2, 3, 4, 5, 6 or 7 is refused.
+  creates the row, and binds an xUDT extension's claim and metadata to the Unique Cell by its pair;
+  a store stamped 2, 3, 4, 5, 6 or 7 is refused.
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
 - exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and
