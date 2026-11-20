@@ -851,6 +851,33 @@ mod tests {
         );
     }
 
+    /// resync fix round 3, item 5 (logic N-3, tests NOTE-9): a store path
+    /// given with a trailing separator (a config's `data/domain/`) names the
+    /// same store, and the inspection of it creates nothing inside it: its
+    /// secondary's directory is the store's sibling.
+    #[test]
+    fn an_inspection_through_a_path_with_a_trailing_separator_creates_nothing_in_the_store() {
+        use earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        create_earlier_layout_domain_store(&domain, Some(7));
+        let before = store_files_and_column_families(&domain);
+        let given = std::path::PathBuf::from(format!("{}/", domain.display()));
+        let secondary =
+            crate::store::secondary_store_path(&given, crate::store::SecondaryStoreOwner::Inspect);
+        assert!(matches!(
+            inspect_domain_store(&given, &secondary).unwrap(),
+            Some(Err(_))
+        ));
+        assert_eq!(
+            store_files_and_column_families(&domain),
+            before,
+            "nothing is created inside the store"
+        );
+    }
+
     /// resync fix round 3, M (logic MUST-1): RocksDB writes `CURRENT` before
     /// a creating open has made every column family, so a reader can meet
     /// this build's store holding `default` and the first column families of

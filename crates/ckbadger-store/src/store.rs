@@ -5182,6 +5182,28 @@ mod tests {
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
     }
 
+    /// resync fix round 3, item 5 (logic N-3, tests NOTE-9): a primary path
+    /// with a trailing separator names the same store, and every owner's
+    /// secondary directory is the store's sibling, never inside it.
+    #[test]
+    fn a_trailing_separator_puts_no_secondary_inside_the_store() {
+        for owner in [
+            SecondaryStoreOwner::Api,
+            SecondaryStoreOwner::Tui,
+            SecondaryStoreOwner::Cli,
+            SecondaryStoreOwner::Supervisor,
+            SecondaryStoreOwner::Inspect,
+        ] {
+            let given = secondary_store_path("x/domain/", owner);
+            assert!(
+                !given.starts_with("x/domain"),
+                "{owner:?}: {} is inside the store",
+                given.display()
+            );
+            assert_eq!(given, secondary_store_path("x/domain", owner), "{owner:?}");
+        }
+    }
+
     #[test]
     fn test_secondary_store_path_uses_owner_suffix() {
         assert_eq!(
