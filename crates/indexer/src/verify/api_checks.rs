@@ -6026,6 +6026,13 @@ impl Check for ParticipantRowsConsistency {
 /// lock, holds an input without sending, or an input's lock is no sending
 /// party: a finding naming the transaction and the lock. A store synced before
 /// the bit existed reads as "nobody sent" and fails here.
+///
+/// The parties are read where every one is drawn: the transaction's own
+/// activity (`/transactions/{hash}/activity`); a feed row draws at most six
+/// (lane feed), so an input of an undrawn sender would read as no party's. And
+/// the feed row's own statement of the bit, the tags of each party it names
+/// (`partyIds`, from which a folded run counts its senders), must say what
+/// `sent` says.
 pub struct ParticipantSentMatchesInputLocks;
 
 /// How many recent activities the check reads (each costs one transaction read).
@@ -6039,11 +6046,20 @@ struct SentParticipantRecord {
     sent: bool,
 }
 
+/// A sampled feed row: its transaction, and every party by its short id with
+/// its tags (`partyIds`, lane feed).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SentFeedRecord {
+    tx_hash: String,
+    block_number: i64,
+    party_ids: Vec<(String, u16)>,
+}
+
+/// The transaction's own activity: every party drawn, each with `sent`.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SentActivityRecord {
-    tx_hash: String,
-    block_number: i64,
     participants: Vec<SentParticipantRecord>,
 }
 
@@ -6089,13 +6105,15 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
 }
 
 /// The findings of one activity against its inputs' locks: every party's
-/// `sent` must equal "its lock is an input's lock", and every input's lock
-/// must be a party that sent.
+/// `sent` (its transaction's own activity, every party drawn) must equal "its
+/// lock is an input's lock", every input's lock must be a party that sent,
+/// and the feed row must name every party with the senders bit `sent` says.
 fn participant_sent_findings(
+    feed: &SentFeedRecord,
     activity: &SentActivityRecord,
     inputs: &TransactionInputsRecord,
 ) -> anyhow::Result<Vec<Finding>> {
-    let entity = format!("tx={} (block {})", activity.tx_hash, activity.block_number);
+    let entity = format!("tx={} (block {})", feed.tx_hash, feed.block_number);
     let mut details = vec![];
     let mut input_locks = std::collections::BTreeSet::new();
     for (index, input) in inputs.inputs.iter().enumerate() {
@@ -6146,6 +6164,45 @@ fn participant_sent_findings(
             details.push(format!("input lock 0x{lock} is no party of the activity"));
         }
     }
+    // the feed row's statement of the bit: every party by its short id with
+    // its tags, the senders bit there the one a folded run counts
+    if feed.party_ids.len() != activity.participants.len() {
+        details.push(format!(
+            "the feed row names {} parties; the transaction's own activity draws {}",
+            feed.party_ids.len(),
+            activity.participants.len()
+        ));
+    }
+    for party in &activity.participants {
+        let (name, id) = match (&party.lock_hash, &party.lock_hash_prefix) {
+            (Some(lock_hash), _) => (
+                format!("lock {lock_hash}"),
+                lock_hash.get(..42).unwrap_or(lock_hash),
+            ),
+            (None, Some(prefix)) => (format!("prefix {prefix}"), prefix.as_str()),
+            // said above: a party carries neither
+            (None, None) => continue,
+        };
+        let key = normalize_hex_key(id);
+        match feed
+            .party_ids
+            .iter()
+            .find(|(named, _)| normalize_hex_key(named) == key)
+        {
+            None => details.push(format!("the feed row does not name {name} ({id})")),
+            Some((named, tags)) => {
+                let bit = tags & ckbadger_store::types::TAG_INPUT != 0;
+                if bit != party.sent {
+                    details.push(format!(
+                        "the feed row names {name} by {named} with tags {tags}, {} the senders \
+                         bit; the transaction's own activity states it {}",
+                        if bit { "with" } else { "without" },
+                        if party.sent { "sent" } else { "did not send" }
+                    ));
+                }
+            }
+        }
+    }
     Ok(if details.is_empty() {
         vec![]
     } else {
@@ -6181,17 +6238,19 @@ impl Check for ParticipantSentMatchesInputLocks {
                  sample verifies nothing"
             );
         }
-        let page: CursorPage<SentActivityRecord> =
-            api_get(ctx, &format!("activities?limit={limit}"))?;
+        let page: CursorPage<SentFeedRecord> = api_get(ctx, &format!("activities?limit={limit}"))?;
         if page.data.is_empty() {
             anyhow::bail!("/activities lists no activity: there is nothing to check the bit on");
         }
         let mut findings = vec![];
         let mut checked = 0u64;
-        for activity in &page.data {
+        for feed in &page.data {
+            // every party, drawn: a feed row draws some of a larger transaction's
+            let activity: SentActivityRecord =
+                api_get(ctx, &format!("transactions/{}/activity", feed.tx_hash))?;
             let inputs: TransactionInputsRecord =
-                api_get(ctx, &format!("transactions/{}", activity.tx_hash))?;
-            findings.extend(participant_sent_findings(activity, &inputs)?);
+                api_get(ctx, &format!("transactions/{}", feed.tx_hash))?;
+            findings.extend(participant_sent_findings(feed, &activity, &inputs)?);
             checked += 1;
             progress.inc(1);
         }
@@ -13191,38 +13250,44 @@ mod tests {
         )
     }
 
-    /// Serves `/activities` as `activities` and each `/transactions/{hash}` as
-    /// its inputs' locks.
+    /// Serves activities written with every party: each as its transaction's
+    /// own activity (`/transactions/{hash}/activity`), and in `/activities` as a
+    /// feed row naming every party by its short id with the senders bit its
+    /// `sent` says (re-pinned at the merge of lane feed: the check reads both;
+    /// it read `/activities` alone, whose rows then drew every party), and each
+    /// `/transactions/{hash}` as its inputs' locks.
     fn run_sent_check(
         activities: serde_json::Value,
         transactions: &[(String, Vec<serde_json::Value>)],
     ) -> CompletedCheck {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let server = runtime.block_on(MockServer::start());
-        runtime.block_on(async {
-            Mock::given(method("GET"))
-                .and(path("/api/v1/activities"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "data": activities, "nextCursor": null, "hasMore": false, "limit": 10
-                })))
-                .mount(&server)
-                .await;
-            for (hash, locks) in transactions {
-                let inputs: Vec<_> = locks.iter().map(|lock| json!({ "lock": lock })).collect();
-                Mock::given(method("GET"))
-                    .and(path(format!("/api/v1/transactions/{hash}")))
-                    .respond_with(
-                        ResponseTemplate::new(200).set_body_json(json!({ "inputs": inputs })),
-                    )
-                    .mount(&server)
-                    .await;
-            }
-        });
-        execute_check(
-            registered_check("participant_sent_matches_input_locks").as_ref(),
-            &mock_ctx(&server),
-            &ProgressReporter::new(None),
-        )
+        let mut feed = vec![];
+        let mut own = vec![];
+        for activity in activities.as_array().expect("a list of activities") {
+            let parties = activity["participants"].as_array().expect("its parties");
+            let ids: Vec<_> = parties
+                .iter()
+                .map(|p| {
+                    let id = p["lockHash"]
+                        .as_str()
+                        .map(|hash| &hash[..42])
+                        .or_else(|| p["lockHashPrefix"].as_str())
+                        .expect("a party's lock hash or prefix");
+                    json!([id, if p["sent"] == json!(true) { 256 } else { 0 }])
+                })
+                .collect();
+            feed.push(json!({
+                "txHash": activity["txHash"],
+                "blockNumber": activity["blockNumber"],
+                "participants": parties,
+                "participantCount": parties.len(),
+                "partyIds": ids,
+            }));
+            own.push((
+                activity["txHash"].as_str().expect("its hash").to_string(),
+                json!({ "participantCount": parties.len(), "participants": parties }),
+            ));
+        }
+        run_sent_check_on_feed(json!(feed), &own, transactions)
     }
 
     /// One transfer: `payer` spends its cell and pays `payee`, each party

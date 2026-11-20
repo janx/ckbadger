@@ -399,11 +399,14 @@ cellbase is outside this check. It needs no RPC and reads no `--sample-count`.
 `participant_sent_matches_input_locks` proves the indexer's senders bit (`TAG_INPUT`, the API's
 `sent`) against the transaction's inputs as ckbadger's own cells hold them: for up to 50 recent
 activities (`/activities`, `--sample-count`), each `/transactions/{hash}` input's lock script is
-hashed here, and every party must state `sent` exactly when its lock is one of those input locks;
-every input's lock must be a party that sent. A party that sends with no input of its lock, holds
-one without sending, or an input lock that is no party is a finding naming the transaction and the
-lock. A store synced before the bit existed reads as "nobody sent" and fails on every activity.
-It needs no RPC.
+hashed here, and every party of the transaction's own activity (`/transactions/{hash}/activity`,
+which draws every party; a feed row draws at most six) must state `sent` exactly when its lock is
+one of those input locks; every input's lock must be a party that sent. The feed row's own
+statement of the bit, the tags of every party it names in `partyIds` (the bit a folded run counts
+its senders by), must say what `sent` says. A party that sends with no input of its lock, holds
+one without sending, an input lock that is no party, or a feed row naming a party with the bit
+`sent` denies (or not naming it) is a finding naming the transaction and the lock. A store synced
+before the bit existed reads as "nobody sent" and fails on every activity. It needs no RPC.
 
 ### Recognised Type Codes vs Cells (S42)
 
