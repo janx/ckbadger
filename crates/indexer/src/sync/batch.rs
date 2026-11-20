@@ -15080,6 +15080,120 @@ mod tests {
             assert_eq!(token_state(&store, &supply_token_hash(1)), (None, None));
         }
 
+        /// resync fix round, tests report NOTE-2: a rollback INSIDE a
+        /// multi-block live batch that carries the claims. Issuance (101),
+        /// claim 7700 (102) and claim 8800 (103) written as ONE live batch,
+        /// rolled back to each block of it: the token row and its counter are
+        /// the ones a store synced to that block holds.
+        #[tokio::test]
+        async fn a_rollback_inside_one_live_batch_restores_the_claim_rule_at_each_block() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = [
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            let one_batch = [blocks[..1].to_vec(), blocks[1..].to_vec()];
+            for (keep, max_supply) in [(102usize, Some(7700)), (101, None), (100, None)] {
+                let store = write_batches_live(&one_batch, None).await;
+                rollback_to(&store, keep as i64);
+                let reference = write_batches_live(&per_block(&blocks[..=keep - 100]), None).await;
+                let expected = token_state(&reference, &supply_token_hash(1));
+                assert_eq!(
+                    token_state(&store, &supply_token_hash(1)),
+                    expected,
+                    "rolled back to {keep} inside the batch"
+                );
+                assert_eq!(
+                    expected.0.and_then(|row| row.max_supply),
+                    max_supply,
+                    "fixture at {keep}"
+                );
+            }
+        }
+
+        /// NOTE-2: two claims in ONE block, in two transactions (7700 then
+        /// 8800), after the issuance: the first in chain order (transaction,
+        /// then output) stands, on every path and batching; and two claims in
+        /// ONE transaction (outputs 0 and 1): the first output's stands.
+        #[tokio::test]
+        async fn two_claims_in_one_block_or_one_transaction_keep_chain_order() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let issue = claim_rule_block(
+                101,
+                vec![issue_tx(
+                    0xa1,
+                    input(0xc0, 0),
+                    FUNDING_CAPACITY,
+                    supply_token_type(1),
+                )],
+            );
+            let two_txs = vec![
+                funding_block(),
+                issue.clone(),
+                claim_rule_block(
+                    102,
+                    vec![
+                        genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700),
+                        genuine_claim_tx(0xa3, input(0xa2, 1), after_issue - 300_00000000, 8800),
+                    ],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&two_txs, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700),
+                "two transactions in one block: the first"
+            );
+
+            let two_outputs = d3_tx(
+                0xa2,
+                vec![input(0xa1, 1)],
+                vec![
+                    supply_info_cell(1, &supply_token_hash(1), 7700),
+                    supply_info_cell(1, &supply_token_hash(1), 8800),
+                    (
+                        output(after_issue - 600_00000000, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let one_tx = vec![
+                funding_block(),
+                issue,
+                claim_rule_block(102, vec![two_outputs]),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&one_tx, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700),
+                "two outputs in one transaction: the first"
+            );
+        }
+
         // ── The owner rule: an Omnilock claim is the token's only when the
         // token's owner lock IS the claiming supply-mode Omnilock ──
 
