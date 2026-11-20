@@ -125,6 +125,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       itemTypes: [],
       parties: [],
+      tokens: null,
     })
   ).toBe(
     runKey({
@@ -139,6 +140,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       itemTypes: [],
       parties: [],
+      tokens: null,
     })
   );
 });

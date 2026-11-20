@@ -215,12 +215,19 @@ function checkItemTypes(row: RowLike): void {
   return;
 }
 
-/** A party's short id as the route names it: the first 20 bytes of its lock hash, else its prefix. */
+/**
+ * A fixture's party's id, as the route names a party by its short id (the first 20 bytes of its
+ * lock hash, else the prefix a protocol named it by): its whole lock hash, else its prefix. A
+ * fixture's lock hashes are seeds padded with zeros, which share their first 20 bytes, so the
+ * route's 20 bytes would name every one of them alike; the page compares ids and reads nothing
+ * else of them (an id names a lock whose hash it begins, `namesLock`), and the route's own form is
+ * pinned by the API's tests (crates/api/tests/api_activities.rs).
+ */
 export function partyShortId(
   party: { lockHash: string | null; lockHashPrefix: string | null },
   where: string
 ): string {
-  const id = party.lockHash?.slice(0, 42) ?? party.lockHashPrefix;
+  const id = party.lockHash ?? party.lockHashPrefix;
   if (typeof id !== 'string') throw new Error(`${where}: a party with no lock hash and no prefix`);
   return id;
 }
@@ -245,10 +252,16 @@ function movementOf(parties: readonly WrittenParty[], item: ItemDelta): ItemMove
  * none, the route's rule over the parties given, which must be every party that moved an item (a
  * row holds every item delta of its transaction). For a test whose input is its pick of a row.
  */
-export function withRouteMovements(parties: readonly WrittenParty[]): ParticipantInfo[] {
+export function withRouteMovements(
+  parties: readonly WrittenParty[],
+  anew = false
+): ParticipantInfo[] {
   return parties.map((p) => ({
     ...p,
-    itemDeltas: p.itemDeltas.map((i) => ({ ...i, movement: i.movement ?? movementOf(parties, i) })),
+    itemDeltas: p.itemDeltas.map((i) => ({
+      ...i,
+      movement: (anew ? undefined : i.movement) ?? movementOf(parties, i),
+    })),
   }));
 }
 
@@ -286,8 +299,9 @@ function feePayerOf(
 
 /**
  * The statements the checker stated for a row that writes every party, by the id list it made: a
- * fixture that spreads such a row and writes other parties over it carries them stale, and is
- * stated again from its own parties (what it writes anew of the statements stands).
+ * fixture that spreads such a row and writes other parties over it carries them stale (and its
+ * items' movements), and is stated again from its own parties (what it writes anew of the
+ * statements stands).
  */
 const stated = new WeakMap<object, Pick<Statements, 'participantCount' | 'feePayer'>>();
 
@@ -310,7 +324,11 @@ function stateParties(written: WrittenRow): unknown {
     );
   if (row.ckbDelta !== undefined) {
     // an address's row: its own changes are the row's; its own party's id is the page's, so the
-    // fixture states what the route states of every party
+    // fixture states what the route states of every party; it sends no other party in full
+    if (row.participants !== undefined)
+      throw new Error(
+        `${where} is an address's row and draws parties: the route sends none but the address's own changes`
+      );
     if (written3.length === 0)
       throw new Error(
         `${where} is an address's row and states no participantCount, partyIds or feePayer`
@@ -321,8 +339,9 @@ function stateParties(written: WrittenRow): unknown {
   }
   const parties = row.participants;
   if (parties === undefined) throw new Error(`${where} is no address's row and draws no party`);
-  const drawn = withRouteMovements(parties);
   const spread = row.partyIds === undefined ? undefined : stated.get(row.partyIds);
+  // a row written over a stated one carries its parties' movements stale too: stated again
+  const drawn = withRouteMovements(parties, spread !== undefined);
   if (written3.length === 3 && spread === undefined) {
     const ids = row.partyIds as PartyId[];
     if (ids.length !== row.participantCount || drawn.length > ids.length)

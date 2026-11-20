@@ -169,7 +169,6 @@ describe('a folded token run counts its tokens', () => {
         tags: 1,
         itemTypes: [ITEM_TYPE.sudt],
         itemDeltas: [{ ...token(hash, symbol, '5'), movement: 'transfer' }],
-        participants: [],
         participantCount: 2,
         partyIds: [own, [`0x${'aa'.repeat(20)}`, 1]],
         feePayer: null,

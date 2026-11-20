@@ -13,6 +13,7 @@ import type {
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject, type FeedRow } from '@/components/activity/activity-runs';
 import { ActivityReadError } from '@/components/activity-event-row';
+import { namesLock, partyIds } from '@/lib/activity-parties';
 import {
   collectionFeedHeadline,
   itemFeedHeadline as itemHeadlineFromContext,
@@ -95,13 +96,14 @@ export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject):
 
 /**
  * Round 3 (contracts R-A · R-4, OB-M10): an m-NFT mint row's "holds the class cell", on the
- * participant whose lock holds the class cell the mint outputs. Nothing when `classCell` is null
- * or absent (every other row); a lock that is no participant of the row is a contract error.
+ * participant whose lock holds the class cell the mint outputs, where the row draws it. Nothing
+ * when `classCell` is null or absent (every other row); a lock that is none of the parties the
+ * route names (`partyIds`, lane feed: the row draws some of them) is a contract error.
  */
 function classCellNote(activity: ItemActivity): ReadonlyMap<string, string> | undefined {
   const cell = activity.itemContext.classCell;
   if (!cell) return undefined;
-  if (!activity.participants.some((p) => p.lockHash === cell.lockHash))
+  if (!partyIds(activity).some(([id]) => namesLock(id, cell.lockHash)))
     throw new Error(`the class cell's lock ${cell.lockHash} is no participant of this row`);
   return new Map([[cell.lockHash, 'holds the class cell']]);
 }

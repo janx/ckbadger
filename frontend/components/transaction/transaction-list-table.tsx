@@ -20,6 +20,7 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { participantCount } from '@/lib/activity-parties';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
@@ -103,7 +104,8 @@ function whatNote(activity: GlobalActivity, size: ShortSize): ReactNode[] {
     ),
   ];
   if (names.length > 0) return names;
-  return [formatCount(activity.participants.length, 'participant')];
+  // every party, as the route counts them (lane feed): the row draws some of them
+  return [formatCount(participantCount(activity), 'participant')];
 }
 
 /** The developer figures a card keeps from 560 px, where no table stands yet: "903 B · 1,744,520 cycles". */

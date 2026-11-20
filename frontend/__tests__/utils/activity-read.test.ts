@@ -94,14 +94,14 @@ describe('activityRead passes the rows the route sends', () => {
     expect(() => activityRead(feedRow({ blockNumber: null, itemTypes: null }))).not.toThrow();
     // an address's row: its own items beside the other parties, who carry none on the wire (lane
     // feed: it states what the route states of every party, the parties by their short ids)
+    const { participants: _drawn, ...typed } = feedRow({ itemTypes: [SUDT] });
     expect(() =>
       activityRead({
-        ...feedRow({ itemTypes: [SUDT] }),
+        ...typed,
         itemDeltas: [],
         ckbDelta: '0',
         ...addressParties,
         partyIds: [...addressParties.partyIds, ['0x' + '02'.repeat(20), 1]],
-        participants: [{}],
       })
     ).not.toThrow();
   });
@@ -130,7 +130,6 @@ describe('activityRead refuses a row the route cannot send', () => {
         itemDeltas: [token('0x71')],
         ckbDelta: '0',
         ...addressParties,
-        participants: [{}],
       },
       'moves 1 item(s) and names no code they carry'
     );
@@ -187,16 +186,17 @@ describe('activityRead refuses a row the route cannot send', () => {
 
 describe('activityRead states what the route states of every party (lane feed)', () => {
   it('states a row written with every party as the route states it', () => {
-    const payer = party([], '-1000');
-    const row = activityRead(feedRow({ participants: [party(), payer] })) as unknown as {
+    const [other, payer] = [party(), party([], '-1000')];
+    const row = activityRead(feedRow({ participants: [other, payer] })) as unknown as {
       participantCount: number;
       partyIds: [string, number][];
       feePayer: string | null;
     };
     expect(row.participantCount).toBe(2);
-    expect(row.partyIds.map(([id]) => id)).toEqual([
-      expect.stringMatching(/^0x0{40}$/),
-      payer.lockHash.slice(0, 42),
+    // a fixture's party by its whole lock hash (its seeds share their first 20 bytes)
+    expect(row.partyIds).toEqual([
+      [other.lockHash, 0],
+      [payer.lockHash, 0],
     ]);
     expect(row.feePayer).toBe(payer.lockHash);
   });
@@ -236,10 +236,15 @@ describe('activityRead states what the route states of every party (lane feed)',
     expect(over.feePayer).toBe(payer.lockHash);
   });
 
-  it('refuses an address’s row that does not state its parties', () => {
+  it('refuses an address’s row that does not state its parties, or draws other parties', () => {
+    const { participants: _drawn, ...address } = feedRow({});
     refuses(
-      { ...feedRow({}), itemDeltas: [], ckbDelta: '0' },
+      { ...address, itemDeltas: [], ckbDelta: '0' },
       "is an address's row and states no participantCount, partyIds or feePayer"
+    );
+    refuses(
+      { ...feedRow({}), itemDeltas: [], ckbDelta: '0', ...addressParties },
+      "is an address's row and draws parties: the route sends none but the address's own changes"
     );
   });
 });

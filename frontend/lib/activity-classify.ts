@@ -1,5 +1,5 @@
 import type {
-  ItemDelta,
+  RowItemDelta,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
@@ -46,8 +46,8 @@ export interface ClassifiedActivity<T extends ActivityBody = ActivityBody> {
   activity: T;
   /** Layer 3: highest-level interpretation, if a ProtocolDetector matched. */
   primaryProtocolAction: ActivityProtocolAction | null;
-  /** Layer 2: primary recognized item delta, if present. */
-  primaryItemDelta: ItemDelta | null;
+  /** Layer 2: primary recognized item delta, if present, with its movement as the route states it. */
+  primaryItemDelta: RowItemDelta | null;
   /** Layer 2: primary unrecognized type script call, if present. */
   primaryTypeCall: ActivityTypeCall | null;
   /** Layer 2: primary non-standard lock script, if present. */
@@ -55,8 +55,11 @@ export interface ClassifiedActivity<T extends ActivityBody = ActivityBody> {
   /* Layer 1: CKB position (ckbDelta, usedDelta) is per participant — not repeated here. */
 }
 
-/** Find the first item delta across all participants. */
-function findFirstItemDelta(activity: ActivityBody): ItemDelta | null {
+/**
+ * Find the first item delta across the parties drawn: every party whose items moved is one (the
+ * route's rule), so these are every item delta of the transaction.
+ */
+function findFirstItemDelta(activity: ActivityBody): RowItemDelta | null {
   for (const p of activity.participants) {
     if (p.itemDeltas.length > 0) {
       return p.itemDeltas[0];
@@ -65,8 +68,8 @@ function findFirstItemDelta(activity: ActivityBody): ItemDelta | null {
   return null;
 }
 
-/** Find the first item delta of a specific kind across all participants. */
-function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): ItemDelta | null {
+/** Find the first item delta of a specific kind across the parties drawn (every item's party). */
+function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): RowItemDelta | null {
   for (const p of activity.participants) {
     const match = p.itemDeltas.find((d) => d.kind === kind);
     if (match) return match;
@@ -74,7 +77,10 @@ function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): ItemDel
   return null;
 }
 
-/** Compute combined tags bitmask from all participants. */
+/**
+ * Compute combined tags bitmask from the parties drawn: its item bits are every item's (each
+ * party that moved one is drawn), the only bits read here beside the cellbase's.
+ */
 function combinedTags(activity: ActivityBody): number {
   let tags = 0;
   for (const p of activity.participants) {

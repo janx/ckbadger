@@ -35,9 +35,10 @@
  *
  * The parties are NOT compared (the owner: "not the args, not the parties"), nor are amounts, items
  * moved, protocol facts and times: they are what the folded rows differ in, and the folded row
- * shows none of them. Nothing is summed: a run counts its rows and its parties (`runParties`), and
- * its newest time is its first row's (a feed is newest first). A run is consecutive by definition:
- * it never crosses a row whose key differs, so a row that says something else ends it.
+ * shows none of them. Nothing is summed: a run counts its rows, its parties (`runParties`) and, a
+ * run of token rows, its tokens (`runTokens`, ruling 6 of gate P), and its newest time is its first
+ * row's (a feed is newest first). A run is consecutive by definition: it never crosses a row whose
+ * key differs, so a row that says something else ends it.
  *
  * A run folds within the rows a feed has loaded. A cursor-paginated feed folds within its page: a
  * run that goes on into the next page is a second run there; a feed that appends older pages to
@@ -45,12 +46,7 @@
  * are consecutive on the screen.
  */
 
-/** A party of a row, by what names it. */
-export interface RunParty {
-  lockHash: string | null;
-  lockHashPrefix: string | null;
-  address: string | null;
-}
+import type { PartyId } from '@/lib/api';
 
 /** What a feed knows of a row, to compare it with its neighbours. */
 export interface RunSubject {
@@ -65,15 +61,16 @@ export interface RunSubject {
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
   /** Its items' and its DAO step's type scripts, each code once (the API's `itemTypes`). */
   itemTypes: readonly { typeCodeHash: string; typeHashType: string }[];
-  /** The row's parties (the feed's: a feed may know more of them than the row draws), counted. */
-  parties: readonly RunParty[];
-}
-
-function partyId(p: RunParty, txHash: string): string {
-  const id = p.lockHash ?? p.lockHashPrefix ?? p.address;
-  if (id === null)
-    throw new Error(`transaction ${txHash}: a party with no lock hash, prefix or address`);
-  return id;
+  /**
+   * Every party of the row's transaction, by its short id and tags, as the route names them
+   * (`partyIds`, lane feed): a row draws some of them, and the run counts them all.
+   */
+  parties: readonly PartyId[];
+  /**
+   * The tokens the row moved, by their type script's hash (the token's id, an item delta's
+   * `typeScriptHash`), on a token row; null on a row of another kind. A run counts them.
+   */
+  tokens: readonly string[] | null;
 }
 
 /** Each once, in one order: what was done or called, not how often. */
@@ -93,12 +90,32 @@ export function runKey(s: RunSubject): string {
 }
 
 /**
- * How many parties a run's rows name, each once (by its full lock hash, else the 20-byte prefix a
- * protocol named it by, else its address): a count, the folded row's "N participants".
+ * How many parties a run's rows name, each once, by its short id (the first 20 bytes of its lock
+ * hash, or the prefix a protocol named it by: the route's `partyIds`), drawn or not: a count, the
+ * folded row's "N participants".
  */
 export function runParties(subjects: readonly RunSubject[]): number {
   const ids = new Set<string>();
-  for (const s of subjects) for (const p of s.parties) ids.add(partyId(p, s.txHash));
+  for (const s of subjects) for (const [id] of s.parties) ids.add(id);
+  return ids.size;
+}
+
+/**
+ * How many tokens a run of token rows moved, each once by its type script's hash: the folded row's
+ * "2 tokens"; null for a run of rows of another kind. The rows of a run share their title, so they
+ * are all token rows or none.
+ */
+export function runTokens(subjects: readonly RunSubject[]): number | null {
+  const tokens = subjects.map((s) => s.tokens);
+  if (tokens.every((t) => t === null)) return null;
+  const ids = new Set<string>();
+  for (const [i, t] of tokens.entries()) {
+    if (t === null)
+      throw new Error(
+        `transaction ${subjects[i].txHash}: a run of token rows holds a row of another kind`
+      );
+    for (const id of t) ids.add(id);
+  }
   return ids.size;
 }
 

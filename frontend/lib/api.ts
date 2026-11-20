@@ -1475,8 +1475,6 @@ interface Activity extends ActivityParties {
   itemTypes: ActivityItemType[] | null;
   itemTypesUnread: string | null;
   protocolActions: ActivityProtocolAction[];
-  /** The OTHER parties of this transaction. */
-  participants: ParticipantRef[];
   /** Roles the protocol gave this participant, if any. */
   roles: string[];
   tags: number;

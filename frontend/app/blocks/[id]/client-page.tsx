@@ -14,6 +14,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ActivityRow } from '@/components/activity/activity-row';
+import { participantCount } from '@/lib/activity-parties';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { BlockPosition } from '@/components/blocks/block-position';
@@ -1051,8 +1052,15 @@ function CellbaseHeadline({
   activity,
 }: {
   block: Pick<Block, 'cellbasePays'>;
-  activity: Pick<GlobalActivity, 'participants'>;
+  activity: Pick<GlobalActivity, 'txHash' | 'participants' | 'participantCount'>;
 }) {
+  // it names every party the cellbase pays: the route draws every party of a row of at most six,
+  // and a cellbase has at most one output (CKB's consensus), so a row that draws fewer is refused
+  const count = participantCount(activity);
+  if (count !== activity.participants.length)
+    throw new Error(
+      `cellbase ${activity.txHash}: it draws ${activity.participants.length} of its ${count} parties`
+    );
   return (
     <>
       Cellbase

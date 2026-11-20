@@ -30,7 +30,8 @@ describe('an address page folds its own runs (B4 item 5)', () => {
           scriptName: '.bit Time Index State',
         },
       ],
-      participants: [],
+      // the address alone, its one change the fee: the route names it the fee payer (lane feed)
+      feePayer: addressFixture.lockScriptHash,
     });
 
   // The lead's finding (the exactness lane's B9): on a page with a next page, the page's last run
@@ -72,6 +73,8 @@ describe('an address page folds its own runs (B4 item 5)', () => {
       ...update(n),
       typeCalls: [],
       ckbDelta,
+      // another party's CKB changed too: the route names no fee payer (lane feed)
+      feePayer: null,
     });
     render(
       <AddressActivities
@@ -158,19 +161,19 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   });
 
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
-  // differ fold, and the run counts them (it did not fold them by the old rule)
+  // differ fold, and the run counts them (it did not fold them by the old rule). Re-pinned on
+  // purpose (lane feed, ruling 14 of gate P): the other party is named by its short id, as the
+  // route names every party (it was sent in full as one of the row's `participants`)
   it('folds rows whose other parties differ, and counts every party once', () => {
     const withOther = (n: number, seed: string): Activity =>
       activityRead({
         ...update(n),
-        participants: [
-          {
-            address: seededAddress(seed),
-            lockHash: `0x${seed.padStart(64, '0')}`,
-            lockHashPrefix: null,
-            roles: [],
-          },
+        participantCount: 2,
+        partyIds: [
+          [addressFixture.lockScriptHash.slice(0, 42), 0],
+          [`0x${seed.padStart(40, '0')}`, 0],
         ],
+        feePayer: addressFixture.lockScriptHash,
       });
     render(
       <AddressActivities
