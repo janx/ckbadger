@@ -87,6 +87,12 @@ use rocksdb::DB;
 ///   one row per live code cell under a type script that is not Type ID,
 ///   from which the live rollup and the API settle a generic type reference
 ///   by its code cells only; a store stamped 7 has no such column family.
+///   Layout 8 is unreleased, and the stamp stayed 8 through the fix rounds
+///   that changed what its rows hold (round 2's B: a token row the chain's
+///   alone; round 3: a creating open makes the newest column families first,
+///   and a stored label states no standard): no store stamped 8 outlives its
+///   test or its scratch run (a paired bulk run's stores are deleted by its
+///   runner), and the owner's re-sync starts from a purge (the lead's ruling).
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash

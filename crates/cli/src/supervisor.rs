@@ -2088,6 +2088,47 @@ mod tests {
         let _ = locked.children[0].child.wait().await;
     }
 
+    /// resync fix round 3, tests NOTE-4: a refused store is no read failure,
+    /// on every poll: polled past the threshold at which a failing read is
+    /// called PERSISTENT ("very likely corrupt"), it is still refused and has
+    /// recorded no failure.
+    #[test]
+    fn a_refused_store_records_no_read_failure_however_long_it_is_polled() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        create_earlier_layout_domain_store(&domain, Some(7));
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain));
+        for poll in 0..=SEQUENCER_READ_FAILURE_PERSISTENT {
+            let sample = reader.poll();
+            assert!(sample.refused, "poll {poll}: {sample:?}");
+            assert_eq!(reader.failures.consecutive(), 0, "poll {poll}");
+        }
+    }
+
+    /// resync fix round 3, tests NOTE-4: the monitor blocks a child with
+    /// `rebuild_required_reason(spec.label)`, and the gate reads that reason
+    /// by the child's name (`observe_gate`): a child is named by its spec's
+    /// label.
+    #[tokio::test]
+    async fn a_spawned_child_is_named_by_its_specs_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = ChildSpec {
+            label: "testnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let mut child = spawn_child(
+            &std::env::current_exe().unwrap(),
+            &spec,
+            &dir.path().join("logs"),
+        )
+        .unwrap();
+        assert_eq!(child.name, spec.label);
+        let _ = child.child.kill().await;
+        let _ = child.child.wait().await;
+    }
+
     /// resync fix round N7: the supervisor names the blocked chain-store
     /// child and the way out, the same words for the indexer and the API.
     #[test]

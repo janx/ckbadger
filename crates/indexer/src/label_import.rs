@@ -3388,13 +3388,14 @@ mod bundled_label_chain_consistency_tests {
         );
     }
 
-    /// The row the sync write path creates when the chain first holds the
-    /// token of `deployment`: a fresh chain row with the label label import
-    /// stored (`token_labels`) attached by the one rule. Label import itself
-    /// writes no token row (resync fix round M1: a token row is the chain's),
-    /// so the label is read back out of a real label import, never rebuilt
-    /// from the TOML. The first block is any block: these checks read the
-    /// metadata only.
+    /// The token as the API names it once the chain holds the token of
+    /// `deployment`: a fresh chain row (what the sync write path creates) with
+    /// the label label import stored (`token_labels`) joined by the one rule,
+    /// as `token_identity` joins it when the token is read (resync fix round
+    /// 2, B: no writer attaches a label). Label import itself writes no token
+    /// row (resync fix round M1: a token row is the chain's), so the label is
+    /// read back out of a real label import, never rebuilt from the TOML. The
+    /// first block is any block: these checks read the metadata only.
     fn row_created_with_label(
         store: &CkbadgerStore,
         deployment: &TokenDeployment,

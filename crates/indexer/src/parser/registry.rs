@@ -625,12 +625,8 @@ mod tests {
     use super::*;
     use crate::rpc::parse_hex_to_bytes;
 
-    /// resync fix round S1: the Unique Cell is recognised by its pair, by the
-    /// one pair rule: each network's registered reference (mainnet: the
-    /// binary 0x2c8c… by data1; testnet: 0x8e34… by type) and each version's
-    /// binary by every data hash type (mainnet 0x2c8c…, testnet 0xcc25…).
-    /// The mainnet binary by `type`, or the testnet reference by a data hash
-    /// type, runs no Unique Cell; it is no protocol and no lock.
+    /// resync fix round 2, C: asking whether a typed output is the Unique Cell
+    /// hashes no pair for another code hash.
     #[test]
     fn asking_whether_a_cell_is_the_unique_cell_hashes_no_pair_for_another_code() {
         // resync fix round 2, C (logic SHOULD-3): bulk's serial lane asks
@@ -670,6 +666,12 @@ mod tests {
         );
     }
 
+    /// resync fix round S1: the Unique Cell is recognised by its pair, by the
+    /// one pair rule: each network's registered reference (mainnet: the
+    /// binary 0x2c8c… by data1; testnet: 0x8e34… by type) and each version's
+    /// binary by every data hash type (mainnet 0x2c8c…, testnet 0xcc25…).
+    /// The mainnet binary by `type`, or the testnet reference by a data hash
+    /// type, runs no Unique Cell; it is no protocol and no lock.
     #[test]
     fn the_unique_cell_runs_only_at_its_registered_pairs() {
         let mainnet = parse_hex_to_bytes(

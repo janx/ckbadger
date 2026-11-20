@@ -459,7 +459,9 @@ async fn custody_reads_a_generic_references_code_cells_only_and_names_their_owne
         format!("0x{}", hex::encode(version))
     );
     let custody = &listed["custody"];
-    assert_ne!(custody["class"], "ambiguous", "{custody}");
+    // the class it is, not only the one it is not (resync fix round 3, tests NOTE-6): the code
+    // cell's owner holds it by one key
+    assert_eq!(custody["class"], "one_key", "{custody}");
     let owners = custody["owners"].as_array().unwrap();
     assert_eq!(owners.len(), 1, "{custody}");
     assert_eq!(

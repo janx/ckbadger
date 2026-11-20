@@ -10661,6 +10661,33 @@ mod tests {
                 &live_with_label,
                 "label import again changes no row"
             );
+            // resync fix round 3, tests NOTE-10: a CHANGED label (another
+            // name, symbol, decimals, standard, icon and description) changes
+            // no row either
+            let mut changed = rgbpp_jump_label();
+            changed.name = "Renamed".to_string();
+            changed.symbol = "RNM".to_string();
+            changed.decimals = 6;
+            changed.standard = "sudt".to_string();
+            changed.icon = Some("https://example.invalid/icon.png".to_string());
+            changed.description = Some("another description".to_string());
+            let result = crate::label_import::import_all(
+                labelled_store.as_ref(),
+                "mainnet",
+                std::slice::from_ref(&changed),
+                &[],
+            )
+            .unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            assert_eq!(
+                crate::sync::bulk_build::collect_token_raw_rows(labelled_store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap(),
+                &live_with_label,
+                "a changed label changes no row"
+            );
 
             let row: TokenInfo = bincode::deserialize(&live_with_label).unwrap();
             assert_eq!(

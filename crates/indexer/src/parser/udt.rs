@@ -714,44 +714,29 @@ mod tests {
         assert!(UdtStandard::from_standard_hint("omiga_inscription").is_none());
     }
 
+    /// A type script whose code hash the registry does not know is no UDT,
+    /// whatever its args. (The two tests that parsed it with an
+    /// `xudt_compatible` or an `sudt` hint, re-pinned in resync fix round 2,
+    /// B, when the hint went, tested this one thing; merged in round 3, tests
+    /// NOTE-11, both cells kept.)
     #[test]
-    fn test_parse_udt_cell_with_xudt_compatible_hint() {
-        let output = CellOutput {
-            capacity: "0x174876e800".to_string(),
-            lock: create_lock_script(),
-            type_: Some(Script {
-                code_hash: "0x4242424242424242424242424242424242424242424242424242424242424242"
-                    .to_string(),
-                hash_type: "type".to_string(),
-                args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
-                    .to_string(),
-            }),
-        };
-
-        // A genuinely unknown code hash does not parse. (Re-pinned in resync
-        // fix round 2, B: the half that parsed it with an `xudt_compatible`
-        // hint is gone with the hint.)
-        assert!(UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none());
-    }
-
-    #[test]
-    fn test_parse_udt_cell_with_sudt_hint_does_not_parse_unknown_code_hash() {
-        let output = CellOutput {
-            capacity: "0x174876e800".to_string(),
-            lock: create_lock_script(),
-            type_: Some(Script {
-                code_hash: "0x4343434343434343434343434343434343434343434343434343434343434343"
-                    .to_string(),
-                hash_type: "type".to_string(),
-                args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
-                    .to_string(),
-            }),
-        };
-
-        // Re-pinned in resync fix round 2, B: no hint exists any more.
-        let parsed = UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000");
-
-        assert!(parsed.is_none());
+    fn test_parse_udt_cell_of_an_unknown_code_hash_is_none() {
+        for code in ["42", "43"] {
+            let output = CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(Script {
+                    code_hash: format!("0x{}", code.repeat(32)),
+                    hash_type: "type".to_string(),
+                    args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
+                        .to_string(),
+                }),
+            };
+            assert!(
+                UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none(),
+                "0x{code}…"
+            );
+        }
     }
 
     #[test]

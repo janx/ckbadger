@@ -9273,7 +9273,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        // 10 fast + 40 sampling: F9 script_names_by_pair and F10
+        // 10 fast + 41 sampling: F9 script_names_by_pair and F10
         // store_layout_matches_build (lane rd/api-lock-names), S39
         // daily_activity_kinds_partition_transactions, S40
         // participant_sent_matches_input_locks (resync/int), S41

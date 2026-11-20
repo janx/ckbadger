@@ -6448,9 +6448,10 @@ mod tests {
     /// them —
     /// an untagged batch, another writer's batch, a direct write outside the
     /// writer's scope or from another thread — is refused.
-    #[test]
+    ///
     /// (Re-pinned in resync fix round 2, B: its example was `tokens`, which
     /// label import no longer writes.)
+    #[test]
     fn whole_cf_outside_journal_entries_admit_only_their_writer() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
