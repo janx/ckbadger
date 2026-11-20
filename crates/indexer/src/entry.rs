@@ -2324,6 +2324,56 @@ mod tests {
         assert!(err.to_string().contains("incomplete bulk build session"));
     }
 
+    /// resync fix round T3 (tests report SHOULD-3): the indexer cannot hold
+    /// its stores without the layout check. A store from before layouts were
+    /// stamped, and a store stamped 7, are refused when they are opened for
+    /// startup (`open_chain_stores_for_startup`, the only way
+    /// `run_indexer_sync` gets its stores), rebuild-required with both
+    /// layouts named, before anything is written and before the append-only
+    /// store is created.
+    #[test]
+    fn startup_open_refuses_a_store_of_another_layout_writing_nothing() {
+        use crate::store_layout::tests::{domain_rows, seed_pre_layout_store};
+        for stamp in [None, Some(7)] {
+            let domain = tempfile::tempdir().unwrap();
+            let append_only = tempfile::tempdir().unwrap();
+            let append_only_path = append_only.path().join("append-only");
+            let before = {
+                let store = CkbadgerStore::open_domain(domain.path()).unwrap();
+                seed_pre_layout_store(&store);
+                if let Some(stamp) = stamp {
+                    store.set_store_layout(stamp).unwrap();
+                }
+                domain_rows(&store)
+            };
+
+            let err = match open_chain_stores_for_startup(
+                domain.path().to_str().unwrap(),
+                append_only_path.to_str().unwrap(),
+                startup_runtime_config(),
+                10_000,
+                1_000,
+            ) {
+                Ok(_) => panic!("a store stamped {stamp:?} must be refused at open"),
+                Err(err) => err,
+            };
+
+            assert!(is_rebuild_required(&err), "{err:#}");
+            let words = err.to_string();
+            assert!(
+                words.contains(&format!("store layout {}", ckbadger_store::STORE_LAYOUT))
+                    && words.contains("delete RocksDB and re-sync from genesis"),
+                "{words}"
+            );
+            let store = CkbadgerStore::open_domain(domain.path()).unwrap();
+            assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+            assert!(
+                !append_only_path.exists(),
+                "the append-only store is not created for a refused store"
+            );
+        }
+    }
+
     fn label_import_config(dir: &std::path::Path) -> LabelImportServiceConfig {
         LabelImportServiceConfig {
             domain_data_path: dir.join("domain").to_string_lossy().into_owned(),

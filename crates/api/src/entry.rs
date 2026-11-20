@@ -181,6 +181,25 @@ pub(crate) fn ensure_store_layout_readable(store: &CkbadgerStore) -> Result<()> 
     }
 }
 
+/// Open the domain store the API serves, as a secondary of the indexer's
+/// primary at `domain_data_path`.
+pub(crate) fn open_api_domain_store(
+    domain_data_path: &str,
+    store_runtime_config: StoreRuntimeConfig,
+) -> Result<Arc<CkbadgerStore>> {
+    let secondary_path = secondary_store_path(domain_data_path, SecondaryStoreOwner::Api);
+    info!(
+        "Opening ckbadger domain store (secondary) at: {} -> {}",
+        domain_data_path,
+        secondary_path.display()
+    );
+    Ok(Arc::new(CkbadgerStore::open_domain_secondary_with_runtime(
+        Path::new(domain_data_path),
+        secondary_path.as_path(),
+        store_runtime_config,
+    )?))
+}
+
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let addr = format!("{}:{}", config.host, config.port);
@@ -205,17 +224,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     }
 
     // Phase 2: stores exist — open them and serve the real router (unchanged below).
-    let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
-    info!(
-        "Opening ckbadger domain store (secondary) at: {} -> {}",
-        config.domain_data_path,
-        secondary_path.display()
-    );
-    let store = Arc::new(CkbadgerStore::open_domain_secondary_with_runtime(
-        Path::new(&config.domain_data_path),
-        secondary_path.as_path(),
-        config.store_runtime_config,
-    )?);
+    let store = open_api_domain_store(&config.domain_data_path, config.store_runtime_config)?;
     ensure_store_layout_readable(&store)?;
 
     let append_only_secondary_path =
@@ -596,6 +605,42 @@ mod tests {
             .set_store_layout(ckbadger_store::STORE_LAYOUT + 1)
             .unwrap();
         assert!(ensure_store_layout_readable(&store).is_err());
+    }
+
+    /// resync fix round T3 (tests report SHOULD-3): the API cannot hold the
+    /// domain store without the layout check. Opening it for serving
+    /// (`open_api_domain_store`, the only way `run_api` gets it) refuses a
+    /// store stamped with another layout, both layouts named, with the
+    /// remedy; a store of this build's layout opens.
+    #[test]
+    fn the_api_cannot_open_a_store_of_another_layout_for_serving() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        {
+            let primary = CkbadgerStore::open_domain(&domain).unwrap();
+            primary.set_network_identity("mainnet").unwrap();
+            primary.set_store_layout(6).unwrap();
+        }
+        let words =
+            match open_api_domain_store(domain.to_str().unwrap(), StoreRuntimeConfig::default()) {
+                Ok(_) => panic!("a store stamped 6 must be refused when the API opens it"),
+                Err(err) => err.to_string(),
+            };
+        assert!(
+            words.contains("store layout 6")
+                && words.contains(&format!("store layout {}", ckbadger_store::STORE_LAYOUT))
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+
+        {
+            let primary = CkbadgerStore::open_domain(&domain).unwrap();
+            primary
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        open_api_domain_store(domain.to_str().unwrap(), StoreRuntimeConfig::default())
+            .expect("this build's layout opens");
     }
     use axum::http::Request;
     use http_body_util::BodyExt;
