@@ -465,6 +465,7 @@ pub fn inspect_domain_store(
     table.set_block_cache(&rocksdb::Cache::new_lru_cache(8 << 20));
     table.set_cache_index_and_filter_blocks(true);
     opts.set_block_based_table_factory(&table);
+    crate::store::refuse_secondary_in_store(primary_path, secondary_path)?;
     crate::store::prune_secondary_info_logs(secondary_path)?;
     let existing = DB::list_cf(&opts, primary_path).map_err(|e| {
         anyhow::anyhow!(

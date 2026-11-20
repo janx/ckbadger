@@ -142,6 +142,28 @@ impl SecondaryStoreOwner {
 /// 4, A).
 pub const SECONDARY_INFO_LOG_FILES: usize = 4;
 
+/// Refuse a secondary directory that is the store's own directory or lies
+/// inside it (resync fix round 4, the lead's guard): a secondary's rotated
+/// info logs are pruned there ([`prune_secondary_info_logs`]), and nothing
+/// of the store's may be. Read by the normalised components, as
+/// [`secondary_store_path`] derives the path, both paths named.
+pub(crate) fn refuse_secondary_in_store(
+    primary_path: &Path,
+    secondary_path: &Path,
+) -> anyhow::Result<()> {
+    let primary: PathBuf = primary_path.components().collect();
+    let secondary: PathBuf = secondary_path.components().collect();
+    if secondary.starts_with(&primary) {
+        anyhow::bail!(
+            "the secondary directory '{}' is the store '{}' or lies inside it: a secondary's \
+             directory is its own, beside the store",
+            secondary_path.display(),
+            primary_path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Before a secondary opens at `secondary_path`: remove its oldest rotated
 /// info logs (`LOG.old.*`, named by the time they were rotated), keeping the
 /// newest `SECONDARY_INFO_LOG_FILES - 2`, so that after the open rotates its
@@ -1731,6 +1753,7 @@ impl CkbadgerStore {
         let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
             Self::configured_options(&memory_profile, runtime_config);
+        refuse_secondary_in_store(primary_path.as_ref(), secondary_path.as_ref())?;
         prune_secondary_info_logs(secondary_path.as_ref())?;
         let existing_cfs = match DB::list_cf(&opts, &primary_path) {
             Ok(cfs) => cfs,
