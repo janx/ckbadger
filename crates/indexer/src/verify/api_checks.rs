@@ -9605,48 +9605,192 @@ mod tests {
         })
     }
 
-    /// The API's rows (`filed`) for every `from` and for the type, and the
-    /// node's cells: A and B live, C dead.
+    /// A cell as the node holds it, by its outpoint (`tx` repeated, `index`):
+    /// listed under its type script by `get_cells` when `listed`, answered by
+    /// `get_live_cell` as live when `live`.
+    #[derive(Clone)]
+    struct NodeCell {
+        tx: u8,
+        index: i64,
+        listed: bool,
+        live: bool,
+        script: crate::rpc::Script,
+        data: String,
+    }
+
+    /// A live cell of `data` under the test's type script.
+    fn node_cell(tx: u8, index: i64, data: &str) -> NodeCell {
+        NodeCell {
+            tx,
+            index,
+            listed: true,
+            live: true,
+            script: live_code_type(),
+            data: data.to_string(),
+        }
+    }
+
+    /// The node of S43's tests: A (0xa1:0) and B (0xa2:1) live code under
+    /// the type, C (0xa3:0) consumed, D (0xa4:0) a live cell under the type
+    /// whose data is not code.
+    fn default_node() -> Vec<NodeCell> {
+        vec![
+            node_cell(0xa1, 0, LIVE_CODE),
+            node_cell(0xa2, 1, LIVE_CODE),
+            NodeCell {
+                listed: false,
+                live: false,
+                ..node_cell(0xa3, 0, LIVE_CODE)
+            },
+            node_cell(0xa4, 0, "0x0100"),
+        ]
+    }
+
+    /// The node's tip in S43's tests.
+    const LIVE_CODE_TIP: i64 = 100;
+
+    /// The API and the node of S43's tests. The API answers a `from` with the
+    /// first of `filed` at or after the key, in the index's key order (type
+    /// hash, then outpoint), wrapping to nothing past the last; and a type
+    /// with its rows: `filed` while the API's synced block is behind the
+    /// node's tip, `filed_late` (when given) once it has reached it (the rows
+    /// as the indexer wrote them in blocks the node had first). The synced
+    /// block reaches the tip at the `catch_up`-th read of
+    /// `statistics/network` (1: at the first).
     struct LiveCodeCellsResponder {
         filed: Vec<serde_json::Value>,
+        filed_late: Option<Vec<serde_json::Value>>,
+        node: Vec<NodeCell>,
+        catch_up: usize,
+        stats_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl LiveCodeCellsResponder {
+        fn new(filed: Vec<serde_json::Value>) -> Self {
+            Self {
+                filed,
+                filed_late: None,
+                node: default_node(),
+                catch_up: 1,
+                stats_reads: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn caught_up(&self) -> bool {
+            self.stats_reads.load(std::sync::atomic::Ordering::SeqCst) >= self.catch_up
+        }
+
+        fn output(cell: &NodeCell) -> serde_json::Value {
+            json!({"capacity": "0x1", "lock": genesis_lock(), "type": cell.script})
+        }
+    }
+
+    /// A row's key in the index's order: its type hash, then its outpoint.
+    fn live_code_row_key(row: &serde_json::Value) -> (String, String, i64) {
+        (
+            row["typeHash"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("0x")
+                .to_ascii_lowercase(),
+            row["txHash"].as_str().unwrap().to_ascii_lowercase(),
+            row["outputIndex"].as_i64().unwrap(),
+        )
     }
 
     impl Respond for LiveCodeCellsResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
-            if request.url.path() == "/api/v1/verify/live-code-cells" {
-                let from = request.url.query_pairs().any(|(key, _)| key == "from");
-                let rows: Vec<serde_json::Value> = if from {
-                    self.filed.iter().take(1).cloned().collect()
+            if request.url.path() == "/api/v1/statistics/network" {
+                let read = self
+                    .stats_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                let mut body = network_stats_body(LIVE_CODE_TIP);
+                body["syncStatus"]["syncedBlock"] = json!(if read >= self.catch_up {
+                    LIVE_CODE_TIP
                 } else {
-                    self.filed.clone()
+                    LIVE_CODE_TIP - 1
+                });
+                return ResponseTemplate::new(200).set_body_json(body);
+            }
+            if request.url.path() == "/api/v1/verify/live-code-cells" {
+                let query: HashMap<String, String> = request
+                    .url
+                    .query_pairs()
+                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                    .collect();
+                let under = query
+                    .get("type_hash")
+                    .map(|type_hash| type_hash.trim_start_matches("0x").to_ascii_lowercase());
+                let mut rows = match (&self.filed_late, &under) {
+                    (Some(late), Some(_)) if self.caught_up() => late.clone(),
+                    _ => self.filed.clone(),
+                };
+                rows.sort_by_key(live_code_row_key);
+                let rows: Vec<serde_json::Value> = match under {
+                    Some(under) => rows
+                        .into_iter()
+                        .filter(|row| live_code_row_key(row).0 == under)
+                        .collect(),
+                    None => {
+                        let from = query["from"].trim_start_matches("0x").to_ascii_lowercase();
+                        rows.into_iter()
+                            .filter(|row| live_code_row_key(row).0 >= from)
+                            .take(1)
+                            .collect()
+                    }
                 };
                 return ResponseTemplate::new(200)
                     .set_body_json(json!({"rows": rows, "complete": true}));
             }
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-            let output =
-                json!({"capacity": "0x1", "lock": genesis_lock(), "type": live_code_type()});
             let result = match body["method"].as_str().unwrap_or_default() {
+                "get_tip_block_number" => json!(format!("0x{LIVE_CODE_TIP:x}")),
                 "get_live_cell" => {
-                    let tx = body["params"][0]["tx_hash"].as_str().unwrap().to_string();
-                    if tx == format!("0x{}", hex::encode([0xa3; 32])) {
-                        json!({"cell": null, "status": "dead"})
-                    } else {
-                        json!({"cell": {"output": output, "data": {"content": LIVE_CODE}},
-                               "status": "live"})
+                    let tx = body["params"][0]["tx_hash"]
+                        .as_str()
+                        .unwrap()
+                        .to_ascii_lowercase();
+                    let index = i64::from_str_radix(
+                        body["params"][0]["index"]
+                            .as_str()
+                            .unwrap()
+                            .trim_start_matches("0x"),
+                        16,
+                    )
+                    .unwrap();
+                    match self.node.iter().find(|cell| {
+                        format!("0x{}", hex::encode([cell.tx; 32])) == tx && cell.index == index
+                    }) {
+                        Some(cell) if cell.live => json!({
+                            "cell": {"output": Self::output(cell), "data": {"content": cell.data}},
+                            "status": "live",
+                        }),
+                        Some(_) => json!({"cell": null, "status": "dead"}),
+                        None => json!({"cell": null, "status": "unknown"}),
                     }
                 }
-                "get_cells" => json!({
-                    "objects": [
-                        {"output": output, "output_data": LIVE_CODE,
-                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa1; 32])), "index": "0x0"}},
-                        {"output": output, "output_data": LIVE_CODE,
-                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa2; 32])), "index": "0x1"}},
-                        {"output": output, "output_data": "0x0100",
-                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa4; 32])), "index": "0x0"}},
-                    ],
-                    "last_cursor": "0x00",
-                }),
+                "get_cells" => {
+                    let script = &body["params"][0]["script"];
+                    let objects: Vec<serde_json::Value> = self
+                        .node
+                        .iter()
+                        .filter(|cell| {
+                            cell.listed && &serde_json::to_value(&cell.script).unwrap() == script
+                        })
+                        .map(|cell| {
+                            json!({
+                                "output": Self::output(cell),
+                                "output_data": cell.data,
+                                "out_point": {
+                                    "tx_hash": format!("0x{}", hex::encode([cell.tx; 32])),
+                                    "index": format!("0x{:x}", cell.index),
+                                },
+                            })
+                        })
+                        .collect();
+                    json!({"objects": objects, "last_cursor": "0x00"})
+                }
                 other => panic!("unexpected RPC method {other}"),
             };
             ResponseTemplate::new(200)
@@ -9654,18 +9798,77 @@ mod tests {
         }
     }
 
-    fn run_live_code_cells_check(filed: Vec<serde_json::Value>) -> CheckResult {
+    fn run_live_code_cells_responder(responder: LiveCodeCellsResponder) -> CheckResult {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
         runtime.block_on(async {
             Mock::given(wiremock::matchers::any())
-                .respond_with(LiveCodeCellsResponder { filed })
+                .respond_with(responder)
                 .mount(&server)
                 .await;
         });
         LiveCodeCellsIndexMatchesChain
             .run(&rpc_ctx(&server), &ProgressReporter::new(None))
             .unwrap()
+    }
+
+    /// S43 over `filed`, the default node, the API caught up with it.
+    fn run_live_code_cells_check(filed: Vec<serde_json::Value>) -> CheckResult {
+        run_live_code_cells_responder(LiveCodeCellsResponder::new(filed))
+    }
+
+    /// The entities of a result's stale-row findings.
+    fn stale_row_entities(result: &CheckResult) -> Vec<String> {
+        result
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .details
+                    .iter()
+                    .any(|detail| detail.starts_with("a stale row: "))
+            })
+            .map(|finding| finding.entity.clone())
+            .collect()
+    }
+
+    /// resync fix round 3, item 2 (logic SHOULD-1): a stale row anywhere in
+    /// a sampled type is found, not only the type's first row (the one a
+    /// sample reaches): every row of the type is held to the node's live code
+    /// cells under it, the converse of a missing row. a3 is consumed.
+    #[test]
+    fn live_code_cells_check_finds_a_stale_row_after_the_first_of_its_type() {
+        let result = run_live_code_cells_check(vec![
+            live_code_row(0xa1, 0),
+            live_code_row(0xa2, 1),
+            live_code_row(0xa3, 0),
+        ]);
+        assert!(!result.passed(), "{:?}", result.detail);
+        assert_eq!(
+            stale_row_entities(&result),
+            vec![format!(
+                "live_code_cells_by_type {} 0x{}:0",
+                live_code_type_hash(),
+                hex::encode([0xa3; 32])
+            )],
+            "{:?}",
+            result.findings
+        );
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+    }
+
+    /// resync fix round 3, item 2 (logic N-6): a code cell the node holds in
+    /// a block the indexer has not reached yet is no missing row. The second
+    /// read is taken once the API's synced block has reached the node's tip,
+    /// and the indexer has filed the cell by then.
+    #[test]
+    fn live_code_cells_check_takes_its_second_read_once_the_indexer_has_caught_up() {
+        let result = run_live_code_cells_responder(LiveCodeCellsResponder {
+            filed_late: Some(vec![live_code_row(0xa1, 0), live_code_row(0xa2, 1)]),
+            catch_up: 3,
+            ..LiveCodeCellsResponder::new(vec![live_code_row(0xa1, 0)])
+        });
+        assert!(result.passed(), "{:?}", result.findings);
     }
 
     /// The index holds exactly the node's live code cells under the type (a
