@@ -5280,6 +5280,47 @@ mod tests {
         );
     }
 
+    /// resync fix round 4 (the lead's guard): a secondary's directory, where
+    /// its rotated info logs are pruned, is never the store's own directory
+    /// nor inside it: an open of a secondary there, and the inspection there,
+    /// are refused with both paths named, and nothing in the store's
+    /// directory is removed (its `LOG.old.1` is still there).
+    #[test]
+    fn a_secondary_at_or_inside_the_store_is_refused_and_removes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("domain");
+        drop(CkbadgerStore::open_domain(&primary).unwrap());
+        std::fs::write(primary.join("LOG.old.1"), b"the store's own").unwrap();
+        for secondary in [
+            primary.clone(),
+            primary.join("inside"),
+            PathBuf::from(format!("{}/", primary.display())),
+        ] {
+            let words = match CkbadgerStore::open_domain_secondary(&primary, &secondary) {
+                Ok(_) => panic!(
+                    "{}: a secondary in the store is refused",
+                    secondary.display()
+                ),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(
+                words.contains(&primary.display().to_string())
+                    && words.contains(&secondary.display().to_string()),
+                "{words}"
+            );
+            assert!(
+                crate::layout_ops::inspect_domain_store(&primary, &secondary).is_err(),
+                "{}: the inspection there is refused too",
+                secondary.display()
+            );
+            assert!(
+                primary.join("LOG.old.1").exists(),
+                "{}: nothing in the store's directory is removed",
+                secondary.display()
+            );
+        }
+    }
+
     /// resync fix round 4, A (the third read's NOTE-2): each open of a
     /// secondary rotates its info log, and a long-lived reader opens again
     /// whenever the store changed; the secondary's own directory keeps at
