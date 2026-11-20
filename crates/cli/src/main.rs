@@ -1381,6 +1381,14 @@ fn being_created(domain_data_path: &Path) -> String {
     )
 }
 
+/// The local domain store verify inspects before it runs `target`.
+fn local_store_to_inspect<'a>(
+    target: &'a VerifyTarget,
+    _api_url: Option<&str>,
+) -> Option<&'a Path> {
+    Some(&target.domain_data_path)
+}
+
 /// Resolve and validate every network before starting any potentially long-running
 /// verification. A plain workdir produces one target; an orchestrator root produces
 /// one target per `[[network]]`, in declaration order.
@@ -1730,7 +1738,9 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
         // A network whose store this build refuses, or that is still being
         // created, or that cannot be read, is that network's report, not
         // run against an API that refuses it too, nor the end of the run.
-        if let Some(reason) = verify_failed_start(&target.domain_data_path) {
+        if let Some(reason) =
+            local_store_to_inspect(&target, args.api_url.as_deref()).and_then(verify_failed_start)
+        {
             reports.push(indexer_verify::VerifyReport::for_failed_start(
                 &run_id, &network, reason,
             ));
@@ -2408,6 +2418,39 @@ mod tests {
         assert_eq!(lines, vec![format!("Sync status: {being_created}")]);
         assert_eq!(super::verify_failed_start(&domain), Some(being_created));
         assert_eq!(store_files_and_column_families(&domain), before);
+    }
+
+    /// resync fix round 4, item 2 (logic N-4): verify inspects the local
+    /// network's store only when it verifies that network's own API; when
+    /// `--api-url` names another API (there may be no local store, and it is
+    /// not the store that API serves), it inspects none.
+    #[test]
+    fn verify_inspects_no_local_store_for_an_api_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let target = super::VerifyTarget {
+            network: "mainnet".to_string(),
+            workdir: dir.path().to_path_buf(),
+            domain_data_path: domain.clone(),
+            api_url: "http://127.0.0.1:8101/api/v1".to_string(),
+            rpc_url: "http://127.0.0.1:8114".to_string(),
+            explorer_url: "https://explorer.invalid".to_string(),
+            cache_dir: dir.path().join("cache"),
+        };
+        assert_eq!(
+            super::local_store_to_inspect(&target, None),
+            Some(domain.as_path())
+        );
+        assert_eq!(
+            super::local_store_to_inspect(&target, Some("http://127.0.0.1:8101/api/v1/")),
+            Some(domain.as_path()),
+            "the network's own API, given"
+        );
+        assert_eq!(
+            super::local_store_to_inspect(&target, Some("http://elsewhere.invalid:8101/api/v1")),
+            None,
+            "an API elsewhere"
+        );
     }
 
     /// resync fix round 3, item 6 (logic N-4, tests NOTE-3): a domain store
