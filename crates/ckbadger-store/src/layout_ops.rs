@@ -80,7 +80,11 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   any cell with those 20 bytes of args. And one pair rule for the
 ///   xUDT-compatible deployments (logic NOTE N3): a compatible deployment's
 ///   version binary by a data hash type is a UDT, as the xUDT binary is; a
-///   store stamped 7 recognised their references only.
+///   store stamped 7 recognised their references only. And the live code
+///   cells by their type script (fix round S3, `live_code_cells_by_type`):
+///   one row per live code cell under a type script that is not Type ID,
+///   from which the live rollup and the API settle a generic type reference
+///   by its code cells only; a store stamped 7 has no such column family.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
@@ -95,7 +99,8 @@ pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by th
      at or after its first block on both sync paths, made by the token's owner lock, protocols \
      recognised by their pair, the recognised type codes that ran on each activity, a token \
      row only once the chain holds the token, its label attached by the writer that creates it, \
-     an xUDT extension's Unique Cell bound by its pair";
+     an xUDT extension's Unique Cell bound by its pair, the live code cells indexed by their type \
+     script";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

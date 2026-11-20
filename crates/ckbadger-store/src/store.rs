@@ -443,6 +443,12 @@ pub const CF_TOKENS: &str = "tokens";
 /// hash: attached to a token's row when the chain first holds the token
 /// (resync fix round M1). Label import is its only writer.
 pub const CF_TOKEN_LABELS: &str = "token_labels";
+/// The live code cells by their type script (resync fix round S3): one row
+/// per live cell whose data is code (`keys::is_code_cell`) under a type
+/// script that is not Type ID, keyed `type_hash ‖ outpoint`, its binary (the
+/// data hash) the value. What a generic type reference runs is read from
+/// here, bounded by its code cells.
+pub const CF_LIVE_CODE_CELLS_BY_TYPE: &str = "live_code_cells_by_type";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_TOKEN_HOLDERS_BY_BALANCE: &str = "token_holders_by_balance";
 pub const CF_ADDR_TOKENS_BY_BALANCE: &str = "addr_tokens_by_balance";
@@ -740,6 +746,7 @@ mod cf_table {
         cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_TOKEN_LABELS,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_LIVE_CODE_CELLS_BY_TYPE,                Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -2285,6 +2292,9 @@ impl CkbadgerStore {
     }
     pub fn cf_token_labels(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_LABELS)
+    }
+    pub fn cf_live_code_cells_by_type(&self) -> &ColumnFamily {
+        self.cf(CF_LIVE_CODE_CELLS_BY_TYPE)
     }
     pub fn cf_token_holders(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_HOLDERS)
@@ -4298,7 +4308,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 75);
+        assert_eq!(DOMAIN_CFS.len(), 76);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5800,8 +5810,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 79);
-        assert_eq!(DOMAIN_CFS.len(), 75);
+        assert_eq!(CF_SPECS.len(), 80);
+        assert_eq!(DOMAIN_CFS.len(), 76);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5863,7 +5873,7 @@ mod tests {
         );
         assert_eq!(
             (FINALIZE_WRITTEN_CFS.len(), BATCH_LOOP_ONLY_CFS.len()),
-            (53, 22)
+            (54, 22)
         );
         for name in BATCH_LOOP_ONLY_CFS {
             assert!(
@@ -6710,6 +6720,7 @@ mod tests {
     "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "token_labels FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "live_code_cells_by_type FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

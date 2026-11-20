@@ -36,6 +36,11 @@ pub(crate) struct ScriptOwner {
     /// ([`Self::settle_generic_type_codes`]) from the code-cell index and the
     /// run's live set: nothing is tracked per transaction.
     generic_type_live_versions: FxHashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
+    /// The `live_code_cells_by_type` rows of the run's end (resync fix round
+    /// S3): `type_hash ‖ outpoint` → binary, one per live code cell under a
+    /// type script that is not Type ID, settled with
+    /// [`Self::generic_type_live_versions`] by the same loop.
+    generic_type_live_code_cells: Vec<(Vec<u8>, Vec<u8>)>,
     type_id_lineage: FxHashMap<(Vec<u8>, Vec<u8>), Vec<i64>>,
     daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
 }
@@ -266,7 +271,9 @@ impl ScriptOwner {
     /// [`generic_type_reference_of_slot`]). One scan of the code index (code
     /// cells only) and one live-set lookup per code cell. Bulk sync starts
     /// from genesis on a fresh store, so the index and the live set hold
-    /// every code cell and every live cell.
+    /// every code cell and every live cell. The same loop keeps the
+    /// `live_code_cells_by_type` rows the final snapshot writes (resync fix
+    /// round S3): nothing per transaction or per cell of the run.
     pub(crate) fn settle_generic_type_codes(
         &mut self,
         domain_store: &CkbadgerStore,
@@ -274,6 +281,7 @@ impl ScriptOwner {
     ) -> Result<()> {
         let mut live: FxHashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>> =
             FxHashMap::default();
+        let mut code_cells: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for row in domain_store.iterator_cf(
             domain_store.cf_cell_by_data_hash(),
             rocksdb::IteratorMode::Start,
@@ -303,6 +311,11 @@ impl ScriptOwner {
             let Some(reference) = generic_reference_of(&OutPointKey::new(tx_hash, index)) else {
                 continue;
             };
+            // The live code cell's `live_code_cells_by_type` row: the same
+            // key and value the live rollup step writes.
+            let mut code_cell_key = reference.clone();
+            code_cell_key.extend_from_slice(outpoint);
+            code_cells.push((code_cell_key, binary.to_vec()));
             let count = live
                 .entry(reference)
                 .or_default()
@@ -316,6 +329,8 @@ impl ScriptOwner {
             })?;
         }
         self.generic_type_live_versions = live;
+        code_cells.sort_unstable();
+        self.generic_type_live_code_cells = code_cells;
         Ok(())
     }
 
@@ -501,6 +516,16 @@ impl ScriptOwner {
                 ckbadger_store::CF_SCRIPT_FAMILIES,
                 family_id.into_bytes(),
                 bincode::serialize(&info)?,
+            ));
+        }
+
+        // The live code cells by type script, as settled at finalize (one per
+        // live code cell under a non-Type-ID type, in key order).
+        for (key, binary) in &self.generic_type_live_code_cells {
+            all_rows.push(MaterializedRow::new(
+                ckbadger_store::CF_LIVE_CODE_CELLS_BY_TYPE,
+                key.clone(),
+                binary.clone(),
             ));
         }
 

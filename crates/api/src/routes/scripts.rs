@@ -24,6 +24,7 @@ use crate::response::{
 use crate::utils::script_resolution::{
     has_observed_type_id_lineage, observed_type_id_references_from_versions,
     reference_form_member_version_with_lineage, resolve_dep_cells_for_transaction,
+    resolve_live_type_reference,
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, hash_type_to_string, hash_type_to_u8,
@@ -603,15 +604,37 @@ fn reference_custody(
             })?
             .current()
             .map(<[u8]>::to_vec);
-            let cells = state
-                .store
-                .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
-                .map_err(|e| {
-                    ApiError::internal(format!(
-                        "code cells for type reference 0x{}: {e}",
-                        hex::encode(reference_hash)
-                    ))
-                })?;
+            // The reference's live code cells (or its one live Type ID cell),
+            // read bounded: never the type's whole live set (resync fix round
+            // S3, the read `resolve_live_type_reference` makes).
+            let live =
+                resolve_live_type_reference(&state.store, &state.append_only_store, reference_hash)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "code cells for type reference 0x{}: {e}",
+                            hex::encode(reference_hash)
+                        ))
+                    })?;
+            let mut cells = Vec::with_capacity(live.matches.len());
+            for candidate in &live.matches {
+                let cell = state
+                    .store
+                    .get_cell(
+                        &candidate.tx_hash,
+                        candidate.output_index,
+                        &state.append_only_store,
+                    )
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "indexed live code cell 0x{}:{} of type reference 0x{} is not live",
+                            hex::encode(&candidate.tx_hash),
+                            candidate.output_index,
+                            hex::encode(reference_hash)
+                        ))
+                    })?;
+                cells.push((candidate.tx_hash.clone(), candidate.output_index, cell));
+            }
             // A cell whose type script is the consensus Type ID script: the
             // one rule, `keys::is_type_id_script`.
             let is_type_id_cell = |cell: &ckbadger_store::PositionedCellInfo| {

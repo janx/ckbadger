@@ -51,12 +51,23 @@ pub fn hash_type_to_string(hash_type: u8) -> Option<&'static str> {
     ckbadger_common::hash_type_label(hash_type)
 }
 
+/// One live cell a type reference's resolution reads: its outpoint and its
+/// binary (data hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeReferenceLiveMatch {
     pub tx_hash: Vec<u8>,
     pub output_index: i16,
     pub version_hash: Vec<u8>,
+}
+
+/// A type reference's live cells, read bounded ([`resolve_live_type_reference`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeReferenceLive {
+    /// The type script under the hash is the consensus Type ID script.
     pub native_type_id: bool,
+    /// A native Type ID reference: its one live Type ID cell. Any other: its
+    /// live CODE cells, never its other live cells.
+    pub matches: Vec<TypeReferenceLiveMatch>,
 }
 
 pub type VersionCodeCell = (Vec<u8>, i16, PositionedCellInfo, bool);
@@ -316,35 +327,74 @@ pub fn resolve_dep_cells_for_transaction(
     Ok(Some(build_dep_cell_mappings(&dep_cells)))
 }
 
-pub fn resolve_live_type_reference_matches(
+/// What a type reference's live cells are, read bounded by its code cells
+/// (resync fix round S3, the read the indexer's rollup makes): one prefix
+/// seek over `live_code_cells_by_type` (the reference's live code cells under
+/// a type script that is not Type ID), and, only when that holds none, the
+/// reference's first live cell (one row of `cell_by_type`): every cell under
+/// one type hash carries the one script, so that cell says whether the
+/// reference is the consensus Type ID script (its one live cell) or holds no
+/// code. Never a read of the type's whole live set: a populous type a
+/// stranger names costs its code cells, which cost their owner capacity.
+pub fn resolve_live_type_reference(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
     reference_hash: &[u8],
-) -> anyhow::Result<Vec<TypeReferenceLiveMatch>> {
-    let mut matches = Vec::new();
-    for (tx_hash, output_index, cell) in
-        store.list_cells_by_type(reference_hash, usize::MAX, None, cells_store)?
-    {
-        let version_hash = cell.cell.data_hash.map(|hash| hash.to_vec()).ok_or_else(|| {
-            anyhow::anyhow!(
-                "live type-referenced code cell is missing data_hash: reference_hash=0x{}, outpoint=0x{}:{}",
-                hex::encode(reference_hash),
-                hex::encode(&tx_hash),
-                output_index
-            )
-        })?;
-        matches.push(TypeReferenceLiveMatch {
-            tx_hash,
-            output_index,
-            version_hash,
-            native_type_id: cell
+) -> anyhow::Result<TypeReferenceLive> {
+    let code = store.list_live_code_cells_by_type(reference_hash)?;
+    if !code.is_empty() {
+        return Ok(TypeReferenceLive {
+            native_type_id: false,
+            matches: code
+                .into_iter()
+                .map(|(tx_hash, output_index, binary)| TypeReferenceLiveMatch {
+                    tx_hash,
+                    output_index,
+                    version_hash: binary.to_vec(),
+                })
+                .collect(),
+        });
+    }
+    let first = store
+        .list_cells_by_type(reference_hash, 1, None, cells_store)?
+        .into_iter()
+        .next();
+    match first {
+        Some((tx_hash, output_index, cell))
+            if cell
                 .type_code_hash
                 .as_ref()
                 .zip(cell.type_hash_type)
-                .is_some_and(|(hash, kind)| ckbadger_store::keys::is_type_id_script(hash, kind)),
-        });
+                .is_some_and(|(hash, kind)| {
+                    ckbadger_store::keys::is_type_id_script(hash, kind)
+                }) =>
+        {
+            let version_hash = cell
+                .cell
+                .data_hash
+                .map(|hash| hash.to_vec())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "live Type ID cell is missing data_hash: reference_hash=0x{}, outpoint=0x{}:{}",
+                    hex::encode(reference_hash),
+                    hex::encode(&tx_hash),
+                    output_index
+                )
+                })?;
+            Ok(TypeReferenceLive {
+                native_type_id: true,
+                matches: vec![TypeReferenceLiveMatch {
+                    tx_hash,
+                    output_index,
+                    version_hash,
+                }],
+            })
+        }
+        _ => Ok(TypeReferenceLive {
+            native_type_id: false,
+            matches: Vec::new(),
+        }),
     }
-    Ok(matches)
 }
 
 /// Return the persisted reference->version mapping when it constitutes a real
@@ -439,25 +489,6 @@ pub fn reference_form_member_version(
     .map(<[u8]>::to_vec))
 }
 
-/// The distinct binaries a generic type reference's live code cells hold:
-/// only code is a binary (`cell_by_data_hash` files code only), so a live cell
-/// of state data under the same type script is none.
-pub fn live_code_binaries(
-    store: &CkbadgerStore,
-    matches: Vec<TypeReferenceLiveMatch>,
-) -> anyhow::Result<std::collections::BTreeSet<Vec<u8>>> {
-    let mut binaries = std::collections::BTreeSet::new();
-    for candidate in matches {
-        if binaries.contains(&candidate.version_hash) {
-            continue;
-        }
-        if store.is_code_data_hash(&candidate.version_hash)? {
-            binaries.insert(candidate.version_hash);
-        }
-    }
-    Ok(binaries)
-}
-
 /// What one reference form runs now ([`ReferenceCode`], the input of the one
 /// family rule, `ScriptFamilyMembershipIndex::family_of_form`):
 ///
@@ -482,9 +513,9 @@ pub fn reference_form_member_version_with_lineage(
 ) -> anyhow::Result<ReferenceCode> {
     let one = |binary: Option<Vec<u8>>| binary.map_or(ReferenceCode::None, ReferenceCode::One);
     if hash_type == 1 {
-        let matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-        if matches.iter().any(|candidate| candidate.native_type_id)
-            || (matches.is_empty()
+        let live = resolve_live_type_reference(store, cells_store, reference_hash)?;
+        if live.native_type_id
+            || (live.matches.is_empty()
                 && match observed_type_id {
                     Some(observed) => observed,
                     None => has_observed_type_id_lineage(store, reference_hash)?,
@@ -497,9 +528,14 @@ pub fn reference_form_member_version_with_lineage(
                 reference_hash,
             )?));
         }
-        return Ok(ReferenceCode::of_live_binaries(live_code_binaries(
-            store, matches,
-        )?));
+        // A generic type reference: the distinct binaries its live code
+        // cells hold (the read carries code cells only).
+        return Ok(ReferenceCode::of_live_binaries(
+            live.matches
+                .into_iter()
+                .map(|candidate| candidate.version_hash)
+                .collect(),
+        ));
     }
     if let Some(version_hash) =
         persisted_reference_version_candidate(store, cells_store, hash_type, reference_hash)?
@@ -599,11 +635,9 @@ pub fn resolve_script_by_hash(
     reference_hash: &[u8],
 ) -> anyhow::Result<CurrentScriptVersionResolution> {
     let direct_version = store.get_script_version(reference_hash)?;
-    let live_type_matches =
-        resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-    let native_type_id = live_type_matches
-        .iter()
-        .any(|candidate| candidate.native_type_id);
+    let live = resolve_live_type_reference(store, cells_store, reference_hash)?;
+    let native_type_id = live.native_type_id;
+    let live_type_matches = live.matches;
     let retired_type_id =
         live_type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?;
     let persisted_versions = {
@@ -846,8 +880,10 @@ mod tests {
         );
         batch.put_cell_by_type(reference, 10, &tx, 0);
         // a code cell: filed in the code-cell index, as only code is a binary
-        // (lane rd/api-lock-names, the lead's ruling)
+        // (lane rd/api-lock-names, the lead's ruling), and by its type script
+        // (resync fix round S3), as the indexer writes it
         batch.put_cell_by_data_hash(binary, 10, &tx, 0);
+        batch.put_live_code_cell(reference, &tx, 0, binary);
         batch.commit().unwrap();
     }
 
@@ -968,6 +1004,8 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x70; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3)
+        batch.put_live_code_cell(&reference_hash, &[0x70; 32], 0, &version_hash_a);
         batch.put_cell(
             &[0x71; 32],
             0,
@@ -986,6 +1024,8 @@ mod tests {
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x71; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3)
+        batch.put_live_code_cell(&reference_hash, &[0x71; 32], 0, &version_hash_b);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1043,6 +1083,8 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x90; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3)
+        batch.put_live_code_cell(&reference_hash, &[0x90; 32], 0, &mapped_version_hash);
         batch.put_cell(
             &[0x91; 32],
             0,
@@ -1061,6 +1103,8 @@ mod tests {
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x91; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3)
+        batch.put_live_code_cell(&reference_hash, &[0x91; 32], 0, &conflicting_version_hash);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1122,6 +1166,8 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3)
+        batch.put_live_code_cell(&reference_hash, &[0x92; 32], 0, &version_hash);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1325,8 +1371,10 @@ mod tests {
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
         // the live type match is a code cell (only code is a binary: lane
-        // rd/api-lock-names, the lead's ruling)
+        // rd/api-lock-names, the lead's ruling), filed by its type script as
+        // the indexer files it (resync fix round S3)
         batch.put_cell_by_data_hash(&version_hash, 10, &[0x92; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x92; 32], 0, &version_hash);
         batch.commit().unwrap();
 
         match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {
@@ -1560,7 +1608,7 @@ mod tests {
 
     /// The cells the indexer leaves for a generic type reference `reference`:
     /// a live code cell per binary (marker, payload, `cell_by_type`,
-    /// `cell_by_data_hash`), and `traps` live cells of the same type that are
+    /// `cell_by_data_hash`, `live_code_cells_by_type`), and `traps` live cells of the same type that are
     /// not code, each with its append-only payload withheld, so any read of
     /// one fails.
     fn seed_generic_reference(
@@ -1591,6 +1639,7 @@ mod tests {
             );
             batch.put_cell_by_type(reference, 11, &tx, 0);
             batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+            batch.put_live_code_cell(reference, &tx, 0, binary);
         }
         for trap in 0..traps {
             let tx = [0xa0u8.wrapping_add(trap); 32];

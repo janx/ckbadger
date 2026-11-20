@@ -678,14 +678,36 @@ struct RollupSteps {
     generic: GenericTypeCodes,
 }
 
-/// A code cell under a type script that is not Type ID, created (+1) or
-/// consumed (-1) in a block: it moves what that generic type reference runs.
+/// A cell under a type script that is not Type ID, created (+1) or consumed
+/// (-1) in a block, which can move what that generic type reference runs.
+///
+/// THE definition (resync fix round S3): a CODE cell is a cell whose data is
+/// code (`keys::is_code_cell`: it starts with the ELF magic). A cell's data
+/// and its type script are fixed when it is created and never change while it
+/// lives (a CKB cell is immutable: "updating" one consumes it and creates
+/// another), so a cell is or is not a code cell, under one type script, for
+/// its whole life. What a generic type reference T runs is the set of
+/// distinct binaries of the live code cells whose type script hash is T, and
+/// that set changes on exactly two events: a code cell under T is created, or
+/// a code cell under T is consumed (a rollback undoes either through the
+/// block journal). Both are a change here: every created output under a
+/// non-Type-ID type whose data is code, and every consumed input under one
+/// (it is a code cell exactly when its binary is among T's live code
+/// binaries: an equal data hash is equal data). Nothing else moves the set: a
+/// Type ID binding decides whether the reference is generic at all (every
+/// cell under one type hash carries the one script, so a Type ID reference
+/// has no generic cells), never what its code cells hold. The rollup step
+/// keeps `live_code_cells_by_type` (domain store, the block's scope) from
+/// these changes and reads a reference's answer from it.
 #[derive(Debug, Clone)]
 pub(crate) struct GenericTypeCodeChange {
     pub reference_hash: Vec<u8>,
     pub binary: Vec<u8>,
     pub created: bool,
     pub block_number: i64,
+    /// The cell: the output created, or the input's previous output consumed.
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
 }
 
 /// Whether a script reference names its binary by data hash (`data` /
@@ -1320,6 +1342,8 @@ impl BatchWriter {
                             binary: data_hash.to_vec(),
                             created: false,
                             block_number: tx.block_number,
+                            tx_hash: input.previous_tx_hash.to_vec(),
+                            output_index: index,
                         });
                     }
                     // A type-id input's reference is its type script hash.
@@ -1350,7 +1374,7 @@ impl BatchWriter {
                     }
                 }
             }
-            for cell in &tx.cells {
+            for (output_index, cell) in tx.cells.iter().enumerate() {
                 // A code cell under a type script that is not Type ID moves
                 // what that generic type reference runs.
                 if let Some(reference) = cell.type_script_hash.as_ref().filter(|_| {
@@ -1366,6 +1390,15 @@ impl BatchWriter {
                         binary: cell.data_hash.to_vec(),
                         created: true,
                         block_number: tx.block_number,
+                        tx_hash: tx.hash.to_vec(),
+                        output_index: i16::try_from(output_index).map_err(|_| {
+                            anyhow::anyhow!(
+                                "code cell output index exceeds storage range: block={} tx=0x{} output={}",
+                                tx.block_number,
+                                hex::encode(tx.hash),
+                                output_index
+                            )
+                        })?,
                     });
                 }
                 if !cell
@@ -1485,44 +1518,23 @@ impl BatchWriter {
     /// [`reference_binary`]), write the rows that changed and advance `state`
     /// to them.
     /// The live code cells under the type script whose hash is `reference`
-    /// (not Type ID), by binary, as the committed store holds them: only code
-    /// is a binary (`cell_by_data_hash` files code only).
+    /// (not Type ID), by binary, as the committed store holds them: one
+    /// prefix seek over `live_code_cells_by_type`, that type's code cells and
+    /// nothing else (resync fix round S3; it read every live cell of the
+    /// type, with its payload).
     fn generic_live_from_store(
         &self,
         reference: &[u8],
     ) -> Result<std::collections::BTreeMap<Vec<u8>, u32>> {
         let mut live = std::collections::BTreeMap::new();
-        for (tx_hash, output_index, cell) in self.store.list_cells_by_type(
-            reference,
-            usize::MAX,
-            None,
-            self.append_only_store.as_ref(),
-        )? {
-            let native = cell
-                .type_code_hash
-                .as_ref()
-                .zip(cell.type_hash_type)
-                .is_some_and(|(hash, kind)| ckbadger_store::keys::is_type_id_script(hash, kind));
-            if native {
-                continue;
-            }
-            let binary = cell.cell.data_hash.ok_or_else(|| {
+        for (_, _, binary) in self.store.list_live_code_cells_by_type(reference)? {
+            let count: &mut u32 = live.entry(binary.to_vec()).or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "live typed cell lacks its data hash: reference=0x{} outpoint=0x{}:{}",
-                    hex::encode(reference),
-                    hex::encode(&tx_hash),
-                    output_index
+                    "generic type reference live code count overflow: reference=0x{}",
+                    hex::encode(reference)
                 )
             })?;
-            if self.store.is_code_data_hash(&binary)? {
-                let count: &mut u32 = live.entry(binary.to_vec()).or_insert(0);
-                *count = count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "generic type reference live code count overflow: reference=0x{}",
-                        hex::encode(reference)
-                    )
-                })?;
-            }
         }
         Ok(live)
     }
@@ -1554,9 +1566,20 @@ impl BatchWriter {
         first_seen: &[(Vec<u8>, u8)],
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // This block's code cells under type scripts that are not Type ID.
+        // This block's code cells under type scripts that are not Type ID,
+        // into the reference's live code binaries and into
+        // `live_code_cells_by_type` (this block's scope: the journal restores
+        // it), the one place both are moved.
         for change in generic {
             let live = self.generic_live(&mut state.generic_live, &change.reference_hash)?;
+            let binary: [u8; 32] = change.binary.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "code cell binary is {} bytes, not a 32-byte data hash: reference=0x{} block={}",
+                    change.binary.len(),
+                    hex::encode(&change.reference_hash),
+                    change.block_number
+                )
+            })?;
             if change.created {
                 let count = live.entry(change.binary.clone()).or_insert(0);
                 *count = count.checked_add(1).ok_or_else(|| {
@@ -1566,13 +1589,26 @@ impl BatchWriter {
                         change.block_number
                     )
                 })?;
+                batch.put_live_code_cell(
+                    &change.reference_hash,
+                    &change.tx_hash,
+                    change.output_index,
+                    &binary,
+                );
             } else if let Some(count) = live.get_mut(&change.binary) {
                 // Only a code cell entered the set; a consumed state cell
-                // under the same type script is no binary.
+                // under the same type script is no binary (its binary is not
+                // among the type's live code binaries: equal data hashes are
+                // equal data).
                 *count -= 1;
                 if *count == 0 {
                     live.remove(&change.binary);
                 }
+                batch.delete_live_code_cell(
+                    &change.reference_hash,
+                    &change.tx_hash,
+                    change.output_index,
+                );
             }
         }
         for (reference_hash, hash_type) in first_seen {
@@ -4439,6 +4475,9 @@ mod tests {
                 batch.put_cell_by_type(&reference, 11, &tx, 0);
                 // the code-cell index files code only
                 batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+                // and the live code cell by its type script, which the rollup
+                // reads (resync fix round S3)
+                batch.put_live_code_cell(&reference, &tx, 0, binary);
             }
             batch.put_script_reference_info(
                 1,

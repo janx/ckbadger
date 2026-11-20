@@ -74,6 +74,29 @@ pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_S
     key
 }
 
+/// Width of a `live_code_cells_by_type` key: `type_hash(32) ‖ outpoint(34)`.
+pub const LIVE_CODE_CELL_KEY_SIZE: usize = 32 + OUTPOINT_KEY_SIZE;
+
+/// `live_code_cells_by_type` key (resync fix round S3): the live code cell
+/// `tx_hash:output_index` under the type script whose hash is `type_hash`.
+/// One type's code cells are one contiguous range (the prefix `type_hash`).
+pub fn encode_live_code_cell_key(
+    type_hash: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; LIVE_CODE_CELL_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_live_code_cell_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
+    let mut key = [0u8; LIVE_CODE_CELL_KEY_SIZE];
+    key[..32].copy_from_slice(type_hash);
+    key[32..].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
 pub fn decode_outpoint(key: &[u8]) -> (Vec<u8>, i16) {
     let tx_hash = key[..32].to_vec();
     let output_index = i16::from_be_bytes([key[32], key[33]]);

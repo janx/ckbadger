@@ -4091,7 +4091,8 @@ pub struct BulkArtifactSnapshot {
     /// Exact persisted bytes of the activity CFs the re-sync set writes:
     /// `CF_TX_ACTIONS` (participants' tags, the recognised type codes),
     /// `CF_TX_ACTIONS_BY_BUCKET` (each transaction's one kind), `CF_ADDR_TXS`
-    /// and `CF_ADDR_TXS_BY_PREFIX` (the tags per address), whole.
+    /// and `CF_ADDR_TXS_BY_PREFIX` (the tags per address), and
+    /// `CF_LIVE_CODE_CELLS_BY_TYPE` (resync fix round S3), whole.
     pub activity_rows: RawCfRows,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
@@ -4613,6 +4614,7 @@ pub(crate) fn collect_activity_rows_for_test(store: &CkbadgerStore) -> Result<Ra
         ckbadger_store::CF_TX_ACTIONS_BY_BUCKET,
         ckbadger_store::CF_ADDR_TXS,
         ckbadger_store::CF_ADDR_TXS_BY_PREFIX,
+        ckbadger_store::CF_LIVE_CODE_CELLS_BY_TYPE,
     ] {
         for row in store.iterator_cf(store.cf(name), IteratorMode::Start) {
             let (key, value) = row?;

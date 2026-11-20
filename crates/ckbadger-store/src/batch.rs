@@ -1033,6 +1033,27 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_cell_by_data_hash(), key);
     }
 
+    /// Index a live code cell under its type script (`live_code_cells_by_type`,
+    /// resync fix round S3): `binary` is its data hash. Written by the live
+    /// rollup step in the creating block's scope.
+    pub fn put_live_code_cell(
+        &mut self,
+        type_hash: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        binary: &[u8],
+    ) {
+        let key = keys::encode_live_code_cell_key(type_hash, tx_hash, output_index);
+        self.put_cf(self.store.cf_live_code_cells_by_type(), key, binary);
+    }
+
+    /// Drop a consumed code cell from `live_code_cells_by_type`, in the
+    /// consuming block's scope.
+    pub fn delete_live_code_cell(&mut self, type_hash: &[u8], tx_hash: &[u8], output_index: i16) {
+        let key = keys::encode_live_code_cell_key(type_hash, tx_hash, output_index);
+        self.delete_cf(self.store.cf_live_code_cells_by_type(), key);
+    }
+
     // ---- Cell index (raw pre-computed key) ----
 
     pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {

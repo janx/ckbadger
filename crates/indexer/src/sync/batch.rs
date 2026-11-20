@@ -16085,20 +16085,80 @@ mod tests {
                 outputs_data: vec![format!("0x{}", hex::encode(total.to_le_bytes()))],
                 witnesses: vec!["0x".to_string()],
             };
-            let mut next = blocks[3].clone();
-            next.block.transactions =
-                vec![super::live_dao_fee::cellbase_tx(0xc4, 100_000_000), merge];
-            let number = 4u64;
-            let header = &mut next.block.header;
-            header.number = format!("0x{number:x}");
-            header.hash = format!("0x{}", hex::encode(super::live_dao_fee::block_hash(number)));
-            header.parent_hash = format!(
-                "0x{}",
-                hex::encode(super::live_dao_fee::block_hash(number - 1))
-            );
-            header.epoch = format!("0x{:x}", (1800_u64 << 40) | (number << 24));
-            header.timestamp = format!("0x{:x}", 1_700_064_002_000_u64);
-            blocks.push(next);
+            let template = blocks[3].clone();
+            let next_block = |number: u64, txs: Vec<crate::rpc::TransactionView>| {
+                let mut next = template.clone();
+                next.block.transactions = txs;
+                let header = &mut next.block.header;
+                header.number = format!("0x{number:x}");
+                header.hash = format!("0x{}", hex::encode(super::live_dao_fee::block_hash(number)));
+                header.parent_hash = format!(
+                    "0x{}",
+                    hex::encode(super::live_dao_fee::block_hash(number - 1))
+                );
+                header.epoch = format!("0x{:x}", (1800_u64 << 40) | (number << 24));
+                header.timestamp = format!("0x{:x}", 1_700_063_998_000_u64 + number * 1_000);
+                next
+            };
+            const FUNDS: u64 = 1_000_000_000_000;
+            blocks.push(next_block(
+                4,
+                vec![super::live_dao_fee::cellbase_tx(0xc4, FUNDS), merge],
+            ));
+            // resync fix round S3: two code cells under a type script that is
+            // not Type ID (block 5), one of them consumed (block 6), so the
+            // live code cell index has rows to compare.
+            let code_type = crate::rpc::Script {
+                code_hash: format!("0x{}", "5c".repeat(32)),
+                hash_type: "type".to_string(),
+                args: "0x01".to_string(),
+            };
+            let elf = |tag: u8| format!("0x{}{tag:02x}", hex::encode(b"\x7fELF\x02\x01\x01"));
+            let output =
+                |capacity: u64, type_: Option<crate::rpc::Script>| crate::rpc::CellOutput {
+                    capacity: format!("0x{capacity:x}"),
+                    lock: super::live_dao_fee::lock_script(),
+                    type_,
+                };
+            let input = |tx_hash: [u8; 32], index: u32| crate::rpc::CellInput {
+                since: "0x0".to_string(),
+                previous_output: crate::rpc::OutPoint {
+                    tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                    index: format!("0x{index:x}"),
+                },
+            };
+            let deploy = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xc4; 32], 0)],
+                outputs: vec![
+                    output(500_00000000, Some(code_type.clone())),
+                    output(500_00000000, Some(code_type)),
+                    output(FUNDS - 100_000_000_000 - 1_000, None),
+                ],
+                outputs_data: vec![elf(1), elf(2), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                5,
+                vec![super::live_dao_fee::cellbase_tx(0xc5, 100_000_000), deploy],
+            ));
+            let consume = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe9; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xe8; 32], 0)],
+                outputs: vec![output(500_00000000 - 1_000, None)],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                6,
+                vec![super::live_dao_fee::cellbase_tx(0xc6, 100_000_000), consume],
+            ));
             blocks
         }
 
@@ -16112,7 +16172,9 @@ mod tests {
         /// bulk build, a block-at-a-time live sync and one live batch, on a
         /// chain with a DAO completion (a sender whose CKB rose), a token
         /// mint, transfer and merge (a recognised code that moved no item)
-        /// and `.cell` registrations.
+        /// and `.cell` registrations; and `live_code_cells_by_type` (resync
+        /// fix round S3), on two code cells deployed and one consumed, with a
+        /// rollback of the consuming block and its replay.
         #[tokio::test]
         async fn bulk_and_live_write_the_same_activity_rows_whole() {
             let _detectors =
@@ -16191,6 +16253,43 @@ mod tests {
                     shape,
                 );
             }
+
+            // resync fix round S3: the live code cells by type script, the
+            // second code cell deployed at block 5 left after block 6 consumed
+            // the first; a rollback of block 6 restores the first exactly, and
+            // the replay leaves the rows bulk writes.
+            let code_cells = |store: &CkbadgerStore| {
+                crate::sync::bulk_build::collect_activity_rows_for_test(store)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|(cf, _, _)| *cf == ckbadger_store::CF_LIVE_CODE_CELLS_BY_TYPE)
+                    .collect::<Vec<_>>()
+            };
+            let at_tip = code_cells(&multi);
+            assert_eq!(at_tip.len(), 1, "fixture: one live code cell at the tip");
+            assert_eq!(&at_tip[0].1[32..64], &[0xe8; 32], "the deploy's cell");
+            multi_indexer.writer.cleanup_batch_range(6, 6).unwrap();
+            multi_indexer.reconcile_hodl_tracker_with_tip(5).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(5)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            assert_eq!(
+                code_cells(&multi).len(),
+                2,
+                "the rollback of block 6 restores the consumed code cell's row"
+            );
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[6..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(
+                crate::sync::bulk_build::collect_activity_rows_for_test(&multi).unwrap(),
+                bulk.activity_rows,
+                "bulk vs rollback/replay"
+            );
         }
 
         fn bucket_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {

@@ -130,6 +130,7 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
         );
         batch.put_cell_by_type(reference, 10, &tx, 0);
         batch.put_cell_by_data_hash(&version, 10, &tx, 0);
+        batch.put_live_code_cell(reference, &tx, 0, &version);
         if i < 2 {
             batch.put_addr_balance(
                 &lock_hash,
@@ -263,6 +264,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
                 version
             };
             batch.put_cell_by_data_hash(&binary, 10, &tx, 0);
+            batch.put_live_code_cell(&reference, &tx, 0, &binary);
         }
         batch.commit().unwrap();
         let app = create_router(test_config(store)).await;
@@ -444,6 +446,7 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
     batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
     put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
     batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
+    batch.put_live_code_cell(&type_ref, &outpoint, 0, &version);
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -577,6 +580,7 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
     put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
     batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
+    batch.put_live_code_cell(&type_ref, &outpoint, 0, &version);
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -712,6 +716,7 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
     batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
     put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
     batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
+    batch.put_live_code_cell(&type_ref, &outpoint, 0, &version);
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -1399,6 +1404,12 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
         &code_cell_tx_hash,
         code_cell_output_index,
     );
+    batch.put_live_code_cell(
+        &type_hash,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &version_hash,
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1482,6 +1493,12 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
         234,
         &code_cell_tx_hash,
         code_cell_output_index,
+    );
+    batch.put_live_code_cell(
+        &type_hash,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &version_hash,
     );
     batch.commit().unwrap();
 
@@ -1616,6 +1633,12 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
         123,
         &code_cell_tx_hash,
         code_cell_output_index,
+    );
+    batch.put_live_code_cell(
+        &type_hash,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &version_hash,
     );
     batch.commit().unwrap();
 
@@ -2058,6 +2081,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     // a code cell: filed in the code-cell index (only code is a binary; lane
     // rd/api-lock-names, the lead's ruling)
     batch.put_cell_by_data_hash(&version_hash_a, 100, &[0xd1; 32], 0);
+    batch.put_live_code_cell(&reference_hash, &[0xd1; 32], 0, &version_hash_a);
     batch.put_cell(
         &[0xd2; 32],
         0,
@@ -2077,6 +2101,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     );
     batch.put_cell_by_type(&reference_hash, 101, &[0xd2; 32], 0);
     batch.put_cell_by_data_hash(&version_hash_b, 101, &[0xd2; 32], 0);
+    batch.put_live_code_cell(&reference_hash, &[0xd2; 32], 0, &version_hash_b);
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -2634,6 +2659,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     );
     batch.put_cell_by_type(&older_type_hash, older_block, &older_tx_hash, 0);
     batch.put_cell_by_data_hash(&older_version_hash, older_block, &older_tx_hash, 0);
+    batch.put_live_code_cell(&older_type_hash, &older_tx_hash, 0, &older_version_hash);
     batch.put_cell(
         &newer_earliest_tx_hash,
         0,
@@ -2663,6 +2689,12 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         &newer_earliest_tx_hash,
         0,
     );
+    batch.put_live_code_cell(
+        &newer_type_hash,
+        &newer_earliest_tx_hash,
+        0,
+        &newer_version_hash,
+    );
     batch.put_cell(
         &newer_tx_hash,
         1,
@@ -2682,6 +2714,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     );
     batch.put_cell_by_type(&newer_type_hash, newer_block, &newer_tx_hash, 1);
     batch.put_cell_by_data_hash(&newer_version_hash, newer_block, &newer_tx_hash, 1);
+    batch.put_live_code_cell(&newer_type_hash, &newer_tx_hash, 1, &newer_version_hash);
     put_canonical_script_tx(&mut batch, &older_tx_hash, older_block, 0, 3);
     put_canonical_script_tx(
         &mut batch,
@@ -4279,6 +4312,7 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
         );
         batch.put_cell_by_type(type_hash, block, tx_hash, 0);
         batch.put_cell_by_data_hash(&version_hash, block, tx_hash, 0);
+        batch.put_live_code_cell(type_hash, tx_hash, 0, &version_hash);
     }
     batch.commit().unwrap();
 
@@ -4412,6 +4446,7 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
         );
         batch.put_cell_by_type(&reference_hash, block, &tx_hash, 0);
         batch.put_cell_by_data_hash(data_hash, block, &tx_hash, 0);
+        batch.put_live_code_cell(&reference_hash, &tx_hash, 0, data_hash);
     }
     batch.commit().unwrap();
 
@@ -4554,6 +4589,7 @@ async fn test_script_lookup_serves_the_references_description() {
         );
         batch.put_cell_by_type(type_hash, block, &tx_hash, 0);
         batch.put_cell_by_data_hash(&version_hash, block, &tx_hash, 0);
+        batch.put_live_code_cell(type_hash, &tx_hash, 0, &version_hash);
     }
     batch.commit().unwrap();
 
@@ -4626,6 +4662,7 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
         );
         batch.put_cell_by_type(&reference_hash, block, &tx_hash, 0);
         batch.put_cell_by_data_hash(data_hash, block, &tx_hash, 0);
+        batch.put_live_code_cell(&reference_hash, &tx_hash, 0, data_hash);
     }
     batch.commit().unwrap();
 
@@ -5727,6 +5764,7 @@ fn seed_generic_type_reference(
         batch.put_cell_by_type(&reference, 50, &tx, 0);
         // the code-cell index files code only: these cells hold code
         batch.put_cell_by_data_hash(binary, 50, &tx, 0);
+        batch.put_live_code_cell(&reference, &tx, 0, binary);
     }
     batch.put_script_reference_info(1, &reference, &usage);
     let lock_args = vec![0x44; 20];
