@@ -813,10 +813,10 @@ network store too), no re-sync:
   rank each row by it (the page's `firstRank` plus the row's place) and count
   the pager's rows from it (part B5); they refuse a response without it, as an
   API older than the page.
-- `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
-  pool, pending and proposed (not `awaitingIndex`). The pool tab states its
-  pending, proposed and awaiting counts apart and sums none of them, so no page
-  reads `totals.waiting` (part B5).
+- `GET /transactions/pool` — `totals: { pending, proposed, awaitingIndex }`,
+  each count apart. The pool tab states them apart and sums none of them; the
+  `totals.waiting` of lane exactness (A4), which no page read, is removed
+  (the readability plan's Phase E).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
 - `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
