@@ -23,14 +23,14 @@ vi.mock('@/components/ui/chart', () => ({
   Chart: (props: {
     title: string;
     yScale?: string;
-    plotName?: string;
+    plotUnit?: string;
     axisCap?: { value: number; note: string };
   }) => (
     <div
       role="img"
       aria-label={props.title}
       data-y-scale={props.yScale ?? 'linear'}
-      data-plot-name={props.plotName}
+      data-plot-name={props.plotUnit}
       data-cap={props.axisCap?.note ?? ''}
     />
   ),

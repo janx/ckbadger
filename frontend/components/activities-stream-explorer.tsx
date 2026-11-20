@@ -273,7 +273,12 @@ function ActivityStreamToolbar({
       />
       {/* the counts' period, said with them (lists lane P3: they are yesterday's, the list below
           is the latest, which its own line says) */}
-      {summary && <p className="text-text-dim text-meta mt-2">Yesterday’s counts (UTC+8).</p>}
+      {summary && (
+        // a note that is a sentence, the reading ink at 13 px and the prose measure
+        // (BRIEF-ink-size-roles item 3: it was quiet at 12); its words are the one-kind counts'
+        // (resync/int: each activity in exactly one kind, so no kind overlaps)
+        <p className="text-small max-w-measure mt-2">Yesterday’s counts (UTC+8).</p>
+      )}
       {counts && activities > 0 && (
         <div
           role="img"
@@ -312,7 +317,7 @@ function ActivityDayDivider({ label }: { label: string }) {
 function LoadingRows() {
   return (
     <>
-      <p role="status" className="text-text-dim text-small py-3">
+      <p role="status" className="text-text text-small py-3">
         Reading activities…
       </p>
       <SkeletonRows />
@@ -579,7 +584,9 @@ export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityS
             </p>
           </div>
         ) : emptyState ? (
-          <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
+          // an empty-state sentence, the reading ink and the prose measure (BRIEF-ink-size-roles
+          // item 3)
+          <p className="max-w-measure py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
             {/* the list's period, as the counts' above (lists lane P3): the latest activities, as
@@ -629,7 +636,7 @@ export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityS
             )}
 
             {isFetchingNextPage && (
-              <p role="status" className="text-text-dim text-small py-3 text-center">
+              <p role="status" className="text-text text-small py-3 text-center">
                 Reading older activities…
               </p>
             )}

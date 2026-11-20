@@ -73,8 +73,10 @@ export function PoolInterpretationNotice({
   if (reasons.length === 0) return null;
 
   return (
-    <span className={className ?? 'text-warning text-meta font-mono'}>
-      partial: {reasons.map(reasonText).join('; ')}
+    <span className={className ?? 'font-mono'}>
+      {/* a notice is a sentence: the warning ink at 13 px, the notice's own (the ink and size round,
+          the shared lane); a caller's class places it and may set its font, never its size or ink */}
+      <span className="text-warning text-small">partial: {reasons.map(reasonText).join('; ')}</span>
     </span>
   );
 }

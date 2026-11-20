@@ -28,7 +28,6 @@ import {
   resourceScale,
 } from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
 import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
@@ -98,14 +97,15 @@ export default function BlocksPage() {
       label: 'Block',
       // The block's stone and its gap (ROW_SEAL.block.footprint, 24), the widest height,
       // "#99,999,999" at the key's 14 px (92.4), a space at 13 px (7.8) and the hash at its tight
-      // size, "0xd161…8fef" at 12 px (79.2: the hash is the key cell's second token, beside the
-      // number), and the gap: 219.4. Its 13 px spare went (readability F3-e): it stood for no
-      // content, and a glyph advances exactly 0.6 em.
+      // size, "0xd161…8fef" at the cell's 13 px (85.8: the hash is the key cell's second token,
+      // beside the number, an id in the reading ink), and the gap: 226. It was 219.4 with the hash
+      // at 12 px (BRIEF-ink-size-roles item 2). Its 13 px spare went (readability F3-e): it stood
+      // for no content, and a glyph advances exactly 0.6 em.
       minWidth: columnPx(
         ROW_SEAL.block.footprint +
           textPx(WIDEST_BLOCK_NUMBER.length, fontPx('body')) +
           charPx('small') +
-          textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('meta')) +
+          textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('small')) +
           CELL_GAP_PX
       ),
       render: (block) => <BlockIdentity block={block} />,
@@ -167,7 +167,9 @@ export default function BlocksPage() {
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
-          <span className="text-text text-meta">
+          // the cell's value and its block link, at the cell's 13 px (BRIEF-ink-size-roles item 2:
+          // the line was 12 px)
+          <span className="text-text">
             {block.rewardFinalizesAt === null ? (
               'Genesis'
             ) : (
@@ -241,7 +243,8 @@ export default function BlocksPage() {
       className: 'whitespace-nowrap',
       render: (block) =>
         block.cycles === null ? (
-          <span className="text-text-dim">
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span className="whitespace-normal">
             {block.cyclesStatus === 'failed' ? 'Replay failed' : 'Not yet run'}
           </span>
         ) : (
@@ -263,7 +266,7 @@ export default function BlocksPage() {
           actions={form === 'table' ? <BlocksLegend /> : undefined}
         >
           {isAwaited(read) && (
-            <p role="status" className="text-text-dim">
+            <p role="status" className="text-text">
               Loading blocks…
             </p>
           )}
@@ -360,10 +363,12 @@ function BlockIdentity({ block }: { block: Block }) {
           <Link href={`/blocks/${block.number}`} look="key" className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>{' '}
-          <Hash hash={block.hash} size="tight" className="text-text-dim text-meta" />
+          {/* an id in a cell, the reading ink at the cell's 13 px (BRIEF-ink-size-roles items 1, 2) */}
+          <Hash hash={block.hash} size="tight" className="text-small" />
         </div>
         {block.hardforkActivation && (
-          <Link href="/hardforks" look="inline" className="text-meta block">
+          // a link is never the meta size (BRIEF-ink-size-roles item 2)
+          <Link href="/hardforks" look="inline" className="block">
             HF · {block.hardforkActivation.shortName.toUpperCase()}
           </Link>
         )}
@@ -382,7 +387,8 @@ const KEY = 'text-body leading-row';
  * `ckb1…93hhsj` in the phone row (tight). Genesis is mined by no one.
  */
 function miner(block: Block, size: ShortSize) {
-  if (!block.minerAddress) return <span className="text-text-dim">Genesis</span>;
+  // a cell's content, the reading ink (BRIEF-ink-size-roles item 1: it was quiet)
+  if (!block.minerAddress) return <span>Genesis</span>;
   return (
     <MinerLink
       address={block.minerAddress}
@@ -527,7 +533,10 @@ function BlockPhoneRow({ block }: { block: Block }) {
           left: (
             <Dotted
               parts={[
-                <Hash key="h" hash={block.hash} size="tight" className="text-meta" />,
+                // the quiet line's 13 px (PhoneRow, since the shared lane's 9470e172), said on the
+                // hash: Hash sets its own size (the body step by default), so the line's size cannot
+                // reach it; it was 12 px, the line's one 12 px value
+                <Hash key="h" hash={block.hash} size="tight" className="text-small" />,
                 block.proposalsCount > 0 && (
                   <span key="p" className="whitespace-nowrap">
                     {formatCount(block.proposalsCount, 'proposal')}
@@ -578,7 +587,8 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
       ROW_SEAL.block.footprint +
         Math.max(
           textPx(WIDEST_BLOCK_NUMBER.length, fontPx('body')),
-          textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('meta'))
+          // the hash under the number at the cell's 13 px (85.8), narrower than the number
+          textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('small'))
         ) +
         CELL_GAP_PX
     ),
@@ -590,13 +600,11 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
           <Link href={`/blocks/${block.number}`} look="key" className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>
-          <Hash
-            hash={block.hash}
-            size="tight"
-            className="text-text-dim text-meta block whitespace-nowrap"
-          />
+          {/* an id in a cell, the reading ink at the cell's 13 px (BRIEF-ink-size-roles items 1, 2) */}
+          <Hash hash={block.hash} size="tight" className="text-small block whitespace-nowrap" />
           {block.hardforkActivation && (
-            <Link href="/hardforks" look="inline" className="text-meta block">
+            // a link is never the meta size (BRIEF-ink-size-roles item 2)
+            <Link href="/hardforks" look="inline" className="block">
               HF · {block.hardforkActivation.shortName.toUpperCase()}
             </Link>
           )}
@@ -609,35 +617,32 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
     label: 'Age · txs',
     // Two data of one cell on two lines: the age, "10y 364d ago" (12 characters at 13 px, 93.6),
     // over the transaction count and the proposals, "9,999 · 1,500p" (the count and the separator
-    // at 13 px, 62.4; the proposals at 12, up to the 1,500 a block may carry, 43.2): 105.6, the
-    // wider, and the gap. A block's uncles ("· 1u") join that line, and stand under it only where
+    // at 13 px, 62.4; the proposals, up to the 1,500 a block may carry, a figure at the cell's 13
+    // px, 46.8): 109.2, the wider, and the gap: 125.2 (it was 121.6 with the proposals at 12 px,
+    // BRIEF-ink-size-roles item 2). A block's uncles ("· 1u") join that line, and stand under it only where
     // the count and the proposals already fill it. Age was 76 (it held "59m ago") and Txs 48.
     minWidth: columnPx(
       Math.max(
         textPx(WIDEST_AGE.length, fontPx('small')),
         textPx(`${WIDEST_COUNT} · `.length, fontPx('small')) +
-          textPx(`${WIDEST_PROPOSALS}p`.length, fontPx('meta'))
+          textPx(`${WIDEST_PROPOSALS}p`.length, fontPx('small'))
       ) + CELL_GAP_PX
     ),
     render: (block) => (
       <span className="block">
         <span className="block">
-          <Utc8Age timestamp={block.timestamp} className="text-text-dim" />
+          {/* a time in a cell, the reading ink (BRIEF-ink-size-roles item 1) */}
+          <Utc8Age timestamp={block.timestamp} className="text-text" />
         </span>
         <span className="block">
           <Dotted
             parts={[
               block.transactionSizes.length.toLocaleString('en-US'),
               block.proposalsCount > 0 && (
-                <span key="p" className="text-text-dim text-meta">
-                  {block.proposalsCount.toLocaleString('en-US')}p
-                </span>
+                // figures of the cell, the reading ink at its 13 px (BRIEF-ink-size-roles items 1, 2)
+                <span key="p">{block.proposalsCount.toLocaleString('en-US')}p</span>
               ),
-              block.unclesCount > 0 && (
-                <span key="u" className="text-text-dim text-meta">
-                  {block.unclesCount}u
-                </span>
-              ),
+              block.unclesCount > 0 && <span key="u">{block.unclesCount}u</span>,
             ]}
           />
         </span>
@@ -684,8 +689,9 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
     render: (block) => (
       <>
         <span className="block whitespace-nowrap">{block.size.toLocaleString('en-US')} B</span>
-        {/* the cycles, a value; not run yet or a failed replay, an empty value, quiet */}
-        <span className={cn('block whitespace-nowrap', block.cycles === null && 'text-text-dim')}>
+        {/* the cycles, a value; not run yet or a failed replay, the cell's content: the reading ink
+            (BRIEF-ink-size-roles item 1: it was quiet) */}
+        <span className="block whitespace-nowrap">
           {block.cycles === null
             ? block.cyclesStatus === 'failed'
               ? 'replay failed'

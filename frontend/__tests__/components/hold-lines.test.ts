@@ -44,12 +44,18 @@ describe('the held lines of the asset lists (logic SHOULD 4): where the right pa
     expect(longest(names)).toBe('Godwoken ETH Account Lock');
   });
 
-  it('a holder’s share line: the lock stays beside the bar to 113.6 px at 360 and 143.6 at 390', () => {
-    // the 22 px indent, the track, the 10 px gap and the share in 7 ch at 12 px: one unit
-    const left = 22 + PHONE_SHARE_TRACK + 10 + meta(7);
-    expect(left).toBeCloseTo(202.4, 10);
-    expect(PHONE_LINE_PX[360] - PHONE_PART_GAP_PX - left).toBeCloseTo(113.6, 10);
-    expect(PHONE_LINE_PX[390] - PHONE_PART_GAP_PX - left).toBeCloseTo(143.6, 10);
+  // Re-pinned on purpose (the ink and size roles round): the share is a value, at 13 px, and its
+  // quiet line goes to 13 px for every list (the shared lane); the share's 7 ch were 50.4 px at 12
+  // (202.4 px, 113.6 beside it at 360, 143.6 at 390). Every comparison below still holds.
+  it('a holder’s share line: the lock stays beside the bar to 109.4 px at 360 and 139.4 at 390', () => {
+    // the 22 px indent, the track, the 10 px gap and the share in 7 ch at 13 px: one unit
+    const left = 22 + PHONE_SHARE_TRACK + 10 + small(7);
+    expect(left).toBeCloseTo(206.6, 10);
+    expect(PHONE_LINE_PX[360] - PHONE_PART_GAP_PX - left).toBeCloseTo(109.4, 10);
+    expect(PHONE_LINE_PX[390] - PHONE_PART_GAP_PX - left).toBeCloseTo(139.4, 10);
+    // 14 glyphs of a lock's words at 13 px beside the bar at 360 (109.2), 17 at 390 (132.6)
+    expect(Math.floor((PHONE_LINE_PX[360] - PHONE_PART_GAP_PX - left) / small(1))).toBe(14);
+    expect(Math.floor((PHONE_LINE_PX[390] - PHONE_PART_GAP_PX - left) / small(1))).toBe(17);
     // the lock's words at 13 px: the registry's longest name, or "lock" and a code hash at the
     // phone's tight size
     const name = small(longest(names).length);

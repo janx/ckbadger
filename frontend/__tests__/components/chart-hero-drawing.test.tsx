@@ -221,8 +221,8 @@ describe('the chart pages’ drawing (lane D1)', () => {
       // the name's last line: its baseline and its descent
       const nameFoot =
         Number(nameText.getAttribute('y')) +
-        (lines - 1) * tightLinePx(SVG_TEXT.label) +
-        descentPx(SVG_TEXT.label);
+        (lines - 1) * tightLinePx(SVG_TEXT.sentence) +
+        descentPx(SVG_TEXT.sentence);
       const labels = [...container.querySelectorAll('g > title')]
         .filter((title) => ['Mirana', 'Meepo', 'Hardfork 3'].includes(title.textContent ?? ''))
         .map((title) => title.parentElement!.querySelector('text')!);

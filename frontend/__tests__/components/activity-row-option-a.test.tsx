@@ -148,7 +148,10 @@ describe('option A: the headline line', () => {
     expect(headline).toHaveAttribute('data-role', 'headline');
     expect(headline).toHaveClass('text-body', 'text-text-bright');
     const evidence = article.querySelector('[data-role="evidence"]') as HTMLElement;
-    expect(evidence).toHaveClass('text-meta', 'text-text-dim');
+    // Re-pinned on purpose (BRIEF-ink-size-roles items 1 and 2: a link is never quiet and never 12 px, a date is a value): the
+    // evidence's block link and date read in the row's ink at 13 px (they were quiet at 12)
+    expect(evidence).toHaveClass('text-small');
+    expect(evidence.className).not.toMatch(/text-meta|text-text-dim/);
     expect(within(evidence).getByRole('link', { name: '#20,904,081' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/20904081'
@@ -173,7 +176,10 @@ describe('option A: the headline line', () => {
       /^Script call · \.bit Time Index State · \.bit Time Info#20,904,081/
     );
     const types = line.querySelector('[data-role="detail"]') as HTMLElement;
-    expect(types).toHaveClass('text-small', 'text-text-dim');
+    // Re-pinned on purpose (BRIEF-ink-size-roles items 1 and 2: a script's name as a link is the reading ink): the type names'
+    // run reads in the reading ink (it was quiet)
+    expect(types).toHaveClass('text-small', 'text-text');
+    expect(types).not.toHaveClass('text-text-dim');
     expect(within(types).getByRole('link', { name: '.bit Time Index State' })).toHaveAttribute(
       'title',
       '.bit Time Index State(0x02)'
@@ -305,12 +311,21 @@ describe('option A: every participant, one line each (D1)', () => {
   // boxes stay on controls.
   // UI review 2026-11-14 (U-08, ruling R4): "occupied ±N" is a figure; the dim ink at 60 % read
   // 2.7:1 by night and 2.5:1 by day. It is the dim ink itself, never thinned.
-  it('writes "occupied ±N" in the dim ink, not the dim ink thinned', () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles items 1 and 2; it was "… in the dim ink, not the dim ink thinned"):
+  // the word "occupied" is the figure's label, quiet at 12 px; the figure is a value, the line's
+  // reading ink at its 13 px (the whole was quiet at 12)
+  it('writes "occupied" as the label, quiet, and its ±N in the line’s reading ink', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     const occupied = container.querySelector('[data-role="occupied"]') as HTMLElement;
     expect(occupied).toHaveTextContent(/^occupied [+−]/);
-    expect(occupied).toHaveClass('text-meta', 'text-text-dim');
-    expect([...occupied.classList].filter((c) => c.includes('/'))).toEqual([]);
+    expect(occupied.className).not.toMatch(/text-meta|text-text-dim/);
+    const label = within(occupied).getByText('occupied');
+    expect(label).toHaveClass('text-meta', 'text-text-dim');
+    expect(
+      [...occupied.querySelectorAll('*'), occupied].filter((el) =>
+        [...el.classList].some((c) => c.includes('/'))
+      )
+    ).toEqual([]);
   });
 
   // Readability B4 (re-pinned on purpose): the lock is named in plain words at the line's own size,
@@ -336,9 +351,11 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(kind).toHaveClass('text-text-dim');
     for (const gone of ['small-caps', 'lowercase', 'whitespace-nowrap', 'border', 'text-meta'])
       expect(kind).not.toHaveClass(gone);
-    // Occupied last, 11 px, in the dim ink (R4, re-pinned on purpose: the dim at 60 % read 2.7:1).
+    // Occupied last (re-pinned on purpose, BRIEF-ink-size-roles items 1 and 2: its label quiet at 12 px, its figure the reading
+    // ink at the line's 13 px; it was the whole in the dim ink at 12).
     const occupied = container.querySelector('[data-role="occupied"]');
-    expect(occupied).toHaveClass('text-meta', 'text-text-dim', 'whitespace-nowrap');
+    expect(occupied).toHaveClass('whitespace-nowrap');
+    expect(occupied!.className).not.toMatch(/text-meta|text-text-dim/);
     expect(occupied).not.toHaveClass('text-text-ghost');
     // The three/four/five-track participant grid is gone.
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;

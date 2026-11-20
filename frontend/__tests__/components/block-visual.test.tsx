@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { BlockContents, ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 
 describe('block evidence visuals', () => {
@@ -14,6 +15,27 @@ describe('block evidence visuals', () => {
     expect(Number(squares[1].getAttribute('width')) ** 2).toBe(
       Number(squares[0].getAttribute('width')) ** 2 * 4
     );
+  });
+  // The ink and size round (the shared lane): a count is a value, the reading ink at 13 px; its word
+  // ("tx", "tiles", "proposed") a unit, quiet at 12 px
+  it('writes its counts as values and their words as units', () => {
+    render(
+      <BlockContents
+        transactionSizes={[100, 100, 100, 100, 100, 100, 100, 100, 100, 100]}
+        proposalsCount={40}
+        unclesCount={0}
+      />
+    );
+    for (const count of ['10', '+2', '40']) {
+      const figure = screen.getByText(count);
+      expect(figure).toHaveClass('text-small');
+      expect(inkOf(figure)).toBe(READING);
+    }
+    for (const word of ['tx', 'tiles', 'proposed']) {
+      const unit = screen.getByText(word);
+      expect(unit).toHaveClass('text-meta');
+      expect(inkOf(unit)).toBe(QUIET);
+    }
   });
   it('labels overhead and user bytes without replacing the block total', () => {
     render(<ResourceBar label="Size, bytes" value={3205} overhead={883} scale={4000} />);

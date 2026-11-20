@@ -699,7 +699,10 @@ describe('the classes and sources the budget reads', () => {
 
   it('reads the strip’s labels at meta (small from md), values at body, their gaps', async () => {
     render(<VitalsStrip />);
-    const block = await screen.findByRole('link', { name: /^Tip #/ });
+    // re-pinned on purpose (the shared lane's ruling, the ink and size round): the vital is a box
+    // of its label and its value, the value its link; the epoch's position and time left are
+    // values at meta below md and small from it (the label's steps, so the strip does not grow)
+    const block = (await screen.findByRole('link', { name: /^Tip #/ })).closest('[data-vital]')!;
     const [label, value] = Array.from(block.children);
     expect(label).toHaveClass('text-meta', 'md:text-small');
     expect(value).toHaveClass('text-body');
@@ -707,6 +710,8 @@ describe('the classes and sources the budget reads', () => {
     const epoch = screen.getByTestId('vitals-epoch');
     expect(epoch).toHaveClass('gap-x-1.5', 'md:gap-x-2');
     expect(screen.getByTestId('vitals-epoch-bar')).toHaveClass('text-meta', 'md:text-small');
+    expect(within(epoch).getByText(/ \/ /)).toHaveClass('text-meta', 'md:text-small');
+    expect(within(epoch).getByText(/left$|^—$/)).toHaveClass('text-meta', 'md:text-small');
   });
 
   it('reads the footer’s links at the small step, 20 px apart', () => {

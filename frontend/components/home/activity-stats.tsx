@@ -56,7 +56,8 @@ export function ActivityStats() {
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
+      {/* an empty-state line, the reading ink (BRIEF-ink-size-roles item 3) */}
+      {d.state === 'empty' && <div className="text-small">{d.message}</div>}
       {d.state === 'ready' && <Summary view={d.view} />}
       <DailyActivityFigure />
     </div>

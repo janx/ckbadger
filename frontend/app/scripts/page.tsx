@@ -165,7 +165,8 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
       ) : code ? (
         <span className="text-text min-w-0">upgradable {code.who}</span>
       ) : (
-        <span className="text-text-dim min-w-0">code evidence unavailable</span>
+        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+        <span className="min-w-0">code evidence unavailable</span>
       )}
     </span>
   );
@@ -228,9 +229,8 @@ function ScriptPhoneRow({ script: s }: { script: KnownScript }) {
           ...code.facts,
         ]
       : [
-          <span key="none" className="text-text-dim">
-            code evidence unavailable
-          </span>,
+          // the row's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span key="none">code evidence unavailable</span>,
         ]),
   ];
   return (
@@ -348,7 +348,9 @@ function ScriptName({ script }: { script: KnownScript }) {
         </RowTag>
       )}
       {!hasName(script) && (
-        <span className="text-text-dim text-meta truncate">{refText(script)}</span>
+        // an unnamed script's reference, an id in a cell: the reading ink at the cell's 13 px
+        // (BRIEF-ink-size-roles items 1 and 2: it was quiet at 12)
+        <span className="text-small truncate">{refText(script)}</span>
       )}
     </span>
   );
@@ -604,7 +606,8 @@ export default function ScriptsPage() {
           trackWidth={SHARE_TRACK}
           minFill={2}
           segments={[{ key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }]}
-          display={<span className="text-text-dim">{occupiedShare(s).share}</span>}
+          // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1)
+          display={<span>{occupiedShare(s).share}</span>}
           displayWidth={SHARE_FIGURE}
         />
       ),
@@ -648,7 +651,7 @@ export default function ScriptsPage() {
               ) : summary.data ? (
                 <ScriptsSummary summary={summary.data} />
               ) : (
-                <div className="text-text-dim text-small mt-6">Loading the script summary…</div>
+                <div className="text-text text-small mt-6">Loading the script summary…</div>
               )}
             </section>
             {summary.data?.classSummary && (
@@ -704,7 +707,7 @@ export default function ScriptsPage() {
                   )}
                 </div>
                 {isAwaited(read) ? (
-                  <div className="text-text-dim text-small py-8">Loading scripts…</div>
+                  <div className="text-text text-small py-8">Loading scripts…</div>
                 ) : isError ? (
                   <div role="alert" className="text-negative text-small py-8">
                     <strong>Failed to load scripts</strong>:{' '}

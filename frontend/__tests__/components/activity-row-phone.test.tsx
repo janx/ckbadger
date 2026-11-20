@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@/__tests__/utils/test-utils';
+import { render, within } from '@/__tests__/utils/test-utils';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
@@ -107,12 +107,13 @@ describe('the activity row on a phone (lane D4, PA-10)', () => {
       const ckb = line.querySelector(':scope > [data-role="ckb"]')!;
       expect(ckb).toBe(line.lastElementChild);
       expect(ckb).toHaveClass('shrink-0', 'ml-auto');
-      // the occupied bytes close the party in the quiet ink, on the line under it, at the right
+      // the occupied bytes close the party on the line under it, at the right; re-pinned on
+      // purpose (BRIEF-ink-size-roles items 1 and 2): their label quiet, their figure in the reading ink (the whole was quiet)
       const figures = p.querySelector(':scope > [data-role="party-figures"]')!;
-      expect(figures.querySelector('[data-role="occupied"]')).toHaveClass(
-        'text-text-dim',
-        'ml-auto'
-      );
+      const occupied = figures.querySelector('[data-role="occupied"]') as HTMLElement;
+      expect(occupied).toHaveClass('ml-auto');
+      expect(occupied).not.toHaveClass('text-text-dim');
+      expect(within(occupied).getByText('occupied')).toHaveClass('text-text-dim');
       expect(line.querySelector('[data-role="occupied"]')).toBeNull();
     }
     expect(parties[0].querySelector('[data-role="ckb"]')).toHaveTextContent('−581.71 CKB');

@@ -267,7 +267,7 @@ export function InventoryPageFallback() {
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
-        <p role="status" className="text-text-dim text-small">
+        <p role="status" className="text-text text-small">
           Loading inventory…
         </p>
       </main>

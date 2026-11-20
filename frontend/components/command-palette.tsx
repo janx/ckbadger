@@ -402,7 +402,7 @@ export function CommandPalette() {
                 footer's last row says both). */}
             <p
               data-testid="shortcuts-about"
-              className="border-base-border text-text-dim text-small border-t px-4 py-3 font-mono"
+              className="border-base-border text-text text-small border-t px-4 py-3 font-mono"
             >
               <span title={`ckbadger ${resolveBuildVersion()}`}>
                 {`ckbadger ${releaseOf(resolveBuildVersion())}`}

@@ -10,6 +10,7 @@ import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { factsOf } from '@/__tests__/utils/facts';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -231,6 +232,18 @@ describe('Uncle detail page', () => {
       /^The canonical block at its height, 0x\S+, has another parent; this uncle was mined on 0x\S+\. #8,775,638 included it:/
     );
     expect(sentence).not.toHaveTextContent('sibling');
+  });
+
+  // lane P1, the ink and size roles: an empty line is a sentence, the reading ink (it was quiet)
+  it('says an uncle that proposed nothing in the reading ink', async () => {
+    params.current = { id: '8775638', index: '0' };
+    server.use(
+      http.get('/api/:network/v1/blocks/:id/uncles/:index', () =>
+        HttpResponse.json({ ...blockUncle, proposalIds: [] })
+      )
+    );
+    render(<UncleDetailPage />);
+    expect(inkOf(await screen.findByText('This uncle proposed nothing.'))).toBe(READING);
   });
 
   it('refuses sibling facts that contradict each other', async () => {

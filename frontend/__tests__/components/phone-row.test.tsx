@@ -36,9 +36,11 @@ describe('PhoneRow (boards L1–L8)', () => {
     const [head, body, quiet] = Array.from(row.children);
     expect(head).toHaveClass('text-body', 'text-text-bright');
     expect(body).toHaveClass('text-small', 'text-text');
-    // Quiet figures: 11 px, a step under the body by size; their ink is the reading ink, as a
-    // value's (re-pinned with readability ruling R3: it was dim), and an exact amount takes it.
-    expect(quiet).toHaveClass('text-meta', 'text-text', '[&_[data-ckb-amount]]:[color:inherit]');
+    // The quiet line's figures: the reading ink, as a value's (re-pinned with readability ruling
+    // R3: it was dim), and an exact amount takes it. Re-pinned on purpose (lane cd-fixes-controls,
+    // the ink and size round): 13 px (it was 12), the size of a value, a link and an id, which the
+    // line holds (a block, a transaction, an address, a date); only a label, a unit or a hint is 12.
+    expect(quiet).toHaveClass('text-small', 'text-text', '[&_[data-ckb-amount]]:[color:inherit]');
     // Lines wrap rather than truncate; the right figure keeps the right edge when it drops.
     expect(head).toHaveClass('flex-wrap');
     expect(head.querySelector('[data-part="right"]')).toHaveClass('ml-auto', 'shrink-0');

@@ -353,7 +353,7 @@ export function ScriptNewestCells({
           Newest cells unavailable: {readErrorText(newest.error)}
         </p>
       ) : newest.loading ? (
-        <p className="text-text-dim text-small py-3">Loading the newest cells…</p>
+        <p className="text-text text-small py-3">Loading the newest cells…</p>
       ) : (
         <ListTable
           label="Newest cells"

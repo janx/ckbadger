@@ -2,8 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakdown';
 import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
 import { positionParts } from '@/components/blocks/block-position';
@@ -110,6 +111,8 @@ describe('RewardBreakdown', () => {
     for (const note of notes) {
       expect(note.tagName).toBe('DD');
       expect(note).toHaveClass('max-w-measure');
+      // lane P1, the ink and size roles: each note is a sentence, the reading ink (it was quiet)
+      expect(inkOf(note)).toBe(READING);
     }
   });
   // Lane P1 follow-up (review chain-a block-quiet: "Committed fees, 60% 0 of 0 in fees of the 0
@@ -447,6 +450,22 @@ describe('BlockTransactionsTable', () => {
     const rows = screen.getByRole('table').querySelectorAll('tbody tr');
     expect(rows[1]).toHaveTextContent('#5 +2');
     expect(rows[0]).toHaveTextContent('cellbase');
+    // lane P1, the ink and size roles: a table cell's content reads in the reading ink, the
+    // cellbase's row as every other (the row, its "cellbase" and the distance were quiet)
+    expect(rows[0]).not.toHaveClass('text-text-dim');
+    expect(inkOf(within(rows[0] as HTMLElement).getByText('cellbase'))).toBe(READING);
+    expect(inkOf(within(rows[1] as HTMLElement).getByText(/\+2/))).toBe(READING);
+  });
+  it('says the genesis block’s origin and a cycles cell with no figure in the reading ink (lane P1)', () => {
+    wrap(
+      <BlockTransactionsTable
+        transactions={[tx(0, { blockNumber: 0, cycles: null, cyclesStatus: 'pending' })]}
+        blockNumber={0}
+      />
+    );
+    const [row] = screen.getByRole('table').querySelectorAll('tbody tr');
+    expect(inkOf(within(row as HTMLElement).getByText('genesis'))).toBe(READING);
+    expect(inkOf(within(row as HTMLElement).getByText('Not yet run'))).toBe(READING);
   });
   it('is a three-line phone row at 358 px: hash and output · proposal · the quiet figures', () => {
     atContainerWidth(358);
@@ -475,7 +494,9 @@ describe('BlockTransactionsTable', () => {
       ['figures', 'index 1 · 2 → 1\u00a0cell · fee 0.0003 CKB', null],
     ]);
     expect(phoneLines(base)[1].left).toBe('cellbase');
-    expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lane P1, the ink and size roles: a table's content is the reading ink,
+    // the cellbase's row as every other; its phone row was set in the quiet ink)
+    expect(base.closest('[role="listitem"]')).not.toHaveClass('text-text-dim');
   });
   // Lane D4 (the phone-rows board): a block's transaction on a phone is the row's three parts. Line 1
   // the hash and, at the right, its output named ("output N CKB"; the table's Output capacity);
@@ -525,7 +546,8 @@ describe('BlockTransactionsTable', () => {
       ['proposal', 'cellbase', null],
       ['figures', 'index 0 · 0 → 1\u00a0cell', null],
     ]);
-    expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lane P1, the ink and size roles): the cellbase's row is not quiet
+    expect(base.closest('[role="listitem"]')).not.toHaveClass('text-text-dim');
     // every figure after its name, the name in the quiet ink
     const labels = Array.from(user.querySelectorAll('[data-role="figure-label"]')).map(
       (l) => l.textContent

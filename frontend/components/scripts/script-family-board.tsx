@@ -828,7 +828,8 @@ export function ScriptCustodyFigure({
                 {signingText(holder)}
               </div>
             )}
-            <div className="text-text-dim text-meta mt-0.5">
+            {/* what it signed, a value: the reading ink at 13 px (ink and size roles) */}
+            <div className="text-text mt-0.5">
               {holder.signed.length
                 ? `signed ${versionList(holder.signed)}`
                 : holder.neverSigned
@@ -841,11 +842,7 @@ export function ScriptCustodyFigure({
                 className="mt-3 space-y-1.5"
               >
                 {keyRows[i].map((key) => (
-                  <li
-                    key={key}
-                    data-kept={kept(i, key)}
-                    className="text-meta flex items-center gap-2"
-                  >
+                  <li key={key} data-kept={kept(i, key)} className="flex items-center gap-2">
                     <svg width="8" height="8" aria-hidden="true" className="shrink-0">
                       <circle
                         cx="4"
@@ -865,7 +862,7 @@ export function ScriptCustodyFigure({
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="text-meta border-text-ghost text-text mt-3 border border-dashed p-3">
+              <div className="border-text-ghost text-text max-w-measure mt-3 border border-dashed p-3">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}
@@ -873,7 +870,7 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text text-meta max-w-measure mt-2.5">
+        <p key={handover.day} className="text-text text-small max-w-measure mt-2.5">
           ● kept across the handover on {unitNode(handover.day)}: {handover.common} of{' '}
           {unitNode(formatCount(handover.total, 'key'))} · ○ replaced:{' '}
           {handover.total - handover.common} of {handover.total}

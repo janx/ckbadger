@@ -207,7 +207,7 @@ function ProtocolEvidenceView({
         </span>
       </div>
       {bytes.length === 0 ? (
-        <p className="text-text-dim text-small">Empty cell data (0 bytes).</p>
+        <p className="text-text text-small">Empty cell data (0 bytes).</p>
       ) : (
         <HexMap
           layout="scale"
@@ -232,7 +232,7 @@ function ProtocolEvidenceView({
       {decodedJson !== undefined && (
         // the library's inner disclosures (lane cd-fixes-controls, the disclosure sweep)
         <SectionDisclosure form="inner" summary="Decoded fields">
-          <p className="text-text text-meta">
+          <p className="text-text text-small max-w-measure">
             Protocol interpretation; raw cell bytes remain the evidence.
           </p>
           <TintedJson text={decodedJson} className="mt-2" />
@@ -291,7 +291,8 @@ function FieldDetail({
           {pinned && <span className="text-text-dim">selected · </span>}
           <span>{reading.name}</span>
         </span>
-        <span className="text-text-dim text-meta whitespace-nowrap tabular-nums">
+        {/* the field's place in the bytes, a value: the reading ink at 13 px (ink and size roles) */}
+        <span className="text-text text-small whitespace-nowrap tabular-nums">
           [{fmt(reading.start)}..{fmt(reading.end)}) · {fmt(n)} B
         </span>
       </div>
@@ -329,7 +330,7 @@ function FieldDetail({
       })}
       {n > WHOLE_LIMIT && (
         <>
-          <p className="text-text text-meta max-w-measure mt-1.5">… {fmt(n - shown)} more bytes</p>
+          <p className="text-text text-small max-w-measure mt-1.5">… {fmt(n - shown)} more bytes</p>
           <SectionDisclosure
             form="inner"
             className="mt-1.5"

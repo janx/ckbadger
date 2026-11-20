@@ -221,7 +221,8 @@ function FigureBody({ body }: { body: ChartBody }) {
       );
     case 'empty':
       return (
-        <div className="text-text-dim text-small flex items-center" style={{ height: CHART_H }}>
+        // an empty-state line, the reading ink (BRIEF-ink-size-roles item 3)
+        <div className="text-small flex items-center" style={{ height: CHART_H }}>
           {body.message}
         </div>
       );

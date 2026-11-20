@@ -725,6 +725,21 @@ describe('ScriptDetailPage', () => {
     // Table-rows L1-4: the version hash is the one-line row's title.
     expect(row.getAttribute('title')).toContain(sharedVersionCodeHash);
     expect(row).toHaveTextContent('No deployment observed');
+    // BRIEF-ink-size-roles item 1: a cell's content is the reading ink, its state where there is no
+    // deployment and the dash for a date or block it has not, as the values beside them (they were
+    // the quiet ink)
+    for (const state of within(row).getAllByText(/^(No deployment observed|—)$/))
+      expect(state).not.toHaveClass('text-text-dim');
+  });
+
+  // BRIEF-ink-size-roles item 3: an empty-state line is a sentence, the reading ink and the prose
+  // measure (it was the quiet ink)
+  it('says a family with no capacity history in a sentence, in the reading ink', async () => {
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue({ ...mockCapacityChart, data: [] });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const empty = await screen.findByText('No capacity history.');
+    expect(empty).not.toHaveClass('text-text-dim');
+    expect(empty).toHaveClass('max-w-measure');
   });
 
   it('shows failed version usage as unavailable, never zero', async () => {

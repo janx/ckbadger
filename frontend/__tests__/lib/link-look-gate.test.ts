@@ -185,12 +185,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // 'components/forks/miner-link.tsx' left the list (lane cd-fixes-controls, review-p-tests
   // SHOULD-4: its five callers state their look, which is now required; its former ink went, 1 → 0)
   // ---- shell ----
-  'components/stats-bar.tsx': {
-    lane: 'shell',
-    sites: { look: 2, ink: 5 },
-    reason:
-      '2 without a look; five inks on children: the epoch link’s label, value and position spans (text-text-dim, text-text-bright with group-hover:text-jade, text-text)',
-  },
+  // 'components/stats-bar.tsx' left the list (lane cd-fixes-controls, the shared lane's ruling in
+  // the ink and size round: look 2, ink 5 → 0): a vital's value alone is its link, in the inline
+  // look; its label stands beside it, so no ink is set inside a link
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
@@ -247,7 +244,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // NAMED: the owner's accepted design) → 22 (the merge with lane cd-fixes-controls,
 // review-p-tests SHOULD-4: Address's and MinerLink's fallback inks, 2, for callers that state no
 // look; every caller states one, and the look is required)
-const TOLERATED_TOTAL = 22;
+// → 15 (lane cd-fixes-controls, the ink and size round): the vitals strip's 2 links without a look
+// and 5 inks inside them went
+const TOLERATED_TOTAL = 15;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

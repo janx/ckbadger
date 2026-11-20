@@ -67,9 +67,9 @@ it('does not silently substitute stale statistics for a missing completed day', 
     { ...dailyActivities[0], date: '20261024' },
   ]);
   render(<ActivitiesPage />);
-  expect(
-    await screen.findByText('No complete activity statistics for 2026-10-25 (UTC+8).')
-  ).toBeInTheDocument();
+  const none = await screen.findByText('No complete activity statistics for 2026-10-25 (UTC+8).');
+  // BRIEF-ink-size-roles item 3: an empty-state sentence, the reading ink (it was quiet)
+  expect(none).not.toHaveClass('text-text-dim');
   expect(screen.getByTestId('stream-summary')).toHaveTextContent('none');
 });
 

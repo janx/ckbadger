@@ -54,7 +54,8 @@ export default function ActivitiesPage() {
               Could not load yesterday’s activity: {error.message}
             </p>
           ) : data ? (
-            <p className="text-text-dim text-small max-w-measure">
+            // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+            <p className="text-small max-w-measure">
               No complete activity statistics for {yesterday} (UTC+8).
             </p>
           ) : (

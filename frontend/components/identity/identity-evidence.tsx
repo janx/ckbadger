@@ -250,7 +250,9 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-meta max-w-measure">
+      {/* a sentence, the reading ink at 13 px, its link in its look (ink and size roles: a credit in
+          the quiet ink at 12 px) */}
+      <p className="text-text text-small max-w-measure">
         Decoded from the account data in the witness of tx{' '}
         <AppLink
           look="inline"
@@ -260,7 +262,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
             index: v.cell.outputIndex,
           })}
         >
-          <Hash hash={v.cell.txHash} size="row" className="text-meta" />
+          <Hash hash={v.cell.txHash} size="row" className="text-small" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -383,7 +385,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-small whitespace-pre-wrap px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>

@@ -52,17 +52,6 @@ function txSealId(tx: Transaction): SealId {
   return { kind: 'tx', hash: tx.hash, consumed: consumedCells(tx), created: tx.outputsCount };
 }
 
-/** A zero amount drawn quiet (board: `#4b5266`), never a different number. */
-function Quiet({ when, children }: { when: boolean; children: ReactNode }) {
-  return when ? (
-    <span data-zero className="[&_[data-ckb-amount]]:text-text-dim">
-      {children}
-    </span>
-  ) : (
-    <>{children}</>
-  );
-}
-
 /**
  * What a cellbase pays, in its own words (R2b-a 35; the lists lane P3: cellbases are a list of their
  * own): the reward for the block it names (linked by hash, R-6a), and the name its amount takes;
@@ -174,11 +163,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
       ];
   const amount = (shannons: string, field: string) => {
     const value = parseShannons(shannons, `transaction ${tx.hash} ${field}`);
-    return (
-      <Quiet when={value === BigInt(0)}>
-        <CkbAmount form="summary" shannons={value} signed={false} tone="plain" />
-      </Quiet>
-    );
+    return <CkbAmount form="summary" shannons={value} signed={false} tone="plain" />;
   };
   const figures: ReactNode[] = [
     <span key="cells" className="whitespace-nowrap">
@@ -285,7 +270,8 @@ function keyColumns(): ListColumn<Transaction>[] {
           >
             {formatBlockNumber(tx.blockNumber)}
           </Link>
-          <span className="text-text-dim block">
+          {/* a time in a cell, the reading ink (BRIEF-ink-size-roles item 1: it was quiet) */}
+          <span className="block">
             <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
@@ -355,7 +341,9 @@ function committedColumns(sameWidth: number): ListColumn<Transaction>[] {
               <span className="text-text-bright min-w-0 [overflow-wrap:anywhere]">
                 <Dotted parts={activityHeadline(tx.activity!).split(HEADLINE_SEPARATOR)} />
               </span>
-              <span className="text-text-dim text-small min-w-0">
+              {/* the scripts it called and its other facts, names and links: the reading ink, the
+                  headline the bright one (BRIEF-ink-size-roles item 1: they were quiet) */}
+              <span className="text-text text-small min-w-0">
                 <Dotted parts={whatNote(tx.activity!, 'row')} />
               </span>
             </span>
@@ -372,15 +360,13 @@ function committedColumns(sameWidth: number): ListColumn<Transaction>[] {
       numeric: true,
       // a column of the subject amounts (R5's column form), aligned on the point
       render: (tx) => (
-        <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
-          <CkbAmount
-            form="column"
-            shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
-            signed={false}
-            tone="plain"
-            unit={false}
-          />
-        </Quiet>
+        <CkbAmount
+          form="column"
+          shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
+          signed={false}
+          tone="plain"
+          unit={false}
+        />
       ),
     },
     {
@@ -390,15 +376,13 @@ function committedColumns(sameWidth: number): ListColumn<Transaction>[] {
       minWidth: columnPx(textPx(WIDEST_TX_FEE.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
-        <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
-          <CkbAmount
-            form="column"
-            shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
-            signed={false}
-            tone="plain"
-            unit={false}
-          />
-        </Quiet>
+        <CkbAmount
+          form="column"
+          shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
+          signed={false}
+          tone="plain"
+          unit={false}
+        />
       ),
     },
     CELLS_COLUMN,
@@ -433,15 +417,13 @@ function cellbaseColumns(sameWidth: number): ListColumn<Transaction>[] {
       minWidth: columnPx(textPx(WIDEST_TX_OUTPUT.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
-        <Quiet when={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} output`) === BigInt(0)}>
-          <CkbAmount
-            form="column"
-            shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} output`)}
-            signed={false}
-            tone="plain"
-            unit={false}
-          />
-        </Quiet>
+        <CkbAmount
+          form="column"
+          shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} output`)}
+          signed={false}
+          tone="plain"
+          unit={false}
+        />
       ),
     },
     CELLS_COLUMN,

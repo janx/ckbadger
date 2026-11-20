@@ -4,9 +4,10 @@ import { unitNode } from '@/components/ui/units';
 
 /**
  * The three voices of a phone row (boards L1–L8): the identity line, the line that says what the
- * row is, and the quiet developer figures last. The quiet line is quieter by its size, not its ink:
- * its figures are values, so they read in the reading ink (readability ruling R3); a label among
- * them is the call site's to set in the quiet ink, and the separators are quiet here.
+ * row is, and the quiet developer figures last. The quiet line is set apart by its place and its
+ * figures, not by its ink or its size: its figures are values, links and ids, so they read in the
+ * reading ink (readability ruling R3) at 13 px (the ink and size round); a label among them is the
+ * call site's to set in the quiet ink at 12 px, and the separators are quiet here.
  */
 export type PhoneLineTone = 'head' | 'body' | 'quiet';
 
@@ -41,9 +42,12 @@ const TONE: Record<PhoneLineTone, string> = {
   head: 'text-body text-text-bright',
   body: 'text-small text-text',
   // An exact amount takes the ink of its line here (CkbAmount sets its own), so the developer
-  // figures read in one ink, the reading ink, a step under the body line by size (R3); a part that
-  // wraps itself in brighter ink keeps it.
-  quiet: 'text-meta text-text [&_[data-ckb-amount]]:[color:inherit]',
+  // figures read in one ink, the reading ink (R3); a part that wraps itself in brighter ink keeps
+  // it. 13 px (lane cd-fixes-controls, the ink and size round: it was 12, a step under the body
+  // line): the line holds values, links and ids (a block, a transaction, an address, a date), and
+  // 12 px is a label's, a unit's or a hint's; the line is set apart from the body line by its
+  // place and its figures, not by a smaller size.
+  quiet: 'text-small text-text [&_[data-ckb-amount]]:[color:inherit]',
 };
 
 /**

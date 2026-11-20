@@ -19,6 +19,7 @@ import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { activityRead } from '@/__tests__/utils/activity-read';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -524,6 +525,34 @@ describe('TransactionDetailPage', () => {
     // readability 2026-11-18: the range is one unit; the line broke after its dash ("2–" / "10")
     expect(within(line).getByText('2–10')).toHaveAttribute('data-nobreak');
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
+    // lane P1, the ink and size roles: the position, the distance and the window are values, the
+    // reading ink (they were quiet), as are the fee rate and the change of common knowledge
+    expect(inkOf(line)).toBe(READING);
+    expect(inkOf(screen.getByText(/^fee rate /))).toBe(READING);
+    expect(inkOf(screen.getByText(/· common knowledge /))).toBe(READING);
+  });
+
+  // lane P1, the ink and size roles: a sentence in the evidence tier reads in the reading ink (the
+  // paused cycles, the cell deps being resolved, none of them); the witness list's "Select a
+  // witness to inspect its bytes." is a hint of how to use it, quiet
+  it('says its evidence’s sentences in the reading ink, its witness hint quiet (lane P1)', async () => {
+    vi.mocked(useCyclesCalculation).mockReturnValue({
+      cycles: null,
+      hasCycles: false,
+      isCalculating: false,
+      hasFailed: false,
+      isPaused: true,
+    });
+    render(<TransactionDetailPage />);
+    expect(inkOf(await screen.findByText('Paused: indexer is on a deep fork'))).toBe(READING);
+    expect(inkOf(await screen.findByText('none'))).toBe(READING);
+    expect(inkOf(screen.getByTestId('tx-witness-selection-empty'))).toBe(QUIET);
+  });
+
+  it('says its cell deps being resolved in the reading ink (lane P1)', async () => {
+    vi.mocked(api.getTransactionCellDeps).mockReturnValue(new Promise(() => {}));
+    render(<TransactionDetailPage />);
+    expect(inkOf(await screen.findByText('Resolving cell deps…'))).toBe(READING);
   });
 
   // Rubbing × Song print, phase 5 (T1): the cells heading is a command and its args, `cells 1 in →
@@ -829,6 +858,11 @@ describe('TransactionDetailPage', () => {
 
     // Provisional, not failed: a placeholder that says what it waits for.
     expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
+    // lane P1, the ink and size roles: what it waits for and the node's message are sentences, the
+    // reading ink (they were quiet)
+    const waiting = screen.getByTestId('tx-inputs-not-yet-resolvable');
+    expect(waiting.querySelectorAll('p')).toHaveLength(2);
+    for (const p of waiting.querySelectorAll('p')) expect(inkOf(p)).toBe(READING);
     expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
     expect(document.querySelector('.comment')).toBeNull();
     // C2: no transaction yet, so no stone.
@@ -1201,6 +1235,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByText('Witnesses · unavailable')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-tab')).toHaveTextContent('Witness bytes are unavailable');
+    // lane P1, the ink and size roles: a sentence, the reading ink (it was quiet)
+    expect(inkOf(screen.getByText('Witness bytes are unavailable'))).toBe(READING);
   });
 
   it('decodes .cell records next to the witness that carries them', async () => {

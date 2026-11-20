@@ -94,7 +94,7 @@ function ReleaseAndZone() {
   return (
     <p
       data-testid="footer-about"
-      className="text-text-dim m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_-0.75ch)] md:hidden"
+      className="text-text m-0 min-w-0 basis-full lowercase [clip-path:inset(-1em_-100vw_-1em_-0.75ch)] md:hidden"
     >
       <span className="-ml-[2ch] flex flex-wrap gap-x-[1ch]">
         <Token name="release" title={`ckbadger ${build}`}>{`ckbadger ${releaseOf(build)}`}</Token>

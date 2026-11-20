@@ -253,6 +253,8 @@ describe('ChartFigure', () => {
     expect(screen.getByText('daily average, s')).toHaveClass('text-text-dim');
     expect(screen.getByTestId('fig-headline')).toHaveTextContent('9.57');
     expect(screen.getByText('No data yet')).toBeInTheDocument();
+    // BRIEF-ink-size-roles item 3: an empty-state line, the reading ink (it was quiet)
+    expect(screen.getByText('No data yet')).not.toHaveClass('text-text-dim');
   });
 
   it('keeps the title on one line, so a wide readout never makes the caption taller', () => {

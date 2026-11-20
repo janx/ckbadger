@@ -95,7 +95,7 @@ export function FiberChannelStep({
   let body: ReactNode;
   if (isAwaited(transaction) || isAwaited(lookup)) {
     body = (
-      <p className="text-text-dim text-small max-w-measure">
+      <p className="text-text text-small max-w-measure">
         Loading the {title.toLowerCase()} transaction…
       </p>
     );

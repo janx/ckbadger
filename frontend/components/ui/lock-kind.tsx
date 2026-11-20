@@ -282,22 +282,26 @@ export function LockWordsView({
       ) : (
         <>
           lock{' '}
-          <Link
-            // the script page of that lock: its hash type where known, as a lock (B4 second fix
-            // round: a bare code hash opened the family of the code hash's `type` script, the
-            // default lock's for a by-data lock on its code hash)
-            href={getScriptDetailHref({
-              codeHash: codeHash!,
-              // the default lock is its code hash by type
-              hashType: words.form === 'lock' ? words.hashType : 'type',
-              scriptKind: 'lock',
-            })}
-            title={codeHash ?? undefined}
-            look="inline"
-            className="transition-colors"
-          >
-            <ShortId value={codeHash!} kind="hash" size={size} />
-          </Link>
+          {/* the code hash is an id, a value: the reading ink at 13 px inside the label's quiet
+              words (lane cd-fixes-controls, the ink and size round), the link's look inline */}
+          <span className="text-text text-small">
+            <Link
+              // the script page of that lock: its hash type where known, as a lock (B4 second fix
+              // round: a bare code hash opened the family of the code hash's `type` script, the
+              // default lock's for a by-data lock on its code hash)
+              href={getScriptDetailHref({
+                codeHash: codeHash!,
+                // the default lock is its code hash by type
+                hashType: words.form === 'lock' ? words.hashType : 'type',
+                scriptKind: 'lock',
+              })}
+              title={codeHash ?? undefined}
+              look="inline"
+              className="transition-colors"
+            >
+              <ShortId value={codeHash!} kind="hash" size={size} />
+            </Link>
+          </span>
           {/* "by <hash type>" is words after the unit, a line may break before it (B4 second fix
               round: held with "lock 0x…" it passed the columns' budgets) */}
           {by && <span className="whitespace-normal">{by}</span>}

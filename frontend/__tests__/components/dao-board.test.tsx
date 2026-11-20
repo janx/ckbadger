@@ -17,6 +17,7 @@ import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { MEASURE_CHARS, fontPx, textPx } from '@/lib/type-metrics';
 import { factsOf } from '@/__tests__/utils/facts';
+import { inkOf, BRIGHT, READING } from '@/__tests__/utils/ink-role';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -857,6 +858,16 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
     expect(works).toHaveTextContent('everything else 95.49% → burnt');
+    // The ink and size round's follow-up (the lead's ruling, as the chart lane's for a chart card's
+    // key): a key's name and its value read in the reading ink at 13 px; the swatch stays as it is
+    for (const value of ['0.01%', '4.50%', '95.49%']) {
+      const figure = within(works).getByText(value);
+      const legend = figure.closest('div')!;
+      expect(legend).toHaveClass('text-small');
+      expect(legend).not.toHaveClass('text-meta');
+      expect(inkOf(figure)).toBe(READING);
+      expect(inkOf(figure.parentElement!)).toBe(READING);
+    }
     expect(works).toHaveTextContent('Statistics are exact to the shannon at block #5');
     // The icicle's former notes, in words.
     expect(works).toHaveTextContent(
@@ -1259,7 +1270,11 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     expect(bar.firstElementChild).toHaveTextContent('claimable now 400 CKB · 1 cell');
     const waiting = bar.nextElementSibling!;
     expect(waiting).toHaveTextContent(/^waiting for its window 500 CKB · 1 cell$/);
-    expect(waiting).toHaveClass('text-meta', 'text-right');
+    // Re-pinned on purpose (the ink and size round's follow-up, the lead's ruling): the line is a
+    // key with its values, the reading ink at 13 px (it was quiet at 12)
+    expect(waiting).toHaveClass('text-small', 'text-right');
+    expect(waiting).not.toHaveClass('text-meta');
+    expect(inkOf(waiting)).toBe(READING);
   });
 
   // Review of main..fix/readability (2026-11-18, logic finding 3): the fit measured
@@ -1296,6 +1311,14 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     expect(under).toHaveTextContent(
       'claimable now 400 CKB · 1 cellwaiting for its window 500 CKB · 1 cell'
     );
+    // The ink and size round's follow-up (the lead's ruling): under the bar the key and its count
+    // read in the reading ink at 13 px, the claimable amount bright as before
+    expect(under).toHaveClass('text-small');
+    expect(inkOf(under)).toBe(READING);
+    const [claimable, waiting] = Array.from(under.children);
+    expect(inkOf(within(claimable as HTMLElement).getByText('· 1 cell'))).toBe(READING);
+    expect(inkOf(within(claimable as HTMLElement).getByText('400'))).toBe(BRIGHT);
+    expect(inkOf(within(waiting as HTMLElement).getByText(/· 1 cell/))).toBe(READING);
   });
 
   it('ends with one one-line caption and keeps the cycle notes, the epoch and the caveats in tier 2', () => {
@@ -1706,6 +1729,12 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     // re-pinned (lane P4) here and in the identity: the field's figures and the identity's are
     // the subject, exact (they were padded to 8 decimals)
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000 CKB issued in total');
+    // The ink and size round's follow-up (the lead's ruling): the field's 32 bytes are a value, the
+    // reading ink at 13 px, broken anywhere so they wrap inside their box (66 glyphs, 514.8 px)
+    const hex = within(t2 as HTMLElement).getByText(evidence.header.daoHex);
+    expect(hex).toHaveClass('text-small', 'break-all', 'font-mono');
+    expect(hex).not.toHaveClass('text-meta');
+    expect(inkOf(hex)).toBe(READING);
     // contracts W5-3 (DAO-16): the identity names the block it holds at, number and hash.
     expect(t2).toHaveTextContent(
       'At block #5 (0xa5a5a5a5…a5a5a5), S (5 CKB) equals the unclaimed compensation (2) plus the burnt share (3) to the shannon: S only counts the burnt share, it does not hold it for anyone. Claimed + unclaimed compensation equals the depositors’ share.'

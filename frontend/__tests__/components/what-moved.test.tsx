@@ -13,6 +13,7 @@ import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-mo
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const HASH = `0x${'54'.repeat(32)}`;
 /** JoyID's code hash, the lock these parties' addresses spell (`ckb1qrgqep…`). */
@@ -138,6 +139,10 @@ describe('WhatMoved, the ribbon form', () => {
     expect(
       within(plate as HTMLElement).getByRole('link', { name: '0x4a2237a7…2abf1d' })
     ).toHaveAttribute('href', `/mainnet/objects/${NERVAPE}`);
+    // lane P1, the ink and size roles: the object's id is a link, at the plate's 13 px (it was 12)
+    expect(
+      typeStepOf(within(plate as HTMLElement).getByRole('link', { name: '0x4a2237a7…2abf1d' }))
+    ).toBe('small');
     // the plate carries no total for a whole object
     expect(plate.querySelector('[data-flow-total]')).toBeNull();
     const from = object.querySelector('[data-flow-side="from"]')!;
@@ -173,6 +178,8 @@ describe('WhatMoved, the ribbon form', () => {
     ]);
     // the plate's total is what left the givers, so the fee is inside it
     expect(ckb.querySelector('[data-flow-total]')).toHaveTextContent('1,070.00008888 CKB in all');
+    // lane P1, the ink and size roles: the total is a value, at the plate's 13 px (it was 12)
+    expect(typeStepOf(ckb.querySelector('[data-flow-total]')!)).toBe('small');
     // ribbons: one per end, the miner's dashed, a chevron on every receiver
     const svg = ckb.querySelector('svg')!;
     expect(svg.querySelectorAll('[data-ribbon]')).toHaveLength(4);

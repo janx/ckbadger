@@ -4,6 +4,15 @@ import { act, createTestQueryClient, render, screen, waitFor, within } from '../
 import { api, type NetworkStats } from '@/lib/api';
 import { VitalsStrip } from '@/components/stats-bar';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
+import { inkOf, BRIGHT, QUIET, READING } from '@/__tests__/utils/ink-role';
+
+/**
+ * A vital's box, found through its link: its label and its value, the value the link (the shared
+ * lane's ruling, the ink and size round). Re-pinned on purpose: the tests read the box where they
+ * read the link, which was the whole vital; its layout's classes are the box's now.
+ */
+const vital = (name: RegExp | string) =>
+  screen.getByRole('link', { name }).closest('[data-vital]') as HTMLElement;
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -78,24 +87,27 @@ describe('VitalsStrip', () => {
         <VitalsStrip />
       </QueryClientProvider>
     );
-    const block = await screen.findByText('#20,819,143');
-    expect(block).not.toHaveClass('phosphor-flare');
+    // a value's span flares; where the value is its link (the shared lane's ruling), the link is
+    // inside that span (re-pinned on purpose: the words were the span's own)
+    const value = (words: string) => screen.getByText(words).closest('span')!;
+    await screen.findByText('#20,819,143');
+    expect(value('#20,819,143')).not.toHaveClass('phosphor-flare');
     // react-query notifies its observers on the next tick
     act(() => {
       client.setQueryData(['network-stats'], stats({ latestBlock: 20819144 }));
     });
-    await waitFor(() => expect(screen.getByText('#20,819,144')).toHaveClass('phosphor-flare'));
-    expect(screen.getByText('850.46 P')).not.toHaveClass('phosphor-flare');
-    expect(screen.getByText('15,168')).not.toHaveClass('phosphor-flare');
+    await waitFor(() => expect(value('#20,819,144')).toHaveClass('phosphor-flare'));
+    expect(value('850.46 P')).not.toHaveClass('phosphor-flare');
+    expect(value('15,168')).not.toHaveClass('phosphor-flare');
     act(() => {
       client.setQueryData(
         ['network-stats'],
         stats({ latestBlock: 20819144, epoch: '15169(0/1590)', avgBlockTime: '8.50s' })
       );
     });
-    await waitFor(() => expect(screen.getByText('15,169')).toHaveClass('phosphor-flare'));
-    expect(screen.getByText('8.50 s')).toHaveClass('phosphor-flare');
-    expect(screen.getByText('850.46 P')).not.toHaveClass('phosphor-flare');
+    await waitFor(() => expect(value('15,169')).toHaveClass('phosphor-flare'));
+    expect(value('8.50 s')).toHaveClass('phosphor-flare');
+    expect(value('850.46 P')).not.toHaveClass('phosphor-flare');
   });
 
   it('shows unavailable block time and epoch estimate explicitly', async () => {
@@ -106,7 +118,8 @@ describe('VitalsStrip', () => {
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     await waitFor(() => expect(strip).toHaveTextContent('Block time—'));
     expect(screen.getByTestId('vitals-epoch')).toHaveTextContent('—');
-    expect(screen.getByTestId('vitals-epoch')).toHaveAttribute(
+    // the epoch's link is its number now (the shared lane's ruling), named as the vital was
+    expect(within(screen.getByTestId('vitals-epoch')).getByRole('link')).toHaveAttribute(
       'aria-label',
       expect.stringContaining('remaining time unavailable')
     );
@@ -141,8 +154,11 @@ describe('VitalsStrip', () => {
     });
     expect(epoch).toHaveAttribute('href', '/mainnet/charts/epoch-time-length');
     expect(epoch).toHaveTextContent('15,168');
-    expect(epoch).toHaveTextContent('246 / 1,590');
-    expect(epoch).toHaveTextContent('≈ 3h 8m left');
+    // re-pinned on purpose (the shared lane's ruling): the link is the number; the position and
+    // the time left stand beside it in the vital
+    const epochVital = screen.getByTestId('vitals-epoch');
+    expect(epochVital).toHaveTextContent('246 / 1,590');
+    expect(epochVital).toHaveTextContent('≈ 3h 8m left');
     // rubbing × Song print, phase 2: the progress in block characters, 246 / 1590 of the cells
     // filled (whole cells only): one of ten from 640 px, none of five on a phone
     const bar = screen.getByTestId('vitals-epoch-bar');
@@ -160,6 +176,45 @@ describe('VitalsStrip', () => {
       'href',
       '/mainnet/charts/difficulty'
     );
+  });
+
+  // The shared lane's ruling (the ink and size round): a vital's label and value were one link, so
+  // the label was link text in the quiet ink, 4.5 points of the site's characters on every page.
+  // The label is a label (quiet, 12 px below md, decided: the label of a value) and stands beside
+  // the link; the value alone is the link, in the inline look, so a reader sees it is one at rest,
+  // in the strip's bright ink; its accessible name still says what it is. The epoch's position and
+  // time left are values: the reading ink, at 13 px from md (12 below it, where 13 would wrap the home
+  // page's epoch line at 360 and grow the strip).
+  it('makes each vital’s value its link, in the inline look; its label a label beside it', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const tip = await screen.findByRole('link', { name: 'Tip #20,819,143' });
+    expect(tip).toHaveTextContent(/^#20,819,143$/);
+    expect(tip).toHaveClass('underline');
+    expect(inkOf(tip)).toBe(BRIGHT);
+    const vital = tip.closest('[data-vital]')!;
+    const label = within(vital as HTMLElement).getByText('Tip');
+    expect(tip).not.toContainElement(label);
+    expect(label).toHaveClass('text-meta', 'md:text-small');
+    expect(inkOf(label)).toBe(QUIET);
+    for (const [name, words] of [
+      ['Hash rate 93.91 PH/s', '93.91 PH/s'],
+      ['Difficulty 850.46 P', '850.46 P'],
+    ] as const) {
+      const link = screen.getByRole('link', { name });
+      expect(link).toHaveTextContent(words);
+      expect(link).toHaveClass('underline');
+      expect(link).not.toHaveTextContent(name.split(' ')[0]);
+    }
+    const epoch = screen.getByRole('link', {
+      name: 'Epoch 15,168, block 246 of 1,590, about 3h 8m left',
+    });
+    expect(epoch).toHaveTextContent(/^15,168$/);
+    expect(epoch).toHaveClass('underline');
+    for (const value of [screen.getByText('246 / 1,590'), screen.getByText('≈ 3h 8m left')]) {
+      expect(value).toHaveClass('text-meta', 'md:text-small');
+      expect(inkOf(value)).toBe(READING);
+    }
   });
 
   it('renders an explicit error for a malformed epoch instead of inventing 0 / 1800', async () => {
@@ -190,8 +245,11 @@ describe('VitalsStrip', () => {
     const epoch = await screen.findByRole('link', {
       name: 'Epoch 0, the genesis block: its header states no epoch length, remaining time unavailable',
     });
-    expect(epoch).toHaveAttribute('data-testid', 'vitals-epoch');
-    expect(epoch).toHaveTextContent(/^Epoch0genesis: no length0 \/ 0—$/);
+    // re-pinned on purpose (the shared lane's ruling): the link is the number, in the vital
+    expect(epoch).toHaveTextContent(/^0$/);
+    expect(epoch.closest('[data-testid="vitals-epoch"]')).toHaveTextContent(
+      /^Epoch0genesis: no length0 \/ 0—$/
+    );
     expect(screen.getByTestId('vitals-epoch-genesis')).toHaveClass('text-text-dim');
     expect(screen.queryByTestId('vitals-epoch-bar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('vitals-epoch-error')).not.toBeInTheDocument();
@@ -234,7 +292,7 @@ describe('VitalsStrip', () => {
     expect(live).toHaveAttribute('data-live', 'true');
     expect(live).toHaveAttribute('title', 'Live: realtime updates connected');
     // Nothing leads the Block item any more.
-    expect(strip.firstElementChild).toBe(screen.getByRole('link', { name: /Tip #20,819,143/ }));
+    expect(strip.firstElementChild).toBe(vital(/Tip #20,819,143/));
   });
 
   it('writes the block time with a space before its unit and never scrolls sideways (TX-05)', async () => {
@@ -265,7 +323,7 @@ describe('VitalsStrip', () => {
     expect(strip).toHaveClass('grid', 'grid-cols-3', 'gap-x-4', 'gap-y-2');
     expect(strip).toHaveClass('sm:grid-cols-[max-content_max-content_max-content_1fr]');
     // Line 1: the block on the left, Live at the right end of the same line.
-    const block = screen.getByRole('link', { name: /Tip #20,819,143/ });
+    const block = vital(/Tip #20,819,143/);
     expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
     const live = screen.getByTestId('vitals-live');
     expect(live).toHaveClass('row-start-1', 'col-start-3', 'sm:col-start-4', 'ml-auto');
@@ -281,8 +339,8 @@ describe('VitalsStrip', () => {
     // label beside value from 640 up.
     const mining = [
       screen.getByText('Block time').parentElement as HTMLElement,
-      screen.getByRole('link', { name: /Hash rate/ }),
-      screen.getByRole('link', { name: /Difficulty/ }),
+      vital(/Hash rate/),
+      vital(/Difficulty/),
     ];
     for (const m of mining) {
       expect(m.className).not.toMatch(/col-span|col-start|row-start/);
@@ -322,7 +380,7 @@ describe('VitalsStrip', () => {
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     const tip = await within(strip).findByRole('link', { name: /^Tip #20,819,143/ });
-    expect(strip.firstElementChild).toBe(tip);
+    expect(strip.firstElementChild).toBe(tip.closest('[data-vital]'));
     expect(within(strip).queryByText(/^Block$/)).toBeNull();
   });
 
@@ -423,8 +481,8 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     expect(position).toContainElement(screen.getByText('≈ 3h 8m left'));
     return [
       screen.getByText('Block time').parentElement as HTMLElement,
-      screen.getByRole('link', { name: /Hash rate/ }),
-      screen.getByRole('link', { name: /Difficulty/ }),
+      vital(/Hash rate/),
+      vital(/Difficulty/),
       position,
     ];
   }
@@ -451,7 +509,7 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     expect(strip).toHaveClass('flex', 'flex-wrap', 'items-baseline', 'gap-x-3', 'py-2.5');
     expect(strip).toHaveClass('md:gap-x-6', 'md:gap-y-2.5', 'md:py-3');
     // what the line holds, drawn at every width, placed by no grid track
-    const block = screen.getByRole('link', { name: /Tip #20,819,143/ });
+    const block = vital(/Tip #20,819,143/);
     const epoch = screen.getByTestId('vitals-epoch');
     const live = screen.getByTestId('vitals-live');
     for (const el of [block, epoch, screen.getByTestId('vitals-epoch-bar'), live]) {

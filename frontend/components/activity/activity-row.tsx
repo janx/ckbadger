@@ -210,11 +210,9 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn(
-            'text-text-dim text-meta',
-            line && 'leading-row ml-auto',
-            phone && 'min-w-0'
-          )}
+          // links and values (the block, the hash, the date or age, the pool's state): the row's
+          // reading ink at 13 px (BRIEF-ink-size-roles items 1 and 2: the evidence was quiet at 12)
+          className={cn('text-small', line && 'leading-row ml-auto', phone && 'min-w-0')}
         >
           {evidence}
         </span>
@@ -230,16 +228,14 @@ export function ActivityRowHead({
           // part after it, and inside a part only where the part lets it (the block number has no
           // space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
           // device's clock is behind" break between its words).
-          className={cn(
-            'text-text-dim text-meta',
-            line && 'leading-row ml-auto',
-            phone && 'min-w-0'
-          )}
+          // links and values (the block, the hash, the date or age, the pool's state): the row's
+          // reading ink at 13 px (BRIEF-ink-size-roles items 1 and 2: the evidence was quiet at 12)
+          className={cn('text-small', line && 'leading-row ml-auto', phone && 'min-w-0')}
         >
           <Dotted
             parts={[
               blockNumber !== null ? (
-                // its ink said on itself, the evidence's quiet ink (a part handed to the list)
+                // its ink said on itself, the evidence's (a part handed to the list)
                 <Link href={`/blocks/${blockNumber}`} look="inline">
                   {formatBlockNumber(blockNumber)}
                 </Link>
@@ -452,13 +448,18 @@ function callNames(refs: CallRef[], args: boolean): ReactNode[] {
       >
         {g.name}
       </Link>
-      {args && g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
+      {/* a figure, the run's ink (BRIEF-ink-size-roles item 1) */}
+      {args && g.calls.length > 1 && <span> ×{g.calls.length}</span>}
     </span>
   ));
 }
 
-/** The voice of the tx-level facts after the headline: one run of them, named `detail`. */
-const DETAIL = 'text-text-dim text-small font-normal';
+/**
+ * The voice of the tx-level facts after the headline: one run of them, named `detail`. Script names
+ * as links and their counts, the reading ink (BRIEF-ink-size-roles item 1: a link is never quiet;
+ * the run was).
+ */
+const DETAIL = 'text-text text-small font-normal';
 
 function detailRun(parts: readonly ReactNode[]): DottedGroup {
   return dottedGroup(parts, { role: 'detail', className: DETAIL });
@@ -469,7 +470,7 @@ function times(part: ReactNode, count: number): ReactNode {
   return count > 1 ? (
     <>
       {part}
-      <span className="text-text-dim"> ×{count}</span>
+      <span> ×{count}</span>
     </>
   ) : (
     part
@@ -632,7 +633,9 @@ function ProtocolActionLine({
   }
   if (parts.length === 0) parts.push(action.label);
   return (
-    <div data-role="protocol-line" className="text-text-dim text-small leading-row pl-[18px]">
+    // a protocol action's facts, values and the deposit block's link: the reading ink
+    // (BRIEF-ink-size-roles item 1: the line was quiet)
+    <div data-role="protocol-line" className="text-text text-small leading-row pl-[18px]">
       <Dotted parts={withCount(parts, group.count)} />
     </div>
   );
@@ -1006,9 +1009,9 @@ function ParticipantLine({
     </span>
   );
   const notePart = p.lockHash !== null && notes?.has(p.lockHash) && (
-    <span data-role="participant-note" className="text-text-dim text-meta">
-      {notes.get(p.lockHash)}
-    </span>
+    // a note that is a sentence ("holds the class cell"): the line's reading ink at its 13 px
+    // (BRIEF-ink-size-roles items 2 and 3: it was quiet at 12)
+    <span data-role="participant-note">{notes.get(p.lockHash)}</span>
   );
   const ckb = (
     <span
@@ -1033,9 +1036,12 @@ function ParticipantLine({
   const occupied = p.usedDelta !== '0' && (
     <span
       data-role="occupied"
-      className={cn('text-meta text-text-dim whitespace-nowrap tabular-nums', !fromSm && 'ml-auto')}
+      className={cn('whitespace-nowrap tabular-nums', !fromSm && 'ml-auto')}
     >
-      occupied {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
+      {/* the figure's label quiet at 12 px, the figure a value in the line's reading ink at its
+          13 px (BRIEF-ink-size-roles items 1 and 2: the whole was quiet at 12) */}
+      <span className="text-text-dim text-meta">occupied</span>{' '}
+      {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
     </span>
   );
   const leadItems = lead.map((item, i) => (

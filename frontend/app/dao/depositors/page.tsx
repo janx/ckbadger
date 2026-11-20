@@ -168,7 +168,8 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
         segments={[
           { key: 'share', label: 'share', value: percentHundredths(d.sharePercent), tone: 'dao' },
         ]}
-        display={<span className="text-text-dim">{d.sharePercent}%</span>}
+        // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1: it was dim)
+        display={<span>{d.sharePercent}%</span>}
         displayWidth={SHARE_TEXT}
       />
     ),
@@ -227,7 +228,7 @@ export default function DaoDepositorsPage() {
               DAO depositors could not be loaded: {String(query.error)}
             </div>
           ) : !page ? (
-            <div className="text-text-dim text-small py-6">Ranking every depositor…</div>
+            <div className="text-text text-small py-6">Ranking every depositor…</div>
           ) : (
             <>
               {moved && (

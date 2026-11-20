@@ -7,6 +7,7 @@ import type { Cell, TransactionDetail } from '@/lib/api';
 import { scriptLookupKey } from '@/lib/script-pair';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -285,6 +286,8 @@ describe('Its transactions against the Cell board', () => {
       expect.stringMatching(/\/blocks\/20834844$/)
     );
     expect(box).toHaveTextContent('The transaction that spends it will run:');
+    // lane P1, the ink and size roles: the lead-in is a sentence, the reading ink (it was quiet)
+    expect(inkOf(within(box).getByText('The transaction that spends it will run:'))).toBe(READING);
     expect(box).toHaveTextContent('lock groupNervape Shadow Lock');
     expect(box).toHaveTextContent('type groupSpore');
     expect(box).toHaveTextContent('0x5b20ec7d…724dc2:0');
@@ -369,6 +372,9 @@ describe('Its transactions against the Cell board', () => {
     expect(box).toHaveTextContent('Not replaced yet');
     expect(box).toHaveTextContent('The transaction that replaces or destroys it will run:');
     expect(box).toHaveTextContent('Built-in Type ID; no code-cell dep');
+    // lane P1, the ink and size roles: what the requirement resolves to is a sentence, the reading
+    // ink (it was quiet)
+    expect(inkOf(within(box).getByText(/Built-in Type ID; no code-cell dep/))).toBe(READING);
   });
 });
 

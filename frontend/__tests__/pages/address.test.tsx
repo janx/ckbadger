@@ -50,6 +50,9 @@ import { factsOf } from '@/__tests__/utils/facts';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 import { activityRead } from '@/__tests__/utils/activity-read';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
+import { formatUtc8Date } from '@/lib/utils';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -1629,6 +1632,9 @@ describe('Address board · F2 blocks', () => {
       fixtureHash(302),
       fixtureHash(306),
     ]);
+    // lane P1, the ink and size roles: the type hash is an id, at the row's 13 px (it was 12)
+    for (const row of withHash)
+      expect(typeStepOf(row.querySelector('[data-type-hash]')!.firstElementChild!)).toBe('small');
   });
 
   it('marks object compositions with the crystal badges on each collection row (BA-33, C14)', async () => {
@@ -2154,7 +2160,9 @@ describe('Address · space legend (lane A follow-up)', () => {
       // lane exactness, part B2: 3,761 of 3,887 B is 96.758…%, 96.75% (half up 96.76%); 126 3.2415…%, 3.24%
     ).toEqual(['Objects3,761\u00a0B96.75%', 'Plain CKB126\u00a0B3.24%']);
     const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
-    expect(rest).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lane P1, the ink and size roles: a sentence outside a <p> takes the
+    // reading ink; it was the quiet ink)
+    expect(inkOf(rest)).toBe(READING);
     expect(rest).toHaveAttribute(
       'title',
       'Nervos DAO 0 B · Tokens 0 B · Identities 0 B · Other scripts 0 B'
@@ -2179,5 +2187,92 @@ describe('Address · space legend (lane A follow-up)', () => {
     const legend = document.querySelector<HTMLElement>('[data-space-legend]')!;
     expect(within(legend).getAllByRole('button')).toHaveLength(6);
     expect(within(legend).queryByText(/^nothing in/)).toBeNull();
+  });
+});
+
+// Lane P1, the ink and size roles round (BRIEF-ink-size-roles, items 1 to 3): a value, a table
+// cell's content and a sentence read in the reading ink at 13 px; a label, a unit, a column head, a
+// hint and an eyebrow stay quiet. These lines stood in the quiet ink, some at the meta step.
+describe('the ink and size roles of the address page (lane P1)', () => {
+  it('says an unavailable lock script and an empty history in the reading ink', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue({ ...addressFixture, lockScript: undefined });
+    vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture([]));
+    render(<AddressDetailPage />);
+    expect(inkOf(await screen.findByText('Script unavailable'))).toBe(READING);
+    expect(inkOf(await screen.findByText('No activities.'))).toBe(READING);
+  });
+
+  it('reads a transaction’s date and notes in its table cells in the reading ink at 13 px', async () => {
+    const named = { ...addressTransactionsFixture[0], txType: 'named' as const };
+    const pooled = {
+      ...addressTransactionsFixture[0],
+      txHash: fixtureHash(801),
+      blockNumber: null,
+      timestamp: null,
+      poolStatus: 'pending' as const,
+      timeAddedToPool: '1771632000000',
+      interpretation: { status: 'partial' as const, reasons: [{ code: 'unresolved_input' }] },
+    };
+    vi.mocked(api.getAddressTransactions).mockResolvedValue(pageFixture([pooled, named], 2));
+    render(<AddressDetailPage />);
+    await tab('Transactions');
+    const table = await screen.findByRole('table', { name: /transactions/i });
+    const note = await within(table).findByText('Named participant');
+    expect(inkOf(note)).toBe(READING);
+    expect(typeStepOf(note)).toBe('small');
+    expect(inkOf(within(table).getByText(formatUtc8Date('1771632000000')))).toBe(READING);
+    expect(typeStepOf(within(table).getByText(/^partial: /))).toBe('small');
+  });
+
+  it('says a phone row’s named participant in the reading ink, its pool note at the line’s size', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    const named = { ...addressTransactionsFixture[0], txType: 'named' as const };
+    const pooled = {
+      ...addressTransactionsFixture[0],
+      txHash: fixtureHash(801),
+      blockNumber: null,
+      timestamp: null,
+      poolStatus: 'pending' as const,
+      timeAddedToPool: '1771632000000',
+      interpretation: { status: 'partial' as const, reasons: [{ code: 'unresolved_input' }] },
+    };
+    vi.mocked(api.getAddressTransactions).mockResolvedValue(pageFixture([pooled, named], 2));
+    render(<AddressDetailPage />);
+    await tab('Transactions');
+    const note = await screen.findByText('Named participant');
+    expect(note.closest('table')).toBeNull();
+    expect(inkOf(note)).toBe(READING);
+    // the touched line is a body line, 13 px: the note takes it (it set the meta step)
+    expect(typeStepOf(screen.getByText(/^partial: /))).toBe('small');
+  });
+
+  it('states a holding’s summary, the collections’ sentence and an unread composition in the reading ink', async () => {
+    vi.mocked(api.getAddressCells).mockImplementation(async (_addr, p) =>
+      pageFixture(
+        addressObjectsFixture
+          .filter((c) => c.display!.collectionId === p?.collection)
+          .map((c) => ({ ...c, display: { ...c.display!, compositionTier: null } })),
+        6
+      )
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    const dao = await waitFor(() => {
+      const h = document.querySelector('[data-holding-class="dao"] h3');
+      expect(h).toHaveTextContent('Nervos DAO deposits');
+      return h!;
+    });
+    expect(inkOf(dao.nextElementSibling!)).toBe(READING);
+    expect(inkOf(await screen.findByText(/^Open a collection to list its objects here/))).toBe(
+      READING
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
+    const list = await screen.findByRole('table', { name: '拯救民主 objects held here' });
+    const unread = within(list).getAllByText('Composition unavailable');
+    for (const el of unread) expect(inkOf(el)).toBe(READING);
   });
 });

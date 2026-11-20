@@ -10,18 +10,42 @@ import { descentPx, fontPx, textPx, tightLinePx } from '@/lib/type-metrics';
  * text under 12 px: the three smallest roles, which stood 1 and 0.5 px under the meta step, are
  * the meta step now (12 px), and the larger roles keep their place against their own step. Every
  * role reads the scale (lib/type-scale.ts); `SVG_TEXT_FLOOR` is the floor the gate holds.
+ *
+ * The roles' inks (the ink and size roles, finished): a tick, a band's label and a unit are the
+ * quiet ink at 12 px, as the chart board drew them; a sentence and a key's words (a name and its
+ * value) are the reading ink at 13 px; a value read out over a plot is the reading ink at 14. The
+ * readout line's hint under a chart ("tap or hover") is HTML, the quiet meta step
+ * (components/ui/readout-row.tsx).
  */
 export const SVG_TEXT = {
-  /** 12 px, the meta step: a chart's axis ticks and rulers, and a figure's smallest marks (a tile's hash and time, a gel's lane digits, a band's label). */
+  /**
+   * 12 px, the meta step, the quiet ink: a chart's axis ticks and rulers, and a figure's smallest
+   * marks (a tile's hash and time, a gel's lane digits, a band's label). A tick names a place on
+   * an axis; a band's label names a mark; neither is what a reader came to read.
+   */
   tick: fontPx('meta'),
   /** 12 px, the meta step: a second line under a name (a date, an epoch, a sub-label) and a figure's notes. */
   note: fontPx('meta'),
-  /** 12 px, the meta step: a plot's name and key, a figure's labels, a time axis set at the label size. */
+  /**
+   * 12 px, the meta step, the quiet ink: a figure's labels, a time axis set at the label size, a
+   * plot's unit alone (an index card's name line, "CKB"), the hover reading's head. Labels and
+   * units, never a sentence.
+   */
   label: fontPx('meta'),
   /** 12.5 px, half a pixel under the small step: a figure's figures set under or beside its labels (a count, a byte range, a box's value). */
   value: fontPx('small') - 0.5,
-  /** 13 px, the small step: the line that leads an item in a figure (a tile's number, a gene's name, a lane's head, a key's words). */
+  /**
+   * 13 px, the small step, the reading ink: the line that leads an item in a figure (a tile's
+   * number, a gene's name, a lane's head) and a key's words, a name and its value (a band's name
+   * and figure at its right end, a target line's key, "target 2.50%").
+   */
   head: fontPx('small'),
+  /**
+   * 13 px, the small step, the reading ink: a sentence in a plot, prose like any other (the ink and
+   * size roles, finished): a plot's name line ("CKB issued, by where it is · every complete day
+   * since …"), an axis cap's note ("3 days above this scale; the largest, …").
+   */
+  sentence: fontPx('small'),
   /** 13.5 px, half a pixel under the body step: a figure's titles over a rule (an edition's name). */
   title: fontPx('body') - 0.5,
   /** 14 px, the body step: a value read out over a plot (an end label, the hover reading, words in a tall box). */

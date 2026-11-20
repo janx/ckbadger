@@ -657,7 +657,8 @@ export function ScriptFamilyPage({
   const versionCell = (row: Row) => (
     <span className="text-text-bright">
       v{row.number}
-      {row.current && <span className="text-text text-meta block">current</span>}
+      {/* the version's state, a value of its cell at the cell's 13 px (BRIEF-ink-size-roles item 2) */}
+      {row.current && <span className="text-text text-small block">current</span>}
     </span>
   );
   /** The deployment a one-line version row writes: its first; the others are its title's. */
@@ -754,7 +755,8 @@ export function ScriptFamilyPage({
             <Utc8Date timestamp={lead.deployedAt} />
           </span>
         ) : (
-          <span className="text-text-dim">—</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>—</span>
         );
       },
     },
@@ -773,7 +775,8 @@ export function ScriptFamilyPage({
             {formatBlockNumber(block)}
           </Link>
         ) : (
-          <span className="text-text-dim">—</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>—</span>
         );
       },
     },
@@ -788,7 +791,8 @@ export function ScriptFamilyPage({
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
-        if (!lead) return <span className="text-text-dim">No deployment observed</span>;
+        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+        if (!lead) return <span>No deployment observed</span>;
         const more = row.version.deployments.filter((d) => d !== lead);
         return (
           <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
@@ -827,7 +831,8 @@ export function ScriptFamilyPage({
         return custody ? (
           <span>{holderName(custody, 'tight')}</span>
         ) : (
-          <span className="text-text-dim">custody unavailable</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>custody unavailable</span>
         );
       },
     },
@@ -869,17 +874,19 @@ export function ScriptFamilyPage({
     {
       key: 'version',
       label: 'v',
-      // "v99", and "current" under it at 12 px (50.4, the wider), and the gap (F3-e: it was 64)
-      minWidth: columnPx(Math.max(small(VERSION_NUMBER), meta('current')) + CELL_GAP_PX),
+      // "v99", and "current" under it at the cell's 13 px (54.6, the wider), and the gap: 70.6
+      // (F3-e: it was 64; 66.4 with "current" at 12 px, BRIEF-ink-size-roles item 2)
+      minWidth: columnPx(Math.max(small(VERSION_NUMBER), small('current')) + CELL_GAP_PX),
       className: NARROW,
       render: versionCell,
     },
     {
       key: 'deployed',
       label: 'Deployed',
-      // the date, and the block under it at 12 px (79.2, the wider), and the gap
+      // the date, and the block under it, a link, at 13 px (85.8, the wider; it was 79.2 at 12
+      // px), and the gap
       minWidth: columnPx(
-        Math.max(small(formatUtc8Date(0)), meta(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
+        Math.max(small(formatUtc8Date(0)), small(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
       ),
       className: NARROW,
       render: (row) =>
@@ -888,12 +895,13 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               <Utc8Date timestamp={d.deployedAt} />
               {d.createdAtBlock !== undefined && (
-                <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
+                <span className="block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
         ) : (
-          <span className="text-text-dim">No deployment observed</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span>No deployment observed</span>
         ),
     },
     {
@@ -910,12 +918,14 @@ export function ScriptFamilyPage({
           {row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
               {outpointLink(d, 'row')}
-              <span className="text-text-dim text-meta block">
+              {/* values of the cell, the reading ink at its 13 px (BRIEF-ink-size-roles items 1 and 2) */}
+              <span className="text-small block">
                 {binarySize(d)} · {signedText(d, 'row')}
               </span>
             </span>
           ))}
-          <span className="text-text-dim text-meta block [overflow-wrap:anywhere]">
+          {/* the version hash the column's head names, a value: the reading ink at 13 px */}
+          <span className="text-text block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>
@@ -1097,7 +1107,7 @@ export function ScriptFamilyPage({
             <div role="region" aria-label="History" className="mt-[72px] min-w-0">
               <DetailSection title="History" actions={range}>
                 {chartLoading ? (
-                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
+                  <p className="text-text text-small py-6">Loading capacity history…</p>
                 ) : chartError ? (
                   <p role="alert" className="text-negative text-small max-w-measure">
                     Capacity history unavailable: {chartError.message}
@@ -1120,7 +1130,8 @@ export function ScriptFamilyPage({
                     />
                   </>
                 ) : (
-                  <p className="text-text-dim text-small py-6">No capacity history.</p>
+                  // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+                  <p className="text-small max-w-measure py-6">No capacity history.</p>
                 )}
               </DetailSection>
             </div>
@@ -1200,7 +1211,7 @@ export function ScriptFamilyPage({
                 ))}
               </div>
               {cells.loading ? (
-                <p className="text-text-dim text-small py-6">Loading cells…</p>
+                <p className="text-text text-small py-6">Loading cells…</p>
               ) : (
                 <ListTable
                   label="Its cells"

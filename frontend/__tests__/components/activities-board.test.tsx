@@ -10,6 +10,7 @@ import { ActivitiesStreamExplorer } from '@/components/activities-stream-explore
 import { api, type GlobalActivity } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 import { activityRead } from '@/__tests__/utils/activity-read';
+import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
@@ -108,11 +109,26 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
     expect(screen.queryByText(/loaded$/)).not.toBeInTheDocument();
   });
 
-  it('says an empty filter in a quiet sentence, not in capitals', async () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles item 3: an empty-state line is a sentence, the reading ink and
+  // the prose measure; it was "… in a quiet sentence …")
+  it('says an empty filter in a sentence in the reading ink, not in capitals', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
     render(<ActivitiesStreamExplorer />);
     const empty = await screen.findByText('Nothing of this kind in the latest activities.');
     expect(empty).not.toHaveClass('uppercase');
+    expect(empty).not.toHaveClass('text-text-dim');
+    expect(empty).toHaveClass('max-w-measure');
+  });
+
+  // BRIEF-ink-size-roles item 3: the counts' period note is a sentence, the reading ink at 13 px (it was quiet at 12)
+  it('says the counts’ period in a sentence in the reading ink at 13 px', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
+    render(<ActivitiesStreamExplorer summary={dailyActivities[0]} />);
+    // re-pinned on purpose at the merge into resync/final: the note's words are the one-kind
+    // counts' (resync/int: no kind overlaps), the ink and the size this brief's
+    const note = await screen.findByText(/^Yesterday’s counts \(UTC\+8\)\.$/);
+    expect(note.className).not.toMatch(/text-text-dim|text-meta/);
+    expect(note).toHaveClass('text-small', 'max-w-measure');
   });
 
   it('says a load failure in sentence case with its reason', async () => {

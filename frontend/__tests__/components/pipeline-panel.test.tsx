@@ -1490,6 +1490,10 @@ describe('PipelinePanel static render', () => {
     server.use(http.get('/api/:network/v1/pipeline', () => new Promise<Response>(() => {})));
     render(<PipelinePanel />);
     expect(screen.getByTestId('pipeline-loading')).toBeInTheDocument();
+    // a loading line is a sentence, the reading ink, one rule site-wide (the lead's follow-up to lane
+    // P3; it was the quiet ink)
+    expect(screen.getByTestId('pipeline-loading')).toHaveClass('text-text');
+    expect(screen.getByTestId('pipeline-loading')).not.toHaveClass('text-text-dim');
     const tip = screen.getByTestId('pipeline-tip');
     expect(tip).toHaveTextContent(/^--tip —$/);
     expect(within(tip).queryByRole('link')).toBeNull();
@@ -2943,6 +2947,15 @@ describe('PipelinePanel interactions', () => {
     tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
     expect(screen.queryByTestId('pipeline-legend')).toBeNull();
+    // BRIEF-ink-size-roles item 2: the readout's link and the pinned item's facts are a link's
+    // words and values, 13 px (the line was 12 px); its eyebrow and its tag are labels, 12 px
+    const line = screen.getByTestId('pipeline-selection');
+    expect(line).toHaveClass('text-small');
+    expect(line).not.toHaveClass('text-meta');
+    expect(within(line).getByRole('link', { name: 'open tx ↗' }).className).not.toMatch(
+      /text-meta/
+    );
+    expect(within(line).getByText('Selected')).toHaveClass('text-meta');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(usePipelineHoverStore.getState().pinned).toBeNull();

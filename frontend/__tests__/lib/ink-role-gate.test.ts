@@ -69,418 +69,106 @@ interface Tolerated {
 // chain 36 → 31, lists 43 → 36, topics 18 → 14, files 59 → 58 (the merge with the P3 follow-up's
 // 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
+// chain 28 → 0, files 51 → 37, decided 15 → 18 in 6 → 9 files (lane P1, the ink and size roles:
+// each chain file left the list in the commit that converted it)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
   // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
   // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
-  chain: 28,
-  assets: 33,
+  chain: 0,
+  // assets 33 → 0 (lane P2, the ink and size roles round): every site reads in the reading ink
+  assets: 0,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
   // prose site gone with its entry
-  lists: 23,
-  topics: 14,
-  shared: 9,
+  // lists 23 → 15 (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink)
+  // lists 15 → 0 (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided)
+  lists: 0,
+  // topics 14 → 0, shared 9 → 0 (lane cd-fixes-controls, the ink and size round)
+  topics: 0,
+  shared: 0,
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
-// 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 51;
+// 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED;
+// 51 → 0 (the ink and size round, at the merge of its five lanes): the chain family's 14 files
+// (lane P1), the assets family's 15 (lane P2), the lists family's 5 (lane P3: the inventory 2, the
+// script pages 3) and the topics and shared families' 17 (lane cd-fixes-controls) left the list
+const TOLERATED_FILES = 0;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
-  'app/address/[addr]/client-page.tsx': {
-    family: 'chain',
-    // prose 4 → 2 (lane P1 follow-up): the .cell names' and the Fiber channels' section sentences
-    // are statements, in the reading ink
-    sites: { prose: 2 },
-    reason:
-      "empty 2: the evidence tier's 'Script unavailable' and the history's no-activities line",
-  },
-  'app/blocks/[id]/client-page.tsx': {
-    family: 'chain',
-    // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it;
-    // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
-    // reading ink; link 10 → 7 (lane P1): the activity rows' transaction link and the hardfork
-    // link state their looks, and the uncle row's links read in the line's ink
-    // link 7 → 0, prose 7 → 4 (lane P1 follow-up): the genesis epoch's note, a proposal's
-    // commitment (or that it has none in its window), the proposals' failure and an uncle's
-    // sibling line are statements, in the reading ink, their links with them
-    sites: { prose: 4 },
-    reason:
-      'empty 3: no uncles, no proposals, no activities in this block; loading 1: the proposals',
-  },
-  'app/blocks/[id]/uncles/[index]/client-page.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: 'This uncle proposed nothing.'",
-  },
+  // lane P1, the ink and size roles: the chain family's 28 sites left this list, 25 in the
+  // reading ink (empty, loading and waiting lines, a table cell's content, notes that are
+  // sentences) and 3 to DECIDED (an uncle row's label, the witness list's hint, the structure's
+  // key): the address page 2, address-history 1, address-holdings 2, the block page 4, the uncle
+  // page 1, block-position 2, block-transactions-table 1, the transaction page 8,
+  // cell-graph-renderer 1, cell-graph 1, cell-microscope 1, cell-transactions 2, code-cell-board
+  // 1, tx-structure 1
   // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
   // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
   // B7: the out-point sentence reads)
-  'app/tx/[hash]/client-page.tsx': {
-    family: 'chain',
-    // link 6 → 3 (lane D3): the script groups' code links moved to
-    // components/transaction/script-group-rows.tsx, in the reading ink
-    // link 3 → 0, prose 12 → 8 (lane P1 follow-up): a .cell witness's "records payload of <name>
-    // (output #N)", a dep group's member rows, the provisional transaction's summary, the cells'
-    // explaining sentence and the focused script group are statements, in the reading ink
-    sites: { prose: 8 },
-    reason:
-      "loading 5: the graph section, the node's waiting line and its message, the graph, the cell deps; empty 3: no witness bytes, no witness chosen, no cell deps",
-  },
-  'components/address/address-history.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1): the script link states its look, the line's reading ink
-    sites: { td: 1 },
-    reason: "empty 1: a transaction's cycles cell with no figure ('Not computed', 'Failed')",
-  },
-  'components/address/address-holdings.tsx': {
-    family: 'chain',
-    // prose 7 → 6 (B7): the balance's parts are labelled facts, no longer a quiet <p>
-    // link 4 → 0, prose 6 → 2 (lane P1 follow-up): the DAO counts, a deposit's state, block and
-    // day, an identity's expiry and holding block and a live cell's block are values in the reading
-    // ink; a read that failed says so in the reading ink; three empty lines went, each in a
-    // section drawn only when its class holds something (they could not be reached)
-    sites: { prose: 2 },
-    reason:
-      "loading 1: the load state's loading and unavailable line; note 1: the collections' hint",
-  },
-  'components/blocks/block-position.tsx': {
-    family: 'chain',
-    // link 1 → 0, prose 7 → 2 (lane P1 follow-up): the position sentence, the two failures, a
-    // proposal arc's uncle line and an uncle's "Included by #N" are statements, in the reading ink
-    sites: { prose: 2 },
-    reason:
-      "loading 1: the proposal origins being read; label 1: an uncle row's 'Uncle parent → included uncle'",
-  },
-  'components/blocks/block-transactions-table.tsx': {
-    family: 'chain',
-    // td 2 → 1 (lane P1 follow-up): a transaction's index in its block is a value, the reading ink
-    sites: { td: 1 },
-    reason: "empty 1: a transaction's cycles cell with no figure ('Not yet run', 'Replay failed')",
-  },
   // 'components/blocks/block-visual.tsx' left the list (lane P1 follow-up): the size-and-cycles
   // line under the blocks figure is a reading of it, its figures values, in the reading ink
   // 'components/blocks/reward-breakdown.tsx' left the list (lane P1 follow-up): the reward's
   // sentences (genesis has none; paid by a block's cellbase, not indexed yet) and "paid by the
   // cellbase of #N · 0x…" are statements, in the reading ink, their links with them
-  'components/cell-graph-renderer.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: the graph's 'No graph data.' (lane P1 follow-up)",
-  },
-  'components/cell-graph.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "loading 1: the graph's 'Loading graph…' (lane P1 follow-up)",
-  },
-  'components/cell/cell-microscope.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: the data box's 'No data: the cell carries 0 bytes.' (lane P1 follow-up)",
-  },
-  'components/cell/cell-transactions.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1 follow-up): a live cell's age and the block it is as of are values, in
-    // the reading ink
-    sites: { prose: 2 },
-    reason:
-      "loading 1: a transaction being read; note 1: the code cells' 'the spender picks its own cell deps'",
-  },
-  'components/cell/code-cell-board.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: 'No registered Type ID version history for this binary.' (lane P1 follow-up)",
-  },
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
   // 'components/transaction/script-group-matrix.tsx' left the list (lane P1 follow-up): a group's
   // runs line ("guards out 1 for the next spend · …") is a statement, in the reading ink, a group
   // only attached as one that ran (link 1 → 0 in lane P1: its script's name reads)
-  'components/transaction/tx-structure.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "note 1: the structure's legend line, a note under the figure (lane P1 follow-up)",
-  },
   // ---- assets ----
-  'app/tokens/[typeHash]/client-page.tsx': {
-    // prose 4 → 3 (lane p-assets: each link states its look)
-    family: 'assets',
-    sites: { prose: 3 },
-    reason:
-      'prose by kind: 2 empty (no recorded token movements, same-symbol comparison unavailable), 1 credit (the label provenance)',
-  },
-  'components/asset/asset-feed.tsx': {
-    family: 'assets',
-    sites: { td: 1, prose: 2 },
-    reason:
-      "a note in a table cell: 1 (a row's cycles not computed or failed); prose by kind: 2 empty (no activities)",
-  },
-  'components/asset/asset-history.tsx': {
-    // link 1 → 0 (lane p-assets: each link states its look)
-    // prose 4 → 1 (lane P2's follow-up, item 4): the peak line, the listed count and the dates note are statements in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (no complete daily history)',
-  },
-  'components/asset/cell-versions.tsx': {
-    // link 2 → 1 (lane p-assets: a version's lock is the one decision's words, no link)
-    // link 4 → 2 (lane p-assets: each link states its look)
-    family: 'assets',
-    sites: { link: 1, prose: 1 },
-    reason:
-      "a version's spending-tx link in the quiet ink of its note; prose by kind: 1 empty (no canonical cell versions)",
-  },
-  'components/asset/collection-detail.tsx': {
-    // prose 5 → 3 (lane P2's follow-up, item 4): the collection sentence and the identity count line read in the reading ink
-    family: 'assets',
-    sites: { prose: 3 },
-    reason:
-      'prose by kind: 3 empty (no description, capacity not recorded, no current cluster cell)',
-  },
-  'components/asset/collection-evidence.tsx': {
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (no description bytes recorded)',
-  },
-  // components/asset/collection-gallery.tsx left the list (lane p-assets): its items are a list
-  // table, whose empty state is the table's own
-  // components/asset/collection-holders.tsx left the list (lane P2's follow-up, item 4): the full collection's counts and the holder-list note read in the reading ink
-  'components/asset/collection-objects.tsx': {
-    // prose 4 → 3 (lane P2's follow-up, item 4): the decoding counts line reads in the reading ink
-    family: 'assets',
-    sites: { link: 1, prose: 3 },
-    reason:
-      "an object's block link in a quiet cell; prose by kind: 1 loading (frequencies await complete decoding), 2 empty (no DOB objects to compare, no objects)",
-  },
-  'components/asset/detail-shell.tsx': {
-    // link 1 → 0 (lane p-assets: each link states its look)
-    // (lane P2's follow-up, item 4) a failure reads in the reading ink; the line's quiet branch stays
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 loading (the read-state line while loading, or unavailable)',
-  },
-  // components/asset/dropped-genes-caption.tsx left the list (lane P2's follow-up, item 4): the caption is a statement in the reading ink
-  'components/asset/genetics.tsx': {
-    // td 5 → 0, prose 14 → 5 (lane P2's follow-up, item 4): a gene's bytes, rule and found value are values, and the decoder, variant, clipping, declared-range and outside-the-pattern lines statements, in the reading ink
-    family: 'assets',
-    sites: { link: 3, prose: 5 },
-    reason:
-      'decoder links in quiet notes; prose by kind: 3 loading (decode pending, frequencies await decoding, not decoded yet), 2 empty (no DOB DNA, no DOB blueprint)',
-  },
-  // components/asset/identity-detail.tsx left the list (lane P2's follow-up, item 4): the no-expiry sentence reads in the reading ink
-  // components/asset/identity-document.tsx left the list (lane P2's follow-up, item 4): the configure bits sentence reads in the reading ink
-  'components/asset/mnft-detail.tsx': {
-    // prose 4 → 3 (lane P2's follow-up, items 4 and 6): the lock footnote, a statement, is drawn
-    // by object-hero's LockFootnote in the reading ink
-    // prose 4 → 3 (lane P2's follow-up, item 4 and 6): the lock footnote, a statement, is drawn by object-hero's LockFootnote in the reading ink; 3 → 1: the renderer URL and the class and set counts are values in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (composition unavailable)',
-  },
-  // components/asset/object-hero.tsx left the list (lane P2's follow-up, item 4): the traits line reads in the reading ink
-  'components/asset/object-media.tsx': {
-    // prose 2 → 1 (lane P2's follow-up, item 4): the not-an-inscription sentence reads in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (no renderable media, or decode pending)',
-  },
-  'components/asset/protocol-evidence.tsx': {
-    // prose 5 → 1 (lane P2's follow-up, item 4): the interpretation line, a reading's words, the more-bytes line and the hint line read in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (empty cell data)',
-  },
-  'components/asset/spore-detail.tsx': {
-    // link 2 → 0, prose 2 → 1 (lane P2's follow-up, item 4): the cluster holder sentence and its links read in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (no live cell holds capacity for the burned object)',
-  },
-  // components/identity/did-readout.tsx left the list (lane P2's follow-up, item 4): the unread-fields and servers sentences read in the reading ink
-  'components/identity/dotcell-item-detail.tsx': {
-    // prose 2 → 1 (lane P2's follow-up, item 4): the top-level-name line reads in the reading ink
-    family: 'assets',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 empty (sub-names · none)',
-  },
-  // components/identity/dotcell-records-table.tsx left the list (lane P2's follow-up, item 4): a record's label and TTL are values in the reading ink
-  'components/identity/identity-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1, prose: 1 },
-    reason:
-      'prose by kind: 1 credit (decoded from the account data in the witness of tx …, its tx link inside it)',
-  },
-  // components/identity/identity-records.tsx left the list (lane P2's follow-up, item 4): the records and TTL count line reads in the reading ink
+  // The assets family left the list (lane P2, the ink and size roles round): its 33 sites in 15
+  // files read in the reading ink, each a sentence, a cell's content or a link in its look:
+  // - empty and loading lines are sentences (the tokens page's two and its label credit; the asset
+  //   feed's "No activities." twice; the history's no-daily line; cell versions' empty line; the
+  //   collection's three; its stored description's; the objects' three; the read-state line's
+  //   loading and unavailable forms; genetics' five; the m-NFT's composition line; the media
+  //   placeholder's; the empty cell data; the burned object's no-live-cell line; the sub-names'
+  //   none; the identity evidence's witness credit);
+  // - a row's cycles state ("Not computed", "Calculation failed") is its table cell's content;
+  // - links that stood in a quiet note or cell wear their look: a version's owner address (its
+  //   label quiet beside it), an object's minting date in its row, the decoders' two links in the
+  //   mechanism tile, the sample object's link (its label and byte count quiet beside it), the
+  //   witness transaction in the credit
   // ---- lists ----
-  'app/scripts/[name]/client-page.tsx': {
-    // td 3 → 2, prose 6 → 4 (lane P2's follow-up, item 4): the version hash is a value and the two statements (the resolution, the capacity caption) read in the reading ink
-    family: 'lists',
-    sites: { td: 2, prose: 4 },
-    reason:
-      'notes in table cells: 2 (custody and evidence unavailable); prose by kind: 2 loading (cells, capacity history), 2 empty (no code-cell deployments, no capacity history)',
-  },
+  // 'app/scripts/[name]/client-page.tsx' left the list (BRIEF-ink-size-roles items 1 and 3: td 2,
+  // prose 4 → DECIDED prose 2): "Custody evidence unavailable" and "Evidence unavailable" are a
+  // cell's content, "No code-cell deployments" and "No capacity history." empty-state sentences, the
+  // reading ink; its two loading lines are decided
   // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
   // the summary sentence, in the reading ink, no quiet label over it)
-  'components/asset/inventory-summary.tsx': {
-    family: 'lists',
-    sites: { link: 1, prose: 2 },
-    reason: "the inventory's totals sentences and the anchor block link in the quiet ink",
-  },
-  'components/asset/inventory-table.tsx': {
-    family: 'lists',
-    sites: { td: 5 },
-    reason: 'supply, H-multiplier, occupied and unavailable values quiet in table cells',
-  },
+  // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles items 1 and 3:
+  // link 1, prose 2 → 0): the totals line and the identities' line are sentences, the reading ink
+  // at 13 px, the anchor's block link in their ink
+  // 'components/asset/inventory-table.tsx' left the list (BRIEF-ink-size-roles item 1: td 5 → 0):
+  // the supply, the H-multiplier and the occupied CKB are figures in cells, and "Unavailable" a
+  // cell's content, the reading ink; the minted " / N" reads at the cell's 13 px, its slash quiet
   // components/scripts/script-code-evidence.tsx left the list (lane P2's follow-up, item 4): the unspendable note reads in the reading ink
   // components/scripts/script-family-board.tsx left the list (lane P2's follow-up, item 4): the handover line reads in the reading ink
-  'components/scripts/script-family-page.tsx': {
-    // link 3 → 0, td 9 → 8 (lane p-assets: each link states its look)
-    // link 4 → 3, prose 6 → 5 (B7): the lede and its link read in the reading ink
-    // td 8 → 5, prose 5 → 3 (lane P2's follow-up, item 4): the replacing block, the deployments' out points and a cell's block and day are values, and the reference sentence and the cells line statements, in the reading ink
-    family: 'lists',
-    sites: { td: 5, prose: 3 },
-    reason:
-      'notes in table cells: 5 (two dashes, two no-deployment notes, custody unavailable); prose by kind: 2 loading (capacity history, cells), 1 empty (no capacity history)',
-  },
+  // 'components/scripts/script-family-page.tsx' left the list (BRIEF-ink-size-roles items 1 and 3:
+  // td 5, prose 3 → DECIDED prose 2): the dashes, "No deployment observed" and "custody
+  // unavailable" are a cell's content, "No capacity history." an empty-state sentence, the reading
+  // ink; its two loading lines are decided
   // components/scripts/script-hero.tsx left the list (lane P2's third round, item 10): the hero's
   // companion line reads in the reading ink (the scripts list page no longer draws it)
-  'components/scripts/script-newest-cells.tsx': {
-    // link 1 → 0 (lane p-assets: each link states its look)
-    // prose 2 → 1 (lane P2's follow-up, item 4): the caption reads in the reading ink
-    family: 'lists',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 loading (the newest cells)',
-  },
+  // 'components/scripts/script-newest-cells.tsx' left the list (BRIEF-ink-size-roles item 1:
+  // prose 1 → DECIDED prose 1): its loading line is decided
   // components/transaction/transaction-list-table.tsx left the list (lane P3: td 3 → 0; the
   // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
   // cells count reads in the reading ink)
-  // ---- topics ----
-  // 'app/dao/depositors/page.tsx' left the list (the P3 follow-up's 2d: link 2, td 1, prose 1 → 0):
-  // a depositor's rank is a value and the ranking-moved sentence a statement, its block links in its
-  // line, all in the reading ink
-  'app/fiber/channels/[id]/client-page.tsx': {
-    family: 'topics',
-    // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note in the quiet ink',
-  },
-  'app/fiber/channels/client-page.tsx': {
-    family: 'topics',
-    // td 1 → 0 (lane P4): a channel's opening day reads in the reading ink
-    sites: { prose: 2 },
-    reason: 'the two loading lines, transient notes in the quiet ink',
-  },
-  // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4): the breadcrumb link
-  // takes its look, a row's clock and the uncle sentence read in the reading ink
-  'app/forks/page.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (lane P4): the empty fork-history line reads in the reading ink
-    sites: { prose: 1 },
-    reason: 'the loading fork-history line, a transient note',
-  },
-  'app/hardforks/page.tsx': {
-    family: 'topics',
-    // prose 10 → 5 (B7): the lede, the two editions paragraphs, the hash-type paragraph and the
-    // RFC note explain, in the reading ink; link 2 → 0, prose 5 → 1 (page lane P4): an edition's
-    // epoch, block and day line reads in the reading ink, its block a link inside the line; "How
-    // it works" is a way onward; the no-header and not-reached states read; the consensus line
-    // (the RPC's name) went to tier 2
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note while the timeline is read',
-  },
-  'app/network/advertisement-graph.tsx': {
-    family: 'topics',
-    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink; 3 → 2 (P4 topics):
-    // the empty line reads
-    sites: { prose: 2 },
-    reason: 'the loading and refreshing lines, transient notes in the quiet ink',
-  },
-  'app/network/client-page.tsx': {
-    family: 'topics',
-    // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
-    // the reading ink; prose 3 → 1 (P4 topics): the two round lines' counts and age are values
-    sites: { prose: 1 },
-    reason: 'the MaxMind credit, a note in the quiet ink',
-  },
-  'app/network/network-map.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country
-    // is a row of the ranked list beside the map
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note in the quiet ink',
-  },
-  'app/network/trends.tsx': {
-    family: 'topics',
-    // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2
-    // (P4 topics): a day's label count is a value, and the two empty lines read
-    sites: { prose: 2 },
-    reason: 'the two loading lines, transient notes in the quiet ink',
-  },
-  'components/dao/dao-board.tsx': {
-    family: 'topics',
-    // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
-    // the reading ink; link 3 → 2 (B4 second fix round): a depositor's lock is written by the one
-    // decision (LockWordsView, components/ui/lock-kind.tsx), its link no longer this file's
-    // td 2 → 0, prose 1 → 0 (lane P4): a holder's rank and share read in the reading ink, the
-    // amounts line under the icicle reads, its labels quiet
-    sites: { link: 2 },
-    reason:
-      'the block links in the capacity-use caption and the 365-day anchor line, notes under a figure',
-  },
-  // 'components/dao/dao-grows.tsx' left the list (lane P4): the deposit reading reads in the
-  // reading ink, its block link with it
-  // 'components/dao/dao-history.tsx' left the list (lane P4): the not-enough-days sentence, an
-  // empty state, reads in the reading ink
-  'components/fiber/fiber-channel-step.tsx': {
-    family: 'topics',
-    // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
-    sites: { prose: 1 },
-    reason: "the step's loading line, a transient note in the quiet ink",
-  },
-  // ---- shared ----
-  // 'components/activity/activity-row.tsx' left the list (lane P3: link 3 → 0; its links take the
-  // inline look and the ink of the line they stand in, the evidence's and the detail run's, a note)
-  'components/command-palette.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason:
-      "the shortcuts panel's release and clock line: chrome, the rule's open point (B1 hand-back)",
-  },
-  // components/error-page-shell.tsx left the list (readability R6): the caption under the seal,
-  // a note under a figure, quiet by rule, is the seal's <figcaption> now that the seal stands in a
-  // figure of its own beside or below the text, no longer a <p> (this gate's other route for it).
-  'components/layout/site-footer.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the footer's release and zone line: chrome, the rule's open point (B1 hand-back)",
-  },
-  'components/ui/allele-gel.tsx': {
-    family: 'shared',
-    sites: { prose: 3 },
-    reason:
-      "the gel's two reading notes and its not-drawn note: notes under a figure, quiet by rule",
-  },
-  'components/ui/detail-layout.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the evidence tier's eyebrow, a label set as a <p>: quiet by rule",
-  },
-  'components/ui/lock-kind.tsx': {
-    family: 'shared',
-    sites: { link: 1 },
-    reason: "B4 rows: an unregistered lock's code-hash link inside the quiet lock-kind label",
-  },
-  'components/ui/script-byte-map.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the byte map's caption: a note under a figure, quiet by rule",
-  },
-  'components/ui/sequencing-gel.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the gel's reading note: a note under a figure, quiet by rule",
-  },
+  // ---- topics ---- (lane cd-fixes-controls, the ink and size round: 14 → 0, each converted)
+  // the loading and refreshing lines of the Fiber channel and channels pages (3), the forks page,
+  // the hardforks page, the advertisement graph (2), the network map, the trends (2) and the Fiber
+  // step are short sentences of a state, in the reading ink; the MaxMind credit states the data's
+  // source, in the reading ink at 13 px; the DAO board's capacity-use caption and 365-day anchor
+  // line are a sentence and a line of values, in the reading ink at 13 px, their block links in them
+  // ---- shared ---- (lane cd-fixes-controls, the ink and size round: 9 → 0)
+  // converted: the shortcuts panel's release and clock line and the footer's release and zone line
+  // are values, in the reading ink; the allele gel's not-drawn line is a sentence, in the reading
+  // ink at 13 px; an unregistered lock's code hash is an id, its link in the reading ink at 13 px
+  // inside the lock words' quiet label; decided (DECIDED): the evidence tier's eyebrow, the two
+  // gels' keys and the byte map's name
 };
 
 // ---- the scan ----
@@ -874,59 +562,66 @@ function toleratedFailures(
  * named by kind with a count. They are no work left; the scan holds them as it holds TOLERATED.
  */
 const DECIDED: Readonly<Record<string, Tolerated>> = {
-  'app/blocks/page.tsx': {
+  // ---- shared (lane cd-fixes-controls, the ink and size round): each a role of the rule ----
+  'components/ui/detail-layout.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the evidence tier’s “Evidence · for developers”, an eyebrow set as a <p>',
+  },
+  'components/ui/allele-gel.tsx': {
+    family: 'shared',
+    sites: { prose: 2 },
+    reason:
+      'decided (the shared lane): the gel’s two keys, its axis labels (“variants per gene ↑ · one lane per gene…”, “genes ranked by how many variants…”) and a hint of how to use it (“open a gene for every variant”)',
+  },
+  'components/ui/sequencing-gel.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the gel’s key, a hint of how to read it (“read top to bottom: each band is one hex digit…”)',
+  },
+  'components/ui/script-byte-map.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the byte map’s name, the label of the figure (“Script · 33 bytes, then the args each cell sets”)',
+  },
+  'components/blocks/block-position.tsx': {
     family: 'chain',
-    // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
-    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
-    // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
-    // reward's finality line with its block link, and the compact table's size and cycles are
-    // values, and the error line a statement, all in the reading ink
-    sites: { td: 1, prose: 1 },
+    // lane P1, the ink and size roles: the one quiet line of the chain position
+    sites: { prose: 1 },
     reason:
-      'decided (the P3 follow-up): the wide table’s cycles state for a block not run yet or a failed replay, an empty value; the loading line',
+      "label 1: an uncle row's 'Uncle parent → included uncle', the label of the two links under it ('Parent 0x…', 'Uncle #… · 0x…')",
   },
-  'components/home/ckbytes-section.tsx': {
+  'app/tx/[hash]/client-page.tsx': {
     family: 'chain',
+    // lane P1, the ink and size roles: the one quiet line of the transaction page
     sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the CKBytes formula, a note under the figure',
-  },
-  'app/activities/page.tsx': {
-    family: 'lists',
-    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink; prose 2 → 1
-    // (the P3 follow-up's 2d): the statistics error is a statement, the reading ink
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the empty line, no complete statistics for yesterday',
-  },
-  'app/inventory/inventory-page-client.tsx': {
-    family: 'lists',
-    // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the loading line',
-  },
-  'app/transactions/page.tsx': {
-    family: 'lists',
-    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
-    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
-    // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
-    // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
-    // subtraction (the day's user transactions are its activity row's, the route's count); prose
-    // 8 → 4 (the P3 follow-up's 2d): the three error lines and the truncated pool's line are
-    // statements, the reading ink
-    sites: { td: 2, prose: 4 },
     reason:
-      'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
+      "hint 1: 'Select a witness to inspect its bytes.', how to use the witness list above it",
   },
-  'components/activities-stream-explorer.tsx': {
-    family: 'lists',
-    // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
-    sites: { prose: 4 },
+  'components/transaction/tx-structure.tsx': {
+    family: 'chain',
+    // lane P1, the ink and size roles: the structure's key
+    sites: { prose: 1 },
     reason:
-      'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
+      "label 1: the key of the figure's dashed onward bridge ('this cell, onward' beside its swatch), a mark's label as the chain position's legend entries are",
   },
 };
-/** The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d. */
-const DECIDED_SITES = 15;
-const DECIDED_FILES = 6;
+/**
+ * The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d; at the merge
+ * of the ink and size round's five lanes, 19 in 14: lane P1's 3 (an uncle row's label, the witness
+ * list's hint, the structure's key), the shared lane's 5 (lane cd-fixes-controls: an eyebrow, two
+ * gels' keys and a figure's name) and the lists family's loading lines (lane P3: 11 in 7 files, the
+ * eight sites of the 15 that were no loading line read in the reading ink). 19 → 8 in 7 files (the
+ * lead's follow-up to lane P3: a loading line is a sentence and reads in the reading ink, one rule
+ * site-wide, as the chain, assets, topics and shared lanes wrote theirs): the lists family's 11
+ * loading lines left; what stays is lane P1's 3 and the shared lane's 5, each a label, a hint, a
+ * key or an eyebrow.
+ */
+const DECIDED_SITES = 8;
+const DECIDED_FILES = 7;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -1226,21 +921,38 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
   });
 
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink; renamed, it was "107 sites in 51 files").
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided; renamed, it was "99 sites in 49 files").
   // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
-  // sites left the work list for DECIDED, 15 in 6 files
-  it('tolerates 107 sites in 51 files: the pinned totals by family, which only fall', () => {
+  // sites left the work list for DECIDED, 15 in 6 files. Re-pinned on purpose (the ink and size
+  // round, at the merge of its five lanes; renamed, it was "107 sites in 51 files"): the chain
+  // family's 28 sites left the list, 25 in the reading ink and 3 decided (lane P1); the assets
+  // family's 33 in 15 files read in the reading ink (lane P2); the lists family's 23 left the list
+  // (lane P3); the topics and shared families' 23 in 17 files (lane cd-fixes-controls, 18 converted
+  // and 5 decided). No family tolerates a site
+  it('tolerates 0 sites in 0 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
         (byFamily[entry.family] ?? 0) +
         Object.values(entry.sites).reduce((sum, n) => sum + (n ?? 0), 0);
-    expect(byFamily).toEqual(TOLERATED_BY_FAMILY);
+    // a family at 0 has no entry left to count (lane P1, the ink and size roles: chain the first),
+    // as the size-role gate reads its own
+    const pinned = Object.fromEntries(Object.entries(TOLERATED_BY_FAMILY).filter(([, n]) => n > 0));
+    expect(byFamily).toEqual(pinned);
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 15 in 6 files, none of them also on the work list', () => {
+  // Re-pinned on purpose (the ink and size round, at the merge of its five lanes; renamed, it was
+  // "15 in 6 files"): the chain family's three decided sites (lane P1: an uncle row's label, the
+  // witness list's hint and the structure's key) and the shared lane's five (lane
+  // cd-fixes-controls) joined; the lists family's decided sites are its loading lines alone (lane P3).
+  // Re-pinned on purpose (the lead's follow-up to lane P3: a loading line is a sentence, the reading
+  // ink; renamed, it was "19 in 14 files"): the lists family's 11 loading lines left, none of the
+  // lists family's sites is decided
+  it('holds the decided sites apart, 8 in 7 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

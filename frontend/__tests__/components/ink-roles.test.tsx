@@ -254,7 +254,7 @@ describe('CellTile: its out point is a link, its state and bytes are values', ()
 });
 
 describe('PhoneRow: the quiet line’s figures are values; its separators are quiet', () => {
-  it('reads the quiet line’s figures in the reading ink, a step under the body by size', () => {
+  it('reads the quiet line’s figures in the reading ink, at 13 px', () => {
     render(
       <PhoneRow
         testId="row"
@@ -271,7 +271,8 @@ describe('PhoneRow: the quiet line’s figures are values; its separators are qu
     );
     const row = screen.getByTestId('row');
     const quiet = row.querySelector('[data-line="figures"]')!;
-    expect(quiet).toHaveClass('text-meta');
+    // re-pinned on purpose (lane cd-fixes-controls, the ink and size round): its values at 13 px
+    expect(quiet).toHaveClass('text-small');
     expect(inkOf(within(row).getByText('3,344 B'))).toBe(READING);
     expect(inkOf(within(row).getByText('0 cycles'))).toBe(READING);
     expect(inkOf(within(row).getByText('2026-11-17'))).toBe(READING);
