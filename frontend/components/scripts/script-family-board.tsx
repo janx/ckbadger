@@ -41,7 +41,7 @@ import {
   HISTORY_PLOT_HEIGHT,
   HeldSentence,
 } from '@/components/asset/asset-history';
-import { unitNode, unitText } from '@/components/ui/units';
+import { NoteCount, unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { charPx } from '@/lib/type-metrics';
 import { assertHeldSeries, heldPoint } from '@/lib/held-point';
@@ -945,8 +945,11 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
         ? 'as their type'
         : 'as lock or type';
   return (
+    // a line of values: the count, the script's name and the amounts read in the reading ink, the
+    // words between them quiet (BRIEF-roles-rest part G: the count and the name stood quiet)
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
-      {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
+      <NoteCount count={family.liveCellsCount} singular="live cell" /> use{' '}
+      <span className="text-text">{family.name}</span> {role} ·{' '}
       <CkbAmount
         form="summary"
         shannons={BigInt(family.ownedCapacitySum)}

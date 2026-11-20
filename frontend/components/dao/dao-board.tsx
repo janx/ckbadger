@@ -47,7 +47,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { HeadId } from '@/components/ui/head-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
@@ -316,23 +316,34 @@ function Hero({
         <Metric label="Estimated APC">{statistics.estimatedApc}%</Metric>
         <Metric
           label="Compensation, last 365 days"
-          note={year ? undefined : 'the chain is younger than 365 days'}
+          // a metric's note is quiet (R13); its values read (BRIEF-roles-rest part G): the
+          // statement why there is no figure, the day's change, the count; their labels quiet
+          note={
+            year ? undefined : <span className="text-text">the chain is younger than 365 days</span>
+          }
         >
           {year ? `${year.observedGrowthPercent}%` : '—'}
         </Metric>
         <Metric
           label="Depositors"
           note={
-            statistics.depositorsChange24h === null
-              ? undefined
-              : `${signedCount(statistics.depositorsChange24h)} in 24 h`
+            statistics.depositorsChange24h === null ? undefined : (
+              <>
+                <span className="text-text">{signedCount(statistics.depositorsChange24h)}</span> in
+                24 h
+              </>
+            )
           }
         >
           {evidence.concentration.currentDepositors.toLocaleString('en-US')}
         </Metric>
         <Metric
           label="Deposits"
-          note={`${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
+          note={
+            <>
+              <NoteCount count={evidence.phase1.count} singular="withdrawal" /> requested
+            </>
+          }
         >
           {evidence.phase0.count.toLocaleString('en-US')}
         </Metric>
@@ -1147,7 +1158,8 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
               {ownerLock(o, 'inline', 'tight')}
               <span className="text-text-bright">
                 <Amount form="summary" value={o.capacity} /> CKB
-                <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
+                <span className="text-text-dim"> · </span>
+                <NoteCount count={o.depositCount} singular="deposit" />
               </span>
             </div>
           </div>

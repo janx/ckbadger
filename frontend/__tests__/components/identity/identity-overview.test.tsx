@@ -191,6 +191,10 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Manager')).toHaveTextContent(item.manager.hashPrefix);
     expect(fact('Expires')).toHaveTextContent('grace to');
     expect(fact('Records')).toHaveTextContent('0');
+    // BRIEF-roles-rest part G: the note's counts read in the reading ink, their nouns quiet
+    const counts = [...fact('Records')!.querySelectorAll('[data-note-count]')];
+    expect(counts.map((c) => c.textContent)).toEqual(['0 addresses', '0 profile keys']);
+    for (const count of counts) expect(count.firstElementChild).toHaveClass('text-text');
     // re-pinned on purpose (lane P2's follow-up, a standing cause): the sub-names and the sale are
     // two facts (one metric said "none · no"), and a name not for sale draws no sale metric
     expect(fact('Sub-names')).toHaveTextContent('none');

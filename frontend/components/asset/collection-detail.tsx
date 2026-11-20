@@ -55,7 +55,7 @@ import { IdentityPositioning, type IdentityStandard } from '@/components/identit
 import { retryTransientOnly } from '@/lib/query-client';
 import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 // ── F2 identities (round 2) ──
@@ -340,7 +340,13 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     {
       label: 'Holders',
       value: data.holdersCount.toLocaleString('en-US'),
-      note: exactlyOne === undefined ? undefined : `${exactlyOne.toLocaleString('en-US')} hold one`,
+      // a metric's note is quiet (R13); its counts read (BRIEF-roles-rest part G), their words quiet
+      note:
+        exactlyOne === undefined ? undefined : (
+          <>
+            <span className="text-text">{exactlyOne.toLocaleString('en-US')}</span> hold one
+          </>
+        ),
     },
     // Round 3 (L2): the count is null while the indexer has not derived it — say nothing of it.
     ...(data.activitiesCount === null
@@ -359,9 +365,14 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             label: 'Transactions',
             value: data.activitiesCount.toLocaleString('en-US'),
             note:
-              weeklyNote === undefined
-                ? undefined
-                : `${weeklyNote}; a transaction may count in more than one`,
+              mints === undefined || transfers === undefined || burns === undefined ? undefined : (
+                <>
+                  <NoteCount count={mints} singular="mint" /> ·{' '}
+                  <NoteCount count={transfers} singular="transfer" /> ·{' '}
+                  <NoteCount count={burns} singular="burn" />; a transaction may count in more than
+                  one
+                </>
+              ),
             title: weeklyRule,
           },
         ]),

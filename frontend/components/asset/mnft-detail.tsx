@@ -1,6 +1,7 @@
 'use client';
 
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { NoteCount } from '@/components/ui/units';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -34,7 +35,7 @@ import {
   ItemLife,
   LockFootnote,
 } from '@/components/asset/object-hero';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { versionFree } from '@/lib/held-point';
@@ -369,7 +370,10 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                           {formatBlockNumber(last.blockNumber)}
                         </AppLink>
                       </span>{' '}
-                      · {moves} {countNoun(moves, 'transfer')} since issue
+                      ·{' '}
+                      <span>
+                        <NoteCount count={moves} singular="transfer" /> since issue
+                      </span>
                     </>
                   )
                 ) : undefined,

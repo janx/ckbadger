@@ -12,6 +12,7 @@ import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { MEASURE_CHARS } from '@/lib/type-metrics';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 
@@ -87,6 +88,19 @@ describe('ForksPage', () => {
       '1 uncle · 1 one block later',
       '1 of 1 · committed in a later block',
     ]);
+    // BRIEF-roles-rest part G: a figure's note is quiet (R13), its values read in the reading ink:
+    // the day the node's record starts and the uncle distance's count; "since", "one block later"
+    // and "committed in a later block" stay quiet labels
+    const [switched, orphans, orphanedTxs] = within(row).getAllByRole('definition');
+    expect(inkOf(within(switched).getByText('2025-08-01'))).toBe(READING);
+    expect(inkOf(within(switched).getByText(/since/))).toBe(QUIET);
+    expect(inkOf(within(orphans).getByText(/one block later/))).toBe(QUIET);
+    expect(
+      within(orphans)
+        .getByText(/one block later/)
+        .querySelector('.text-text')
+    ).toHaveTextContent(/^1$/);
+    expect(inkOf(within(orphanedTxs).getByText(/committed in a later block/))).toBe(QUIET);
     // R11: no coloured text in tier 1 (the glyphs and bars keep their colours). Re-pinned (lane
     // P4; it was none at all): the one celadon is the lede's way down, the onward look the owner
     // of the looks draws (components/ui/link.tsx), as on the other topic pages
@@ -250,7 +264,12 @@ describe('ForksPage', () => {
     for (const head of within(table()).getAllByRole('columnheader'))
       expect(head.firstElementChild?.tagName).toBe('SPAN');
     expect(within(table()).getByText(fullText('1 block deep'))).toHaveClass('block', 'w-fit');
-    expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
+    // Re-pinned on purpose (BRIEF-roles-rest part G; it read getByText('1 of 1 tx committed
+    // later'), one text): the cell's statement reads its figures in the reading ink at 13 px, its
+    // words quiet spans, so it is read by its whole text
+    const committed = within(table()).getByText(fullText('1 of 1 tx committed later'));
+    expect(committed).toHaveClass('block', 'w-fit', 'text-text', 'text-small');
+    expect(within(committed).getByText('tx committed later')).toHaveClass('text-text-dim');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
     // Table-rows T5 (was R11's bright ink): the fork point is the row's one bright thing, so the
@@ -262,11 +281,11 @@ describe('ForksPage', () => {
     const block = within(fate.parentElement!).getByRole('link', { name: '#12' });
     expect(block).not.toHaveClass('text-text-bright');
     expect(block).not.toHaveClass('text-jade');
-    expect(within(table()).getByText(fullText('1 block after it'))).toHaveClass(
-      'text-meta',
-      'text-text-dim'
-    );
-    expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
+    const after = within(table()).getByText(fullText('1 block after it'));
+    expect(after).toHaveClass('text-meta', 'text-text-dim');
+    // BRIEF-roles-rest part G: its count is a value, the reading ink; "block after it" its label
+    expect(within(after).getByText('1')).toHaveClass('text-text');
+    expect(within(table()).getByText(fullText('1 of 1 tx committed later'))).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
   });
@@ -557,7 +576,12 @@ describe('ForksPage', () => {
     await waitFor(() =>
       expect(within(table()).getByText('No rollback at detection')).toBeInTheDocument()
     );
-    expect(within(table()).getByText('indexed #12 → node #13')).toBeInTheDocument();
+    // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): the two tips are values
+    // in the reading ink, "indexed" and "node" their quiet labels, 12 px
+    const tips = within(table()).getByText(fullText('indexed #12 → node #13'));
+    expect(tips).toHaveClass('text-meta', 'text-text-dim');
+    expect(within(tips).getByText('#12')).toHaveClass('text-text');
+    expect(within(tips).getByText('#13')).toHaveClass('text-text');
     expect(within(table()).queryByRole('link', { name: /^20\d\d-/ })).toBeNull();
     // Table-rows T1: why there is no link is a footnote; it left the row for the row's title.
     expect(within(table()).queryByText('nothing was rolled back, so no detail page')).toBeNull();
@@ -690,19 +714,26 @@ describe('ForksPage · branch switches budgeted from what they hold (readability
     ceil(at('ckb1…4s93hhsj vs ckb1…4s93hhsj', 14) + 16),
     // six digits of milliseconds, wider than the head's words
     ceil(Math.max(at('999,999 ms', 13), at('apart', 12)) + 16),
-    // the widest fate on its line, or a deep switch's tips on its meta line; the last column
+    // the widest fate on its line, a deep switch's tips on its meta line, or the cell's statement
+    // of its transactions at 13 px (BRIEF-roles-rest part G: it was 12 px, under the tips' 273.6);
+    // the last column
     ceil(
       Math.max(
         at('uncle inclusion still possible', 14),
-        at('indexed #99,999,999 → node #99,999,999', 12)
+        at('indexed #99,999,999 → node #99,999,999', 12),
+        at('held no transaction but its cellbase', 13),
+        at('9,999 of 9,999 tx committed later', 13)
       )
     ),
   ];
 
-  it('pins every column to its content and changes form at their sum, 1,147 px', async () => {
-    expect(budgets).toEqual([176, 109, 226, 268, 94, 274]);
+  // Re-pinned on purpose (BRIEF-roles-rest part G; it was "… 1,147 px", the fate column 274): the
+  // statement "held no transaction but its cellbase" reads at 13 px, 280.8 px, the fate column's
+  // widest line, so the column is 281 and the table changes form at 1,154 px (1232 at 1280 holds it)
+  it('pins every column to its content and changes form at their sum, 1,154 px', async () => {
+    expect(budgets).toEqual([176, 109, 226, 268, 94, 281]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(1147);
+    expect(sum).toBe(1154);
     const { unmount } = render(<ForksPage />);
     const shown = await screen.findByRole('table', { name: 'Branch switches on this node' });
     const cols = Array.from(shown.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
@@ -712,8 +743,8 @@ describe('ForksPage · branch switches budgeted from what they hold (readability
     unmount();
     for (const [width, form] of [
       [1232, 'table'],
-      [1147, 'table'],
-      [1146, 'rows'],
+      [1154, 'table'],
+      [1153, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

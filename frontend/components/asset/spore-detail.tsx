@@ -42,9 +42,9 @@ import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { PartReadError } from '@/components/read-failure';
 
@@ -149,7 +149,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       // fails this note in its place (D7)
       note: object.ownerLockHash ? (
         history === undefined ? (
-          'Loading lock…'
+          <span className="text-text">Loading lock…</span>
         ) : last === undefined ? (
           <PartReadError
             what="the owner’s lock"
@@ -171,7 +171,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 {collectionName ?? 'Unnamed collection'}
               </AppLink>
             ),
-            note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
+            note: collection.data ? (
+              <NoteCount count={collection.data.liveCount} singular="object" />
+            ) : undefined,
           },
         ]
       : []),
@@ -232,7 +234,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   {formatBlockNumber(last.blockNumber)}
                 </AppLink>
               </span>{' '}
-              · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
+              ·{' '}
+              <span>
+                <NoteCount count={moves} singular="transfer" /> since minting
+              </span>
             </>
           )
         ) : undefined,
@@ -254,7 +259,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Content',
       size: 'body',
       value: <span className="break-all">{object.contentType}</span>,
-      note: formatCount(object.contentSize, 'byte'),
+      note: <NoteCount count={object.contentSize} singular="byte" />,
     },
   ];
   const coll = collection.data;

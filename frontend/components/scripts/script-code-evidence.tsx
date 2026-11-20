@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 import { fontPx, textPx } from '@/lib/type-metrics';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
@@ -376,16 +376,19 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
     <div className="text-small min-w-0">
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
-        <div className="text-text-dim mt-1">
-          {custody.threshold} of {unitNode(formatCount(verifiedKeyCount(custody), 'key'))} · witness
-          configuration matches the code cell lock arguments
+        // the fact's second line (BRIEF-roles-rest part G): the threshold and the key count are
+        // values, the statement of what the witness shows a sentence, the reading ink; "of" quiet
+        <div className="text-text mt-1">
+          {custody.threshold} <span className="text-text-dim">of</span>{' '}
+          <NoteCount count={verifiedKeyCount(custody)} singular="key" /> · witness configuration
+          matches the code cell lock arguments
         </div>
       )}
       {custody.witnessState === 'unavailable' && custody.class === 'multisig' && (
-        <div className="text-text-dim mt-1">Signing configuration unavailable</div>
+        <div className="text-text mt-1">Signing configuration unavailable</div>
       )}
       {custody.witnessState === 'never_signed' && (
-        <div className="text-text-dim mt-1">
+        <div className="text-text mt-1">
           Never signed: every indexed cell under this exact holder lock remains live.
         </div>
       )}

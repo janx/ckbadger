@@ -7,6 +7,7 @@ import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { fullText } from '@/__tests__/utils/full-text';
 import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -362,7 +363,16 @@ it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C
   ])
     expect(within(rail).getByText(label)).toBeInTheDocument();
   expect(rail).toHaveTextContent('Nervape Shadow Lock');
-  expect(await within(rail).findByText('1 transfer since minting')).toBeInTheDocument();
+  // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): the count is a NoteCount,
+  // its number in the reading ink, its noun and "since minting" quiet
+  const transfers = await within(rail).findByText(fullText('1 transfer since minting'));
+  expect(transfers.querySelector('[data-note-count] .text-text')).toHaveTextContent(/^1$/);
+  // the collection's live objects and the content's bytes, counts in their notes, the same way
+  for (const label of ['Collection', 'Content']) {
+    const count = within(rail).getByText(label).parentElement!.querySelector('[data-note-count]');
+    expect(count!.firstElementChild).toHaveClass('text-text');
+    expect(count!.lastElementChild).toHaveClass('text-text-dim');
+  }
   // C7: the metric shows the date; the time of day stays in the metric's title.
   expect(rail).toHaveTextContent('2026-10-22');
   expect(within(rail).getByText('Minted').parentElement).toHaveAttribute(

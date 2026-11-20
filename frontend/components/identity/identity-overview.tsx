@@ -22,7 +22,7 @@ import { ShortId } from '@/components/ui/short-id';
 import type { ShortSize } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
@@ -418,7 +418,12 @@ export function identityFacts({
         {
           label: 'Records',
           value: stored.length.toLocaleString('en-US'),
-          note: `${plural(records.addresses.length, 'address', 'addresses')} · ${plural(records.profile.length, 'profile key', 'profile keys')}`,
+          note: (
+            <>
+              <NoteCount count={records.addresses.length} singular="address" plural="addresses" /> ·{' '}
+              <NoteCount count={records.profile.length} singular="profile key" />
+            </>
+          ),
         },
         // Lane P2's follow-up (a standing cause): two facts were one metric, "Sub-names · for
         // sale", "none · no"; each is its own, and a name not for sale draws no sale metric (the

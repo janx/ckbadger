@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
 import { ELLIPSIS, SHORT_FORMS, type IdKind } from '@/lib/shorten';
+import { countNoun, groupCount } from '@/lib/format-count';
 
 /**
  * The units a composed string carries, in the exact forms the site's own formatters write them
@@ -117,6 +118,29 @@ export function unitText(text: string): ReactNode {
   if (parts.length === 0) return text;
   if (at < text.length) parts.push(text.slice(at));
   return <Fragment>{parts}</Fragment>;
+}
+
+/**
+ * A count in a note (a metric's note, a hero figure's second line, a row's fact; BRIEF-roles-rest
+ * part G): the number is the datum, in the reading ink; its noun is its unit, in the quiet ink,
+ * whatever the line's ink; the two one unit a line never breaks inside (`NoBreak`, as `countNoun`
+ * asks of a count whose number is set apart). The noun agrees with the count (`countNoun`).
+ */
+export function NoteCount({
+  count,
+  singular,
+  plural,
+}: {
+  count: number | bigint;
+  singular: string;
+  plural?: string;
+}) {
+  return (
+    <NoBreak data-note-count="">
+      <span className="text-text">{groupCount(count)}</span>{' '}
+      <span className="text-text-dim">{countNoun(count, singular, plural)}</span>
+    </NoBreak>
+  );
 }
 
 /** `unitText` for a node a component is given: a string is read, anything else stays as it is. */
