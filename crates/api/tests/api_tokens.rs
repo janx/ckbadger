@@ -1675,6 +1675,46 @@ async fn a_label_names_a_token_when_it_is_read_and_its_removal_gives_the_chains_
     );
 }
 
+/// resync fix round 3, item 4 (the lead's ruling, logic N-1): a label never
+/// states a token's standard. The standard is a chain fact, what the pair of
+/// the token's type script runs (the chain row's); a label beside a chain row
+/// of another standard names the token, and its standard is the chain's, on
+/// the token page and in the token list's standard filter.
+#[tokio::test]
+async fn a_label_never_states_a_tokens_standard() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let token = vec![0xe1; 32];
+    let mut row = provenance_token(0x31, "Chain Name", "CHN", TokenMetadataSource::Chain, None);
+    row.standard = "sudt".to_string();
+    store.put_token_direct(&token, &row).unwrap();
+    store
+        .put_token_label_direct(&token, &label_of("Labelled", "LBL", 8))
+        .unwrap();
+
+    let (status, json) = token_detail(store.clone(), &token).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        (json["symbol"].clone(), json["standard"].clone()),
+        ("LBL".into(), "sudt".into()),
+        "the label names it, the chain says its standard: {json}"
+    );
+
+    let app = create_router(test_config(store)).await;
+    for (standard, listed) in [("sudt", true), ("xudt", false)] {
+        let (status, json) =
+            get_json(&app, &format!("/assets?type=token&standard={standard}")).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let symbols: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|asset| asset["symbol"].as_str())
+            .collect();
+        assert_eq!(symbols.contains(&"LBL"), listed, "{standard}: {json}");
+    }
+}
+
 /// resync fix round 2, B: a label for a token the chain does not hold names
 /// nothing: no token page (the API reads the chain's rows and joins their
 /// labels; it never lists a label alone).
