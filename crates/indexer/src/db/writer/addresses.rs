@@ -3115,6 +3115,203 @@ mod tests {
         );
     }
 
+    /// resync fix round S3 (the lead's option B): the live rollup settles a
+    /// generic type reference from its live CODE cells only. The reference's
+    /// type holds two live code cells (deployed through the step at block 20)
+    /// and fifty live cells that are not code, each a trap: its append-only
+    /// payload is withheld, so any read of it fails. A batch that moves
+    /// nothing (block 21: a plain transfer) settles the reference without
+    /// touching a trap, and changes no row the rollup owns.
+    #[test]
+    fn the_rollup_reads_a_generic_references_code_cells_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
+        let code = vec![0x13u8; 32];
+        let args = vec![0x5eu8; 4];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+        let elf = |tag: u8| {
+            let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+            data.push(tag);
+            data
+        };
+        let (data_one, data_two) = (elf(1), elf(2));
+        let hash = |data: &[u8]| crate::parser::ScriptParser::compute_data_hash(data);
+        store
+            .put_script_family_direct(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for data in [&data_one, &data_two] {
+            let version = hash(data).to_vec();
+            store
+                .put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.clone(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.clone(), 0)],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 4,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+        let code_cell = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: Some(code.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(args.clone()),
+            type_script_hash: Some(reference.clone()),
+            data_hash: hash(data),
+            data_size: data.len() as i32,
+            data: data.to_vec(),
+        };
+        let plain_cell = crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            type_script_hash: None,
+            data_hash: hash(&[]),
+            data_size: 0,
+            data: vec![],
+        };
+        let tx = |hash_byte: u8, block: i64, cells: Vec<crate::parser::cell::ParsedCell>| {
+            crate::sync::types::TxData {
+                hash: [hash_byte; 32],
+                block_number: block,
+                tx_index: 1,
+                inputs_count: 0,
+                outputs_count: cells.len() as i16,
+                is_cellbase: false,
+                inputs: vec![],
+                cells,
+                witnesses: vec![],
+                total_input_capacity: 0,
+                total_output_capacity: 0,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                semantic_tags: 0,
+            }
+        };
+        let run = |txs: &[crate::sync::types::TxData]| {
+            ckbadger_store::commit_journaled(&store, |batch| {
+                writer
+                    .materialize_script_versions_and_families_with_chain(
+                        &[],
+                        txs,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &crate::sync::types::derive_input_script_hashes(
+                            txs,
+                            &HashMap::new(),
+                            &HashMap::new(),
+                        ),
+                        batch,
+                    )
+                    .unwrap();
+            })
+        };
+
+        let deploy = tx(0x44, 20, vec![code_cell(&data_one), code_cell(&data_two)]);
+        run(std::slice::from_ref(&deploy)).unwrap();
+        // The two code cells as the cell writer indexes them, and fifty live
+        // cells of the same type that are not code, each a trap: its payload
+        // is withheld from the append-only store, so a read of it fails.
+        let positioned = |data: &[u8]| {
+            ckbadger_store::PositionedCellInfo::new(
+                ckbadger_store::LiveCellInfo {
+                    capacity: 10000,
+                    lock_code_hash: [0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some(code.clone().try_into().unwrap()),
+                    type_hash_type: Some(1),
+                    type_args: Some(args.clone()),
+                    data_size: data.len() as i32,
+                    udt_amount: None,
+                    data_hash: Some(hash(data)),
+                },
+                20,
+            )
+        };
+        let mut cells = StoreBatch::new(&store);
+        let mut payloads = StoreBatch::new(&append);
+        for (index, data) in [&data_one, &data_two].into_iter().enumerate() {
+            let outpoint = keys::encode_outpoint(&deploy.hash, index as i16);
+            payloads
+                .put_cell_payload(&outpoint, &positioned(data).cell)
+                .unwrap();
+            cells.put_live_cell_marker(&outpoint, 20);
+            cells.put_cell_by_type(&reference, 20, &deploy.hash, index as i16);
+            cells.put_cell_by_data_hash(&hash(data), 20, &deploy.hash, index as i16);
+        }
+        for trap in 0..50u8 {
+            let tx_hash = [0xa0u8.wrapping_add(trap); 32];
+            cells.put_live_cell_marker(&keys::encode_outpoint(&tx_hash, 0), 20);
+            cells.put_cell_by_type(&reference, 20, &tx_hash, 0);
+        }
+        payloads.commit().unwrap();
+        cells.commit().unwrap();
+        let family_live_cells = || {
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+        assert_eq!(family_live_cells(), 3, "fixture: counted in its family");
+        let rollup_rows =
+            || crate::sync::bulk_build::collect_script_binding_rows_for_test(&store).unwrap();
+        let before = rollup_rows();
+
+        // Block 21 moves nothing the reference depends on: a plain output.
+        let plain = tx(0x46, 21, vec![plain_cell]);
+        let settled = run(std::slice::from_ref(&plain));
+        assert!(
+            settled.is_ok(),
+            "the step settles the reference from its code cells, touching no other cell: {:?}",
+            settled.err()
+        );
+        assert_eq!(
+            rollup_rows(),
+            before,
+            "a batch that moves nothing changes no row"
+        );
+        assert_eq!(family_live_cells(), 3);
+    }
+
     #[test]
     fn live_type_id_upgrade_adds_family_version_inline_and_undo_removes_it() {
         let dir = tempfile::tempdir().unwrap();

@@ -1557,4 +1557,84 @@ mod tests {
             other => panic!("expected direct version resolution, got {other:?}"),
         }
     }
+
+    /// The cells the indexer leaves for a generic type reference `reference`:
+    /// a live code cell per binary (marker, payload, `cell_by_type`,
+    /// `cell_by_data_hash`), and `traps` live cells of the same type that are
+    /// not code, each with its append-only payload withheld, so any read of
+    /// one fails.
+    fn seed_generic_reference(
+        store: &CkbadgerStore,
+        reference: &[u8],
+        binaries: &[[u8; 32]],
+        traps: u8,
+    ) {
+        let mut batch = ckbadger_store::StoreBatch::new(store);
+        for (index, binary) in binaries.iter().enumerate() {
+            let tx = [0xd0 + index as u8; 32];
+            batch.put_cell(
+                &tx,
+                0,
+                &ckbadger_store::LiveCellInfo {
+                    capacity: 100,
+                    lock_code_hash: [0x12; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some([0x13; 32]),
+                    type_hash_type: Some(1),
+                    type_args: Some(vec![0x5e; 4]),
+                    data_size: 64,
+                    udt_amount: None,
+                    data_hash: Some(*binary),
+                },
+                11,
+            );
+            batch.put_cell_by_type(reference, 11, &tx, 0);
+            batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+        }
+        for trap in 0..traps {
+            let tx = [0xa0u8.wrapping_add(trap); 32];
+            batch.put_live_cell_marker(&ckbadger_store::keys::encode_outpoint(&tx, 0), 11);
+            batch.put_cell_by_type(reference, 11, &tx, 0);
+        }
+        batch.commit().unwrap();
+    }
+
+    /// resync fix round S3 (the lead's option B): the API settles a generic
+    /// type reference from its live CODE cells only, the read the indexer
+    /// makes. The type holds two live code cells and fifty live cells that are
+    /// not code, each a trap (any read of one fails): the reference runs the
+    /// two binaries, and no trap is touched, for the form's code and for the
+    /// hash's resolution.
+    #[test]
+    fn a_generic_type_reference_is_read_from_its_code_cells_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = crate::utils::address::compute_script_hash(&[0x13; 32], 1, &[0x5e; 4]);
+        let binaries = [[0x61u8; 32], [0x62; 32]];
+        seed_generic_reference(&store, &reference, &binaries, 50);
+
+        let code = reference_form_member_version_with_lineage(
+            &store,
+            &store,
+            1,
+            &reference,
+            &|_| true,
+            Some(false),
+        );
+        assert_eq!(
+            code.map_err(|e| e.to_string()),
+            Ok(ReferenceCode::Several(
+                binaries.iter().map(|b| b.to_vec()).collect()
+            )),
+            "the form's code, from its code cells only"
+        );
+        match resolve_script_by_hash(&store, &store, &reference) {
+            Ok(CurrentScriptVersionResolution::Ambiguous(ambiguous)) => assert_eq!(
+                ambiguous.version_hashes,
+                binaries.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+            ),
+            other => panic!("the hash's resolution, from its code cells only: {other:?}"),
+        }
+    }
 }
