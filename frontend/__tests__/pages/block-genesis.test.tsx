@@ -186,9 +186,16 @@ describe('the genesis block page', () => {
     // its headline names no one: it pays no block's reward
     const headline = row.querySelector('[data-role="headline"]') as HTMLElement;
     expect(headline).toHaveTextContent(/^Cellbase$/);
-    // the five it draws, the burn cell's zero lock among them, then the way to the other 662
-    expect(row.querySelectorAll('[data-role="participant"]')).toHaveLength(5);
-    expect(within(row).getByTitle(cellbase.participants[0].lockHash!)).toBeInTheDocument();
+    // the five it draws, the largest the burn cell's zero lock, then the way to the other 662
+    const drawn = [...row.querySelectorAll('[data-role="participant"]')];
+    expect(drawn.map((line) => line.textContent!.match(/\+[\d,]+ CKB/)![0])).toEqual([
+      '+8,400,000,000 CKB',
+      '+2,856,000,000 CKB',
+      '+1,428,000,000 CKB',
+      '+1,260,000,000 CKB',
+      '+840,000,000 CKB',
+    ]);
+    expect(drawn[0]).toHaveTextContent('Zero Lock');
     const rest = within(row).getByRole('link', {
       name: /^662\smore\sparticipants on the transaction page$/,
     });
