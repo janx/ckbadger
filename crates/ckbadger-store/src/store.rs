@@ -127,11 +127,16 @@ impl SecondaryStoreOwner {
     }
 }
 
+/// Where `owner` keeps its secondary of the store at `primary_path`: the
+/// store's sibling, named after it. The path is read by its components, so a
+/// trailing separator (a config's `data/domain/`) names the same store and
+/// never puts the directory inside it (resync fix round 3, item 5).
 pub fn secondary_store_path<P: AsRef<Path>>(
     primary_path: P,
     owner: SecondaryStoreOwner,
 ) -> PathBuf {
-    let mut path = primary_path.as_ref().as_os_str().to_os_string();
+    let normalised: PathBuf = primary_path.as_ref().components().collect();
+    let mut path = normalised.into_os_string();
     path.push(format!("-{}", owner.suffix()));
     PathBuf::from(path)
 }
