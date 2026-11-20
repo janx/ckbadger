@@ -6044,6 +6044,356 @@ impl Check for ActivityRecognizedTypesMatchCells {
     }
 }
 
+// ── Live code cells by type (resync fix round 2, E) ────────────────────────
+
+/// S43: `live_code_cells_by_type` (resync fix round S3: the index a generic
+/// type reference is settled from, on both sync paths and in the API) held
+/// to the node, both ways on a sample:
+///
+/// - every sampled row names a cell the node holds live (`get_live_cell`),
+///   under a type script whose hash is the row's type hash and which is not
+///   the consensus Type ID script, with data that hashes to the row's binary
+///   and is code (`keys::is_code_cell`); a row that fails one is stale;
+/// - for each sampled row's type script, every live code cell the node lists
+///   under it (`get_cells`, up to [`LIVE_CODE_CELLS_NODE_PAGES`] pages) has its
+///   row (`/verify/live-code-cells?type_hash=`); a cell without one is a
+///   missing row.
+///
+/// The rows are sampled from `--sample-count` random keys of the seed, each
+/// the first row at or after its key (`/verify/live-code-cells?from=`). A
+/// finding stands only if a second read of the type's rows still shows it,
+/// so a block indexed between the two reads is not reported. A type with more
+/// live cells than the walk reads, or more rows than one answer holds, is
+/// named in the pass detail as not compared, never counted as verified. (Its
+/// blind spot: a type that lost every row is never sampled.)
+pub struct LiveCodeCellsIndexMatchesChain;
+
+const LIVE_CODE_CELLS_SAMPLE_MAX: usize = 32;
+const LIVE_CODE_CELLS_NODE_PAGE: u64 = 100;
+const LIVE_CODE_CELLS_NODE_PAGES: usize = 10;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveCodeCellsPage {
+    rows: Vec<LiveCodeCellEvidence>,
+    complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveCodeCellEvidence {
+    type_hash: String,
+    tx_hash: String,
+    output_index: i64,
+    binary: String,
+}
+
+impl LiveCodeCellEvidence {
+    fn names(&self, tx_hash: &str, index: i64) -> bool {
+        self.tx_hash.eq_ignore_ascii_case(tx_hash) && self.output_index == index
+    }
+}
+
+/// The type script of a node cell's JSON output, parsed.
+fn node_type_script(output: &serde_json::Value) -> anyhow::Result<Option<crate::rpc::Script>> {
+    match output.get("type") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(script) => Ok(Some(serde_json::from_value(script.clone())?)),
+    }
+}
+
+fn node_hex(value: &serde_json::Value, what: &str) -> anyhow::Result<Vec<u8>> {
+    let hex = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("node {what} is not a hex string"))?;
+    Ok(hex::decode(hex.trim_start_matches("0x"))?)
+}
+
+/// Why the node says `row` is not a live code cell under its type, if it
+/// does; and the cell's type script when it is one.
+fn live_code_cell_row_at_node(
+    ctx: &CheckContext,
+    rpc_url: &str,
+    row: &LiveCodeCellEvidence,
+) -> anyhow::Result<Result<crate::rpc::Script, String>> {
+    let cell = rpc_call(
+        ctx,
+        rpc_url,
+        "get_live_cell",
+        vec![
+            serde_json::json!({
+                "tx_hash": row.tx_hash,
+                "index": format!("0x{:x}", row.output_index),
+            }),
+            serde_json::Value::Bool(true),
+        ],
+    )?;
+    let Some(cell) = cell else {
+        return Ok(Err("the node answers nothing for the cell".to_string()));
+    };
+    if cell["status"] != "live" {
+        return Ok(Err(format!("the node says the cell is {}", cell["status"])));
+    }
+    let Some(script) = node_type_script(&cell["cell"]["output"])? else {
+        return Ok(Err("the node's cell has no type script".to_string()));
+    };
+    let type_hash = crate::parser::script::ScriptParser::compute_script_hash(&script);
+    if !row
+        .type_hash
+        .eq_ignore_ascii_case(&format!("0x{}", hex::encode(&type_hash)))
+    {
+        return Ok(Err(format!(
+            "the node's cell is under type 0x{}",
+            hex::encode(&type_hash)
+        )));
+    }
+    let code_hash = node_hex(
+        &serde_json::Value::String(script.code_hash.clone()),
+        "code hash",
+    )?;
+    if ckbadger_store::keys::is_type_id_script(
+        &code_hash,
+        crate::parser::script::ScriptParser::hash_type_to_i16(&script.hash_type),
+    ) {
+        return Ok(Err("the cell's type script is Type ID".to_string()));
+    }
+    let data = node_hex(&cell["cell"]["data"]["content"], "cell data")?;
+    let data_hash = crate::parser::script::ScriptParser::compute_data_hash(&data);
+    if !row
+        .binary
+        .eq_ignore_ascii_case(&format!("0x{}", hex::encode(data_hash)))
+    {
+        return Ok(Err(format!(
+            "the node's cell data hashes to 0x{}",
+            hex::encode(data_hash)
+        )));
+    }
+    if !ckbadger_store::keys::is_code_cell(&data) {
+        return Ok(Err(format!(
+            "the node's cell data ({} bytes) is not code",
+            data.len()
+        )));
+    }
+    Ok(Ok(script))
+}
+
+/// The live code cells the node lists under `script`, `None` when the walk
+/// ends before the node's list does.
+fn node_live_code_cells(
+    ctx: &CheckContext,
+    rpc_url: &str,
+    script: &crate::rpc::Script,
+) -> anyhow::Result<Option<Vec<(String, i64)>>> {
+    let mut cells = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..LIVE_CODE_CELLS_NODE_PAGES {
+        let mut params = vec![
+            serde_json::json!({
+                "script": script,
+                "script_type": "type",
+                "script_search_mode": "exact",
+                "with_data": true,
+            }),
+            serde_json::Value::String("asc".to_string()),
+            serde_json::Value::String(format!("0x{LIVE_CODE_CELLS_NODE_PAGE:x}")),
+        ];
+        if let Some(cursor) = &cursor {
+            params.push(serde_json::Value::String(cursor.clone()));
+        }
+        let page = rpc_call(ctx, rpc_url, "get_cells", params)?
+            .ok_or_else(|| anyhow::anyhow!("the node answers no get_cells page"))?;
+        let objects = page["objects"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("get_cells page has no objects"))?;
+        for object in objects {
+            let data = node_hex(&object["output_data"], "output data")?;
+            if !ckbadger_store::keys::is_code_cell(&data) {
+                continue;
+            }
+            let tx_hash = object["out_point"]["tx_hash"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("get_cells object has no tx hash"))?
+                .to_ascii_lowercase();
+            let index = object["out_point"]["index"]
+                .as_str()
+                .and_then(|hex| i64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+                .ok_or_else(|| anyhow::anyhow!("get_cells object has no output index"))?;
+            cells.push((tx_hash, index));
+        }
+        if (objects.len() as u64) < LIVE_CODE_CELLS_NODE_PAGE {
+            return Ok(Some(cells));
+        }
+        cursor = page["last_cursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            return Ok(Some(cells));
+        }
+    }
+    Ok(None)
+}
+
+impl Check for LiveCodeCellsIndexMatchesChain {
+    fn name(&self) -> &'static str {
+        "live_code_cells_index_matches_chain"
+    }
+    fn description(&self) -> &'static str {
+        "live_code_cells_by_type holds a row for exactly the live code cells under each sampled \
+         type script, by the node (each sampled row live, under its type, its binary, code; each \
+         sampled type's code cells all filed)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        true
+    }
+    /// The rows are sampled by `--sample-count` random keys.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(LIVE_CODE_CELLS_SAMPLE_MAX) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let rpc_url = ctx.rpc_url.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("live_code_cells_index_matches_chain needs --rpc-url")
+        })?;
+        let samples = ctx.sample_count.min(LIVE_CODE_CELLS_SAMPLE_MAX);
+        if samples == 0 {
+            anyhow::bail!(
+                "live_code_cells_index_matches_chain was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let first_from = |from: &[u8]| -> anyhow::Result<Option<LiveCodeCellEvidence>> {
+            let page: LiveCodeCellsPage = api_get(
+                ctx,
+                &format!(
+                    "verify/live-code-cells?from=0x{}&limit=1",
+                    hex::encode(from)
+                ),
+            )?;
+            Ok(page.rows.into_iter().next())
+        };
+        let rows_under = |type_hash: &str| -> anyhow::Result<LiveCodeCellsPage> {
+            api_get(
+                ctx,
+                &format!("verify/live-code-cells?type_hash={type_hash}&limit=64"),
+            )
+        };
+
+        // The sample: the first row at or after each random key, wrapping to
+        // the first row of the index past its last.
+        let mut sampler = LcgSampler::new(ctx.seed.wrapping_add(43));
+        let mut sampled: Vec<LiveCodeCellEvidence> = Vec::new();
+        for _ in 0..samples {
+            let key: Vec<u8> = sampler
+                .sample_range(4, u64::MAX)
+                .into_iter()
+                .flat_map(u64::to_be_bytes)
+                .collect();
+            let row = match first_from(&key)? {
+                Some(row) => Some(row),
+                None => first_from(&[0u8; 32])?,
+            };
+            match row {
+                Some(row) if !sampled.contains(&row) => sampled.push(row),
+                Some(_) => {}
+                None => {
+                    return Ok(CheckResult::pass_with_detail(
+                        0,
+                        "live_code_cells_by_type holds no row: no generic type reference has \
+                         live code on this network"
+                            .to_string(),
+                    ))
+                }
+            }
+        }
+
+        let mut findings = Vec::new();
+        let mut checked = 0u64;
+        let mut not_compared = Vec::new();
+        let mut types: Vec<(String, crate::rpc::Script)> = Vec::new();
+        for row in &sampled {
+            checked += 1;
+            progress.inc(1);
+            match live_code_cell_row_at_node(ctx, rpc_url, row)? {
+                Ok(script) => {
+                    if !types
+                        .iter()
+                        .any(|(type_hash, _)| type_hash == &row.type_hash)
+                    {
+                        types.push((row.type_hash.clone(), script));
+                    }
+                }
+                Err(reason) => {
+                    // A row consumed between the sample and now is gone from
+                    // a second read.
+                    let still = rows_under(&row.type_hash)?
+                        .rows
+                        .iter()
+                        .any(|again| again == row);
+                    if still {
+                        findings.push(Finding {
+                            entity: format!(
+                                "live_code_cells_by_type {} {}:{}",
+                                row.type_hash, row.tx_hash, row.output_index
+                            ),
+                            details: vec![format!("a stale row: {reason}")],
+                        });
+                    }
+                }
+            }
+        }
+
+        for (type_hash, script) in &types {
+            let Some(node_cells) = node_live_code_cells(ctx, rpc_url, script)? else {
+                not_compared.push(format!(
+                    "{type_hash} (more than {} live cells)",
+                    LIVE_CODE_CELLS_NODE_PAGE * LIVE_CODE_CELLS_NODE_PAGES as u64
+                ));
+                continue;
+            };
+            let filed = rows_under(type_hash)?;
+            if !filed.complete {
+                not_compared.push(format!("{type_hash} (more rows than one answer holds)"));
+                continue;
+            }
+            let missing: Vec<&(String, i64)> = node_cells
+                .iter()
+                .filter(|(tx, index)| !filed.rows.iter().any(|row| row.names(tx, *index)))
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            // A cell created between the reads is filed by the second.
+            let again = rows_under(type_hash)?;
+            for (tx, index) in missing {
+                if !again.rows.iter().any(|row| row.names(tx, *index)) {
+                    findings.push(Finding {
+                        entity: format!("live code cell {tx}:{index} under {type_hash}"),
+                        details: vec!["the node holds it live under this type, and \
+                             live_code_cells_by_type has no row for it"
+                            .to_string()],
+                    });
+                }
+            }
+        }
+
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!(
+            "{} sampled rows held to the node; the code cells of {} type(s) compared both ways",
+            sampled.len(),
+            types.len() - not_compared.len()
+        );
+        if !not_compared.is_empty() {
+            detail.push_str(&format!("; not compared: {}", not_compared.join(", ")));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 // ── Token live cell count ──────────────────────────────────────────────────
 
 /// A token's persisted live cell count (`cellsCount`: the running sum of its
@@ -8235,6 +8585,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(ClusterActivitiesCountConsistency),
         Box::new(BitCellAccountIndexConsistency),
         Box::new(ScriptReferenceLiveCellsConsistency),
+        Box::new(LiveCodeCellsIndexMatchesChain),
     ]
 }
 
@@ -8438,8 +8789,9 @@ mod tests {
         // daily_activity_kinds_partition_transactions, S40
         // participant_sent_matches_input_locks (resync/int), S41
         // script_reference_live_cells_consistency (lane rd/api-lock-names) and
-        // S42 activity_recognized_types_match_cells (resync/type-codes, C7).
-        assert_eq!(checks.len(), 50);
+        // S42 activity_recognized_types_match_cells (resync/type-codes, C7);
+        // S43 live_code_cells_index_matches_chain (resync fix round 2, E).
+        assert_eq!(checks.len(), 51);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -8471,6 +8823,7 @@ mod tests {
         assert!(names.contains(&"daily_activity_kinds_partition_transactions"));
         assert!(names.contains(&"participant_sent_matches_input_locks"));
         assert!(names.contains(&"activity_recognized_types_match_cells"));
+        assert!(names.contains(&"live_code_cells_index_matches_chain"));
         assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
@@ -8558,8 +8911,8 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 10);
-        // 40 here; with the entity-history and DAO-cell checks, the 42 of S1-S42.
-        assert_eq!(sampling_count, 40);
+        // 41 here; with the entity-history and DAO-cell checks, the 43 of S1-S43.
+        assert_eq!(sampling_count, 41);
     }
 
     #[test]
@@ -8840,6 +9193,154 @@ mod tests {
         DataHashIndexFilesOnlyCodeCells
             .run(&rpc_ctx(&server), &ProgressReporter::new(None))
             .unwrap()
+    }
+
+    // ── live_code_cells_index_matches_chain (resync fix round 2, E) ──────
+
+    /// A generic type script and the two live code cells the node holds
+    /// under it (A at 0xa1:0, B at 0xa2:1), plus cell C at 0xa3:0, which the
+    /// node says is dead.
+    fn live_code_type() -> crate::rpc::Script {
+        crate::rpc::Script {
+            code_hash: format!("0x{}", "61".repeat(32)),
+            hash_type: "type".to_string(),
+            args: "0x01".to_string(),
+        }
+    }
+
+    const LIVE_CODE: &str = "0x7f454c4602010100";
+
+    fn live_code_type_hash() -> String {
+        format!(
+            "0x{}",
+            hex::encode(crate::parser::script::ScriptParser::compute_script_hash(
+                &live_code_type()
+            ))
+        )
+    }
+
+    fn live_code_row(tx: u8, index: i64) -> serde_json::Value {
+        json!({
+            "typeHash": live_code_type_hash(),
+            "txHash": format!("0x{}", hex::encode([tx; 32])),
+            "outputIndex": index,
+            "binary": format!("0x{}", hex::encode(hash_of(LIVE_CODE))),
+        })
+    }
+
+    /// The API's rows (`filed`) for every `from` and for the type, and the
+    /// node's cells: A and B live, C dead.
+    struct LiveCodeCellsResponder {
+        filed: Vec<serde_json::Value>,
+    }
+
+    impl Respond for LiveCodeCellsResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            if request.url.path() == "/api/v1/verify/live-code-cells" {
+                let from = request.url.query_pairs().any(|(key, _)| key == "from");
+                let rows: Vec<serde_json::Value> = if from {
+                    self.filed.iter().take(1).cloned().collect()
+                } else {
+                    self.filed.clone()
+                };
+                return ResponseTemplate::new(200)
+                    .set_body_json(json!({"rows": rows, "complete": true}));
+            }
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let output =
+                json!({"capacity": "0x1", "lock": genesis_lock(), "type": live_code_type()});
+            let result = match body["method"].as_str().unwrap_or_default() {
+                "get_live_cell" => {
+                    let tx = body["params"][0]["tx_hash"].as_str().unwrap().to_string();
+                    if tx == format!("0x{}", hex::encode([0xa3; 32])) {
+                        json!({"cell": null, "status": "dead"})
+                    } else {
+                        json!({"cell": {"output": output, "data": {"content": LIVE_CODE}},
+                               "status": "live"})
+                    }
+                }
+                "get_cells" => json!({
+                    "objects": [
+                        {"output": output, "output_data": LIVE_CODE,
+                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa1; 32])), "index": "0x0"}},
+                        {"output": output, "output_data": LIVE_CODE,
+                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa2; 32])), "index": "0x1"}},
+                        {"output": output, "output_data": "0x0100",
+                         "out_point": {"tx_hash": format!("0x{}", hex::encode([0xa4; 32])), "index": "0x0"}},
+                    ],
+                    "last_cursor": "0x00",
+                }),
+                other => panic!("unexpected RPC method {other}"),
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
+        }
+    }
+
+    fn run_live_code_cells_check(filed: Vec<serde_json::Value>) -> CheckResult {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(wiremock::matchers::any())
+                .respond_with(LiveCodeCellsResponder { filed })
+                .mount(&server)
+                .await;
+        });
+        LiveCodeCellsIndexMatchesChain
+            .run(&rpc_ctx(&server), &ProgressReporter::new(None))
+            .unwrap()
+    }
+
+    /// The index holds exactly the node's live code cells under the type (a
+    /// non-code cell under it is no row): the check passes.
+    #[test]
+    fn live_code_cells_check_passes_on_an_index_that_matches_the_node() {
+        let result =
+            run_live_code_cells_check(vec![live_code_row(0xa1, 0), live_code_row(0xa2, 1)]);
+        assert!(result.passed(), "{:?}", result.findings);
+    }
+
+    /// A live code cell the node lists under the type has no row: a finding
+    /// naming it.
+    #[test]
+    fn live_code_cells_check_fails_on_a_missing_row() {
+        let result = run_live_code_cells_check(vec![live_code_row(0xa1, 0)]);
+        assert!(!result.passed());
+        let entities: Vec<&str> = result.findings.iter().map(|f| f.entity.as_str()).collect();
+        assert_eq!(
+            entities,
+            [format!(
+                "live code cell 0x{}:1 under {}",
+                hex::encode([0xa2; 32]),
+                live_code_type_hash()
+            )
+            .as_str()],
+            "{:?}",
+            result.findings
+        );
+    }
+
+    /// A row whose cell the node says is dead: a stale row, named.
+    #[test]
+    fn live_code_cells_check_fails_on_a_stale_row() {
+        let result = run_live_code_cells_check(vec![
+            live_code_row(0xa3, 0),
+            live_code_row(0xa1, 0),
+            live_code_row(0xa2, 1),
+        ]);
+        assert!(!result.passed());
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.entity.contains(&hex::encode([0xa3; 32]))
+                    && finding
+                        .details
+                        .iter()
+                        .any(|detail| detail.contains("stale row"))),
+            "{:?}",
+            result.findings
+        );
     }
 
     #[test]

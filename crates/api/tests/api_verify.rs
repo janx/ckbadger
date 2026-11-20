@@ -1200,3 +1200,79 @@ async fn data_hash_rows_rejects_a_limit_over_the_cap() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+// ── `GET /api/v1/verify/live-code-cells` (resync fix round 2, E) ──────────
+
+/// The export reads `live_code_cells_by_type` raw: every row under a type
+/// script hash with `complete`, or the rows from a key on (the verifier's
+/// random start), each with its type hash, outpoint and binary; one of the two
+/// parameters, a limit within the cap.
+#[tokio::test]
+async fn live_code_cells_export_reads_the_index_under_a_type_and_from_a_key() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_live_code_cell(&[0x20; 32], &[0x01; 32], 0, &[0xb1; 32]);
+    batch.put_live_code_cell(&[0x20; 32], &[0x02; 32], 3, &[0xb2; 32]);
+    batch.put_live_code_cell(&[0x40; 32], &[0x03; 32], 1, &[0xb3; 32]);
+    batch.commit().unwrap();
+    let app = create_router_without_warmup(test_config(store));
+
+    let (status, body) = get_json(
+        &app,
+        &format!("/verify/live-code-cells?type_hash={}", hex0x(&[0x20; 32])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "rows": [
+                {"typeHash": hex0x(&[0x20; 32]), "txHash": hex0x(&[0x01; 32]),
+                 "outputIndex": 0, "binary": hex0x(&[0xb1; 32])},
+                {"typeHash": hex0x(&[0x20; 32]), "txHash": hex0x(&[0x02; 32]),
+                 "outputIndex": 3, "binary": hex0x(&[0xb2; 32])},
+            ],
+            "complete": true,
+        })
+    );
+
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/live-code-cells?from={}&limit=1",
+            hex0x(&[0x21; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["rows"][0]["typeHash"], hex0x(&[0x40; 32]), "{body}");
+    assert_eq!(body["complete"], true, "{body}");
+
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/live-code-cells?from={}&limit=2",
+            hex0x(&[0x00; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["rows"].as_array().unwrap().len(), 2, "{body}");
+    assert_eq!(body["complete"], false, "a third row follows: {body}");
+
+    for bad in [
+        "/verify/live-code-cells".to_string(),
+        format!(
+            "/verify/live-code-cells?type_hash={}&from={}",
+            hex0x(&[0x20; 32]),
+            hex0x(&[0x20; 32])
+        ),
+        format!(
+            "/verify/live-code-cells?type_hash={}&limit=65",
+            hex0x(&[0x20; 32])
+        ),
+    ] {
+        let (status, body) = get_json(&app, &bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+}

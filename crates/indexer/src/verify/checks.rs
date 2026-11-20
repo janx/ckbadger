@@ -829,6 +829,7 @@ mod status_model_tests {
             "participant_rows_consistency",
             "participant_sent_matches_input_locks",
             "activity_recognized_types_match_cells",
+            "live_code_cells_index_matches_chain",
             "global_activity_bucket_index_consistency",
             "address_cellbase_count_consistency",
             "token_live_cells_consistency",

@@ -1319,9 +1319,10 @@ disabled or empty state. A point lookup still returns not found.
 
 ### verify (crates/api/src/routes/verify.rs)
 
-| Method | Path                               | Handler                    | Purpose                                                               |
-| ------ | ---------------------------------- | -------------------------- | --------------------------------------------------------------------- |
-| POST   | `/api/v1/verify/entity-statistics` | `export_entity_statistics` | Bounded, read-only export of raw entity daily deltas for the verifier |
+| Method | Path                               | Handler                    | Purpose                                                                                                           |
+| ------ | ---------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/v1/verify/entity-statistics` | `export_entity_statistics` | Bounded, read-only export of raw entity daily deltas for the verifier                                             |
+| GET    | `/api/v1/verify/live-code-cells`   | `export_live_code_cells`   | Raw `live_code_cells_by_type` rows under `type_hash`, or from a `from` key on (`limit` ≤ 64, `complete`), for S43 |
 
 A verification-only endpoint, not part of the public explorer surface. Every
 read happens inside the request's single read-view pin, so the anchor and the

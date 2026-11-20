@@ -63,6 +63,105 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/verify/entity-statistics", post(export_entity_statistics))
         .route("/verify/data-hash-rows", get(export_data_hash_rows))
+        .route("/verify/live-code-cells", get(export_live_code_cells))
+}
+
+/// Rows per `/verify/live-code-cells` answer.
+const MAX_LIVE_CODE_CELL_ROWS: usize = 64;
+
+#[derive(Debug, Deserialize)]
+pub struct LiveCodeCellsQuery {
+    /// Every row under this type script hash.
+    pub type_hash: Option<String>,
+    /// The rows from the first key at or after this one (a 32-byte type
+    /// script hash, any value: the verifier's random start).
+    pub from: Option<String>,
+    /// Rows to return; defaults to (and may not exceed)
+    /// [`MAX_LIVE_CODE_CELL_ROWS`].
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCodeCellsResponse {
+    pub rows: Vec<LiveCodeCellRowResponse>,
+    /// Under `type_hash`: no further row exists under it. From `from`: no
+    /// further row exists after the last one.
+    pub complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCodeCellRowResponse {
+    pub type_hash: String,
+    pub tx_hash: String,
+    pub output_index: i16,
+    /// The cell's data hash, as the row stores it.
+    pub binary: String,
+}
+
+/// `GET /api/v1/verify/live-code-cells?type_hash=0x…` or `?from=0x…` — the
+/// stored `live_code_cells_by_type` rows (resync fix round S3) under one type
+/// script hash, or from a key on: raw and bounded, from the request's one
+/// read pin. The verifier (`live_code_cells_index_matches_chain`) samples the
+/// index from random keys and holds each row to the node, and a sampled
+/// type's code cells the node lists to the rows under it (resync fix round
+/// 2, E).
+async fn export_live_code_cells(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<LiveCodeCellsQuery>,
+) -> ApiResult<LiveCodeCellsResponse> {
+    let limit = query.limit.unwrap_or(MAX_LIVE_CODE_CELL_ROWS);
+    if limit == 0 || limit > MAX_LIVE_CODE_CELL_ROWS {
+        return Err(ApiError::bad_request(format!(
+            "limit must be between 1 and {MAX_LIVE_CODE_CELL_ROWS}, got {limit}"
+        )));
+    }
+    let (start, under) = match (&query.type_hash, &query.from) {
+        (Some(type_hash), None) => (parse_hash32(type_hash, "type_hash")?, true),
+        (None, Some(from)) => (parse_hash32(from, "from")?, false),
+        _ => {
+            return Err(ApiError::bad_request(
+                "give exactly one of type_hash and from",
+            ))
+        }
+    };
+    let store = state.store.clone();
+    let (rows, complete) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        if under {
+            let all = store.list_live_code_cells_by_type(&start)?;
+            let complete = all.len() <= limit;
+            Ok((
+                all.into_iter()
+                    .take(limit)
+                    .map(|row| (start.to_vec(), row))
+                    .collect::<Vec<_>>(),
+                complete,
+            ))
+        } else {
+            let mut rows = store.list_live_code_cells_from(&start, limit + 1)?;
+            let complete = rows.len() <= limit;
+            rows.truncate(limit);
+            Ok((rows, complete))
+        }
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("live code cells export task failed: {e}")))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    ok(LiveCodeCellsResponse {
+        rows: rows
+            .into_iter()
+            .map(
+                |(type_hash, (tx_hash, output_index, binary))| LiveCodeCellRowResponse {
+                    type_hash: hex0x(&type_hash),
+                    tx_hash: hex0x(&tx_hash),
+                    output_index,
+                    binary: hex0x(&binary),
+                },
+            )
+            .collect(),
+        complete,
+    })
 }
 
 /// Rows per `/verify/data-hash-rows` answer: the verifier names a few rows
