@@ -13303,6 +13303,120 @@ mod tests {
         );
     }
 
+    /// Serves `/activities` as the merged feed (lane feed: a row draws some
+    /// parties and names every one in `partyIds`), each transaction's own
+    /// activity (`/transactions/{hash}/activity`, every party drawn) and its
+    /// inputs' locks.
+    fn run_sent_check_on_feed(
+        feed: serde_json::Value,
+        own: &[(String, serde_json::Value)],
+        transactions: &[(String, Vec<serde_json::Value>)],
+    ) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/activities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": feed, "nextCursor": null, "hasMore": false, "limit": 10
+                })))
+                .mount(&server)
+                .await;
+            for (hash, activity) in own {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/transactions/{hash}/activity")))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(activity.clone()))
+                    .mount(&server)
+                    .await;
+            }
+            for (hash, locks) in transactions {
+                let inputs: Vec<_> = locks.iter().map(|lock| json!({ "lock": lock })).collect();
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/transactions/{hash}")))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(json!({ "inputs": inputs })),
+                    )
+                    .mount(&server)
+                    .await;
+            }
+        });
+        execute_check(
+            registered_check("participant_sent_matches_input_locks").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    /// Eight parties, the first and the eighth sending: the feed row draws
+    /// the first six and names all eight by short id and tags, the senders
+    /// bit (256) on the two that sent; the transaction's own activity draws
+    /// all eight with `sent`.
+    fn sent_check_eight_parties(
+        tx: &str,
+        feed_bits: [bool; 8],
+    ) -> (serde_json::Value, serde_json::Value, Vec<serde_json::Value>) {
+        let parties: Vec<_> = (1..=8u8).map(sent_check_lock).collect();
+        let sent = |i: usize| i == 0 || i == 7;
+        let full: Vec<_> = parties
+            .iter()
+            .enumerate()
+            .map(|(i, (_, hash))| json!({ "lockHash": hash, "lockHashPrefix": null, "sent": sent(i) }))
+            .collect();
+        let feed = json!({
+            "txHash": tx,
+            "blockNumber": 100,
+            "participants": full[..6],
+            "participantCount": 8,
+            "partyIds": parties
+                .iter()
+                .enumerate()
+                .map(|(i, (_, hash))| json!([&hash[..42], if feed_bits[i] { 256 } else { 0 }]))
+                .collect::<Vec<_>>(),
+        });
+        let own = json!({ "participantCount": 8, "participants": full });
+        let inputs = vec![parties[0].0.clone(), parties[7].0.clone()];
+        (feed, own, inputs)
+    }
+
+    /// The feed draws six of eight parties (lane feed): the eighth sent, its
+    /// input's lock is no drawn party. The check reads every party (the
+    /// transaction's own activity draws them all), so nothing is wrong here.
+    #[test]
+    fn sent_check_reads_every_party_where_the_feed_draws_some() {
+        let tx = format!("0x{}", "ef".repeat(32));
+        let bits = [true, false, false, false, false, false, false, true];
+        let (feed, own, inputs) = sent_check_eight_parties(&tx, bits);
+        let completed =
+            run_sent_check_on_feed(json!([feed]), &[(tx.clone(), own)], &[(tx, inputs)]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    /// The feed's senders bit is checked too: the eighth party sent, and the
+    /// feed names it without the bit (a fold would not count it).
+    #[test]
+    fn sent_check_fails_on_a_feed_row_whose_party_ids_lack_the_senders_bit() {
+        let tx = format!("0x{}", "ef".repeat(32));
+        let bits = [true, false, false, false, false, false, false, false];
+        let (feed, own, inputs) = sent_check_eight_parties(&tx, bits);
+        let eighth = sent_check_lock(8).1;
+        let completed =
+            run_sent_check_on_feed(json!([feed]), &[(tx.clone(), own)], &[(tx.clone(), inputs)]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].entity, format!("tx={tx} (block 100)"));
+        assert_eq!(
+            result.findings[0].details,
+            vec![format!(
+                "the feed row names lock {eighth} by {} with tags 0, without the senders bit; \
+                 the transaction's own activity states it sent",
+                &eighth[..42]
+            )]
+        );
+    }
+
     // ── daily_activity_kinds_partition_transactions ───────────────────────
 
     fn activity_day(date: &str, kinds: [u64; 7], coinbase: u64) -> serde_json::Value {
