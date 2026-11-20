@@ -2,7 +2,7 @@
 //! registry (`docs/metadata/scripts/*.toml`). Network-agnostic union: a
 //! code_hash uniquely identifies a protocol across networks (no collisions).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::label_import::bundled::script_labels;
@@ -387,6 +387,47 @@ fn hash_type_byte(label: &str, slug: &str) -> u8 {
 
 pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
     LazyLock::new(ProtocolRegistry::from_bundled);
+
+/// The registry's category of the token scripts (`category = "udt"`).
+const UDT_CATEGORY: &str = "udt";
+
+/// The xUDT-compatible deployments' pairs (resync fix round, logic NOTE N3):
+/// every registry entry of category `udt` other than sUDT and xUDT (which the
+/// registry recognises as those protocols), at the pairs of THE pair rule
+/// ([`registered_pairs`]: its reference by its hash type and its version's
+/// binary by every data hash type), deprecated or not (a deprecated
+/// deployment's cells still run its code). It was a narrower rule bundled by
+/// build.rs (references only, deprecated skipped), so a compatible
+/// deployment's binary by data1 was no UDT while the xUDT binary by data2 was.
+static XUDT_COMPATIBLE_PAIRS: LazyLock<HashSet<([u8; 32], u8)>> = LazyLock::new(|| {
+    let mut pairs = HashSet::new();
+    for meta in script_labels() {
+        let Some(slug) = meta.metadata_slug.as_deref() else {
+            continue;
+        };
+        if meta.category.as_deref() != Some(UDT_CATEGORY)
+            || matches!(
+                slug_to_protocol(slug),
+                Some(ProtocolScript::Sudt | ProtocolScript::Xudt)
+            )
+        {
+            continue;
+        }
+        pairs.extend(registered_pairs(&meta, slug));
+    }
+    pairs
+});
+
+/// Whether `(code_hash, hash_type)` runs an xUDT-compatible deployment's code
+/// ([`XUDT_COMPATIBLE_PAIRS`]). No allocation: the key is the 32 bytes and the
+/// hash type byte; a hash type outside the CKB bytes is no pair.
+pub(crate) fn is_xudt_compatible(code_hash: &[u8], hash_type: i16) -> bool {
+    let (Ok(code_hash), Ok(hash_type)) = (<[u8; 32]>::try_from(code_hash), u8::try_from(hash_type))
+    else {
+        return false;
+    };
+    XUDT_COMPATIBLE_PAIRS.contains(&(code_hash, hash_type))
+}
 
 // ── Script layouts (R-7, R-8) ────────────────────────────────────────────
 // What the registry says about how a script's bytes read: a lock's args

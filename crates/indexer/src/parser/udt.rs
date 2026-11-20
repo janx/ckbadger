@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
-use std::sync::OnceLock;
+use std::collections::BTreeMap;
 
 use tracing::warn;
 
@@ -8,39 +7,6 @@ use ckbadger_common::TokenBalance;
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
-
-mod bundled_udt {
-    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled_udt_script_code_hashes.json"
-    ));
-}
-
-static XUDT_COMPATIBLE_PAIRS: OnceLock<HashSet<([u8; 32], i16)>> = OnceLock::new();
-
-/// The xUDT-compatible deployments' registered pairs (`<code hash>:<hash
-/// type>`, bundled by build.rs): a pair, as the protocol registry reads every
-/// script (resync/protocol-pairs).
-fn xudt_compatible_pairs() -> &'static HashSet<([u8; 32], i16)> {
-    XUDT_COMPATIBLE_PAIRS.get_or_init(|| {
-        let encoded: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
-            .expect("bundled UDT script pairs JSON is invalid — build.rs bug");
-        encoded
-            .into_iter()
-            .map(|pair| {
-                let (code_hash, label) = pair
-                    .split_once(':')
-                    .expect("bundled UDT script pair is <code hash>:<hash type> — build.rs bug");
-                let hash_type = ckbadger_common::hash_type_from_label(label)
-                    .expect("bundled UDT script hash type — build.rs validates it");
-                let code_hash: [u8; 32] = parse_hex_to_bytes(code_hash)
-                    .try_into()
-                    .expect("bundled UDT code hash is 32 bytes — build.rs validates it");
-                (code_hash, i16::from(hash_type))
-            })
-            .collect()
-    })
-}
 
 pub const SUDT_CODE_HASH: &str =
     "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
@@ -121,11 +87,7 @@ impl UdtParser {
         match PROTOCOL_REGISTRY.protocol(code_hash, hash_type) {
             Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
             Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
-            // no allocation: the key is the 32 bytes and the hash type
-            _ if <[u8; 32]>::try_from(code_hash).is_ok_and(|code_hash| {
-                xudt_compatible_pairs().contains(&(code_hash, hash_type))
-            }) =>
-            {
+            _ if crate::parser::registry::is_xudt_compatible(code_hash, hash_type) => {
                 Some(UdtStandard::Xudt)
             }
             _ => None,

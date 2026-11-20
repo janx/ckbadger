@@ -77,7 +77,10 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   extension's cell is the Unique Cell by its registered pair, the last
 ///   such output with the extension's args giving the bound metadata and the
 ///   claim on both paths; a store stamped 7 took a claim and metadata from
-///   any cell with those 20 bytes of args.
+///   any cell with those 20 bytes of args. And one pair rule for the
+///   xUDT-compatible deployments (logic NOTE N3): a compatible deployment's
+///   version binary by a data hash type is a UDT, as the xUDT binary is; a
+///   store stamped 7 recognised their references only.
 ///
 /// A store from before layouts were stamped carries no stamp: its
 /// `script_info` rows are keyed by the code hash alone and sum every hash
