@@ -1990,6 +1990,41 @@ mod tests {
         }
     }
 
+    /// resync fix round 3, M (logic MUST-1): the sequencer's probe meets the
+    /// gating store while its creating open is still making its column
+    /// families. It is not refused and no handle is kept (a secondary never
+    /// gains a column family made after it opened); once the store is made
+    /// and stamped, the next poll reads it.
+    #[test]
+    fn the_sequencers_probe_waits_on_a_store_still_being_created_and_reads_it_once_made() {
+        use ckbadger_store::earlier_layout_for_test::create_store_in_creation;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain.clone()));
+
+        let sample = reader.poll();
+        assert!(
+            !sample.refused,
+            "a store being created is no refusal: {sample:?}"
+        );
+        assert_eq!(sample.past_bulk, None, "and no signal yet: {sample:?}");
+
+        {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert!(
+            sample.past_bulk.is_some(),
+            "the made store is read: {sample:?}"
+        );
+    }
+
     /// The lead's ruling on rule 11 (resync fix round 2): a gating network
     /// refused as rebuild-required holds the next network, and the gate knows
     /// it needs a rebuild, from its store (refused before its indexer exits)

@@ -206,7 +206,7 @@ pub(crate) fn open_api_domain_store(
     )?;
     Ok(match ensure_store_layout_readable(&store)? {
         StoreLayoutState::Current => Some(Arc::new(store)),
-        StoreLayoutState::Fresh => None,
+        StoreLayoutState::Fresh | StoreLayoutState::NotReady => None,
     })
 }
 

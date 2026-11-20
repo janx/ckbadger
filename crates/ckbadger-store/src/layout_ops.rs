@@ -110,6 +110,22 @@ pub enum StoreLayoutState {
     Fresh,
     /// Stamped with [`STORE_LAYOUT`].
     Current,
+    /// Still being created (resync fix round 3, M): RocksDB writes `CURRENT`
+    /// before a creating open of this build has made every column family, so
+    /// a reader can meet the store holding the first ones of
+    /// [`domain_creation_order`] and no row and no stamp. Nothing to misread,
+    /// and nothing to refuse: look again. A reader drops what it opened (a
+    /// secondary never gains a column family made after it opened); the
+    /// indexer's open makes the rest.
+    NotReady,
+}
+
+/// The order in which a creating open makes the domain column families: the
+/// order of its descriptors (`CkbadgerStore::open_domain`; RocksDB's
+/// `DB::Open` makes each missing column family in that order, one MANIFEST
+/// append each, after `NewDB` has written `CURRENT` with `default` alone).
+pub fn domain_creation_order() -> Vec<&'static str> {
+    DOMAIN_CFS.to_vec()
 }
 
 /// How a store's column families differ from this build's (resync fix
@@ -372,22 +388,48 @@ pub mod earlier_layout_for_test {
     /// this build but [`ADDED_SINCE_LAYOUT_7`], holding one row (the network
     /// identity) and the layout stamp `stamp`, if any.
     pub fn create_earlier_layout_domain_store(path: &Path, stamp: Option<u32>) {
-        let mut opts = rocksdb::Options::default();
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
         let column_families: Vec<&str> = DOMAIN_CFS
             .iter()
             .copied()
             .filter(|name| !ADDED_SINCE_LAYOUT_7.contains(name))
             .collect();
+        create_domain_store_by_hand(path, &column_families, true, stamp);
+    }
+
+    /// Create, at `path`, with plain RocksDB, a domain store holding
+    /// `column_families` (and `default`), one row (the network identity in
+    /// `sync_meta`) when `row`, and the layout stamp `stamp`, if any.
+    pub fn create_domain_store_by_hand(
+        path: &Path,
+        column_families: &[&str],
+        row: bool,
+        stamp: Option<u32>,
+    ) {
+        let mut opts = rocksdb::Options::default();
+        opts.create_if_missing(true);
+        opts.create_missing_column_families(true);
         let db = rocksdb::DB::open_cf(&opts, path, column_families).unwrap();
-        let sync_meta = db.cf_handle(CF_SYNC_META).unwrap();
-        db.put_cf(sync_meta, sync_meta_keys::NETWORK_IDENTITY, b"mainnet")
-            .unwrap();
-        if let Some(stamp) = stamp {
-            db.put_cf(sync_meta, sync_meta_keys::STORE_LAYOUT, stamp.to_le_bytes())
-                .unwrap();
+        if row || stamp.is_some() {
+            let sync_meta = db
+                .cf_handle(CF_SYNC_META)
+                .expect("a row or a stamp is written in sync_meta");
+            if row {
+                db.put_cf(sync_meta, sync_meta_keys::NETWORK_IDENTITY, b"mainnet")
+                    .unwrap();
+            }
+            if let Some(stamp) = stamp {
+                db.put_cf(sync_meta, sync_meta_keys::STORE_LAYOUT, stamp.to_le_bytes())
+                    .unwrap();
+            }
         }
+    }
+
+    /// What a creating open of this build leaves when it has made the first
+    /// `made` domain column families (in [`crate::domain_creation_order`]) and
+    /// no more: no row, no stamp.
+    pub fn create_store_in_creation(path: &Path, made: usize) {
+        let order = crate::layout_ops::domain_creation_order();
+        create_domain_store_by_hand(path, &order[..made], false, None);
     }
 
     /// What a refusal must leave as it found it: the store directory's files
@@ -638,6 +680,61 @@ mod tests {
                 before,
                 "stamp {stamp:?}: the refused store is as it was"
             );
+        }
+    }
+
+    /// resync fix round 3, M (logic MUST-1): RocksDB writes `CURRENT` before
+    /// a creating open has made every column family, so a reader can meet
+    /// this build's store holding `default` and the first column families of
+    /// [`domain_creation_order`], no row and no stamp. That store is still
+    /// being created: not ready (look again), never refused, by the inspection
+    /// an opener makes and by a secondary; nothing is written in it.
+    #[test]
+    fn a_store_still_being_created_is_not_ready_never_refused() {
+        use earlier_layout_for_test::{create_store_in_creation, store_files_and_column_families};
+        let all = domain_creation_order().len();
+        for made in [0, 1, all / 2, all - 1] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_store_in_creation(&domain, made);
+            let before = store_files_and_column_families(&domain);
+            assert_eq!(
+                inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap(),
+                Some(Ok(StoreLayoutState::NotReady)),
+                "{made} of {all} made: the inspection waits"
+            );
+            let secondary =
+                CkbadgerStore::open_domain_secondary(&domain, &dir.path().join("secondary"))
+                    .unwrap();
+            assert_eq!(
+                secondary.check_store_layout().unwrap(),
+                Ok(StoreLayoutState::NotReady),
+                "{made} of {all} made: a secondary waits"
+            );
+            drop(secondary);
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "{made} of {all} made: nothing is written in it"
+            );
+        }
+    }
+
+    /// But a store holding a row, or a stamp, beside such a set was written:
+    /// it is not being created, and is refused (resync fix round 3, M).
+    #[test]
+    fn a_partial_store_holding_a_row_or_a_stamp_is_refused() {
+        use earlier_layout_for_test::create_domain_store_by_hand;
+        let order = domain_creation_order();
+        let made = &order[..order.len() - 1];
+        for (row, stamp) in [(true, None), (false, Some(STORE_LAYOUT))] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_domain_store_by_hand(&domain, made, row, stamp);
+            match inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap() {
+                Some(Err(mismatch)) => assert_eq!(mismatch.found, stamp),
+                other => panic!("row {row}, stamp {stamp:?}: refused, got {other:?}"),
+            }
         }
     }
 

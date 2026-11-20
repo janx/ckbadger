@@ -84,8 +84,8 @@ pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucke
 #[cfg(any(test, feature = "test-store"))]
 pub use layout_ops::earlier_layout_for_test;
 pub use layout_ops::{
-    inspect_domain_store, StoreColumnFamilies, StoreLayoutMismatch, StoreLayoutState, STORE_LAYOUT,
-    STORE_LAYOUT_CHANGE,
+    domain_creation_order, inspect_domain_store, StoreColumnFamilies, StoreLayoutMismatch,
+    StoreLayoutState, STORE_LAYOUT, STORE_LAYOUT_CHANGE,
 };
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;

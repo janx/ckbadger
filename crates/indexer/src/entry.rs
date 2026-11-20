@@ -2471,6 +2471,67 @@ mod tests {
         }
     }
 
+    /// resync fix round 3, M: a store this build's creating open left half
+    /// made (RocksDB wrote `CURRENT`, the open stopped before it made every
+    /// column family; no row, no stamp) is no earlier build's: the indexer,
+    /// its creator, makes the rest at its open and stamps it.
+    #[test]
+    fn startup_completes_a_store_its_creating_open_left_half_made() {
+        use ckbadger_store::earlier_layout_for_test::create_store_in_creation;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append_only = dir.path().join("append-only");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+
+        let opened = open_chain_stores_for_startup(
+            domain.to_str().unwrap(),
+            append_only.to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap_or_else(|err| panic!("a store still being created is made whole: {err:#}"));
+        assert!(opened.decision.fresh);
+        assert_eq!(
+            opened.store.get_store_layout().unwrap(),
+            Some(ckbadger_store::STORE_LAYOUT)
+        );
+        drop(opened);
+        let made = rocksdb::DB::list_cf(&rocksdb::Options::default(), &domain).unwrap();
+        for name in ckbadger_store::store::DOMAIN_CFS {
+            assert!(made.iter().any(|have| have == name), "{name} made");
+        }
+    }
+
+    /// resync fix round 3, M: `ckbadger label-import` run by hand on a store
+    /// still being created says so, and to try again; it refuses nothing and
+    /// writes nothing in it.
+    #[tokio::test]
+    async fn label_import_says_a_store_still_being_created_is_being_created() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_store_in_creation, store_files_and_column_families,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let before = store_files_and_column_families(&domain);
+
+        let error = run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(!is_rebuild_required(&error), "{error:#}");
+        let words = format!("{error:#}");
+        assert!(
+            words.contains("is still being created")
+                && words.contains("try again")
+                && !words.contains("delete RocksDB"),
+            "{words}"
+        );
+        assert_eq!(store_files_and_column_families(&domain), before);
+    }
+
     fn label_import_config(dir: &std::path::Path) -> LabelImportServiceConfig {
         LabelImportServiceConfig {
             domain_data_path: dir.join("domain").to_string_lossy().into_owned(),

@@ -1190,6 +1190,52 @@ mod tests {
         }
     }
 
+    /// resync fix round 3, M (logic MUST-1): the TUI meets the domain store
+    /// while its creating open is still making its column families. It shows
+    /// no refusal and keeps no handle (a secondary never gains a column family
+    /// made after it opened); once the store is made and stamped, the next
+    /// tick reads it.
+    #[tokio::test]
+    async fn the_tui_waits_on_a_store_still_being_created_and_reads_it_once_made() {
+        use ckbadger_store::earlier_layout_for_test::create_store_in_creation;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append = dir.path().join("append-only");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain.to_str().unwrap(),
+            append.to_str().unwrap(),
+        )
+        .await;
+        let no_refusal = |row: &anyhow::Result<super::SyncStatusRow>| {
+            if let Err(error) = row {
+                let words = format!("{error:#}");
+                assert!(
+                    !words.contains("refused") && !words.contains("delete RocksDB"),
+                    "{words}"
+                );
+            }
+        };
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        no_refusal(&row);
+        assert!(
+            db.store_handle().is_none(),
+            "no handle kept on a store being created"
+        );
+
+        {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        no_refusal(&row);
+        assert!(db.store_handle().is_some(), "the made store is read");
+    }
+
     #[test]
     fn parse_epoch_full() {
         assert_eq!(

@@ -48,6 +48,10 @@ pub fn ensure_store_layout(store: &CkbadgerStore) -> Result<()> {
     match store.check_store_layout()? {
         Ok(StoreLayoutState::Current) => Ok(()),
         Ok(StoreLayoutState::Fresh) => store.set_store_layout(STORE_LAYOUT),
+        Ok(StoreLayoutState::NotReady) => anyhow::bail!(
+            "the domain store opened as primary lacks column families: a primary open makes \
+             every one"
+        ),
         Err(mismatch) => Err(anyhow::Error::new(RebuildRequiredError::new(
             mismatch.diagnosis(),
         ))),

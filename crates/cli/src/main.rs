@@ -2362,6 +2362,37 @@ mod tests {
         }
     }
 
+    /// resync fix round 3, M: `ckbadger status` and `verify` meet a store
+    /// still being created: they say so, and to try again, refusing nothing
+    /// and writing nothing in it.
+    #[test]
+    fn status_and_verify_say_a_store_still_being_created_is_being_created() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_store_in_creation, store_files_and_column_families,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let before = store_files_and_column_families(&domain);
+        let being_created = format!(
+            "the domain store {} is still being created: try again once the indexer has made it",
+            domain.display()
+        );
+
+        let lines = super::sync_status_lines(
+            &domain,
+            &dir.path().join("cli-secondary"),
+            ckbadger_store::StoreRuntimeConfig::default(),
+        );
+        assert_eq!(lines, vec![format!("Sync status: {being_created}")]);
+        assert_eq!(
+            super::verify_store_refusal(&domain).unwrap(),
+            Some(being_created)
+        );
+        assert_eq!(store_files_and_column_families(&domain), before);
+    }
+
     /// resync fix round N7: `ckbadger status` checks the store's layout after
     /// opening it (read-only) and, on a store of another layout, prints the
     /// refusal with the way out instead of that store's tip.
