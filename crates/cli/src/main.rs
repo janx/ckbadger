@@ -2408,6 +2408,28 @@ mod tests {
         assert_eq!(store_files_and_column_families(&domain), before);
     }
 
+    /// resync fix round 3, item 6 (logic N-4, tests NOTE-3): a domain store
+    /// verify cannot read (here a `CURRENT` naming a MANIFEST that is not
+    /// there) is that network's failed start, said with the store and the
+    /// error, never an error that ends the run for every network.
+    #[test]
+    fn verify_reports_a_store_it_cannot_read_as_that_networks_failed_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        std::fs::create_dir_all(&domain).unwrap();
+        std::fs::write(domain.join("CURRENT"), "MANIFEST-000099\n").unwrap();
+        match super::verify_store_refusal(&domain) {
+            Ok(Some(reason)) => assert!(
+                reason.starts_with(&format!(
+                    "the domain store {} could not be read: ",
+                    domain.display()
+                )),
+                "{reason}"
+            ),
+            other => panic!("that network's failed start, got {other:?}"),
+        }
+    }
+
     /// resync fix round N7: `ckbadger status` checks the store's layout after
     /// opening it (read-only) and, on a store of another layout, prints the
     /// refusal with the way out instead of that store's tip.
