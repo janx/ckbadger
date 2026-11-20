@@ -10902,6 +10902,74 @@ mod tests {
         /// token cells) and the transfer (two in, two out) are one each —
         /// identically on the live writer and in bulk build, and a shallow
         /// rollback of the transfer's block takes its count back out.
+        /// resync fix round 4, item 1 (the lead's ruling): a token's standard
+        /// is a chain fact, the deployment its type script's pair runs, by
+        /// the registry: `xudt` under the canonical xUDT pair,
+        /// `xudt_compatible` under a pair of the registry's compatible list.
+        /// The stored row says it, on bulk and on live, byte-equal.
+        #[tokio::test]
+        async fn a_tokens_standard_is_the_deployment_its_pair_runs_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let (code, hash_type) = crate::parser::registry::a_compatible_pair_for_test();
+            let compatible = Script {
+                code_hash: format!("0x{}", hex::encode(code)),
+                hash_type: ckbadger_common::hash_type_label(hash_type)
+                    .expect("a CKB hash type")
+                    .to_string(),
+                args: xudt_type().args,
+            };
+            for (script, standard) in [(xudt_type(), "xudt"), (compatible, "xudt_compatible")] {
+                let mut blocks = blocks();
+                for block in &mut blocks {
+                    for tx in &mut block.block.transactions {
+                        for output in &mut tx.outputs {
+                            if output.type_ == Some(xudt_type()) {
+                                output.type_ = Some(script.clone());
+                            }
+                        }
+                    }
+                }
+                let type_hash = crate::parser::ScriptParser::compute_script_hash(&script);
+
+                let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+                let bulk_bytes = bulk
+                    .token_rows
+                    .tokens
+                    .get(&type_hash)
+                    .expect("bulk writes the token row")
+                    .clone();
+
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                let indexer = indexer_for_live_write_test(store.clone());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                    .await
+                    .unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[2].clone()])
+                    .await
+                    .unwrap();
+                let live_bytes = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .expect("live writes the token row")
+                    .clone();
+
+                let row: ckbadger_store::types::TokenInfo =
+                    bincode::deserialize(&bulk_bytes).unwrap();
+                assert_eq!(row.standard, standard, "bulk");
+                assert_eq!(
+                    live_bytes, bulk_bytes,
+                    "{standard}: live and bulk, byte-equal"
+                );
+            }
+        }
+
         #[tokio::test]
         async fn token_daily_counts_each_transaction_once_on_both_paths() {
             let _guard =

@@ -456,6 +456,16 @@ static XUDT_COMPATIBLE_PAIRS: LazyLock<HashSet<([u8; 32], u8)>> = LazyLock::new(
     pairs
 });
 
+/// One pair of the registry's compatible list, the same in every run (the
+/// smallest), for a test's token under a compatible deployment.
+#[cfg(test)]
+pub(crate) fn a_compatible_pair_for_test() -> ([u8; 32], u8) {
+    *XUDT_COMPATIBLE_PAIRS
+        .iter()
+        .min()
+        .expect("the registry lists xUDT-compatible deployments")
+}
+
 /// Whether `(code_hash, hash_type)` runs an xUDT-compatible deployment's code
 /// ([`XUDT_COMPATIBLE_PAIRS`]). No allocation: the key is the 32 bytes and the
 /// hash type byte; a hash type outside the CKB bytes is no pair.
