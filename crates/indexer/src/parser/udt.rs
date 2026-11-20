@@ -573,6 +573,26 @@ mod tests {
         }
     }
 
+    /// resync fix round, logic NOTE N3: an xUDT-compatible deployment runs at
+    /// the pairs THE pair rule registers for every registry entry (the
+    /// protocol registry's): its reference by its hash type and its version's
+    /// binary by every data hash type. The Stable++ Asset (mainnet) binary by
+    /// data1 is that token code; the binary by `type` runs no registered code.
+    #[test]
+    fn test_an_xudt_compatible_binary_is_a_udt_by_the_one_pair_rule() {
+        let binary = parse_hex_to_bytes(
+            "0xec32ad0c478ab011f9d089a900f3d06c91338a1954e45d9d8152c74859f99945",
+        );
+        for data_type in [0i16, 2, 4] {
+            assert_eq!(
+                UdtParser::is_udt_code_hash_bytes(&binary, data_type),
+                Some(UdtStandard::Xudt),
+                "the Stable++ Asset binary by hash type {data_type}"
+            );
+        }
+        assert_eq!(UdtParser::is_udt_code_hash_bytes(&binary, 1), None);
+    }
+
     #[test]
     fn test_parse_amount_valid() {
         let data = 1000u128.to_le_bytes();
