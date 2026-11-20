@@ -158,7 +158,13 @@ export function activityRead<R extends WrittenRow>(
   checked: R
 ): R & Statements & { participants: ParticipantInfo[] } {
   checkItemTypes(checked as RowLike);
-  return stateParties(checked) as R & Statements & { participants: ParticipantInfo[] };
+  const parties = stateParties(checked);
+  // an address's row: the route sends no other party in full, and the fixture states the rest
+  if (parties === null) return checked as R & Statements & { participants: ParticipantInfo[] };
+  // the row it checked as the route states it: the checker's output (the gate's reader passes a
+  // row returned here, from this body, and nowhere else)
+  return { ...checked, ...parties.statements, participants: parties.drawn } as R &
+    Statements & { participants: ParticipantInfo[] };
 }
 
 /** The item types a row states, checked by the route's rule (see the module's head). */
@@ -305,8 +311,14 @@ function feePayerOf(
  */
 const stated = new WeakMap<object, Pick<Statements, 'participantCount' | 'feePayer'>>();
 
-/** The row with what the route states of every party (see the module's head). */
-function stateParties(written: WrittenRow): unknown {
+/**
+ * What the route states of every party of a row (see the module's head): the parties it draws,
+ * their items' movement stated, and its statements; null for an address's row, which states them
+ * itself and draws no party.
+ */
+function stateParties(
+  written: WrittenRow
+): { drawn: ParticipantInfo[]; statements: Statements } | null {
   const row = written as Partial<Statements> & {
     txHash?: string;
     ckbDelta?: string;
@@ -335,7 +347,7 @@ function stateParties(written: WrittenRow): unknown {
       );
     if (row.partyIds!.length !== row.participantCount)
       throw new Error(`${where} names ${row.partyIds!.length} parties of ${row.participantCount}`);
-    return written;
+    return null;
   }
   const parties = row.participants;
   if (parties === undefined) throw new Error(`${where} is no address's row and draws no party`);
@@ -348,7 +360,14 @@ function stateParties(written: WrittenRow): unknown {
       throw new Error(
         `${where} draws ${drawn.length} parties and names ${ids.length} of ${row.participantCount}`
       );
-    return Object.assign({}, written, { participants: drawn });
+    return {
+      drawn,
+      statements: {
+        participantCount: row.participantCount!,
+        partyIds: ids,
+        feePayer: row.feePayer!,
+      },
+    };
   }
   const partyIds = parties.map((p): PartyId => [partyShortId(p, where), p.tags]);
   const own = {
@@ -356,17 +375,18 @@ function stateParties(written: WrittenRow): unknown {
     feePayer: feePayerOf(row, parties, where),
   };
   stated.set(partyIds, own);
-  // the checked row with its statements: the checker's own output, not a fixture's row
-  return Object.assign({}, written, {
-    participants: drawn,
-    partyIds,
-    // over a spread row, a statement it writes anew stands
-    participantCount:
-      spread && row.participantCount !== spread.participantCount
-        ? row.participantCount!
-        : own.participantCount,
-    feePayer: spread && row.feePayer !== spread.feePayer ? row.feePayer! : own.feePayer,
-  });
+  return {
+    drawn,
+    statements: {
+      partyIds,
+      // over a spread row, a statement it writes anew stands
+      participantCount:
+        spread && row.participantCount !== spread.participantCount
+          ? row.participantCount!
+          : own.participantCount,
+      feePayer: spread && row.feePayer !== spread.feePayer ? row.feePayer! : own.feePayer,
+    },
+  };
 }
 
 /**
