@@ -48,7 +48,8 @@ function routeRow(
   drawn: WrittenParty[],
   named: WrittenParty[],
   feePayer: string | null = null,
-  itemTypes: GlobalActivity['itemTypes'] = []
+  itemTypes: GlobalActivity['itemTypes'] = [],
+  items: GlobalActivity['items'] = []
 ): GlobalActivity {
   return activityRead({
     txHash: hashOf(n),
@@ -65,6 +66,7 @@ function routeRow(
     participantCount: named.length,
     partyIds: named.map(idOf),
     feePayer,
+    items,
   });
 }
 

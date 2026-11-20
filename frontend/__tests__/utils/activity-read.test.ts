@@ -39,6 +39,7 @@ const addressParties = {
   participantCount: 2,
   partyIds: [['0x' + '01'.repeat(20), 0]],
   feePayer: null,
+  items: [],
 };
 
 /** A feed's row: every party's items. */
@@ -102,6 +103,9 @@ describe('activityRead passes the rows the route sends', () => {
         ckbDelta: '0',
         ...addressParties,
         partyIds: [...addressParties.partyIds, ['0x' + '02'.repeat(20), 1]],
+        // re-pinned on purpose (lane feed, part 4): the other party's token is in the row's
+        // stated items, the transaction's, beside the address's own (none)
+        items: [{ ...token('0x71'), movement: 'transfer', amount: '1', parties: 2 }],
       })
     ).not.toThrow();
   });
@@ -212,15 +216,22 @@ describe('activityRead states what the route states of every party (lane feed)',
     const drawn = [party(), party()];
     const ids = [...drawn, party()].map((p) => [p.lockHash.slice(0, 42), 0]);
     const row = activityRead(
-      feedRow({ participants: drawn, participantCount: 3, partyIds: ids, feePayer: null })
+      feedRow({
+        participants: drawn,
+        participantCount: 3,
+        partyIds: ids,
+        feePayer: null,
+        items: [],
+      })
     ) as unknown as { participantCount: number };
     expect(row.participantCount).toBe(3);
+    // re-pinned on purpose (lane feed, part 4): the route states four, its items with them
     refuses(
       feedRow({ participantCount: 2 }),
-      'states some of participantCount, partyIds and feePayer: the route states all three'
+      'states some of participantCount, partyIds, feePayer and items: the route states all four'
     );
     refuses(
-      feedRow({ participantCount: 1, partyIds: ids.slice(0, 1), feePayer: null }),
+      feedRow({ participantCount: 1, partyIds: ids.slice(0, 1), feePayer: null, items: [] }),
       'draws 2 parties and names 1 of 1'
     );
   });
@@ -240,7 +251,7 @@ describe('activityRead states what the route states of every party (lane feed)',
     const { participants: _drawn, ...address } = feedRow({});
     refuses(
       { ...address, itemDeltas: [], ckbDelta: '0' },
-      "is an address's row and states no participantCount, partyIds or feePayer"
+      "is an address's row and states no participantCount, partyIds, feePayer or items"
     );
     refuses(
       { ...feedRow({}), itemDeltas: [], ckbDelta: '0', ...addressParties },

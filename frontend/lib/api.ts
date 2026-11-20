@@ -705,6 +705,7 @@ interface PoolTransaction {
     | 'participantCount'
     | 'partyIds'
     | 'feePayer'
+    | 'items'
     | 'protocolActions'
     | 'typeCalls'
     | 'lockCalls'
@@ -1351,6 +1352,21 @@ export type ItemMovement = 'mint' | 'burn' | 'transfer';
  */
 export type RowItemDelta = ItemDelta & { movement: ItemMovement };
 
+type DeltaOf<K extends ItemDelta['kind']> = Extract<ItemDelta, { kind: K }>;
+
+/**
+ * One item of a transaction as a row states it once (lane feed, part 4; docs/API.md, "The parties
+ * a row draws"), computed by the route from every party: what names it, its movement, how many
+ * parties' holdings of it changed and, for a token, the amount moved (the larger of what holders
+ * gained and gave, an exact decimal string of raw units). A row draws no party for moving an item:
+ * what a page says of a row's items it reads here.
+ */
+export type RowItem = (
+  | (Omit<DeltaOf<'token'>, 'delta'> & { amount: string })
+  | Omit<DeltaOf<'object'>, 'delta'>
+  | Omit<DeltaOf<'identity'>, 'delta'>
+) & { movement: ItemMovement; parties: number };
+
 /**
  * A party by its short id, as the route names every party of an activity (`partyIds`, lane feed):
  * the first 20 bytes of its lock hash as `0x` and 40 hex digits (for a party a protocol named by a
@@ -1370,6 +1386,8 @@ interface ActivityParties {
   partyIds: PartyId[];
   /** The lock hash of the party whose only movement is the fee, or null. */
   feePayer: string | null;
+  /** Every item of the transaction, once, in the order it first appears among the parties. */
+  items: RowItem[];
 }
 
 interface ActivityTypeCall {
@@ -1527,9 +1545,9 @@ interface GlobalActivity extends ActivityParties {
   itemTypes: ActivityItemType[] | null;
   itemTypesUnread: string | null;
   /**
-   * The parties the row draws, in full, in the transaction's order: every party of a row of at
-   * most six; beyond, the five largest CKB changes, the fee payer and every party whose items
-   * moved. So it holds every item delta of the transaction, and the CKB of these parties only.
+   * The parties the row draws, in full, in the transaction's order, each with its own item deltas:
+   * every party of a row of at most six; beyond, the five largest CKB changes and the fee payer.
+   * The row's items are `items`, its parties counted and named `participantCount` and `partyIds`.
    */
   participants: ParticipantInfo[];
 }

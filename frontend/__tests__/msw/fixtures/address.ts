@@ -230,6 +230,8 @@ export const addressActivitiesFixture: Activity[] = [
     participantCount: 1,
     partyIds: [[addressHash.slice(0, 42), 0]],
     feePayer: null,
+    // it moved no item (lane feed, part 4: the route states the transaction's items once)
+    items: [],
   }),
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [
