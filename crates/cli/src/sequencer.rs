@@ -47,8 +47,13 @@ pub(crate) struct GateStatus {
 /// What a deferred network is waiting for, in words: the one wait line the
 /// sequencer logs, naming the gating network and what it waits for it to do.
 pub(crate) fn waiting_for(gating: &str, status: &GateStatus) -> String {
-    let _ = (gating, status);
-    "waiting for gating network to pass bulk sync before starting the next indexer".to_string()
+    if status.needs_rebuild {
+        format!("waiting for '{gating}', which needs a rebuild")
+    } else if let Some(reason) = &status.blocked {
+        format!("waiting for '{gating}', whose indexer is blocked: {reason}")
+    } else {
+        format!("waiting for '{gating}' to pass bulk sync")
+    }
 }
 
 /// Number of polls between "still waiting" logs at `poll` cadence, at least 1 so
@@ -130,9 +135,10 @@ where
                         gating = %gating,
                         deferred = %deferred,
                         reason = %reason,
-                        "network '{gating}' indexer is blocked; network '{deferred}' will not \
-                         start until it is resolved. The sequencer keeps waiting — it never skips \
-                         ahead and never stops the running networks"
+                        "network '{deferred}' is {}; it will not start until that is resolved. \
+                         The sequencer keeps waiting — it never skips ahead and never stops the \
+                         running networks",
+                        waiting_for(gating, &status)
                     );
                     blocked_logged = true;
                 }
@@ -168,7 +174,7 @@ where
                     lag = ?status.lag,
                     bulk_completed = status.bulk_completed,
                     has_signal = status.past_bulk.is_some(),
-                    "{}",
+                    "network '{deferred}' is {}",
                     waiting_for(gating, &status)
                 );
             }

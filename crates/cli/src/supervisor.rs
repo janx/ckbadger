@@ -530,6 +530,9 @@ struct BulkStatusSample {
     past_bulk: Option<bool>,
     lag: Option<i128>,
     bulk_completed: bool,
+    /// The store is one this build refuses: the gating network needs a
+    /// rebuild (no signal all the same).
+    refused: bool,
 }
 
 /// One gating network's bulk-status source: a LAZILY-opened, LONG-LIVED domain
@@ -597,12 +600,16 @@ impl BulkStatusReader {
                         child = %self.label,
                         store = %self.domain_data_path.display(),
                         "sequencer status read refuses this store: domain store {} refused: \
-                         {error}; the next network stays deferred",
-                        self.domain_data_path.display()
+                         {error}; the next network is waiting for '{}', which needs a rebuild",
+                        self.domain_data_path.display(),
+                        self.label
                     );
                     self.refusal_logged = true;
                 }
-                BulkStatusSample::default()
+                BulkStatusSample {
+                    refused: true,
+                    ..BulkStatusSample::default()
+                }
             }
             Ok(sample) => {
                 self.refusal_logged = false;
@@ -725,6 +732,7 @@ impl BulkStatusReader {
             )),
             lag,
             bulk_completed,
+            refused: false,
         })
     }
 }
@@ -761,12 +769,19 @@ async fn observe_gate(
     .await
     .context("sequencer bulk-status read task failed")?;
 
-    let blocked = {
+    // The gating indexer blocked as rebuild-required: blocked with the reason
+    // the one function writes for it ([`rebuild_required_reason`]).
+    let (blocked, blocked_as_rebuild) = {
         let locked = state.lock().await;
         locked
             .children
             .get(gate_child_index)
-            .and_then(|child| child.blocked.clone())
+            .map(|child| {
+                let as_rebuild =
+                    child.blocked.as_deref() == Some(rebuild_required_reason(&child.name).as_str());
+                (child.blocked.clone(), as_rebuild)
+            })
+            .unwrap_or((None, false))
     };
 
     Ok(GateStatus {
@@ -774,7 +789,7 @@ async fn observe_gate(
         lag: sample.lag,
         bulk_completed: sample.bulk_completed,
         blocked,
-        needs_rebuild: false,
+        needs_rebuild: sample.refused || blocked_as_rebuild,
     })
 }
 
