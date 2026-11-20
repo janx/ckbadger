@@ -4129,6 +4129,49 @@ mod tests {
         );
     }
 
+    /// resync fix round T1 (tests report SHOULD-1): a recognised code that ran on an INPUT only is
+    /// recorded. A full burn of a token to plain CKB: two token cells in, no token cell out. The
+    /// code ran (the inputs' type script) and the row says so.
+    #[test]
+    fn a_token_burned_in_full_records_its_code_from_the_inputs_alone() {
+        let inputs = [c7_udt_input(0xAA, 60), c7_udt_input(0xAA, 40)];
+        let outputs = [make_output(0xAA, 399_00000000, None, None, None, vec![])];
+        let actions = build_tx_actions_for_block_no_detectors(&[c7_tx(&inputs, &outputs)])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            actions.recognized_type_codes,
+            vec![c7_code(&c7_udt_code(), 1)],
+            "the token's code ran on the inputs alone"
+        );
+        assert!(actions.type_calls.is_empty(), "{:?}", actions.type_calls);
+    }
+
+    /// T1, the DAO: a withdrawal's completion consumes the withdrawing cell (the DAO type) and
+    /// creates plain CKB. The DAO's code ran on the input alone, and the row records it.
+    #[test]
+    fn a_dao_withdrawal_completion_records_the_dao_code_from_its_input_alone() {
+        let dao_code = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let mut withdrawing = make_input(0xAA, 1000_00000000, 102_00000000);
+        withdrawing.type_code_hash = Some(dao_code.clone());
+        withdrawing.type_hash_type = Some(1);
+        withdrawing.type_script_hash = Some(vec![0x82; 32]);
+        withdrawing.type_args = Some(vec![]);
+        withdrawing.data = 1_000u64.to_le_bytes().to_vec();
+        withdrawing.is_dao_withdraw_request = true;
+        withdrawing.dao_compensation = Some(5_00000000);
+        let inputs = [withdrawing];
+        let outputs = [make_output(0xAA, 1004_00000000, None, None, None, vec![])];
+        let actions = build_tx_actions_for_block_no_detectors(&[c7_tx(&inputs, &outputs)])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            actions.recognized_type_codes,
+            vec![c7_code(&dao_code, 1)],
+            "the DAO's code ran on the input alone"
+        );
+    }
+
     /// A type script with no hash type is an invariant violation, named with its code hash, never
     /// classified or recorded as some default: the one rule of `classify_input` /
     /// `classify_output` (resync/protocol-pairs), which C7's list records under (re-pinned at the
