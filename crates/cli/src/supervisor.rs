@@ -211,9 +211,11 @@ enum ChildExitAction {
 
 /// Whether a supervised service holds this network's chain stores: the
 /// indexer writes them and the API reads them, and each refuses a store it
-/// must not use (another layout, a store left half built) with
-/// rebuild-required, exit 78. The two refusals are one case to the operator
-/// (resync fix round N7).
+/// must not use with rebuild-required, exit 78: both refuse a store of
+/// another layout (resync fix round 2, A); the indexer also refuses a store
+/// a bulk build left half built (the API serves a stamped store mid-bulk).
+/// The two refusals are one case to the operator (resync fix round N7; logic
+/// N-10 corrected the words).
 fn holds_chain_stores(service: &str) -> bool {
     matches!(service, "indexer" | "api")
 }

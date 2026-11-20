@@ -15301,14 +15301,30 @@ mod tests {
                     supply_token_type(1),
                 )],
             );
+            // Tests report NOTE-7: the first transaction's claim sits at a
+            // HIGHER output index (1) than the second's (0), so an order of
+            // (block, output, transaction) would take 8800; chain order
+            // (block, transaction, output) takes the first transaction's.
+            let first_claim_at_output_1 = d3_tx(
+                0xa2,
+                vec![input(0xa1, 1)],
+                vec![
+                    (
+                        output(after_issue - 300_00000000, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                    supply_info_cell(1, &supply_token_hash(1), 7700),
+                ],
+                vec!["0x".to_string()],
+            );
             let two_txs = vec![
                 funding_block(),
                 issue.clone(),
                 claim_rule_block(
                     102,
                     vec![
-                        genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700),
-                        genuine_claim_tx(0xa3, input(0xa2, 1), after_issue - 300_00000000, 8800),
+                        first_claim_at_output_1,
+                        genuine_claim_tx(0xa3, input(0xa2, 0), after_issue - 300_00000000, 8800),
                     ],
                 ),
             ];
@@ -16312,6 +16328,46 @@ mod tests {
                 6,
                 vec![super::live_dao_fee::cellbase_tx(0xc6, 100_000_000), consume],
             ));
+            // Tests report NOTE-3: a code cell created and consumed in one
+            // block (block 7: one transaction deploys it, the next spends it).
+            let deploy_and_spend = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xea; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xe8; 32], 2)],
+                outputs: vec![
+                    output(
+                        500_00000000,
+                        Some(crate::rpc::Script {
+                            code_hash: format!("0x{}", "5c".repeat(32)),
+                            hash_type: "type".to_string(),
+                            args: "0x01".to_string(),
+                        }),
+                    ),
+                    output(FUNDS - 100_000_000_000 - 500_00000000 - 2_000, None),
+                ],
+                outputs_data: vec![elf(3), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let spent_in_its_block = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xeb; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xea; 32], 0)],
+                outputs: vec![output(500_00000000 - 1_000, None)],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                7,
+                vec![
+                    super::live_dao_fee::cellbase_tx(0xc7, 100_000_000),
+                    deploy_and_spend,
+                    spent_in_its_block,
+                ],
+            ));
             blocks
         }
 
@@ -16326,8 +16382,14 @@ mod tests {
         /// chain with a DAO completion (a sender whose CKB rose), a token
         /// mint, transfer and merge (a recognised code that moved no item)
         /// and `.cell` registrations; and `live_code_cells_by_type` (resync
-        /// fix round S3), on two code cells deployed and one consumed, with a
-        /// rollback of the consuming block and its replay.
+        /// fix round S3), on two code cells deployed and one consumed, and one
+        /// code cell created and consumed in one block, with a rollback of
+        /// the last two blocks compared row by row with a store synced to
+        /// block 5, and their replay. (A labelled token and a claim before a
+        /// token's first cell are held whole on the three shapes elsewhere:
+        /// `token_metadata_provenance_parity::a_label_changes_no_stored_token_row_on_either_path`
+        /// and `live_token_binding::a_claim_before_the_token_exists_is_not_the_tokens`;
+        /// this chain's bulk build takes no label seed.)
         #[tokio::test]
         async fn bulk_and_live_write_the_same_activity_rows_whole() {
             let _detectors =
@@ -16419,19 +16481,35 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             let at_tip = code_cells(&multi);
-            assert_eq!(at_tip.len(), 1, "fixture: one live code cell at the tip");
+            assert_eq!(
+                at_tip.len(),
+                1,
+                "fixture: one live code cell at the tip (block 7's was created and spent in it)"
+            );
             assert_eq!(&at_tip[0].1[32..64], &[0xe8; 32], "the deploy's cell");
-            multi_indexer.writer.cleanup_batch_range(6, 6).unwrap();
+            multi_indexer.writer.cleanup_batch_range(6, 7).unwrap();
             multi_indexer.reconcile_hodl_tracker_with_tip(5).unwrap();
             multi_indexer
                 .reconcile_cell_dist_tracker_with_tip(5)
                 .unwrap();
             multi_indexer.cell_cache.clear();
+            // Tests report NOTE-3: the rolled-back rows themselves, against a
+            // store synced a block at a time through block 5 (not their count).
+            let (through_5, through_5_indexer) = open_live();
+            for block in blocks[..6].iter().cloned() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &through_5_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live through block 5");
+            }
             assert_eq!(
-                code_cells(&multi).len(),
-                2,
-                "the rollback of block 6 restores the consumed code cell's row"
+                code_cells(&multi),
+                code_cells(&through_5),
+                "the rollback of blocks 6 and 7 restores the rows of block 5"
             );
+            assert_eq!(code_cells(&multi).len(), 2, "both deployed code cells");
             super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
                 &multi_indexer,
                 blocks[6..].to_vec(),

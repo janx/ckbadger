@@ -539,6 +539,28 @@ mod tests {
         assert_eq!(UdtParser::is_udt_code_hash_bytes(&binary, 1), None);
     }
 
+    /// Tests report NOTE-6 (N3's own question): a compatible deployment's
+    /// Type ID REFERENCE is a UDT by `type` only; by a data hash type it names
+    /// no code (the reference is no binary's data hash).
+    #[test]
+    fn test_an_xudt_compatible_type_id_reference_is_a_udt_by_type_only() {
+        let reference = parse_hex_to_bytes(
+            "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+        );
+        assert_eq!(
+            UdtParser::is_udt_code_hash_bytes(&reference, 1),
+            Some(UdtStandard::Xudt),
+            "the Stable++ Asset reference by type"
+        );
+        for data_type in [0i16, 2, 4] {
+            assert_eq!(
+                UdtParser::is_udt_code_hash_bytes(&reference, data_type),
+                None,
+                "the Stable++ Asset reference by hash type {data_type}"
+            );
+        }
+    }
+
     #[test]
     fn test_parse_amount_valid() {
         let data = 1000u128.to_le_bytes();

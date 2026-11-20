@@ -3328,8 +3328,24 @@ mod tests {
                 .live_cells_count
         };
         assert_eq!(family_live_cells(), 3, "fixture: counted in its family");
-        let rollup_rows =
-            || crate::sync::bulk_build::collect_script_binding_rows_for_test(&store).unwrap();
+        // Tests report NOTE-4: the rows the rollup owns include
+        // `live_code_cells_by_type`; the step wrote the two code cells' rows
+        // at block 20 (deploy outputs 0 and 1, each by its binary).
+        let code_cell_rows = || store.list_live_code_cells_by_type(&reference).unwrap();
+        assert_eq!(
+            code_cell_rows(),
+            vec![
+                (deploy.hash.to_vec(), 0, hash(&data_one)),
+                (deploy.hash.to_vec(), 1, hash(&data_two)),
+            ],
+            "the step's rows at block 20"
+        );
+        let rollup_rows = || {
+            (
+                crate::sync::bulk_build::collect_script_binding_rows_for_test(&store).unwrap(),
+                code_cell_rows(),
+            )
+        };
         let before = rollup_rows();
 
         // Block 21 moves nothing the reference depends on: a plain output.

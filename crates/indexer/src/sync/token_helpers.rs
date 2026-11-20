@@ -87,6 +87,13 @@ pub(crate) fn unique_cell_candidate(type_args: &[u8], data: &[u8]) -> Option<Uni
 ///
 /// `args_of` and `pair_of` read a candidate's type args and its type script
 /// pair; the pair is read only for a candidate whose args match.
+///
+/// Of the pair, the code hash decides on chain today; the hash type cannot
+/// (tests report NOTE-1): a cell typed by the Unique Cell's code hash under a
+/// hash type the registry does not list would have to run that pair's code,
+/// and by `type` no cell has the Unique Cell's code hash as its type hash, so
+/// no such cell exists. The hash type is read because the registry's pair is
+/// the one rule, not because a cell on chain needs it.
 pub(crate) fn bound_unique_cell<'c, T>(
     candidates: impl DoubleEndedIterator<Item = T>,
     args: &[u8],

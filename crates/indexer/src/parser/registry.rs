@@ -1019,6 +1019,40 @@ mod tests {
         }
     }
 
+    /// Tests report NOTE-6: the layout pairs written out, not taken from
+    /// `registered_pairs` (the test above holds the implementation to
+    /// itself). The Default Lock's args read by `secp256k1_blake160` at its
+    /// reference by `type` and at its binary by data, data1 and data2, and at
+    /// no other hash type of either.
+    #[test]
+    fn the_default_locks_layout_is_at_its_written_out_pairs() {
+        let reference = parse_hex_to_bytes(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
+        let binary = parse_hex_to_bytes(
+            "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+        );
+        for (code_hash, hash_type, layout) in [
+            (&reference, 1, true),
+            (&reference, 0, false),
+            (&reference, 2, false),
+            (&reference, 4, false),
+            (&binary, 0, true),
+            (&binary, 2, true),
+            (&binary, 4, true),
+            (&binary, 1, false),
+        ] {
+            assert_eq!(
+                SCRIPT_LAYOUTS
+                    .get(code_hash, hash_type)
+                    .map(|layout| layout.slug.as_str()),
+                layout.then_some("default-lock"),
+                "0x{} by {hash_type}",
+                hex::encode(code_hash)
+            );
+        }
+    }
+
     /// R-7: Spore-family type scripts declare the `SporeAction` items they
     /// emit; xUDT declares none (no action schema is specified for it).
     #[test]

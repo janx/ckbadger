@@ -997,14 +997,16 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash_a),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x70; 32], 0);
-        // a live code cell, as the indexer files it (resync fix round S3)
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash_a, 10, &[0x70; 32], 0);
         batch.put_live_code_cell(&reference_hash, &[0x70; 32], 0, &version_hash_a);
         batch.put_cell(
             &[0x71; 32],
@@ -1017,14 +1019,16 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash_b),
             },
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x71; 32], 0);
-        // a live code cell, as the indexer files it (resync fix round S3)
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash_b, 11, &[0x71; 32], 0);
         batch.put_live_code_cell(&reference_hash, &[0x71; 32], 0, &version_hash_b);
         batch.commit().unwrap();
 
@@ -1076,14 +1080,16 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(mapped_version_hash),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x90; 32], 0);
-        // a live code cell, as the indexer files it (resync fix round S3)
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&mapped_version_hash, 10, &[0x90; 32], 0);
         batch.put_live_code_cell(&reference_hash, &[0x90; 32], 0, &mapped_version_hash);
         batch.put_cell(
             &[0x91; 32],
@@ -1096,14 +1102,16 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(conflicting_version_hash),
             },
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x91; 32], 0);
-        // a live code cell, as the indexer files it (resync fix round S3)
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&conflicting_version_hash, 11, &[0x91; 32], 0);
         batch.put_live_code_cell(&reference_hash, &[0x91; 32], 0, &conflicting_version_hash);
         batch.commit().unwrap();
 
@@ -1159,14 +1167,16 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
-        // a live code cell, as the indexer files it (resync fix round S3)
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash, 10, &[0x92; 32], 0);
         batch.put_live_code_cell(&reference_hash, &[0x92; 32], 0, &version_hash);
         batch.commit().unwrap();
 
