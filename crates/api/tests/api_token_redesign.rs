@@ -793,7 +793,12 @@ async fn token_history_rejects_missing_capacity_evidence_for_existing_transfers(
 
 #[tokio::test]
 async fn token_history_accepts_same_day_mint_burn_with_zero_net_capacity() {
-    let info = fixture().get_token(&TOKEN).unwrap().unwrap();
+    // the token as the API names it, its label joined (resync fix round 4,
+    // the third read's NOTE-6: the stored row is the chain's alone, and a copy
+    // of it lost the label's name, symbol and decimals)
+    let info = ckbadger_api::token_identity::get_token(&fixture(), &TOKEN)
+        .unwrap()
+        .unwrap();
     let store = test_store();
     put_token_as_indexed(&store, &TOKEN, &info).unwrap();
     let timestamp = utc_ms("2026-10-01T00:00:00Z");
@@ -1174,7 +1179,12 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
 /// daily rows the indexer writes for them (`transfer_tx_count` per day).
 fn tab_fixture(n: i64) -> Arc<CkbadgerStore> {
     let store = test_store();
-    let info = fixture().get_token(&TOKEN).unwrap().unwrap();
+    // the token as the API names it, its label joined (resync fix round 4,
+    // the third read's NOTE-6: the stored row is the chain's alone, and a copy
+    // of it lost the label's name, symbol and decimals)
+    let info = ckbadger_api::token_identity::get_token(&fixture(), &TOKEN)
+        .unwrap()
+        .unwrap();
     put_token_as_indexed(&store, &TOKEN, &info).unwrap();
     let start = utc_ms("2026-09-30T16:00:00Z");
     let headers: Vec<(i64, i64)> = (0..=n).map(|b| (b, start + b * 60_000)).collect();

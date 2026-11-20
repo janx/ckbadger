@@ -473,13 +473,15 @@ pub(crate) fn import_all(
             // stops the import (finding 14).
             match prepare_token_label(token, deployment) {
                 Ok(prepared) => {
-                    write_token_label(store, token, &prepared).with_context(|| {
-                        format!(
-                            "label import: network={network} token={} type_hash=0x{}",
-                            token.symbol,
-                            hex::encode(&prepared.type_hash)
-                        )
-                    })?;
+                    let disagreement =
+                        write_token_label(store, token, &prepared).with_context(|| {
+                            format!(
+                                "label import: network={network} token={} type_hash=0x{}",
+                                token.symbol,
+                                hex::encode(&prepared.type_hash)
+                            )
+                        })?;
+                    result.standard_disagreements.extend(disagreement);
                     imported_token_labels.insert(prepared.type_hash);
                     result.udt_labels_imported += 1;
                 }
@@ -652,7 +654,7 @@ fn upsert_token_label(
     token: &TokenMetadata,
     deployment: &TokenDeployment,
 ) -> Result<()> {
-    write_token_label(store, token, &prepare_token_label(token, deployment)?)
+    write_token_label(store, token, &prepare_token_label(token, deployment)?).map(|_| ())
 }
 
 /// The label a token metadata entry carries, as `token_labels` stores it.
@@ -693,11 +695,13 @@ fn label_standard_disagreement(
 /// the chain's beside them.
 ///
 /// [`TokenInfo::attach_label`]: ckbadger_store::types::TokenInfo::attach_label
+/// Returns how the label's standard disagrees with the chain's row, if it
+/// does (`<symbol> 0x<type hash>: …`), for the import's result.
 fn write_token_label(
     store: &CkbadgerStore,
     token: &TokenMetadata,
     prepared: &PreparedTokenLabel,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let type_hash = &prepared.type_hash;
     store.put_token_label_direct(type_hash, &token_label(token))?;
     if let Some(info) = store.get_token(type_hash)? {
@@ -720,9 +724,14 @@ fn write_token_label(
                  chain's: what the pair of the token's type script runs; a label never states \
                  it)"
             );
+            return Ok(Some(format!(
+                "{} 0x{}: {disagreement}",
+                token.symbol,
+                hex::encode(type_hash)
+            )));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn selected_script_deployments(
@@ -3388,8 +3397,15 @@ mod bundled_label_chain_consistency_tests {
     fn label_import_says_a_labels_other_standard_when_it_meets_the_chain_row() {
         let usdi = bundled::udt_labels()
             .into_iter()
-            .find(|token| token.symbol == "USDI" && token.mainnet.is_some())
-            .expect("the bundled labels carry mainnet USDI");
+            // of the two bundled mainnet USDI labels, the one that says
+            // `xudt_compatible` (usdi-0cae1430.toml; usdi-7f3fba3f.toml says
+            // `xudt`)
+            .find(|token| {
+                token.symbol == "USDI"
+                    && token.standard == "xudt_compatible"
+                    && token.mainnet.is_some()
+            })
+            .expect("the bundled labels carry mainnet USDI saying xudt_compatible");
         let deployment = usdi.mainnet.clone().unwrap();
         let type_hash = compute_type_hash(&deployment).unwrap();
         let dir = TempDir::new().unwrap();

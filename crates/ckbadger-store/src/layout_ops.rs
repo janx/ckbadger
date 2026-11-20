@@ -335,7 +335,14 @@ fn stamp_in(db: &DB) -> anyhow::Result<Option<u32>> {
 }
 
 /// Whether any domain column family `db` opened holds a row.
+/// (And whether `default` holds one: no build of ckbadger writes `default`,
+/// so a row there is a foreign store's, evidence of a write, never a store
+/// still being created; resync fix round 4, the third read's NOTE-1.)
 fn holds_domain_rows_in(db: &DB) -> anyhow::Result<bool> {
+    if let Some(row) = db.iterator(rocksdb::IteratorMode::Start).next() {
+        row.map_err(|e| anyhow::anyhow!("read the first row of default: {e}"))?;
+        return Ok(true);
+    }
     for name in DOMAIN_CFS {
         let Some(cf) = db.cf_handle(name) else {
             continue;
@@ -487,12 +494,12 @@ pub fn inspect_domain_store(
 #[cfg(any(test, feature = "test-store"))]
 pub mod earlier_layout_for_test {
     use crate::keys::sync_meta_keys;
-    use crate::store::{CF_LIVE_CODE_CELLS_BY_TYPE, CF_SYNC_META, CF_TOKEN_LABELS, DOMAIN_CFS};
+    use crate::store::{CF_SYNC_META, DOMAIN_CFS};
     use std::path::Path;
 
     /// The column families this build added since layout 7, which an earlier
     /// build's store lacks.
-    pub const ADDED_SINCE_LAYOUT_7: [&str; 2] = [CF_TOKEN_LABELS, CF_LIVE_CODE_CELLS_BY_TYPE];
+    pub const ADDED_SINCE_LAYOUT_7: [&str; 2] = crate::layout_ops::DOMAIN_CFS_CREATED_FIRST;
 
     /// Create, at `path`, a domain store with every domain column family of
     /// this build but [`ADDED_SINCE_LAYOUT_7`], holding one row (the network
@@ -807,6 +814,29 @@ mod tests {
                 "stamp {stamp:?}: the refused store is as it was"
             );
         }
+    }
+
+    /// resync fix round 4, the third read's NOTE-1: one list for the creation
+    /// order, read by the creating open and by the rule: it begins with the
+    /// column families the newest layout added (an earlier build's store
+    /// lacks them), the tests' list of them is that same list, and the open
+    /// makes them in that order.
+    #[test]
+    fn the_creation_order_begins_with_the_newest_layouts_column_families() {
+        let order = domain_creation_order();
+        assert_eq!(
+            order[..DOMAIN_CFS_CREATED_FIRST.len()],
+            DOMAIN_CFS_CREATED_FIRST
+        );
+        assert_eq!(
+            earlier_layout_for_test::ADDED_SINCE_LAYOUT_7,
+            DOMAIN_CFS_CREATED_FIRST
+        );
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        let mut domain = DOMAIN_CFS.to_vec();
+        domain.sort_unstable();
+        assert_eq!(sorted, domain, "every domain column family, each once");
     }
 
     /// resync fix round 4, the third read's NOTE-1: a store of `default`

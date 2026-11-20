@@ -6768,6 +6768,10 @@ impl Check for LiveCodeCellsIndexMatchesChain {
         let mut findings = Vec::new();
         let mut checked = 0u64;
         let mut not_compared = Vec::new();
+        // the types whose cells and rows were held both ways (resync fix
+        // round 4, NOTE-3: counted, never derived from `not_compared`, which
+        // also names rows)
+        let mut types_compared = 0usize;
         let mut types: Vec<(String, crate::rpc::Script)> = Vec::new();
         // The candidates, each confirmed at a second read (below).
         let mut stale: Vec<(LiveCodeCellEvidence, String)> = Vec::new();
@@ -6819,6 +6823,7 @@ impl Check for LiveCodeCellsIndexMatchesChain {
                     stale.push((row.clone(), reason));
                 }
             }
+            types_compared += 1;
         }
 
         // The second read, once the indexer has caught up with the node: a
@@ -6852,12 +6857,19 @@ impl Check for LiveCodeCellsIndexMatchesChain {
             if !again.contains_key(&type_hash) {
                 again.insert(type_hash.clone(), rows_under(&type_hash)?);
             }
-            if again[&type_hash]
-                .rows
-                .iter()
-                .any(|row| row.names(&tx, index))
-                || !node_holds_live_code(ctx, rpc_url, &type_hash, &tx, index)?
-            {
+            let rows = &again[&type_hash];
+            if rows.rows.iter().any(|row| row.names(&tx, index)) {
+                continue;
+            }
+            // a second read that holds more rows than one answer cannot say
+            // the cell has none (resync fix round 4, NOTE-3)
+            if !rows.complete {
+                not_compared.push(format!(
+                    "{tx}:{index} under {type_hash} (its type has more rows than one answer holds)"
+                ));
+                continue;
+            }
+            if !node_holds_live_code(ctx, rpc_url, &type_hash, &tx, index)? {
                 continue;
             }
             findings.push(Finding {
@@ -6874,7 +6886,7 @@ impl Check for LiveCodeCellsIndexMatchesChain {
         let mut detail = format!(
             "{} sampled rows held to the node; the code cells of {} type(s) compared both ways",
             sampled.len(),
-            types.len() - not_compared.len()
+            types_compared
         );
         if !not_compared.is_empty() {
             detail.push_str(&format!("; not compared: {}", not_compared.join(", ")));
@@ -9775,6 +9787,9 @@ mod tests {
         /// The `complete` of the type's rows once caught up (true unless a
         /// test says the second read holds more rows than one answer).
         late_complete: bool,
+        /// The `complete` of the type's rows before (true unless a test says
+        /// the first read holds more rows than one answer).
+        early_complete: bool,
         node: Vec<NodeCell>,
         catch_up: usize,
         stats_reads: std::sync::atomic::AtomicUsize,
@@ -9786,6 +9801,7 @@ mod tests {
                 filed,
                 filed_late: None,
                 late_complete: true,
+                early_complete: true,
                 node: default_node(),
                 catch_up: 1,
                 stats_reads: std::sync::atomic::AtomicUsize::new(0),
@@ -9843,7 +9859,11 @@ mod tests {
                     (Some(filed_late), true) => filed_late.clone(),
                     _ => self.filed.clone(),
                 };
-                let complete = !late || self.late_complete;
+                let complete = match (under.is_some(), late) {
+                    (true, true) => self.late_complete,
+                    (true, false) => self.early_complete,
+                    (false, _) => true,
+                };
                 rows.sort_by_key(live_code_row_key);
                 let rows: Vec<serde_json::Value> = match under {
                     Some(under) => rows
@@ -10165,6 +10185,56 @@ mod tests {
             detail.contains("the code cells of 1 type(s) compared both ways")
                 && detail.contains(&format!("0x{}:0", hex::encode([0xa3; 32])))
                 && detail.contains(&format!("0x{}:0", hex::encode([0xa9; 32]))),
+            "{detail}"
+        );
+    }
+
+    /// resync fix round 4 (the third read's NOTE-4): an indexer that never
+    /// reaches the node's tip ends the check with an error naming both
+    /// blocks; no finding is confirmed against an index behind the node.
+    #[test]
+    fn live_code_cells_check_errs_when_the_indexer_never_catches_up() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(wiremock::matchers::any())
+                .respond_with(LiveCodeCellsResponder {
+                    catch_up: usize::MAX,
+                    ..LiveCodeCellsResponder::new(vec![live_code_row(0xa1, 0)])
+                })
+                .mount(&server)
+                .await;
+        });
+        let error = LiveCodeCellsIndexMatchesChain
+            .run(&rpc_ctx(&server), &ProgressReporter::new(None))
+            .expect_err("the index never caught up");
+        let words = format!("{error:#}");
+        assert!(
+            words.contains(&format!(
+                "the indexer stands at block {} and the node at {LIVE_CODE_TIP}",
+                LIVE_CODE_TIP - 1
+            )),
+            "{words}"
+        );
+    }
+
+    /// resync fix round 4 (the third read's NOTE-4): a type whose first read
+    /// holds more rows than one answer is named as not compared, never held
+    /// to the node's list (it would read its unlisted rows as missing).
+    #[test]
+    fn live_code_cells_check_names_a_type_with_more_rows_than_an_answer_as_not_compared() {
+        let result = run_live_code_cells_responder(LiveCodeCellsResponder {
+            early_complete: false,
+            ..LiveCodeCellsResponder::new(vec![live_code_row(0xa1, 0)])
+        });
+        assert!(result.passed(), "{:?}", result.findings);
+        let detail = result.detail.unwrap_or_default();
+        assert!(
+            detail.contains("the code cells of 0 type(s) compared both ways")
+                && detail.contains(&format!(
+                    "{} (more rows than one answer holds)",
+                    live_code_type_hash()
+                )),
             "{detail}"
         );
     }

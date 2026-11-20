@@ -1204,6 +1204,37 @@ async fn data_hash_rows_rejects_a_limit_over_the_cap() {
 
 // ── `GET /api/v1/verify/live-code-cells` (resync fix round 2, E) ──────────
 
+/// resync fix round 4 (the third read's NOTE-4): the export's bound held at
+/// the route: under a type whose 67th row is unreadable, `limit=64` reads at
+/// most 65 rows and answers; a route that read every row of the type would
+/// meet the bad row and fail.
+#[tokio::test]
+async fn live_code_cells_export_under_a_type_reads_no_row_past_its_bound() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(&store);
+    for tx in 0..66u8 {
+        batch.put_live_code_cell(&[0x20; 32], &[tx; 32], 0, &[0xb1; 32]);
+    }
+    batch.commit().unwrap();
+    // the 67th row of the type, a value of 31 bytes: no binary
+    let key = ckbadger_store::keys::encode_live_code_cell_key(&[0x20; 32], &[0xff; 32], 0);
+    store
+        .put_cf(store.cf_live_code_cells_by_type(), &key, &[0xb1; 31])
+        .unwrap();
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/live-code-cells?type_hash={}&limit=64",
+            hex0x(&[0x20; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["rows"].as_array().unwrap().len(), 64, "{body}");
+    assert_eq!(body["complete"], false, "{body}");
+}
+
 /// resync fix round 3, item 2 (tests NOTE-5): under a type with more rows
 /// than an answer holds, the export answers `limit` rows and `complete:
 /// false` (S43 then names the type as not compared, never reports its rows
