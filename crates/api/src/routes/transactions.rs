@@ -285,6 +285,7 @@ pub(crate) fn transaction_response(
                 &state.store,
                 &state.ckb_network,
                 actions,
+                super::activities::Draw::Row,
                 &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
                 &mut std::collections::HashMap::new(),
             )

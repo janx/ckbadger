@@ -14,16 +14,17 @@ import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtur
 import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { AddressActivity } from '@/components/address/address-history';
-import type { ItemDelta, ParticipantInfo } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import type { ItemDelta, PartyId } from '@/lib/api';
+import {
+  activityRead,
+  ITEM_TYPE,
+  type WrittenParty,
+  type Written,
+} from '@/__tests__/utils/activity-read';
 
 const MINUS = '−';
 
-function party(
-  seed: string,
-  ckbDelta: string,
-  over: Partial<ParticipantInfo> = {}
-): ParticipantInfo {
+function party(seed: string, ckbDelta: string, over: Partial<WrittenParty> = {}): WrittenParty {
   return {
     address: seededAddress(seed),
     lockHash: `0x${seed.padStart(64, '0')}`,
@@ -41,8 +42,8 @@ function party(
 }
 
 function row(
-  participants: ParticipantInfo[],
-  over: Partial<ActivityRowData> = {}
+  participants: WrittenParty[],
+  over: Partial<Written<ActivityRowData>> = {}
 ): ActivityRowData {
   return activityRead({
     txHash: `0x${'fe'.repeat(32)}`,
@@ -148,31 +149,55 @@ describe('a line whose only movement is the fee (B4 item 3)', () => {
   });
 });
 
+// Re-pinned on purpose (lane feed, ruling 14 of gate P): the route states the fee payer from every
+// party (`feePayer`), so the address's row says "fee" exactly where the route names the address,
+// other parties or not; it said it only where the transaction had no other party, since their
+// changes were not on the row
 describe('on an address page, the row lists this address alone', () => {
+  const own = [addressFixture.lockScriptHash.slice(0, 42), 0] as PartyId;
+  const other = [`0x${'0e'.repeat(20)}`, 0] as PartyId;
   const oracle = { ...addressActivitiesFixture[0], ckbDelta: '-30000', usedDelta: '0' };
 
-  it('says the fee when the transaction has no other party', () => {
+  it('says the fee when the route names this address the fee payer, alone', () => {
     const { container } = render(
       <AddressActivity
         address={addressFixture}
-        activity={activityRead({ ...oracle, participants: [] })}
+        activity={activityRead({
+          ...oracle,
+          participantCount: 1,
+          partyIds: [own],
+          feePayer: addressFixture.lockScriptHash,
+        })}
       />
     );
     expect(ckbOf(container)).toHaveTextContent(/^fee 0\.0003 CKB$/);
   });
 
-  it('cannot say it when other parties are unlisted: their changes are not on the row', () => {
-    const other = {
-      address: seededAddress('other1'),
-      lockHash: `0x${'0e'.repeat(32)}`,
-      lockHashPrefix: null,
-      roles: [],
-      sent: false,
-    };
+  it('says the fee when the route names this address beside another party that moved nothing', () => {
     const { container } = render(
       <AddressActivity
         address={addressFixture}
-        activity={activityRead({ ...oracle, participants: [other] })}
+        activity={activityRead({
+          ...oracle,
+          participantCount: 2,
+          partyIds: [own, other],
+          feePayer: addressFixture.lockScriptHash,
+        })}
+      />
+    );
+    expect(ckbOf(container)).toHaveTextContent(/^fee 0\.0003 CKB$/);
+  });
+
+  it('cannot say it when the route names no fee payer: another party received', () => {
+    const { container } = render(
+      <AddressActivity
+        address={addressFixture}
+        activity={activityRead({
+          ...oracle,
+          participantCount: 2,
+          partyIds: [own, other],
+          feePayer: null,
+        })}
       />
     );
     expect(ckbOf(container)).not.toHaveAttribute('data-fee');

@@ -7,7 +7,7 @@ use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, SyncStatus, WsManager};
-use crate::routes::activities::build_global_activity_response;
+use crate::routes::activities::{build_global_activity_response, Draw};
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -283,6 +283,7 @@ fn broadcast_latest_activities(
                 store,
                 ckb_network,
                 actions,
+                Draw::Row,
                 &mut script_info_cache,
                 &mut address_cache,
             )

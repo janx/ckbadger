@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { unitText, unitNode } from '@/components/ui/units';
+import { NoteCount, unitText, unitNode } from '@/components/ui/units';
 import { formatCount } from '@/lib/format-count';
 import { shortenAddress, shortenHash, shortenOutpoint, type ShortSize } from '@/lib/shorten';
 
@@ -232,4 +232,32 @@ it('holds every noun the source gives formatCount, at the largest count', () => 
     const text = formatCount(U64_MAX, one, many);
     expect(units(`${text})`).counts.map((c) => c.textContent)).toEqual([`${plain(text)})`]);
   }
+});
+
+// BRIEF-roles-rest part G: a count in a quiet note (a metric's note, a figure's second line) reads
+// its number as the datum and its noun as its unit, whatever the note's ink
+describe('NoteCount: a count in a note, its number read and its noun its unit', () => {
+  it('reads the number in the reading ink and the noun quiet, one unit, the noun agreeing', () => {
+    const { container } = render(
+      <span className="text-text-dim">
+        <NoteCount count={1234} singular="withdrawal" />, <NoteCount count={1} singular="deposit" />
+        , <NoteCount count={2} singular="address" plural="addresses" />
+      </span>
+    );
+    const counts = [...container.querySelectorAll('[data-note-count]')] as HTMLElement[];
+    expect(counts.map((c) => c.textContent)).toEqual([
+      '1,234 withdrawals',
+      '1 deposit',
+      '2 addresses',
+    ]);
+    for (const count of counts) {
+      expect(count).toHaveAttribute('data-nobreak');
+      expect(count.firstElementChild).toHaveClass('text-text');
+      expect(count.lastElementChild).toHaveClass('text-text-dim');
+    }
+  });
+
+  it('refuses a count that is no count, as groupCount and countNoun do', () => {
+    expect(() => render(<NoteCount count={-1} singular="deposit" />)).toThrow('Invalid count -1');
+  });
 });

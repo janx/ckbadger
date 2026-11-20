@@ -137,16 +137,25 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const maximum =
     t.maximumSupplyStatus === 'limited' ? (
       t.maximumSupply === null ? (
-        <span>maximum supply unavailable</span>
+        <span>
+          maximum supply <span className="text-text">unavailable</span>
+        </span>
       ) : (
         <span>
-          maximum <TokenAmount form="summary" amount={t.maximumSupply} decimals={t.decimals} />
+          maximum{' '}
+          <span className="text-text">
+            <TokenAmount form="summary" amount={t.maximumSupply} decimals={t.decimals} />
+          </span>
         </span>
       )
     ) : t.maximumSupplyStatus === 'unlimited' ? (
-      <span>maximum supply unlimited</span>
+      <span>
+        maximum supply <span className="text-text">unlimited</span>
+      </span>
     ) : (
-      <span title={NOT_ESTABLISHED_CAP}>maximum supply not established</span>
+      <span title={NOT_ESTABLISHED_CAP}>
+        maximum supply <span className="text-text">not established</span>
+      </span>
     );
   const largestShare =
     concentration.data && BigInt(concentration.data.totalSupply) > BigInt(0)
@@ -265,17 +274,29 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             {
               label: 'Holders',
               value: <AssetCount value={t.holdersCount} />,
-              note: largestShare === null ? undefined : `largest holds ${largestShare}%`,
+              // a metric's note is quiet (R13); its values read (BRIEF-roles-rest part G): the
+              // share, the counts, the occupied share; "largest holds", "in 24 h" stay labels
+              note:
+                largestShare === null ? undefined : (
+                  <>
+                    largest holds <span className="text-text">{largestShare}%</span>
+                  </>
+                ),
             },
             {
               label: 'Transfers',
               value: <AssetCount value={t.transfersCount} />,
               note:
                 t.transfers24h === 0 ? (
-                  'none in 24 h'
+                  <>
+                    <span className="text-text">none</span> in 24 h
+                  </>
                 ) : (
                   <>
-                    <AssetCount value={t.transfers24h} /> in 24 h
+                    <span className="text-text">
+                      <AssetCount value={t.transfers24h} />
+                    </span>{' '}
+                    in 24 h
                   </>
                 ),
             },
@@ -332,7 +353,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span
                     title={`occupied ${formatCkbAmount(occupied).full} CKB · free ${formatCkbAmount(held - occupied).full} CKB`}
                   >
-                    {percentOf(occupied, held)} occupied
+                    <span className="text-text">{percentOf(occupied, held)}</span> occupied
                   </span>
                 ) : undefined,
             },

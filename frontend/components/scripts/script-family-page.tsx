@@ -266,7 +266,7 @@ function ReferenceFacts({
             </span>
           ))
         ) : (
-          <span className="text-text-dim">
+          <span className="text-text">
             {reference.currentVersionHash
               ? 'No live code cell for the current version'
               : 'Retired: no current code cell'}
@@ -342,7 +342,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     const { live } = liveDeployments(family, reference);
     if (!live.length)
       return (
-        <span className="text-text-dim">
+        <span className="text-text">
           {reference.currentVersionHash ? 'no live code cell' : 'retired'}
         </span>
       );
@@ -616,7 +616,7 @@ export function ScriptFamilyPage({
         unavailable
       </span>
     ) : (
-      <span className="text-text-dim">…</span>
+      <span className="text-text">…</span>
     );
   };
   /**
@@ -1002,7 +1002,7 @@ export function ScriptFamilyPage({
                     · {outpointLink(first, 'tight')}
                   </>
                 ) : (
-                  <span className="text-text-dim">no deployment observed</span>
+                  <span className="text-text">no deployment observed</span>
                 )}
               </>
             ),

@@ -80,6 +80,20 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     expect(row('account')).toHaveTextContent(/^account → next0x[0-9a-f]{40} → next /);
   });
 
+  // BRIEF-roles-rest part G: the manager key's note that it is the owner's is a state of the
+  // value, the reading ink (it stood quiet in the note); its separator stays quiet
+  it('says a manager key that is the owner’s in the reading ink', () => {
+    const protocol = structuredClone(dotbitV4ProtocolProducer) as typeof dotbitV4ProtocolProducer;
+    const decoded = protocol.versions.at(-1)!.decoded as { owner: unknown; manager: unknown };
+    decoded.manager = structuredClone(decoded.owner);
+    render(
+      <DetailTier2>
+        <DotbitAccountData protocol={protocol as never} />
+      </DetailTier2>
+    );
+    expect(screen.getByText('the same as the owner')).toHaveClass('text-text');
+  });
+
   it('lists the witness timing and sub-account fields, "never" for a zero time (ID-B1)', () => {
     const p = structuredClone(dotbitV4ProtocolProducer) as Extract<
       ItemProtocol,
@@ -184,6 +198,8 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     render(<DotcellStored protocol={p} item={dotcellItem()} />);
     const records = screen.getByRole('region', { name: 'Records as stored · witness' });
     expect(records).toHaveTextContent(/^Records as stored · witness · none in this version$/);
+    // BRIEF-roles-rest part G: the empty state is a value of the heading's line: the reading ink
+    expect(within(records).getByText('none in this version')).toHaveClass('text-text');
     expect(records.children).toHaveLength(1);
     expect(within(records).queryByText(/^No records/)).toBeNull();
   });

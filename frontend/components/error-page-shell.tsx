@@ -204,11 +204,20 @@ function TipSeal() {
         <Dotted
           inline
           parts={[
-            // a link inside the caption's line, in the reading ink the caption gives its values
-            <span key="block" className="text-text">
+            // a link inside the caption's line, in the reading ink the caption gives its values, at
+            // 13 px (BRIEF-roles-rest part B: a link is never 12 px; its hash, a value, with it):
+            // "#99,999,999 · 0xabc123de…34abcd", 31 glyphs at 13 px, 241.8 px, one box in the
+            // stone's 256 px column and on a 288 px line at 320
+            <span key="block" className="text-text text-small">
               <BlockLink look="inline" number={block.number} />
             </span>,
-            <ShortId key="hash" value={block.hash} kind="hash" size="row" className="text-text" />,
+            <ShortId
+              key="hash"
+              value={block.hash}
+              kind="hash"
+              size="row"
+              className="text-text text-small"
+            />,
           ]}
         />
       </figcaption>

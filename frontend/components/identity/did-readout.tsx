@@ -176,8 +176,10 @@ export function AmongDidCkb({
     <section aria-label="Among did:ckb" className="min-w-0 space-y-3">
       <PromptHeading
         command="Among did:ckb"
+        // a link is never 12 px (BRIEF-roles-rest part B): 13 px in the note's 12 px, "All N →"
+        // with N to six digits, 13 glyphs, 101.4 px, an item of the heading's wrapping row
         note={
-          <AppLink look="onward" href={collectionHref}>
+          <AppLink look="onward" href={collectionHref} className="text-small">
             All {total.toLocaleString('en-US')}
           </AppLink>
         }

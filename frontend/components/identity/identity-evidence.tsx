@@ -66,7 +66,12 @@ function Tier2Section({
       >
         {title}
         {empty !== undefined && (
-          <span className="text-text-dim text-small font-normal"> · {empty}</span>
+          // the section's empty state, a value of the heading's line: the reading ink, its
+          // separator quiet (BRIEF-roles-rest part G)
+          <span className="text-small font-normal">
+            <span className="text-text-dim"> · </span>
+            <span className="text-text">{empty}</span>
+          </span>
         )}
       </h2>
       {children}
@@ -190,7 +195,19 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
     {
       key: 'manager',
       label: 'manager key',
-      value: <WitnessKey k={d.manager} note={same && <Dim> · the same as the owner</Dim>} />,
+      value: (
+        <WitnessKey
+          k={d.manager}
+          note={
+            same && (
+              <>
+                <Dim> · </Dim>
+                <span className="text-text">the same as the owner</span>
+              </>
+            )
+          }
+        />
+      ),
     },
     {
       key: 'records',

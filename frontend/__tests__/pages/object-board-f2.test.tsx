@@ -7,6 +7,8 @@ import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { fullText } from '@/__tests__/utils/full-text';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -332,6 +334,8 @@ it('places it in its collection with the composition count and cluster cell (OB-
   expect(promptNote(heading)).toContainElement(
     within(coll).getByRole('link', { name: 'Open the collection' })
   );
+  // BRIEF-roles-rest part B: a link is never 12 px; it took the note's text-meta
+  expect(within(coll).getByRole('link', { name: 'Open the collection' })).toHaveClass('text-small');
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');
   expect(coll).toHaveTextContent('90 of 90');
@@ -359,7 +363,16 @@ it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C
   ])
     expect(within(rail).getByText(label)).toBeInTheDocument();
   expect(rail).toHaveTextContent('Nervape Shadow Lock');
-  expect(await within(rail).findByText('1 transfer since minting')).toBeInTheDocument();
+  // Re-pinned on purpose (BRIEF-roles-rest part G; it read one text): the count is a NoteCount,
+  // its number in the reading ink, its noun and "since minting" quiet
+  const transfers = await within(rail).findByText(fullText('1 transfer since minting'));
+  expect(transfers.querySelector('[data-note-count] .text-text')).toHaveTextContent(/^1$/);
+  // the collection's live objects and the content's bytes, counts in their notes, the same way
+  for (const label of ['Collection', 'Content']) {
+    const count = within(rail).getByText(label).parentElement!.querySelector('[data-note-count]');
+    expect(count!.firstElementChild).toHaveClass('text-text');
+    expect(count!.lastElementChild).toHaveClass('text-text-dim');
+  }
   // C7: the metric shows the date; the time of day stays in the metric's title.
   expect(rail).toHaveTextContent('2026-10-22');
   expect(within(rail).getByText('Minted').parentElement).toHaveAttribute(
@@ -367,6 +380,25 @@ it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C
     expect.stringContaining('2026-10-22 14:43:00 UTC+8')
   );
   expect(within(rail).getByText('Nervape 3x')).toBeInTheDocument();
+  // BRIEF-roles-rest part A: a metric's note is quiet (R13), its values are not: the blocks it was
+  // minted and last moved in and the minter's address (links), and the free CKB, read in the
+  // reading ink (they stood quiet in the notes; the address at 14 px in the 13 px note)
+  const minted = within(rail).getByText('Minted').parentElement!;
+  for (const link of within(minted).getAllByRole('link')) expect(inkOf(link)).toBe(READING);
+  const minter = within(minted)
+    .getAllByRole('link')
+    .find((l) => l.getAttribute('href')!.includes('/address/'))!;
+  expect(minter).toHaveClass('text-small');
+  const moved = within(rail).getByText('Last moved').parentElement!;
+  for (const link of within(moved).getAllByRole('link')) expect(inkOf(link)).toBe(READING);
+  const held = within(rail).getByText('CKB held in its cell').parentElement!;
+  const note = held.querySelector('[data-role="metric-note"]')!;
+  expect(note).toHaveTextContent(/occupied · .+ free$/);
+  // the two figures, occupied and free, each its own reading-ink span
+  expect([...note.querySelectorAll('.text-text')].map((e) => e.textContent)).toEqual([
+    expect.stringMatching(/\d/),
+    expect.stringMatching(/\d/),
+  ]);
   expect(ledeRestatements(container)).toEqual([]);
   expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
 });

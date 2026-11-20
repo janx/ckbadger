@@ -17,7 +17,9 @@ import type {
   ActivityTypeCall,
   ActivityLockCall,
   ActivityProtocolAction,
+  ClassifiedItem,
 } from '@/lib/api';
+import { sentField } from '@/lib/api-fields';
 import { formatBlockNumber } from '@/lib/format-block';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -185,35 +187,15 @@ export function globalTxEvents(activity: ActivityBody): TxEvent[] {
   return events;
 }
 
-/** Net change of the same item across every participant decides mint/burn/transfer. */
-function itemMovement(activity: ActivityBody, primary: ItemDelta | null): string {
-  if (!primary)
-    throw new Error(
-      `transaction ${activity.txHash ?? 'uncommitted'}: item headline has no item delta`
-    );
-  const sameItem = (item: ItemDelta) => {
-    if (primary.kind === 'token')
-      return item.kind === 'token' && item.typeScriptHash === primary.typeScriptHash;
-    if (primary.kind === 'object')
-      return item.kind === 'object' && item.objectId === primary.objectId;
-    return (
-      item.kind === 'identity' &&
-      item.identityId === primary.identityId &&
-      item.standard === primary.standard
-    );
-  };
-  let net = BigInt(0);
-  for (const participant of activity.participants)
-    for (const item of participant.itemDeltas) {
-      if (!sameItem(item)) continue;
-      const delta = String(item.delta);
-      if (!/^-?\d+$/.test(delta))
-        throw new Error(
-          `transaction ${activity.txHash ?? 'uncommitted'}: invalid ${item.kind} delta ${delta}`
-        );
-      net += BigInt(delta);
-    }
-  return net > BigInt(0) ? 'mint' : net < BigInt(0) ? 'burn' : 'transfer';
+/**
+ * The headline's item's movement in the whole transaction, as the route states it beside the item
+ * (lane feed): its net over every party rose (mint), fell (burn) or held (transfer). The route
+ * computes it from every party; a row draws some of them, so the page sums nothing.
+ */
+function itemMovement(activity: ActivityBody, primary: ClassifiedItem | null): string {
+  const where = `transaction ${activity.txHash ?? 'uncommitted'}`;
+  if (!primary) throw new Error(`${where}: item headline has no item delta`);
+  return sentField(primary.movement, where, 'movement');
 }
 
 /** The asset class a feed headline is about, or null for CKB transfers and script calls. */

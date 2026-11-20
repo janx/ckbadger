@@ -128,7 +128,8 @@ describe('AssetTransactions board columns', () => {
       // a token feed's row carries its activity (what moved is read from it): none moved here
       const moved = {
         ...tx(1, 1930, 1_923_713),
-        activity: { participants: [] } as unknown as Transaction['activity'],
+        // re-pinned on purpose (lane feed, part 4): the row's stated items (none) are read
+        activity: { participants: [], items: [] } as unknown as Transaction['activity'],
       };
       render(
         <AssetTransactions

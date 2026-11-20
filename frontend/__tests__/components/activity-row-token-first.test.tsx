@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { AssetFeed } from '@/components/asset/asset-feed';
-import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import type { GlobalActivity, ItemDelta } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { activityRead, ITEM_TYPE, type WrittenParty } from '@/__tests__/utils/activity-read';
 
 const PAGE_TOKEN = `0x${'77'.repeat(32)}`;
 const OTHER_TOKEN = `0x${'88'.repeat(32)}`;
@@ -21,7 +21,7 @@ const token = (hash: string, symbol: string, delta: string): ItemDelta => ({
   decimals: 8,
 });
 
-function party(seed: string, ckbDelta: string, itemDeltas: ItemDelta[]): ParticipantInfo {
+function party(seed: string, ckbDelta: string, itemDeltas: ItemDelta[]): WrittenParty {
   return {
     address: seededAddress(seed),
     lockHash: `0x${seed.padStart(64, '0')}`,

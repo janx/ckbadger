@@ -6,6 +6,7 @@ import type { ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
 import { ScriptHeroMetrics } from '@/components/scripts/script-family-board';
 import { typeLineage } from '@/lib/script-lineage';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { inkOf } from '@/__tests__/utils/ink-role';
 
 const family = fixture.family as unknown as ScriptFamilyDetail;
 const lineage = typeLineage(family.history as ScriptHistoryMarkerApi[])!;
@@ -104,5 +105,29 @@ describe('the hero tiles break no word at a phone width (A4 round 2)', () => {
     const ever = within(screen.getByText('Ever used').parentElement!).getByText(/78,675,029/);
     // re-pinned (A4 round 3): the unit's own marker, data-count-unit
     expect(ever.closest('[data-count-unit]')).toHaveTextContent(/^78,675,029 cells$/);
+  });
+});
+
+/**
+ * BRIEF-roles-rest part A: a hero metric's note is quiet (R13), its values are not. The deploying
+ * transaction under "In use since" (a link), the day the code was last replaced and a holder that
+ * has never signed stood in the note's quiet ink with their label words; they are values, in the
+ * reading ink, and "deployed in" and "last replaced" stay quiet labels.
+ */
+describe('the hero metrics read their notes’ values in the reading ink', () => {
+  it('reads the deploying tx, the day last replaced and the holder’s state; quiet labels', () => {
+    render(<ScriptHeroMetrics family={family} lineage={lineage} />);
+    const since = screen.getByText('In use since').parentElement!;
+    const tx = within(since).getByRole('link');
+    expect(inkOf(tx)).toBe('text-text');
+    expect(inkOf(within(since).getByText(/deployed in/))).toBe('text-text-dim');
+    const code = screen.getByText('Code').parentElement!;
+    const replaced = within(code).getByText(/last replaced/);
+    expect(inkOf(replaced)).toBe('text-text-dim');
+    const day = replaced.querySelector('time') ?? replaced.lastElementChild!;
+    expect(day.textContent).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    expect(inkOf(day)).toBe('text-text');
+    const held = screen.getByText('Code cell held by').parentElement!;
+    expect(inkOf(within(held).getByText('has never signed'))).toBe('text-text');
   });
 });

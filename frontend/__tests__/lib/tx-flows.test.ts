@@ -14,6 +14,7 @@ import {
   type FlowEnd,
 } from '@/lib/tx-flows';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { withRouteMovements, type WrittenParty } from '@/__tests__/utils/activity-read';
 import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 
 const HASH = `0x${'91'.repeat(32)}`;
@@ -24,7 +25,7 @@ function party(
   ckbDelta: string,
   itemDeltas: ItemDelta[] = [],
   lockKind: string | null = 'Default Lock'
-): ParticipantInfo {
+): WrittenParty {
   return {
     address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
     lockHash: `0x${tail.padStart(64, '0')}`,
@@ -46,10 +47,11 @@ const token = (delta: string): ItemDelta => ({
   decimals: 8,
 });
 // re-pinned (lane P1, third round): an activity with no protocol step, as onlyFeeMoved reads it
+// its parties' items with their movement, as the route states it
 const activity = (
-  participants: ParticipantInfo[]
+  participants: WrittenParty[]
 ): Pick<GlobalActivity, 'participants' | 'protocolActions'> => ({
-  participants,
+  participants: withRouteMovements(participants),
   protocolActions: [],
 });
 const amounts = (ends: readonly FlowEnd[]) =>
@@ -274,7 +276,7 @@ describe('txFlows', () => {
   // Re-pinned on purpose (lane P1, third round; review p-logic-chain MUST 2): the one decision reads
   // the activity's protocol steps too, so it takes the activity beside its flows
   it('tells a transaction that moved only its fee', () => {
-    const only = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) => {
+    const only = (participants: WrittenParty[], fee: string, compensation: bigint | null) => {
       const a = activity(participants);
       return onlyFeeMoved(a, txFlows({ hash: HASH, activity: a, fee, compensation }));
     };
@@ -317,6 +319,40 @@ describe('txFlows', () => {
     }
   });
 
+  // Two fee rules, two questions (the lead's F3 on lane feed): this page's `onlyFeeMoved` asks
+  // whether nothing but the fee moved (no protocol step; one payer or several); the route's
+  // `feePayer` names the one party whose line is the fee exactly (a protocol step allowed; one
+  // payer only). On the two transactions of the route's own test
+  // (crates/api/tests/api_activities.rs, `the_fee_payer_names_a_depositor_and_none_of_two_payers`)
+  // they differ, each way.
+  it('holds the two transactions on which the fee rules differ', () => {
+    // a Nervos DAO deposit from its owner's own address: the route names the owner its fee payer
+    const owner = { ...party('aaaaaa', '-1000'), tags: 8 };
+    const deposit = {
+      ...activity([owner]),
+      protocolActions: [
+        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata: {} },
+      ],
+      feePayer: owner.lockHash,
+    };
+    const depositFlows = txFlows({
+      hash: HASH,
+      activity: deposit,
+      fee: '1000',
+      compensation: null,
+    });
+    expect(deposit.feePayer).not.toBeNull();
+    expect(onlyFeeMoved(deposit, depositFlows)).toBe(false);
+    // two parties paid the fee together: the route names no fee payer, and only the fee moved
+    const shared = {
+      ...activity([party('aaaaaa', '-600'), party('bbbbbb', '-400')]),
+      feePayer: null,
+    };
+    const sharedFlows = txFlows({ hash: HASH, activity: shared, fee: '1000', compensation: null });
+    expect(shared.feePayer).toBeNull();
+    expect(onlyFeeMoved(shared, sharedFlows)).toBe(true);
+  });
+
   it('keys objects and identities by what they are', () => {
     expect(flowKey({ kind: 'object', objectId: '0xo1', delta: 1 })).toBe('object:0xo1');
     expect(flowKey({ kind: 'identity', standard: 'dotbit', identityId: 'a.bit', delta: -1 })).toBe(
@@ -329,7 +365,7 @@ describe('foldEnds', () => {
   const ends = (n: number): FlowEnd[] =>
     Array.from({ length: n }, (_, i) => ({
       t: 'party' as const,
-      party: party(String(i).padStart(6, 'p'), '-1'),
+      party: withRouteMovements([party(String(i).padStart(6, 'p'), '-1')])[0],
       amount: BigInt(100 - i),
     }));
 

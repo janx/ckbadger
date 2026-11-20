@@ -32,3 +32,8 @@ deploy/helm/*/templates/
 
 # Verbatim copies of the seals-by-kind design prototype (kinds5.js and what it requires)
 frontend/__tests__/fixtures/seal-prototype/
+
+# Byte pins of the API's own pretty JSON (serde_json::to_string_pretty), which
+# crates/api/tests/api_layout_pins.rs compares byte for byte: prettier writes a
+# short array of values on one line where serde writes one value a line
+crates/api/tests/fixtures/layout_pins/

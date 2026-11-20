@@ -7,7 +7,7 @@ import {
   dayGroups,
   drawnAnchors,
 } from '@/components/activities-stream-explorer';
-import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
+import type { GlobalActivity } from '@/lib/api';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -16,7 +16,12 @@ import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { pagedRead } from '@/__tests__/utils/paged-read';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import {
+  activityRead,
+  ITEM_TYPE,
+  type WrittenParty,
+  type Written,
+} from '@/__tests__/utils/activity-read';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -27,12 +32,10 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
-  TAG_TOKEN: 1,
-  TAG_OBJECT: 2,
-  TAG_IDENTITY: 4,
-  TAG_CELLBASE: 32,
   // C7: the classifier reads a party's TAG_TYPE_CALL (a recognised script that moved nothing)
   TAG_TYPE_CALL: 64,
+  // the fold reads every party's senders bit from the route's partyIds
+  TAG_INPUT: 256,
 }));
 
 /**
@@ -46,7 +49,7 @@ const lockHashOf = (address: string) =>
     .slice(-64)
     .padStart(64, '0')}`;
 
-function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantInfo {
+function makeParticipant(overrides: Partial<WrittenParty> = {}): WrittenParty {
   const address = overrides.address ?? seededAddress('test');
   return {
     address,
@@ -62,7 +65,7 @@ function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantI
 }
 
 function makeActivity(
-  overrides: Partial<GlobalActivity> & { participants: ParticipantInfo[] }
+  overrides: Partial<Written<GlobalActivity>> & { participants: WrittenParty[] }
 ): GlobalActivity {
   return activityRead({
     txHash: overrides.txHash ?? '0xtx',

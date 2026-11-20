@@ -28,6 +28,7 @@ import { lockCallFacts } from '@/lib/lock-words';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
+import { feePayer, participantCount } from '@/lib/activity-parties';
 import { formatOccupiedDelta } from '@/lib/occupied';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
@@ -37,6 +38,7 @@ import type {
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
+  ClassifiedItem,
   GlobalActivity,
   ItemDelta,
   ParticipantInfo,
@@ -53,6 +55,7 @@ import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { FoldToggle } from '@/components/ui/fold-toggle';
+import { unitNode } from '@/components/ui/units';
 import { ShortId } from '@/components/ui/short-id';
 import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
@@ -802,29 +805,28 @@ function activityDetails(
 }
 
 /**
- * The party whose line's only movement is the fee (readability lane B4): its index, or null. Given
- * a row that lists every party of the transaction with its change, CKB is conserved but for what
- * enters (a cellbase's reward, a Nervos DAO withdrawal's compensation) and what leaves (the fee).
- * When nothing entered, no item moved, and exactly one party's CKB changed and went down, that
- * change is the fee exactly: its line says so, in the reading ink. Nothing is summed to find it.
+ * The party whose line's only movement is the fee (readability lane B4), as the route states it
+ * from every party (`feePayer`, lane feed: the rule this page applied to the parties it was sent,
+ * now the route's alone): not a cellbase, no Nervos DAO compensation entering, no item moved, and
+ * exactly one party's CKB changed and went down, so that change is the fee exactly; its line says
+ * so, in the reading ink. Its index among the parties drawn, or null. A cross-user row draws the
+ * fee payer (the route's rule), so one it does not draw is refused; a focus row (the address page)
+ * draws its own party alone, and another party may have paid. Not the transaction page's
+ * `onlyFeeMoved` (lib/tx-flows.ts), which asks whether nothing but the fee moved: a protocol step
+ * stops that one and not this (a DAO deposit from its owner's own address is "fee" on the owner's
+ * line), two payers stop this one and not that.
  */
-function feeOnlyParty(activity: ActivityBody): number | null {
-  if (activity.isCellbase) return null;
-  if (
-    activity.protocolActions.some(
-      (pa) => pa.protocol === 'dao' && pa.action === 'withdraw_complete'
-    )
-  )
-    return null;
-  let payer: number | null = null;
-  for (const [i, p] of activity.participants.entries()) {
-    if (p.itemDeltas.length > 0) return null;
-    const delta = BigInt(p.ckbDelta);
-    if (delta === BigInt(0)) continue;
-    if (delta > BigInt(0) || payer !== null) return null;
-    payer = i;
-  }
-  return payer;
+function feePayerAt(
+  activity: Pick<ActivityRowData, 'txHash' | 'participants' | 'feePayer'>,
+  focusRow: boolean
+): number | null {
+  const payer = feePayer(activity);
+  if (payer === null) return null;
+  const at = activity.participants.findIndex((p) => p.lockHash === payer);
+  if (at >= 0 || focusRow) return at >= 0 ? at : null;
+  throw new Error(
+    `transaction ${activity.txHash}: its fee payer ${payer} is none of the ${activity.participants.length} parties it draws`
+  );
 }
 
 function partyKey(p: ParticipantInfo, i: number): string {
@@ -926,7 +928,7 @@ function ItemsOnLine({
 }
 
 /** "+2 objects", "−1 object", "+1 −1 objects": a participant's object changes as one signed count. */
-export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
+export function objectCountLabel(items: readonly ItemDelta[]): string {
   const objects = items.filter((i) => i.kind === 'object');
   const arrived = objects.filter((o) => o.delta > 0).length;
   const departed = objects.length - arrived;
@@ -1186,13 +1188,18 @@ function partiesShown<T extends ActivityParticipant>(
 }
 
 /**
- * Every participant, Layer 1 and Layer 2, one line each (D1: none is dropped). Named parties with
- * no change are listed — their zero is the fact. Over six, the five largest and an explicit "+N"
- * to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that participant
- * comes first, always shown; the others keep their order and that rule among themselves.
+ * Every participant the row draws, Layer 1 and Layer 2, one line each (D1: none is dropped). Named
+ * parties with no change are listed — their zero is the fact. Over six, the five largest and an
+ * explicit "+N" to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that
+ * participant comes first, always shown; the others keep their order and that rule among
+ * themselves. A row that draws some of the transaction's parties (lane feed: the route draws the
+ * five largest CKB changes and the fee payer, at most six, so all are shown) names the others as
+ * a way onward to the transaction's page, where every party stands ("765 more participants on the
+ * transaction page"); one that draws more than six of them is refused (a fold would say "all").
  */
 function Participants({
   participants,
+  participantCount,
   txHash,
   focusLockHash,
   foldObjects = false,
@@ -1203,9 +1210,14 @@ function Participants({
   focusTokenTypeHash,
 }: {
   participants: ActivityParticipant[];
+  /**
+   * The transaction's parties, counted by the route, where the row names the ones it does not draw;
+   * null on a row that draws its own party alone (the address page).
+   */
+  participantCount: number | null;
   txHash: string;
   focusLockHash?: string;
-  /** The index of the party whose only movement is the fee (`feeOnlyParty`), or null. */
+  /** The index of the party whose only movement is the fee, as the route names it (`feePayerAt`), or null. */
   feePayer: number | null;
   focusTokenTypeHash?: string;
   foldObjects?: boolean;
@@ -1218,6 +1230,15 @@ function Participants({
   const listId = useId();
   const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
   const foldable = expanded || hidden > 0;
+  const rest = participantCount === null ? 0 : participantCount - participants.length;
+  if (rest < 0)
+    throw new Error(
+      `transaction ${txHash}: it draws ${participants.length} parties of ${participantCount}`
+    );
+  if (rest > 0 && participants.length > PARTICIPANT_LIMIT)
+    throw new Error(
+      `transaction ${txHash}: it draws ${participants.length} of its ${participantCount} parties, where a row draws at most ${PARTICIPANT_LIMIT}`
+    );
   if (participants.length === 0) return null;
   return (
     <div id={listId} data-role="participants" className="flex min-w-0 flex-col">
@@ -1248,13 +1269,27 @@ function Participants({
           />
         </div>
       )}
+      {/* the parties it does not draw, once its drawn lines are all shown: on the transaction's
+          page, which lists every party (the route sends them in full there) */}
+      {rest > 0 && !(foldable && !expanded) && (
+        <div data-role="participants-rest" className="text-small leading-row self-start pl-[18px]">
+          <Link href={`/tx/${txHash}`} look="onward">
+            {unitNode(`${formatCount(rest, 'more participant')} on the transaction page`)}
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
 
-export type ActivityRowData = Omit<GlobalActivity, 'blockNumber' | 'timestamp' | 'txIndex'> & {
+export type ActivityRowData = Omit<
+  GlobalActivity,
+  'blockNumber' | 'timestamp' | 'txIndex' | 'items'
+> & {
   blockNumber: number | null;
   timestamp: string | null;
+  /** The row's items: the route's statement (an address's own page: its own items). */
+  items: readonly ClassifiedItem[];
   poolStatus?: PoolStatus;
   timeAddedToPool?: string;
   interpretation?: PoolInterpretation;
@@ -1295,12 +1330,6 @@ export type ActivityRowProps = {
   focusLockHash?: string;
   /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
   age?: boolean;
-  /**
-   * How many of the transaction's parties the row does not list with their changes (the address
-   * page lists its own party alone): a line is said to be the fee (`feeOnlyParty`) only on a row
-   * that lists every party, since an unlisted party's change is not known to it.
-   */
-  unlistedParties?: number;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -1325,7 +1354,6 @@ export function ActivityRow({
   participantNotes,
   focusLockHash,
   age = false,
-  unlistedParties = 0,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -1402,7 +1430,14 @@ export function ActivityRow({
           focusItemId={focusItemId}
           itemTone={itemTone}
           notes={participantNotes}
-          feePayer={mode === 'cross-user' && unlistedParties === 0 ? feeOnlyParty(activity) : null}
+          // a cross-user row names the parties it does not draw; a focus row (the address page)
+          // draws its own party alone, and the others are on the transaction's page
+          participantCount={
+            mode === 'cross-user' && focusLockHash === undefined ? participantCount(activity) : null
+          }
+          feePayer={
+            mode === 'cross-user' ? feePayerAt(activity, focusLockHash !== undefined) : null
+          }
           focusTokenTypeHash={focusTokenTypeHash}
         />
       )}
@@ -1454,7 +1489,8 @@ export function activityTitleText(
  * A run of rows that did the same thing, folded (readability lane B4; the rule is
  * `lib/activity-runs.ts`, the owner's of Gate B): one row that says what its rows did and called —
  * the title, the scripts by the code they share (no row's args: those differ from row to row) —
- * how many transactions it holds and how many parties of them sent, and the newest time (the
+ * how many transactions it holds, how many parties of them sent and, on a run of token rows, how
+ * many tokens they moved (ruling 6 of gate P: "2 tokens"), and the newest time (the
  * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
  * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
  * fold control (`FoldToggle`: "all N transactions ↓", "fewer ↑"): it opens the ordinary rows in
@@ -1463,6 +1499,7 @@ export function activityTitleText(
 export function FoldedActivityRow({
   rows,
   senders,
+  tokens,
   title,
   showScriptDetails,
   age,
@@ -1476,10 +1513,13 @@ export function FoldedActivityRow({
   /** The run, newest first: at least two committed rows. */
   rows: readonly ActivityRowData[];
   /**
-   * How many parties of its rows sent, each once (`runSenders`); null for a run of cellbases, which
-   * have no input and so no sender, and are folded with no count of senders.
+   * How many parties of its rows sent, each once (`runSenders`, from the senders bit of every
+   * party's tags in the route's `partyIds`); null for a run of cellbases, which have no input and
+   * so no sender, and are folded with no count of senders.
    */
   senders: number | null;
+  /** How many tokens its rows moved, each once, on a run of token rows; else null (`runTokens`). */
+  tokens: number | null;
   /** The title its rows draw (`ActivityTitle`). */
   title: ReactNode;
   showScriptDetails: boolean;
@@ -1570,8 +1610,8 @@ export function FoldedActivityRow({
       {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
       <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
         {/* "senders": the owner's word, the parties one of whose cells the transaction consumed
-            (the indexer's per-participant input flag, the route's `sent`; `runSenders` counts
-            them, each once). A run of cellbases has none and says no count. This is the one
+            (the indexer's per-participant input flag, the senders bit of every party's tags in the
+            route's `partyIds`; `runSenders` counts them, each once). A run of cellbases has none and says no count. This is the one
             place that writes it. Like the transactions', its count says "so far" while older rows
             are unread (the lead's finding). */}
         <Dotted
@@ -1579,6 +1619,8 @@ export function FoldedActivityRow({
             toggle,
             open && transactions,
             senders !== null && `${formatCount(senders, 'sender')}${soFar}`,
+            // the tokens its rows moved, by their type script (ruling 6 of gate P), one too
+            tokens !== null && `${formatCount(tokens, 'token')}${soFar}`,
           ]}
         />
       </div>

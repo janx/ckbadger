@@ -275,6 +275,12 @@ export function txFlows({
  * decision the lede, What moved and the balance table follow (lane P1, third round; review
  * p-logic-chain MUST 2: a DAO deposit or withdrawal request from the owner's own address leaves its
  * one party −fee and no item, and read as "only the fee moved").
+ *
+ * Not the route's `feePayer`, which answers another question (the lead's F3 on lane feed): which ONE
+ * party's line is the fee exactly, the word "fee" a feed row writes on that line. A protocol step
+ * does not stop it (a DAO deposit from its owner's own address names the owner) and two payers do
+ * (no one line is the fee); here a protocol step stops it and the fee may be paid by several.
+ * __tests__/lib/tx-flows.test.ts holds a transaction each way.
  */
 export function onlyFeeMoved(
   activity: Pick<GlobalActivity, 'protocolActions'>,

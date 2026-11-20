@@ -7,10 +7,13 @@ import { render, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtures/address';
 import { AddressActivities } from '@/components/address/address-history';
-import type { Activity } from '@/lib/api';
+import { TAG_INPUT, type Activity } from '@/lib/api';
 import { activityRead } from '@/__tests__/utils/activity-read';
 
 const NOW = Date.now();
+
+/** This address by the short id the route names it by. */
+const OWN = addressFixture.lockScriptHash.slice(0, 42);
 
 describe('an address page folds its own runs (B4 item 5)', () => {
   const update = (n: number): Activity =>
@@ -32,7 +35,10 @@ describe('an address page folds its own runs (B4 item 5)', () => {
           scriptName: '.bit Time Index State',
         },
       ],
-      participants: [],
+      // the address alone, its one change the fee: the route names it the fee payer (lane feed);
+      // it sent: its tags carry the senders bit, as the route names every party (`partyIds`)
+      partyIds: [[OWN, TAG_INPUT]],
+      feePayer: addressFixture.lockScriptHash,
     });
 
   // The lead's finding (the exactness lane's B9): on a page with a next page, the page's last run
@@ -71,25 +77,26 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   // and received 40 folded into one run that said neither; a CKB row is headed by its direction for
   // this address, as a token's is, and the two directions are two runs.
   it('heads a CKB row by its direction here, and folds received with received only', () => {
-    // a received row's other party paid it (it sent); a sent row's sender is this address
-    const transfer = (n: number, ckbDelta: string): Activity =>
-      activityRead({
+    // a received row's other party paid it (it sent); a sent row's sender is this address: each
+    // by its short id and tags, as the route names every party (lane feed)
+    const transfer = (n: number, ckbDelta: string): Activity => {
+      const sent = ckbDelta.startsWith('-');
+      return activityRead({
         ...update(n),
         typeCalls: [],
         ckbDelta,
-        sent: ckbDelta.startsWith('-'),
-        participants: ckbDelta.startsWith('-')
-          ? []
+        sent,
+        participantCount: sent ? 1 : 2,
+        partyIds: sent
+          ? [[OWN, TAG_INPUT]]
           : [
-              {
-                address: seededAddress('payer0'),
-                lockHash: `0x${'payer0'.padStart(64, '0')}`,
-                lockHashPrefix: null,
-                roles: [],
-                sent: true,
-              },
+              [OWN, 0],
+              [`0x${'payer0'.padStart(40, '0')}`, TAG_INPUT],
             ],
+        // another party's CKB changed too: the route names no fee payer (lane feed)
+        feePayer: null,
       });
+    };
     render(
       <AddressActivities
         more={false}
@@ -176,21 +183,21 @@ describe('an address page folds its own runs (B4 item 5)', () => {
 
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
   // differ fold, and the run counts them (it did not fold them by the old rule). Re-pinned on
-  // purpose (resync/int): it counts the parties that sent, each once
+  // purpose (resync/int): it counts the parties that sent, each once. Re-pinned on purpose (lane
+  // feed, ruling 14 of gate P): the other party is named by its short id and tags, as the route
+  // names every party (it was sent in full as one of the row's `participants`), the senders bit in
+  // its tags
   it('folds rows whose other parties differ, and counts every sender once', () => {
     const withOther = (n: number, seed: string): Activity =>
       activityRead({
         ...update(n),
-        participants: [
-          {
-            address: seededAddress(seed),
-            lockHash: `0x${seed.padStart(64, '0')}`,
-            lockHashPrefix: null,
-            roles: [],
-            // each other party spent a cell beside this address's
-            sent: true,
-          },
+        participantCount: 2,
+        partyIds: [
+          [OWN, TAG_INPUT],
+          // each other party spent a cell beside this address's
+          [`0x${seed.padStart(40, '0')}`, TAG_INPUT],
         ],
+        feePayer: addressFixture.lockScriptHash,
       });
     render(
       <AddressActivities

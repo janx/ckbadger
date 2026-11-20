@@ -1,6 +1,7 @@
 'use client';
 
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { NoteCount } from '@/components/ui/units';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -34,7 +35,7 @@ import {
   ItemLife,
   LockFootnote,
 } from '@/components/asset/object-hero';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { versionFree } from '@/lib/held-point';
@@ -308,11 +309,16 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               // the owner's lock by the one decision (B4): nothing for the default lock
               // the note's parts, which the metric's separated list draws (a list inside another
               // is refused): the lock left out where none is named
+              // a metric's note is quiet (R13); its values are not (BRIEF-roles-rest part A): the
+              // day it is held since, the blocks, read in the reading ink, their labels quiet
               note: current
                 ? [
                     cellOwnerLockPart(current),
                     <>
-                      since <Utc8Date timestamp={current.timestamp} />
+                      since{' '}
+                      <span className="text-text">
+                        <Utc8Date timestamp={current.timestamp} />
+                      </span>
                     </>,
                   ]
                 : undefined,
@@ -331,11 +337,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               title: first ? `issued ${formatUtc8DateTime(first.timestamp)}` : undefined,
               value: first ? formatUtc8Date(first.timestamp) : evidenceState,
               note: first ? (
-                <>
+                <span className="text-text">
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>
-                </>
+                </span>
               ) : undefined,
             },
             {
@@ -359,10 +365,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     'since issue'
                   ) : (
                     <>
-                      <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
-                        {formatBlockNumber(last.blockNumber)}
-                      </AppLink>{' '}
-                      · {moves} {countNoun(moves, 'transfer')} since issue
+                      <span className="text-text">
+                        <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
+                          {formatBlockNumber(last.blockNumber)}
+                        </AppLink>
+                      </span>{' '}
+                      ·{' '}
+                      <span>
+                        <NoteCount count={moves} singular="transfer" /> since issue
+                      </span>
                     </>
                   )
                 ) : undefined,
@@ -384,10 +395,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 evidenceState
               ),
               note: current ? (
+                // both figures are values, the reading ink; "occupied" and "free" their labels,
+                // quiet (the free figure stood quiet: BRIEF-roles-rest part A)
                 <>
                   <span className="text-text">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
                   occupied ·{' '}
-                  {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))} free
+                  <span className="text-text">
+                    {ckbText(versionFree(current, `${current.txHash}:${current.outputIndex}`))}
+                  </span>{' '}
+                  free
                 </>
               ) : undefined,
             },
@@ -497,8 +513,10 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         <PromptHeading
           command="Class"
           args={className}
+          // a link is never 12 px (BRIEF-roles-rest part B): 13 px in the note's 12 px, the note an
+          // item of the heading's wrapping row, "Open the class →" 16 glyphs, 124.8 px
           note={
-            <AppLink look="onward" href={classHref}>
+            <AppLink look="onward" href={classHref} className="text-small">
               Open the class
             </AppLink>
           }

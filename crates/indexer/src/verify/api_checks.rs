@@ -389,19 +389,258 @@ struct AddressActivityRecord {
     item_deltas: Vec<serde_json::Value>,
 }
 
-/// One party of a global activity row.
+/// One party of a global activity row, with its item deltas.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalParticipantApiRecord {
     lock_hash: Option<String>,
     lock_hash_prefix: Option<String>,
+    item_deltas: Vec<ItemDeltaApiRecord>,
 }
 
+/// One item delta of a party: the item by its kind and id (an identity's standard too), and its
+/// signed change (a token's an exact decimal string, an object's or an identity's ±1).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemDeltaApiRecord {
+    kind: String,
+    type_script_hash: Option<String>,
+    object_id: Option<String>,
+    identity_id: Option<String>,
+    standard: Option<String>,
+    delta: serde_json::Value,
+}
+
+/// One item a row states once (lane feed, part 4): what it is, its movement, how many parties'
+/// holdings of it changed and a token's amount moved.
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RowItemApiRecord {
+    kind: String,
+    type_script_hash: Option<String>,
+    object_id: Option<String>,
+    identity_id: Option<String>,
+    standard: Option<String>,
+    movement: String,
+    amount: Option<String>,
+    parties: usize,
+}
+
+/// A feed row of `/activities`: it sends in full only the parties it draws, names every party of
+/// its transaction by its short id (`partyIds`, `[id, tags]`) beside their count, and states its
+/// items once (`items`).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalActivityApiRecord {
     tx_hash: String,
     block_number: i64,
+    participant_count: usize,
+    party_ids: Vec<(String, u16)>,
+    items: Vec<RowItemApiRecord>,
+}
+
+/// An unsigned integer of 256 bits, little-endian limbs: wide enough for any transaction's sum of
+/// token amounts (each a u128), exact, for holding a row's stated amounts against its parties.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Wide([u64; 4]);
+
+impl Wide {
+    fn parse(digits: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+            "not a decimal amount: {digits:?}"
+        );
+        let mut value = Self::default();
+        for digit in digits.bytes() {
+            value = value.mul_add(10, u64::from(digit - b'0'))?;
+        }
+        Ok(value)
+    }
+
+    fn mul_add(self, factor: u64, addend: u64) -> anyhow::Result<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = u128::from(addend);
+        for (limb, value) in out.iter_mut().zip(self.0) {
+            let wide = u128::from(value) * u128::from(factor) + carry;
+            *limb = wide as u64;
+            carry = wide >> 64;
+        }
+        anyhow::ensure!(carry == 0, "an amount past 256 bits");
+        Ok(Self(out))
+    }
+
+    fn add(self, other: Self) -> anyhow::Result<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = false;
+        for (i, limb) in out.iter_mut().enumerate() {
+            let (sum, over_a) = self.0[i].overflowing_add(other.0[i]);
+            let (sum, over_b) = sum.overflowing_add(u64::from(carry));
+            *limb = sum;
+            carry = over_a || over_b;
+        }
+        anyhow::ensure!(!carry, "an amount past 256 bits");
+        Ok(Self(out))
+    }
+
+    /// `self − other`, where `self ≥ other`.
+    fn sub(self, other: Self) -> Self {
+        let mut out = [0u64; 4];
+        let mut borrow = false;
+        for (i, limb) in out.iter_mut().enumerate() {
+            let (diff, under_a) = self.0[i].overflowing_sub(other.0[i]);
+            let (diff, under_b) = diff.overflowing_sub(u64::from(borrow));
+            *limb = diff;
+            borrow = under_a || under_b;
+        }
+        out.into()
+    }
+
+    fn decimal(self) -> String {
+        const CHUNK: u64 = 10_000_000_000_000_000_000;
+        let mut limbs = self.0;
+        let mut chunks = Vec::new();
+        loop {
+            let mut remainder = 0u128;
+            for limb in limbs.iter_mut().rev() {
+                let value = (remainder << 64) | u128::from(*limb);
+                *limb = (value / u128::from(CHUNK)) as u64;
+                remainder = value % u128::from(CHUNK);
+            }
+            chunks.push(remainder as u64);
+            if limbs.iter().all(|limb| *limb == 0) {
+                break;
+            }
+        }
+        let mut out = chunks.pop().unwrap_or(0).to_string();
+        for chunk in chunks.iter().rev() {
+            out.push_str(&format!("{chunk:019}"));
+        }
+        out
+    }
+}
+
+impl From<[u64; 4]> for Wide {
+    fn from(limbs: [u64; 4]) -> Self {
+        Self(limbs)
+    }
+}
+
+impl PartialOrd for Wide {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Wide {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.iter().rev().cmp(other.0.iter().rev())
+    }
+}
+
+/// What every party of a transaction moves of each item, as a row states it (lane feed, part 4):
+/// each item once in the order it first appears among the parties, each party's deltas of it
+/// netted first; `parties` the parties whose holdings changed; `movement` `mint` where they gained
+/// more than they gave, `burn` where they gave more, `transfer` where the two are equal; a token's
+/// `amount` the larger of the two. Computed here from the transaction's own activity, the
+/// verifier's own reading, to hold the route's statement against.
+fn items_moved_by(parties: &[GlobalParticipantApiRecord]) -> anyhow::Result<Vec<RowItemApiRecord>> {
+    type Key = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let key = |d: &ItemDeltaApiRecord| -> Key {
+        (
+            d.kind.clone(),
+            d.type_script_hash.clone(),
+            d.object_id.clone(),
+            d.identity_id.clone(),
+            d.standard.clone(),
+        )
+    };
+    let mut totals: Vec<(Key, Wide, Wide, usize)> = Vec::new();
+    for party in parties {
+        let mut nets: Vec<(Key, Wide, Wide)> = Vec::new();
+        for delta in &party.item_deltas {
+            let text = match &delta.delta {
+                serde_json::Value::String(text) => text.clone(),
+                serde_json::Value::Number(number) => number.to_string(),
+                other => anyhow::bail!("an item delta of {other}"),
+            };
+            let (negative, digits) = match text.strip_prefix('-') {
+                Some(digits) => (true, digits),
+                None => (false, text.as_str()),
+            };
+            let amount = Wide::parse(digits)?;
+            let k = key(delta);
+            let at = match nets.iter().position(|(n, _, _)| *n == k) {
+                Some(at) => at,
+                None => {
+                    nets.push((k, Wide::default(), Wide::default()));
+                    nets.len() - 1
+                }
+            };
+            let (_, gained, gave) = &mut nets[at];
+            if negative {
+                *gave = gave.add(amount)?;
+            } else {
+                *gained = gained.add(amount)?;
+            }
+        }
+        for (k, gained, gave) in nets {
+            let at = match totals.iter().position(|(t, _, _, _)| *t == k) {
+                Some(at) => at,
+                None => {
+                    totals.push((k, Wide::default(), Wide::default(), 0));
+                    totals.len() - 1
+                }
+            };
+            let (_, received, sent, movers) = &mut totals[at];
+            match gained.cmp(&gave) {
+                std::cmp::Ordering::Greater => *received = received.add(gained.sub(gave))?,
+                std::cmp::Ordering::Less => *sent = sent.add(gave.sub(gained))?,
+                std::cmp::Ordering::Equal => continue,
+            }
+            *movers += 1;
+        }
+    }
+    Ok(totals
+        .into_iter()
+        .map(
+            |(
+                (kind, type_script_hash, object_id, identity_id, standard),
+                received,
+                sent,
+                parties,
+            )| {
+                let movement = match received.cmp(&sent) {
+                    std::cmp::Ordering::Greater => "mint",
+                    std::cmp::Ordering::Less => "burn",
+                    std::cmp::Ordering::Equal => "transfer",
+                };
+                let amount = (kind == "token").then(|| std::cmp::max(received, sent).decimal());
+                RowItemApiRecord {
+                    kind,
+                    type_script_hash,
+                    object_id,
+                    identity_id,
+                    standard,
+                    movement: movement.to_string(),
+                    amount,
+                    parties,
+                }
+            },
+        )
+        .collect())
+}
+
+/// A transaction's own activity (`/transactions/{hash}/activity`): every party in full.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionActivityApiRecord {
+    participant_count: usize,
     participants: Vec<GlobalParticipantApiRecord>,
 }
 
@@ -5600,9 +5839,14 @@ impl Check for DaoStatusIndexMatchesDeposits {
 /// The whole point of the participant model is that `addr_txs` rows are derived
 /// from `TxActions.participants` rather than from cells: one derivation, no
 /// join to drift. This check reads it back from the other end — for each party
-/// a recent activity lists, the party's own transaction index must contain that
+/// of a recent activity, the party's own transaction index must contain that
 /// transaction. A `Lock` party is looked up by address, a protocol-named party
 /// by its 20-byte prefix.
+///
+/// A feed row sends in full only the parties it draws (lane feed, ruling 14 of
+/// gate P), so every party is read from the transaction's own activity, which
+/// draws them all; the feed row's `participantCount` and `partyIds` are held
+/// against those parties, one finding naming the transaction where they differ.
 pub struct ParticipantRowsConsistency;
 
 /// How many recent activities the check walks, and how deep it pages each
@@ -5644,7 +5888,81 @@ impl Check for ParticipantRowsConsistency {
         let mut findings = vec![];
         let mut checked = 0u64;
         for activity in &page.data {
-            for participant in &activity.participants {
+            let own: TransactionActivityApiRecord =
+                api_get(ctx, &format!("transactions/{}/activity", activity.tx_hash))?;
+            // the feed row names every party the transaction's own activity draws, in its order
+            let named: Vec<Option<String>> = own
+                .participants
+                .iter()
+                .map(|p| {
+                    p.lock_hash
+                        .as_deref()
+                        .map(|hash| hash.get(..42).unwrap_or(hash).to_string())
+                        .or_else(|| p.lock_hash_prefix.clone())
+                })
+                .collect();
+            let feed: Vec<Option<String>> = activity
+                .party_ids
+                .iter()
+                .map(|(id, _)| Some(id.clone()))
+                .collect();
+            if activity.participant_count != own.participants.len()
+                || own.participant_count != own.participants.len()
+                || feed != named
+            {
+                findings.push(Finding {
+                    entity: format!("tx={}", activity.tx_hash),
+                    details: vec![format!(
+                        "the feed row counts {} parties and its partyIds name {} ({}); the \
+                         transaction's own activity counts {} and draws {}",
+                        activity.participant_count,
+                        activity.party_ids.len(),
+                        if feed == named {
+                            "the transaction's parties, in its order"
+                        } else {
+                            "not the transaction's parties in its order"
+                        },
+                        own.participant_count,
+                        own.participants.len(),
+                    )],
+                });
+            }
+            // the row's items, stated once, against what every party moves (lane feed, part 4)
+            let moved = items_moved_by(&own.participants)?;
+            if activity.items != moved {
+                let said = |items: &[RowItemApiRecord]| {
+                    items
+                        .iter()
+                        .map(|i| {
+                            format!(
+                                "{} {} {}{} by {}",
+                                i.kind,
+                                i.type_script_hash
+                                    .as_deref()
+                                    .or(i.object_id.as_deref())
+                                    .or(i.identity_id.as_deref())
+                                    .unwrap_or("?"),
+                                i.movement,
+                                i.amount
+                                    .as_deref()
+                                    .map(|a| format!(" {a}"))
+                                    .unwrap_or_default(),
+                                i.parties
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                };
+                findings.push(Finding {
+                    entity: format!("tx={}", activity.tx_hash),
+                    details: vec![format!(
+                        "the row states its items as [{}]; every party of its own activity moves [{}]",
+                        said(&activity.items),
+                        said(&moved)
+                    )],
+                });
+            }
+            for participant in &own.participants {
                 let (path, entity) = match (&participant.lock_hash, &participant.lock_hash_prefix) {
                     // Resolved or plain cell participant: its full lock hash is
                     // the address index key.
@@ -12101,6 +12419,231 @@ mod tests {
                     .unwrap_or_default()
                     .contains("--sample-count 0"),
                 "{name}"
+            );
+        }
+    }
+
+    /// Lane feed (ruling 14 of gate P): a feed row sends in full only the parties it draws, so
+    /// `participant_rows_consistency` reads EVERY party of each sampled activity from the
+    /// transaction's own activity (which draws them all), holds the feed row's
+    /// `participantCount` and `partyIds` against them, and looks each one up. Eight parties, five
+    /// drawn on the feed: a party the feed does not draw whose own index lacks the transaction
+    /// is a finding naming it; ids or a count that disagree with the transaction's parties are a
+    /// finding; every party found passes, one item a sampled activity as before.
+    #[test]
+    fn participant_rows_check_reads_every_party_not_only_the_drawn() {
+        const TX: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let lock = |i: usize| format!("0x{i:02x}{}", "ab".repeat(31));
+        let party =
+            |i: usize| json!({ "lockHash": lock(i), "lockHashPrefix": null, "itemDeltas": [] });
+        let ids = |n: usize| -> Vec<serde_json::Value> {
+            (0..n)
+                .map(|i| json!([lock(i)[..42].to_string(), 0]))
+                .collect()
+        };
+        let run = |feed_ids: Vec<serde_json::Value>, missing: Option<usize>| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            runtime.block_on(async {
+                let get = |route: String, body: serde_json::Value| {
+                    Mock::given(method("GET"))
+                        .and(path(format!("/api/v1/{route}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                };
+                get(
+                    "activities".into(),
+                    json!({"data": [{
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 8,
+                        "partyIds": feed_ids,
+                        "feePayer": null,
+                        "items": [],
+                        "participants": (0..5).map(party).collect::<Vec<_>>(),
+                    }], "nextCursor": null}),
+                )
+                .mount(&server)
+                .await;
+                get(
+                    format!("transactions/{TX}/activity"),
+                    json!({
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 8,
+                        "partyIds": ids(8),
+                        "feePayer": null,
+                        "participants": (0..8).map(party).collect::<Vec<_>>(),
+                    }),
+                )
+                .mount(&server)
+                .await;
+                for i in 0..8 {
+                    let rows = if missing == Some(i) {
+                        json!([])
+                    } else {
+                        json!([{ "txHash": TX }])
+                    };
+                    get(
+                        format!("addresses/{}/transactions", lock(i)),
+                        json!({"data": rows, "nextCursor": null}),
+                    )
+                    .mount(&server)
+                    .await;
+                }
+            });
+            let check = registered_check("participant_rows_consistency");
+            let completed = execute_check(
+                check.as_ref(),
+                &mock_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            let result = completed.result.expect("a completed run has a result");
+            (completed.status, result)
+        };
+
+        let (status, result) = run(ids(8), None);
+        assert_eq!(status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+
+        // party 7 is not drawn on the feed; its own index lacks the transaction
+        let (status, result) = run(ids(8), Some(7));
+        assert_eq!(status, CheckStatus::Fail, "{:?}", result.findings);
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert_eq!(result.findings[0].entity, format!("lock_hash={}", lock(7)));
+
+        // the feed row names seven of the eight parties it counts
+        let (status, result) = run(ids(7), None);
+        assert_eq!(status, CheckStatus::Fail, "{:?}", result.findings);
+        assert_eq!(result.findings[0].entity, format!("tx={TX}"));
+        assert!(
+            result.findings[0].details[0].contains("partyIds"),
+            "{:?}",
+            result.findings
+        );
+    }
+
+    /// Lane feed, part 4: a row states its items once (`items`), computed by the route from every
+    /// party, and draws no party for moving one; the check holds that statement against every
+    /// party of the transaction's own activity: each item once in the order it first appears, its
+    /// movement, how many parties' holdings changed (each party's deltas netted first) and a
+    /// token's amount moved (the larger of what holders gained and gave). A statement right in
+    /// all passes; a wrong amount, mover count or movement is a finding naming the transaction.
+    /// The verifier's sums of token amounts are exact past a u128 (a transaction's amounts of one
+    /// token can sum past one): two u128::MAX make 2^129 − 2, written back in full.
+    #[test]
+    fn wide_amounts_sum_past_a_u128_exactly() {
+        let max = Wide::parse(&u128::MAX.to_string()).unwrap();
+        let twice = max.add(max).unwrap();
+        assert_eq!(twice.decimal(), "680564733841876926926749214863536422910");
+        assert_eq!(twice.sub(max), max);
+        assert!(twice > max);
+        assert_eq!(Wide::parse("0").unwrap().decimal(), "0");
+        assert!(Wide::parse("-1").is_err());
+    }
+
+    #[test]
+    fn participant_rows_check_holds_the_row_items_against_every_party() {
+        const TX: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
+        let t = format!("0x{}", "71".repeat(32));
+        let u = format!("0x{}", "72".repeat(32));
+        let o = format!("0x{}", "73".repeat(32));
+        let lock = |i: usize| format!("0x{i:02x}{}", "cd".repeat(31));
+        let token = |id: &str, delta: &str| json!({ "kind": "token", "typeScriptHash": id, "delta": delta });
+        // T: 0 gives 10, 1 and 2 take 4 and 6; O: 3 gains an object no one gave; U: 4 gives 5 from
+        // one cell and takes 3 back in another (−2), 5 takes 2
+        let deltas = [
+            json!([token(&t, "-10")]),
+            json!([token(&t, "4")]),
+            json!([token(&t, "6")]),
+            json!([{ "kind": "object", "objectId": o, "delta": 1 }]),
+            json!([token(&u, "-5"), token(&u, "3")]),
+            json!([token(&u, "2")]),
+        ];
+        let stated = |t_amount: &str, o_movement: &str, u_parties: usize| {
+            json!([
+                { "kind": "token", "typeScriptHash": t, "movement": "transfer", "amount": t_amount, "parties": 3 },
+                { "kind": "object", "objectId": o, "movement": o_movement, "parties": 1 },
+                { "kind": "token", "typeScriptHash": u, "movement": "transfer", "amount": "2", "parties": u_parties },
+            ])
+        };
+        let run = |items: serde_json::Value| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            let parties: Vec<serde_json::Value> = deltas
+                .iter()
+                .enumerate()
+                .map(|(i, d)| json!({ "lockHash": lock(i), "lockHashPrefix": null, "itemDeltas": d }))
+                .collect();
+            let ids: Vec<serde_json::Value> = (0..6)
+                .map(|i| json!([lock(i)[..42].to_string(), 1]))
+                .collect();
+            runtime.block_on(async {
+                let get = |route: String, body: serde_json::Value| {
+                    Mock::given(method("GET"))
+                        .and(path(format!("/api/v1/{route}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                };
+                get(
+                    "activities".into(),
+                    json!({"data": [{
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 6,
+                        "partyIds": ids,
+                        "feePayer": null,
+                        "items": items,
+                        "participants": parties[..5].to_vec(),
+                    }], "nextCursor": null}),
+                )
+                .mount(&server)
+                .await;
+                get(
+                    format!("transactions/{TX}/activity"),
+                    json!({
+                        "txHash": TX,
+                        "participantCount": 6,
+                        "partyIds": ids,
+                        "feePayer": null,
+                        "items": items,
+                        "participants": parties,
+                    }),
+                )
+                .mount(&server)
+                .await;
+                for i in 0..6 {
+                    get(
+                        format!("addresses/{}/transactions", lock(i)),
+                        json!({"data": [{ "txHash": TX }], "nextCursor": null}),
+                    )
+                    .mount(&server)
+                    .await;
+                }
+            });
+            let check = registered_check("participant_rows_consistency");
+            let completed = execute_check(
+                check.as_ref(),
+                &mock_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            let result = completed.result.expect("a completed run has a result");
+            (completed.status, result)
+        };
+
+        let (status, result) = run(stated("10", "mint", 2));
+        assert_eq!(status, CheckStatus::Pass, "{:?}", result.findings);
+        for wrong in [
+            stated("9", "mint", 2),
+            stated("10", "transfer", 2),
+            stated("10", "mint", 3),
+        ] {
+            let (status, result) = run(wrong.clone());
+            assert_eq!(status, CheckStatus::Fail, "{wrong}: {:?}", result.findings);
+            assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+            assert_eq!(result.findings[0].entity, format!("tx={TX}"));
+            assert!(
+                result.findings[0].details[0].contains("items"),
+                "{:?}",
+                result.findings
             );
         }
     }

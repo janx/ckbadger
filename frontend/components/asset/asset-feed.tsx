@@ -13,6 +13,7 @@ import type {
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject, type FeedRow } from '@/components/activity/activity-runs';
 import { ActivityReadError } from '@/components/activity-event-row';
+import { namesLock, partyIds, rowItems } from '@/lib/activity-parties';
 import {
   collectionFeedHeadline,
   itemFeedHeadline as itemHeadlineFromContext,
@@ -95,30 +96,35 @@ export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject):
 
 /**
  * Round 3 (contracts R-A · R-4, OB-M10): an m-NFT mint row's "holds the class cell", on the
- * participant whose lock holds the class cell the mint outputs. Nothing when `classCell` is null
- * or absent (every other row); a lock that is no participant of the row is a contract error.
+ * participant whose lock holds the class cell the mint outputs, where the row draws it. Nothing
+ * when `classCell` is null or absent (every other row); a lock that is none of the parties the
+ * route names (`partyIds`, lane feed: the row draws some of them) is a contract error.
  */
 function classCellNote(activity: ItemActivity): ReadonlyMap<string, string> | undefined {
   const cell = activity.itemContext.classCell;
   if (!cell) return undefined;
-  if (!activity.participants.some((p) => p.lockHash === cell.lockHash))
+  if (!partyIds(activity).some(([id]) => namesLock(id, cell.lockHash)))
     throw new Error(`the class cell's lock ${cell.lockHash} is no participant of this row`);
   return new Map([[cell.lockHash, 'holds the class cell']]);
 }
 
+/**
+ * How much of a token a transaction moved, as the route states it from every party (lane feed,
+ * part 4: its `items` entry's `amount`, the larger of what holders gained and gave; the page summed
+ * the positive deltas of the parties it was sent). A token the transaction moved none of is not
+ * among its items: it moved 0.
+ */
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
   if (!transaction.activity)
     throw new Error(`${transaction.hash}: token transaction is missing its full activity`);
-  let value = BigInt(0);
-  for (const p of transaction.activity.participants)
-    for (const item of p.itemDeltas) {
-      if (item.kind !== 'token' || item.typeScriptHash !== typeHash) continue;
-      if (!/^-?(0|[1-9]\d*)$/.test(item.delta))
-        throw new Error(`${transaction.hash}: invalid token delta ${item.delta}`);
-      const delta = BigInt(item.delta);
-      if (delta > BigInt(0)) value += delta;
-    }
-  return value.toString();
+  const item = rowItems(transaction.activity).find(
+    (i) => i.kind === 'token' && i.typeScriptHash === typeHash
+  );
+  if (!item) return '0';
+  if (item.kind !== 'token') throw new Error(`${transaction.hash}: a token item of another kind`);
+  if (!/^(0|[1-9]\d*)$/.test(item.amount))
+    throw new Error(`${transaction.hash}: invalid token amount ${item.amount}`);
+  return item.amount;
 }
 export interface AssetTransactionsProps {
   rows: readonly Transaction[];

@@ -86,10 +86,29 @@ it('shows exact RGB++ Bitcoin evidence with the lock transition', () => {
 });
 
 it('interprets an uncommitted body without fabricated block evidence', () => {
-  const { participants, protocolActions, typeCalls, lockCalls, isCellbase } =
-    feedSamples.objectTransfer;
+  // re-pinned on purpose (lane feed, part 4): a body's interpretation reads its stated items
+  // and, at the merge into resync/int, its parties' ids (a script call is read from their tags, C7)
+  const {
+    participants,
+    protocolActions,
+    typeCalls,
+    lockCalls,
+    isCellbase,
+    items,
+    participantCount,
+    partyIds,
+  } = feedSamples.objectTransfer;
   expect(
-    activityHeadline({ participants, protocolActions, typeCalls, lockCalls, isCellbase })
+    activityHeadline({
+      participants,
+      protocolActions,
+      typeCalls,
+      lockCalls,
+      isCellbase,
+      items,
+      participantCount,
+      partyIds,
+    })
   ).toBe('Object transfer');
 });
 
@@ -126,6 +145,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       recognizedTypes: [],
       parties: [],
+      tokens: null,
     })
   ).toBe(
     runKey({
@@ -141,6 +161,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       lockCalls: [],
       recognizedTypes: [],
       parties: [],
+      tokens: null,
     })
   );
 });

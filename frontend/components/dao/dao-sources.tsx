@@ -49,9 +49,9 @@ export function DaoSources() {
           DAO activities could not be loaded: {String(activities.error)}
         </div>
       ) : isAwaited(activities) ? (
-        <div className="text-text-dim text-small py-7">Loading DAO activities…</div>
+        <div className="text-text text-small py-7">Loading DAO activities…</div>
       ) : !rows?.length ? (
-        <div className="text-text-dim text-small py-7">No DAO activities at this indexed tip.</div>
+        <div className="text-text text-small py-7">No DAO activities at this indexed tip.</div>
       ) : (
         // B4: consecutive rows that say the same thing fold into one counted run
         <ActivityRuns

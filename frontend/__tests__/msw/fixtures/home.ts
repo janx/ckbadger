@@ -9,7 +9,12 @@ import type {
   TxStatsResponse,
   UncleRateChartResponse,
 } from '@/lib/api';
-import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import {
+  activityRead,
+  ITEM_TYPE,
+  type WrittenParty,
+  type Written,
+} from '@/__tests__/utils/activity-read';
 
 /**
  * The homepage's data, shaped like the live API (mainnet, 2026-10-24). Daily charts end on the
@@ -394,8 +399,8 @@ function party(
   tail: string,
   ckbDelta: string,
   usedDelta: string,
-  itemDeltas: GlobalActivity['participants'][number]['itemDeltas'] = []
-): GlobalActivity['participants'][number] {
+  itemDeltas: WrittenParty['itemDeltas'] = []
+): WrittenParty {
   return {
     address: seededAddress(tail),
     // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
@@ -418,7 +423,7 @@ const CKB = (whole: string) => `${whole}00000000`;
 
 function sample(
   n: number,
-  overrides: Partial<GlobalActivity> & Pick<GlobalActivity, 'participants'>
+  overrides: Partial<Written<GlobalActivity>> & { participants: WrittenParty[] }
 ): GlobalActivity {
   return activityRead({
     txHash: `0x${String(n).padStart(2, '0')}${'cd'.repeat(30)}${String(n).padStart(2, '0')}`,

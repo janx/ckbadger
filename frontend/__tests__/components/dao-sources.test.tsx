@@ -8,7 +8,10 @@ import { api } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 import { activityRead } from '@/__tests__/utils/activity-read';
 
-vi.mock('@/lib/api', () => ({
+// the module's own constants and error class (the fold reads the senders bit, TAG_INPUT, at the
+// merge of lane feed into resync/int), its two reads mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
 }));
 

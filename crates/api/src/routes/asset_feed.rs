@@ -5,7 +5,7 @@ use anyhow::{ensure, Context};
 use ckbadger_store::{CkbadgerStore, ResolvedTx, TxActions, TxIndexEntry};
 
 use super::{
-    activities::{build_global_activity_response, GlobalActivityResponse},
+    activities::{build_global_activity_response, Draw, GlobalActivityResponse},
     transactions::{transaction_response, TransactionResponse},
 };
 use crate::{
@@ -177,6 +177,7 @@ pub(crate) fn project_actions(
                 &state.store,
                 &state.ckb_network,
                 actions,
+                Draw::Row,
                 &mut scripts,
                 &mut addresses,
             )

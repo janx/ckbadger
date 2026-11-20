@@ -1734,9 +1734,14 @@ describe('Address board · F2 blocks', () => {
           scriptName: 'Some Type',
         },
       ],
-      participants: [
-        { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [], sent: false },
+      // re-pinned on purpose (lane feed, ruling 14 of gate P): the other party by its short id, as
+      // the route names every party (it was sent in full as one of the row's `participants`)
+      participantCount: 2,
+      partyIds: [
+        [addressFixture.lockScriptHash.slice(0, 42), 0],
+        [fixtureHash(802).slice(0, 42), 0],
       ],
+      feePayer: addressFixture.lockScriptHash,
     });
     const page = pageFixture([...addressActivitiesFixture, second]);
     // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the

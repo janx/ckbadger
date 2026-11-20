@@ -588,7 +588,10 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               <ShortId value={event.newTipHash} kind="hash" size="row" /> and drops{' '}
               {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}{' '}
               {/* the dot goes with its item to a new line (PA-25) */}
-              <NoBreak className="text-text-dim">· depth {event.depth}</NoBreak>
+              {/* the depth is a value, the line's reading ink; "· depth" its label */}
+              <NoBreak>
+                <span className="text-text-dim">· depth</span> {event.depth}
+              </NoBreak>
             </span>
             {event.revertedByEvent && (
               <span data-testid="fork-step-3" className="contents">

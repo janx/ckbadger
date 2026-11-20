@@ -42,9 +42,9 @@ import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
-import { unitNode } from '@/components/ui/units';
+import { NoteCount, unitNode } from '@/components/ui/units';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { PartReadError } from '@/components/read-failure';
 
@@ -149,7 +149,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       // fails this note in its place (D7)
       note: object.ownerLockHash ? (
         history === undefined ? (
-          'Loading lock…'
+          <span className="text-text">Loading lock…</span>
         ) : last === undefined ? (
           <PartReadError
             what="the owner’s lock"
@@ -171,7 +171,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 {collectionName ?? 'Unnamed collection'}
               </AppLink>
             ),
-            note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
+            note: collection.data ? (
+              <NoteCount count={collection.data.liveCount} singular="object" />
+            ) : undefined,
           },
         ]
       : []),
@@ -187,12 +189,24 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
+      // a metric's note is quiet (R13); its values are not (BRIEF-roles-rest part A): the block
+      // and the minter's address read in the reading ink at the note's 13 px, "by" a quiet label
       note: first ? (
         <>
-          <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
-            {formatBlockNumber(first.blockNumber)}
-          </AppLink>{' '}
-          · by <Address look="inline" address={first.ownerAddress} size="row" className="inline" />
+          <span className="text-text">
+            <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
+              {formatBlockNumber(first.blockNumber)}
+            </AppLink>
+          </span>{' '}
+          · by{' '}
+          <span className="text-text">
+            <Address
+              look="inline"
+              address={first.ownerAddress}
+              size="row"
+              className="text-small inline"
+            />
+          </span>
         </>
       ) : undefined,
     },
@@ -215,10 +229,15 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             'since minting'
           ) : (
             <>
-              <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
-                {formatBlockNumber(last.blockNumber)}
-              </AppLink>{' '}
-              · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
+              <span className="text-text">
+                <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
+                  {formatBlockNumber(last.blockNumber)}
+                </AppLink>
+              </span>{' '}
+              ·{' '}
+              <span>
+                <NoteCount count={moves} singular="transfer" /> since minting
+              </span>
             </>
           )
         ) : undefined,
@@ -228,9 +247,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />,
       // R11: tier 1's words stay uncoloured; the bars keep the occupied colour.
       note: (
+        // both figures are values, the reading ink; "occupied" and "free" their labels, quiet (the
+        // free figure stood quiet: BRIEF-roles-rest part A)
         <>
           <span className="text-text">{ckbText(occupied)}</span> occupied ·{' '}
-          {ckbText(held - occupied)} free
+          <span className="text-text">{ckbText(held - occupied)}</span> free
         </>
       ),
     },
@@ -238,7 +259,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Content',
       size: 'body',
       value: <span className="break-all">{object.contentType}</span>,
-      note: formatCount(object.contentSize, 'byte'),
+      note: <NoteCount count={object.contentSize} singular="byte" />,
     },
   ];
   const coll = collection.data;
@@ -453,8 +474,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <PromptHeading
             command="Collection"
             args={collectionName ?? 'this collection'}
+            // a link is never 12 px (BRIEF-roles-rest part B): 13 px in the note's 12 px, the note
+            // an item of the heading's wrapping row, "Open the collection →" 21 glyphs, 163.8 px
             note={
-              <AppLink look="onward" href={collectionHref!}>
+              <AppLink look="onward" href={collectionHref!} className="text-small">
                 Open the collection
               </AppLink>
             }

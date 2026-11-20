@@ -327,8 +327,18 @@ describe('CellDetailPage', () => {
     });
     view();
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
-    expect(screen.getByText(/input #2/)).toBeInTheDocument();
-    expect(screen.getByText(/30s on chain/)).toBeInTheDocument();
+    // Re-pinned on purpose (BRIEF-roles-rest part A; it read getByText(/input #2/) and
+    // getByText(/30s on chain/), one text each): the Spent fact's second line keeps its words, its
+    // label words ("input", "on chain") quiet spans beside the values in the reading ink
+    const spent = within(screen.getByRole('region', { name: 'Cell facts' }))
+      .getByText('Spent')
+      .closest('div.min-w-0') as HTMLElement;
+    expect(spent).toHaveTextContent(/· input #2 · 30s on chain$/);
+    expect(inkOf(within(spent).getByText('· input'))).toBe('text-text-dim');
+    expect(inkOf(within(spent).getByText('on chain'))).toBe('text-text-dim');
+    // the line's own ink, which its values (the time, "#2", "30s") are written in
+    expect(spent.lastElementChild).toHaveTextContent(/^2024-01-02 08:00:00 UTC\+8/);
+    expect(inkOf(spent.lastElementChild!)).toBe(READING);
     // Created / Spent times read as the site UTC+8 clock, never raw ISO (#16, SC-C1 row).
     expect(screen.getByText('2024-01-01 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();

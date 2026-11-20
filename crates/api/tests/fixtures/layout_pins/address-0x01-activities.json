@@ -3,6 +3,7 @@
     {
       "blockNumber": 3,
       "ckbDelta": "-100000000000",
+      "feePayer": null,
       "isCellbase": false,
       "itemDeltas": [
         {
@@ -19,17 +20,32 @@
           "role": "spore"
         }
       ],
-      "lockCalls": [],
-      "participants": [
+      "items": [
         {
-          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqs84gg6t",
-          "lockHash": "0xbf7373a319dce28331dfdf2b158db8b67ba213c61a19d7a6cab5e6c23c11ff4b",
-          "lockHashPrefix": null,
-          "lockKind": "Default Lock",
-          "lockKindBy": null,
-          "roles": [],
-          "sent": false
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": "pure_ckb",
+          "kind": "object",
+          "movement": "transfer",
+          "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
+          "parties": 2,
+          "role": "spore"
         }
+      ],
+      "lockCalls": [],
+      "participantCount": 2,
+      "partyIds": [
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          258
+        ],
+        [
+          "0xbf7373a319dce28331dfdf2b158db8b67ba213c6",
+          2
+        ]
       ],
       "protocolActions": [],
       "recognizedTypes": [
@@ -52,6 +68,7 @@
     {
       "blockNumber": 2,
       "ckbDelta": "100000000000",
+      "feePayer": null,
       "isCellbase": false,
       "itemDeltas": [
         {
@@ -68,17 +85,32 @@
           "role": "spore"
         }
       ],
-      "lockCalls": [],
-      "participants": [
+      "items": [
         {
-          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfzyg3zyg3zyg3zyg3zyg3zyg3zyg3zygssd2hqn",
-          "lockHash": "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0",
-          "lockHashPrefix": null,
-          "lockKind": "Default Lock",
-          "lockKindBy": null,
-          "roles": [],
-          "sent": true
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": "pure_ckb",
+          "kind": "object",
+          "movement": "mint",
+          "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
+          "parties": 1,
+          "role": "spore"
         }
+      ],
+      "lockCalls": [],
+      "participantCount": 2,
+      "partyIds": [
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          2
+        ],
+        [
+          "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6",
+          256
+        ]
       ],
       "protocolActions": [],
       "recognizedTypes": [
@@ -101,6 +133,7 @@
     {
       "blockNumber": 1,
       "ckbDelta": "100000000000",
+      "feePayer": null,
       "isCellbase": false,
       "itemDeltas": [
         {
@@ -117,17 +150,32 @@
           "role": "cluster"
         }
       ],
-      "lockCalls": [],
-      "participants": [
+      "items": [
         {
-          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfqyqszqgpqyqszqgpqyqszqgpqyqszqgqrrutlq",
-          "lockHash": "0xc7f452d9580bd9e6d031614261265af1c85ed2aee7627a2a1338c1e6c8381d4d",
-          "lockHashPrefix": null,
-          "lockKind": "Default Lock",
-          "lockKindBy": null,
-          "roles": [],
-          "sent": true
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": null,
+          "kind": "object",
+          "movement": "mint",
+          "objectId": "0x1111111111111111111111111111111111111111111111111111111111111111",
+          "parties": 1,
+          "role": "cluster"
         }
+      ],
+      "lockCalls": [],
+      "participantCount": 2,
+      "partyIds": [
+        [
+          "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
+          2
+        ],
+        [
+          "0xc7f452d9580bd9e6d031614261265af1c85ed2ae",
+          256
+        ]
       ],
       "protocolActions": [],
       "recognizedTypes": [

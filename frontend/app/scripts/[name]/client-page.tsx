@@ -136,7 +136,7 @@ function CellOwner({ cell }: { cell: Cell }) {
 }
 
 function CellTypeReference({ cell }: { cell: Cell }) {
-  if (!cell.typeScriptHash) return <span className="text-text-dim">No type script</span>;
+  if (!cell.typeScriptHash) return <span className="text-text">No type script</span>;
   if (!cell.typeCodeHash || !cell.typeHashType)
     return (
       <span role="alert" className="text-negative">

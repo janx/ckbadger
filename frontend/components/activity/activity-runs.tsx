@@ -5,10 +5,11 @@ import {
   rowReadFails,
   type ActivityRowData,
 } from '@/components/activity/activity-row';
-import { foldRuns, runKey, runSenders, type RunSubject } from '@/lib/activity-runs';
-import type { ParticipantRef } from '@/lib/api';
+import { foldRuns, runKey, runSenders, runTokens, type RunSubject } from '@/lib/activity-runs';
 import { readable } from '@/components/activity-event-row';
 import { sentField } from '@/lib/api-fields';
+import { classifyActivity } from '@/lib/activity-classify';
+import { partyIds, rowItems } from '@/lib/activity-parties';
 
 /**
  * What a row's part draws, by which its boundary starts again (B4 third round): its transaction and
@@ -40,20 +41,19 @@ export interface FeedRow {
 
 /**
  * What a row is compared on (`lib/activity-runs.ts`): the title in words (`activityTitleText`), its
- * protocol actions and the code its items carry and its scripts called; and its parties, which a
- * run counts (the row's own, unless the feed knows more of them: the address page's other
- * parties). Null for a row that cannot read one of its protocol actions (`rowReadFails`): it
- * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1). Every
- * other row has one, a committed row and a pending row alike: its recognised codes are read from
- * its row (`recognizedTypes`, C7), never resolved per item, so no row stands alone for codes it
- * cannot say (a pending row folds with nothing anyway). A row that states no list is refused: an
- * API older than the page.
+ * protocol actions and the code its items carry and its scripts called; and what a run counts: its
+ * transaction's every party, by the route's ids and tags (`partyIds`, lane feed: the row draws some
+ * of them, the address page its own alone), whose senders bit the run counts, and on a token row the
+ * tokens its items moved, by their type script's hash (ruling 6 of gate P), from the row's stated
+ * items (lane feed, part 4: the route's, of every party; the address page states its own). Null for
+ * a row that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its
+ * place, so it is never folded (lane B4 fix round, review NOTE 1). Every other row has one, a
+ * committed row and a pending row alike: its recognised codes are read from its row
+ * (`recognizedTypes`, C7), never resolved per item, so no row stands alone for codes it cannot say
+ * (a pending row folds with nothing anyway). A row that states no list is refused: an API older
+ * than the page.
  */
-export function runSubject(
-  activity: ActivityRowData,
-  title: string,
-  parties: readonly ParticipantRef[] = activity.participants
-): RunSubject | null {
+export function runSubject(activity: ActivityRowData, title: string): RunSubject | null {
   if (rowReadFails(activity)) return null;
   // the API states the list on every row (empty where no recognised code ran): a row without it
   // is older than this page, refused by name through the one reader; a row whose list is no list
@@ -76,7 +76,15 @@ export function runSubject(
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
     recognizedTypes,
-    parties,
+    parties: partyIds(activity),
+    tokens:
+      classifyActivity(activity).displayType === 'token'
+        ? [
+            ...new Set(
+              rowItems(activity).flatMap((i) => (i.kind === 'token' ? [i.typeScriptHash] : []))
+            ),
+          ]
+        : null,
   };
 }
 
@@ -197,6 +205,7 @@ export function ActivityRuns({
             rows={run.map((r) => r.activity)}
             // a run of cellbases has no sender to count (none of them has an input)
             senders={lead.activity.isCellbase ? null : runSenders(run.map(subjectOf))}
+            tokens={runTokens(run.map(subjectOf))}
             title={lead.title}
             showScriptDetails={showScriptDetails}
             age={age}

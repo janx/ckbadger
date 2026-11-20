@@ -330,7 +330,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}
         >
           {searching ? (
-            <div className="text-text-dim px-4 py-3">Searching…</div>
+            <div className="text-text px-4 py-3">Searching…</div>
           ) : results.length > 0 ? (
             <ul className="max-h-80 overflow-auto py-1">
               {results.map((result, index) => (
@@ -369,7 +369,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               ))}
             </ul>
           ) : (
-            <div className="text-text-dim px-4 py-3">No results.</div>
+            <div className="text-text px-4 py-3">No results.</div>
           )}
         </div>
       )}

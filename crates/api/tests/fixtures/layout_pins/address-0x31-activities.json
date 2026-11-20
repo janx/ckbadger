@@ -3,19 +3,21 @@
     {
       "blockNumber": 4,
       "ckbDelta": "-50000000000",
+      "feePayer": null,
       "isCellbase": false,
       "itemDeltas": [],
+      "items": [],
       "lockCalls": [],
-      "participants": [
-        {
-          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfjxgeryv3jxgeryv3jxgeryv3jxgeryvsvmkkzj",
-          "lockHash": "0xe283d25800772fa5df7552b9e1e60bc7a34848acb7d329b0c94f1ffe767c46e7",
-          "lockHashPrefix": null,
-          "lockKind": "Default Lock",
-          "lockKindBy": null,
-          "roles": [],
-          "sent": false
-        }
+      "participantCount": 2,
+      "partyIds": [
+        [
+          "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
+          256
+        ],
+        [
+          "0xe283d25800772fa5df7552b9e1e60bc7a34848ac",
+          0
+        ]
       ],
       "protocolActions": [],
       "recognizedTypes": [],
@@ -31,19 +33,21 @@
     {
       "blockNumber": 1,
       "ckbDelta": "50000000000",
+      "feePayer": null,
       "isCellbase": false,
       "itemDeltas": [],
+      "items": [],
       "lockCalls": [],
-      "participants": [
-        {
-          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfpyysjzgfpyysjzgfpyysjzgfpyysjzggvtf6u9",
-          "lockHash": "0x783238c9b02633e0f37959e275385f78c0e2c1f5a31b69ce24c743e4bef768e7",
-          "lockHashPrefix": null,
-          "lockKind": "Default Lock",
-          "lockKindBy": null,
-          "roles": [],
-          "sent": true
-        }
+      "participantCount": 2,
+      "partyIds": [
+        [
+          "0x783238c9b02633e0f37959e275385f78c0e2c1f5",
+          256
+        ],
+        [
+          "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
+          0
+        ]
       ],
       "protocolActions": [],
       "recognizedTypes": [],

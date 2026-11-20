@@ -21,9 +21,12 @@ import { describe, expect, it } from 'vitest';
  * sit in (parentheses, `as`, `satisfies`, a `?:` branch, a spread into the row), or where it is
  * handed to a row builder of its own file: a function whose body makes its row through
  * `activityRead(…)`, so the overrides are checked in the row it makes
- * (`makeActivity({ recognizedTypes: [DAO], protocolActions: [deposit], … })`). The fold rule's
- * subjects (`RunSubject`: a `title` and `parties`) and an item's context rows (an `itemId` and its
- * own `protocolActions`) are not the route's activity rows, and the reader leaves them.
+ * (`makeActivity({ recognizedTypes: [DAO], protocolActions: [deposit], … })`). And the checker's
+ * own output: a row `activityRead` returns from its own body in its own module
+ * (`CHECKER_MODULE`), the row it checked as the route states it (lane feed, the lead's F4), not one
+ * a function nested in it returns. The fold rule's subjects (`RunSubject`: a `title` and
+ * `parties`) and an item's context rows (an `itemId` and its own `protocolActions`) are not the
+ * route's activity rows, and the reader leaves them.
  *
  * Its limits, what it cannot see: a row over a spread that writes only other fields, a row with no
  * literal of its own (built from a variable, or its keys computed), a row in a JSON fixture
@@ -60,6 +63,23 @@ const UNSENT: Readonly<Record<string, { count: number; reason: string }>> = {
 };
 
 const ROOT = join(__dirname, '..', '..');
+
+/**
+ * The checker's own module: the one file whose `activityRead` gives back the rows it checks, as the
+ * route states them (a row it returns from its own body is its output, not a fixture's row).
+ */
+const CHECKER_MODULE = '__tests__/utils/activity-read.ts';
+
+/** The function a statement belongs to: its nearest enclosing function of any kind, if a declaration. */
+function functionOf(statement: ts.Node): ts.FunctionDeclaration | null {
+  let node = statement.parent;
+  while (node) {
+    if (ts.isFunctionDeclaration(node)) return node;
+    if (ts.isFunctionLike(node)) return null;
+    node = node.parent;
+  }
+  return null;
+}
 
 /** Every TypeScript source under `__tests__`. */
 function testSources(): string[] {
@@ -143,6 +163,12 @@ function rowsOf(code: string, fileName: string): { unchecked: string[]; unsent: 
         builders.has(parent.expression.text)
       )
         return parent.arguments.some((a) => a === node) ? 'held' : false;
+      // the checker's output: a row returned from activityRead's own body in its own module, the
+      // row it checked as the route states it (lane feed); not one in a function nested in it
+      if (ts.isReturnStatement(parent))
+        return fileName === CHECKER_MODULE && functionOf(parent)?.name?.text === 'activityRead'
+          ? 'held'
+          : false;
       const passes =
         ts.isParenthesizedExpression(parent) ||
         ts.isAsExpression(parent) ||
@@ -228,6 +254,36 @@ describe('the activity-row reader finds a row no checker holds, and passes one i
       const held = activityRead({ ...moved(1), recognizedTypes: [SUDT] });
     `;
     expect(rowsOf(code, 'x.tsx')).toEqual({ unchecked: [], unsent: 1 });
+  });
+
+  // The lead's F4 on lane feed: the checker gives back the row it checked as the route states it,
+  // `{ ...checked, participants, partyIds, … }`; that literal, returned from activityRead's own
+  // body in the checker's own module, is the checker's output, not a fixture's row. There and only
+  // there: the same literal elsewhere in that module, returned by a function of another name, or
+  // returned by an activityRead of another file, is still found.
+  it('passes the row activityRead returns from its own body in the checker’s module, and no other', () => {
+    const code = `
+      export function activityRead(checked) {
+        const kept = { ...checked, participants: drawn };
+        const inner = () => { return { ...checked, participants: drawn }; };
+        return { ...checked, participants: drawn, partyIds: ids } as Stated;
+      }
+      function stateParties(checked) { return { ...checked, participants: drawn }; }
+      const loose = { ...checked, participants: drawn };
+    `;
+    expect(uncheckedRows(code, '__tests__/utils/activity-read.ts')).toEqual([
+      '3: participants',
+      '4: participants',
+      '7: participants',
+      '8: participants',
+    ]);
+    expect(uncheckedRows(code, '__tests__/components/x.test.tsx')).toEqual([
+      '3: participants',
+      '4: participants',
+      '5: participants',
+      '7: participants',
+      '8: participants',
+    ]);
   });
 
   it('does not take a row handed to another call inside activityRead as held', () => {

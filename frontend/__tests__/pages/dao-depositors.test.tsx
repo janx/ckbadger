@@ -289,10 +289,18 @@ describe('DAO depositors page (DAO-12)', () => {
         key: 'holder',
         tone: 'head',
         left: '1ckb1…sd2hqn',
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB")
-        right: '1\u00a0deposit999 CKB1.00%',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB").
+        // Re-pinned on purpose (BRIEF-roles-rest part G; it was "1\u00a0deposit", formatCount's
+        // no-break space): the count is a NoteCount, its number in the reading ink and its noun
+        // quiet, one unit held by NoBreak, so a plain space joins them
+        right: '1 deposit999 CKB1.00%',
       },
     ]);
+    const count = row.querySelector('[data-note-count]') as HTMLElement;
+    expect(count).toHaveTextContent(/^1 deposit$/);
+    expect(count).toHaveClass('whitespace-nowrap');
+    expect(count.firstElementChild).toHaveClass('text-text');
+    expect(count.lastElementChild).toHaveClass('text-text-dim');
   });
 
   // Re-pinned on purpose (controls lane C2): the page's size is said by the pager's count line,

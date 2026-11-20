@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use super::activities::{
-    LockCallResponse, ParticipantResponse, ProtocolActionResponse, TypeCallResponse,
+    ActivityParties, Draw, LockCallResponse, ParticipantResponse, ProtocolActionResponse,
+    TypeCallResponse,
 };
 use crate::{
     pool::{InterpretationResponse, PoolSnapshot, PoolStatus},
@@ -20,10 +21,14 @@ pub struct PoolListParams {
     activity_type: Option<String>,
 }
 
+/// A pool transaction's activity as a row draws it: the parts of the one activity builder's
+/// response a pool row has (`activities::build_global_activity_response_with_pool`, [`Draw::Row`]).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolActivity {
     pub participants: Vec<ParticipantResponse>,
+    #[serde(flatten)]
+    pub parties: ActivityParties,
     pub protocol_actions: Vec<ProtocolActionResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -53,9 +58,6 @@ pub struct PoolTotals {
     pub pending: usize,
     pub proposed: usize,
     pub awaiting_index: usize,
-    /// The transactions waiting in the pool, pending and proposed (lane exactness, part A, A4): the "in the pool"
-    /// tab's count (the page summed the two).
-    pub waiting: usize,
 }
 
 #[derive(Serialize)]
@@ -172,7 +174,6 @@ fn pool_transactions_page(
         pending: 0,
         proposed: 0,
         awaiting_index: 0,
-        waiting: 0,
     };
     let mut records = Vec::new();
     for record in snapshot.records.values() {
@@ -185,14 +186,8 @@ fn pool_transactions_page(
             continue;
         }
         match record.pool_status {
-            PoolStatus::Pending => {
-                totals.pending += 1;
-                totals.waiting += 1;
-            }
-            PoolStatus::Proposed => {
-                totals.proposed += 1;
-                totals.waiting += 1;
-            }
+            PoolStatus::Pending => totals.pending += 1,
+            PoolStatus::Proposed => totals.proposed += 1,
             PoolStatus::CommittedAwaitingIndex { .. } => totals.awaiting_index += 1,
         }
         if filter != "all" && filter != record.pool_status.as_str() {
@@ -265,12 +260,14 @@ fn pool_transactions_page(
                     &state.store,
                     &state.ckb_network,
                     actions,
+                    Draw::Row,
                     &mut script_cache,
                     &mut addresses,
                     Some(record),
                 )
                 .map(|activity| PoolActivity {
                     participants: activity.participants,
+                    parties: activity.parties,
                     protocol_actions: activity.protocol_actions,
                     type_calls: activity.type_calls,
                     lock_calls: activity.lock_calls,

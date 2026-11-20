@@ -100,8 +100,14 @@ export function DotcellRoles({
             <span>
               <PartyLine party={c.party} size="row" />
             </span>
+            {/* "since" a label, the day and the note's statement values, the reading ink
+                (BRIEF-roles-rest part E: the line was quiet whole) */}
             <span className="text-text-dim text-small">
-              since <Utc8Date timestamp={c.since} /> · {c.note}
+              since{' '}
+              <span className="text-text">
+                <Utc8Date timestamp={c.since} />
+              </span>{' '}
+              · <span className="text-text">{c.note}</span>
             </span>
           </div>
         ))}

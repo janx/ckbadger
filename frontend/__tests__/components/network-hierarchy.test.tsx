@@ -270,6 +270,15 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     // re-pinned for lane exactness, part A (A8): the round's 840 s in the site's one span form, cut (it was its
     // minutes rounded, "14 min": a round of 869 s read 14 and one of 870 s read 15)
     expect(values[2]).toHaveTextContent(/^#97 · \d\d-\d\d \d\d:\d\d UTC\+8 · 14m · 2,345 dials$/);
+    // BRIEF-roles-rest part G: a metric's note is quiet (R13), its values read: the count heard of
+    // and never verified, the round's end, its span and its dials; "never verified" and "dials" quiet
+    expect(inkOf(within(values[1]).getByText('115'))).toBe(READING);
+    expect(inkOf(within(values[2]).getByText(/UTC\+8$/))).toBe(READING);
+    expect(inkOf(within(values[2]).getByText('14m'))).toBe(READING);
+    const dials = values[2].querySelector('[data-note-count]') as HTMLElement;
+    expect(dials).toHaveTextContent(/^2,345 dials$/);
+    expect(inkOf(dials.firstElementChild!)).toBe(READING);
+    expect(inkOf(dials.lastElementChild!)).toBe('text-text-dim');
     // The sub-notes are inline and dim, not a second line of figures.
     for (const note of Array.from(row.querySelectorAll('dd > span')))
       expect(note).toHaveClass('text-small', 'text-text-dim');

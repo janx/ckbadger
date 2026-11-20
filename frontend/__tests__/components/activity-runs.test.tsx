@@ -13,8 +13,8 @@ import { ActivitiesStreamExplorer } from '@/components/activities-stream-explore
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runMemory, runSubject } from '@/components/activity/activity-runs';
-import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
-import { api, TAG_TOKEN, TAG_TYPE_CALL } from '@/lib/api';
+import type { GlobalActivity, ItemActivity, ParticipantInfo, PartyId } from '@/lib/api';
+import { api, TAG_INPUT, TAG_TYPE_CALL } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { liveFeeds } from '@/__tests__/utils/live-activities';
 import { ROW_LINE_PX } from '@/lib/type-metrics';
@@ -38,6 +38,9 @@ class NoopObserver {
     return [];
   }
 }
+
+/** The indexer's TAG_TOKEN (crates/ckbadger-store/src/types.rs, bit 0): the party moved a token. */
+const TAG_TOKEN = 1;
 
 const NOW = Date.parse('2026-11-18T08:00:00Z');
 
@@ -241,15 +244,26 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   const feeds = Object.fromEntries(
     Object.entries(liveFeeds()).map(([feed, rows]) => [
       feed,
-      rows.map((a) =>
-        activityRead({
+      rows.map((a) => {
+        // the parties whose CKB fell, by the short id the route names them by: the senders bit
+        // marked in their tags (the fold counts it there, lane feed); the parties a row of more
+        // than six does not draw carry no CKB change here, so none of them is marked
+        const fell = new Set(
+          a.participants
+            .filter((p) => BigInt(p.ckbDelta) < BigInt(0))
+            .map((p) => (p.lockHash ?? p.lockHashPrefix ?? '').slice(0, 42))
+        );
+        return activityRead({
           ...a,
           participants: a.participants.map((p) => ({
             ...p,
             sent: BigInt(p.ckbDelta) < BigInt(0),
           })),
-        })
-      ),
+          partyIds: a.partyIds.map(
+            ([id, tags]): PartyId => [id, fell.has(id) ? tags | TAG_INPUT : tags]
+          ),
+        });
+      }),
     ])
   );
   const said = (el: Element) =>
@@ -310,9 +324,15 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
       // re-pinned on purpose (the lead's final round, item 2): a folded head names its item types
       // first and six names at most, as a row's head does; the eight were "… · lock
       // 0xede19974…56f0ba · Godwoken Withdrawal Lock · lock 0xff022d55…d32733". Re-pinned on
-      // purpose (resync/int): the run counts its 31 senders (the parties whose CKB fell), where it
-      // counted 149 participants
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 31 senders',
+      // purpose (resync/int): the run counts its senders (the parties whose CKB fell), where it
+      // counted 149 participants; re-pinned on purpose (ruling 6 of gate P): the run counts its
+      // tokens too, the six sets' five (USDC, USDC|bsc, dCKB, WBTC, BTCB|bsc), each by its type
+      // script. Re-pinned on purpose at the merge of lane feed: the senders are counted from the
+      // senders bit of the route's party ids, which this capture marks on the parties whose CKB
+      // fell; its rows (8 to 11 parties each) now draw five parties, so only theirs can be marked:
+      // 17 of the run's 149 parties (31 where every party was sent in full; both counted apart in
+      // Python from the two captures), until the capture is re-taken over a re-synced store
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock +3 more locks | all 29 transactions ↓ · 17 senders · 5 tokens',
     ]);
   });
 

@@ -5,18 +5,17 @@
 // scripts with their args and the parties with their roles, which left the live feed unfolded,
 // 100 activities 99 rows).
 import { describe, expect, it } from 'vitest';
-import { foldRuns, runKey, runSenders, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runSenders, runTokens, type RunSubject } from '@/lib/activity-runs';
+import { partyIds } from '@/lib/activity-parties';
 import { liveFeeds } from '@/__tests__/utils/live-activities';
-import type { GlobalActivity } from '@/lib/api';
+import { TAG_INPUT, type GlobalActivity, type PartyId } from '@/lib/api';
 import { activityTitleText } from '@/components/activity/activity-row';
 
-/** A party by its lock hash; `sent` says whether its lock is an input's (the API's `sent`). */
-const party = (id: string, sent = true) => ({
-  lockHash: `0x${id.padStart(64, '0')}`,
-  lockHashPrefix: null,
-  address: `ckb1${id}`,
-  sent,
-});
+/**
+ * A party as the route names it (lane feed): its short id, the first 20 bytes of its lock hash, and
+ * its tags; a sender by default (the senders bit, `TAG_INPUT`, which a run counts).
+ */
+const party = (id: string, tags = TAG_INPUT): PartyId => [`0x${id.padStart(40, '0')}`, tags];
 const typeCall = (code: string, hashType = 'type') => ({
   typeCodeHash: `0x${code.padStart(64, '0')}`,
   typeHashType: hashType,
@@ -42,6 +41,7 @@ function oracle(over: Partial<RunSubject> = {}): RunSubject {
     lockCalls: [],
     recognizedTypes: [],
     parties: [party('01')],
+    tokens: null,
     ...over,
   };
 }
@@ -210,50 +210,57 @@ describe('runKey: the recognised codes that ran', () => {
 });
 
 // Re-pinned on purpose (resync/int, step 2: the owner's word at Gate B): a run counts its SENDERS,
-// the parties whose lock is an input's (the API's `sent`), each once; it counted every party
-// (`runParties`) while the stores did not say who sent.
+// the parties whose lock is an input's, each once; it counted every party (`runParties`) while the
+// stores did not say who sent. Re-pinned again at the merge of lane feed (ruling 14 of gate P): a
+// party is the route's short id with its tags, every party of each transaction, drawn or not, and
+// it sent where its tags carry the senders bit (`TAG_INPUT`, the API's `sent` of a drawn party);
+// it was a party sent in full with its `sent`, named by its lock hash, else its prefix, else its
+// address (so a protocol-named party and the same party by its full hash were two).
 describe('runSenders: how many parties of a run sent', () => {
-  it('counts each sender once across the run, by its lock hash, else its prefix, else its address', () => {
+  it('counts each sender once across the run, by the short id the route names it by', () => {
     expect(runSenders([oracle(), oracle(), oracle({ parties: [party('02')] })])).toBe(2);
     expect(runSenders([oracle({ parties: [party('01'), party('02')] }), oracle()])).toBe(2);
-    const addressed = { lockHash: null, lockHashPrefix: null, address: 'ckb1only', sent: true };
-    expect(runSenders([oracle({ parties: [party('01'), addressed] }), oracle()])).toBe(2);
-  });
-
-  it('counts no party that did not send: a payee, a party a protocol only named', () => {
-    const named = { lockHash: null, lockHashPrefix: '0x1234', address: null, sent: false };
+    // its other tags are not its name: one party in two rows
     expect(
       runSenders([
-        oracle({ parties: [party('01'), party('02', false), named] }),
-        oracle({ parties: [party('03', false), party('01')] }),
+        oracle({ parties: [party('03', TAG_INPUT | 64)] }),
+        oracle({ parties: [party('03')] }),
       ])
     ).toBe(1);
   });
 
-  it('refuses a party it cannot name, with the transaction', () => {
-    const nobody = { lockHash: null, lockHashPrefix: null, address: null, sent: true };
-    expect(() => runSenders([oracle({ parties: [nobody] })])).toThrow(
-      `transaction 0x${'aa'.repeat(32)}: a party with no lock hash, prefix or address`
-    );
+  it('counts no party that did not send: a payee, a party a protocol only named', () => {
+    expect(
+      runSenders([
+        oracle({ parties: [party('01'), party('02', 0), party('1234', 0)] }),
+        oracle({ parties: [party('03', 0), party('01')] }),
+      ])
+    ).toBe(1);
+  });
+
+  // the refusal of a party it cannot name moved to where the ids are read (lane feed): every party
+  // the route names has its short id, and `partyIds` refuses a row naming fewer than its count
+  it('refuses a row that names fewer parties than it counts, with the transaction', () => {
+    expect(() =>
+      partyIds({ txHash: `0x${'aa'.repeat(32)}`, participantCount: 2, partyIds: [party('01')] })
+    ).toThrow(`transaction 0x${'aa'.repeat(32)}: it names 1 of its 2 parties`);
   });
 
   it('refuses a committed transaction no party of which sent, never counting it as none', () => {
-    expect(() => runSenders([oracle(), oracle({ parties: [party('02', false)] })])).toThrow(
+    expect(() => runSenders([oracle(), oracle({ parties: [party('02', 0)] })])).toThrow(
       `transaction 0x${'aa'.repeat(32)}: a committed transaction with no party that sent (every transaction but a cellbase has an input)`
     );
   });
 
-  it('refuses a party that does not say whether it sent: an API older than the page', () => {
-    const older = { lockHash: `0x${'01'.padStart(64, '0')}`, lockHashPrefix: null, address: null };
-    expect(() =>
-      runSenders([oracle({ parties: [older as unknown as RunSubject['parties'][number]] })])
-    ).toThrow(
-      `transaction 0x${'aa'.repeat(32)}: party 0x${'01'.padStart(64, '0')} does not say whether it sent: the API is older than this page`
+  // an API older than the page states no party ids: refused where they are read
+  it('refuses a row that states no party ids: an API older than the page', () => {
+    expect(() => partyIds({ txHash: `0x${'aa'.repeat(32)}`, participantCount: 1 })).toThrow(
+      'partyIds'
     );
   });
 
   it('has no sender to count in a cellbase', () => {
-    expect(() => runSenders([oracle({ isCellbase: true, parties: [party('c0', false)] })])).toThrow(
+    expect(() => runSenders([oracle({ isCellbase: true, parties: [party('c0', 0)] })])).toThrow(
       `transaction 0x${'aa'.repeat(32)}: a cellbase has no sender to count`
     );
   });
@@ -264,6 +271,23 @@ describe('runKey: a cellbase folds with cellbases only', () => {
     expect(runKey(oracle({ isCellbase: true }))).not.toBe(runKey(oracle()));
     expect(runKey(oracle({ isCellbase: true }))).toBe(
       runKey(oracle({ isCellbase: true, txHash: `0x${'bb'.repeat(32)}` }))
+    );
+  });
+});
+
+describe('runTokens: how many tokens a run of token rows moved (ruling 6 of gate P)', () => {
+  const tokens = (...ids: string[]) => ({ title: 'tokens: Token transfer', tokens: ids });
+  it('counts each token once across the run, by its type script hash', () => {
+    expect(
+      runTokens([oracle(tokens('0x7e')), oracle(tokens('0x7e', '0x7f')), oracle(tokens('0x7e'))])
+    ).toBe(2);
+    expect(runTokens([oracle(tokens('0x7e')), oracle(tokens('0x7e'))])).toBe(1);
+  });
+
+  it('counts none on a run of another kind, and refuses a run that mixes the two', () => {
+    expect(runTokens([oracle(), oracle()])).toBeNull();
+    expect(() => runTokens([oracle(tokens('0x7e')), oracle()])).toThrow(
+      `transaction 0x${'aa'.repeat(32)}: a run of token rows holds a row of another kind`
     );
   });
 });
@@ -343,7 +367,8 @@ describe('the rule on the live feeds', () => {
     typeCalls: a.typeCalls,
     lockCalls: a.lockCalls,
     recognizedTypes: a.recognizedTypes,
-    parties: a.participants,
+    parties: partyIds(a),
+    tokens: null,
   });
   const runsOf = (rows: GlobalActivity[]) => foldRuns(rows, (a) => runKey(subject(a)));
   const tokensOf = (a: GlobalActivity) =>

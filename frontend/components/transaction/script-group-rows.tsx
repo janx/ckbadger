@@ -267,14 +267,14 @@ export function scriptGroupRows(
             ))
           ) : null
         ) : provisional ? (
-          <span className="text-text-dim">read once committed</span>
+          <span className="text-text">read once committed</span>
         ) : depsError ? (
-          <span className="text-text-dim">cell deps unreadable</span>
+          <span className="text-text">cell deps unreadable</span>
         ) : !deps ? (
-          <span className="text-text-dim">Resolving code…</span>
+          <span className="text-text">Resolving code…</span>
         ) : codeDeps.length === 0 ? (
           // the built-in Type ID runs with no cell dep; any other code with none is unmatched
-          <span className="text-text-dim">
+          <span className="text-text">
             {g.script.hashType === 'type' && g.script.codeHash.toLowerCase() === TYPE_ID_CODE_HASH
               ? 'Built-in Type ID, no cell dep'
               : 'No matching dep'}

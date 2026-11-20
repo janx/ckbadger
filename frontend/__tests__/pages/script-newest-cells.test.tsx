@@ -208,6 +208,15 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     await waitFor(() =>
       expect(row).toHaveTextContent('tx 0xfc79070b…5bcf91 · #20,911,460 · 2026-11-03')
     );
+    // BRIEF-roles-rest part A: the creating tx, its block and its day are values in the row's
+    // reading ink, "tx" their label, quiet; what the cell is, "plain cell", a value too (the line
+    // stood in a quiet span, its two links with it, and "plain cell" was quiet)
+    const quietAround = (el: Element) => el.closest('.text-text-dim');
+    expect(quietAround(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' }))).toBeNull();
+    expect(quietAround(within(row).getByRole('link', { name: '#20,911,460' }))).toBeNull();
+    expect(quietAround(within(row).getByText('2026-11-03'))).toBeNull();
+    expect(within(row).getByText('tx')).toHaveClass('text-text-dim');
+    expect(quietAround(within(row).getByText('plain cell'))).toBeNull();
     expect(row.getAttribute('title')).toContain(`created in tx ${first.txHash}`);
     expect(row.getAttribute('title')).toContain(`owner ${first.address}`);
     // Live cells only: no status word in a row.
