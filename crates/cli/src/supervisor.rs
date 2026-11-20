@@ -774,6 +774,7 @@ async fn observe_gate(
         lag: sample.lag,
         bulk_completed: sample.bulk_completed,
         blocked,
+        needs_rebuild: false,
     })
 }
 
@@ -1972,6 +1973,60 @@ mod tests {
             );
             assert_eq!(store_files_and_column_families(&domain), before);
         }
+    }
+
+    /// The lead's ruling on rule 11 (resync fix round 2): a gating network
+    /// refused as rebuild-required holds the next network, and the gate knows
+    /// it needs a rebuild, from its store (refused before its indexer exits)
+    /// and from its indexer blocked as rebuild-required; a gate blocked for
+    /// another reason does not.
+    #[tokio::test]
+    async fn observe_gate_says_a_gate_whose_stores_need_a_rebuild() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = TempDir::new().unwrap();
+        let refused = dir.path().join("refused/domain");
+        create_earlier_layout_domain_store(&refused, Some(7));
+        let absent = dir.path().join("absent/domain");
+        let readers: BulkStatusReaders = Arc::new(std::sync::Mutex::new(vec![
+            BulkStatusReader::new(&test_sequenced_indexer(refused)),
+            BulkStatusReader::new(&test_sequenced_indexer(absent)),
+        ]));
+
+        let exe = std::env::current_exe().unwrap();
+        let log_dir = dir.path().join("run/logs");
+        let spec = ChildSpec {
+            label: "mainnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let child = spawn_child(&exe, &spec, &log_dir).unwrap();
+        let state = Arc::new(Mutex::new(SupervisorState {
+            children: vec![child],
+            shutdown_requested: false,
+        }));
+
+        // its store is refused, its indexer not yet blocked
+        let status = observe_gate(&readers, &state, 0, 0).await.unwrap();
+        assert_eq!(status.past_bulk, None);
+        assert!(status.needs_rebuild, "a refused store needs a rebuild");
+
+        // its indexer blocked as rebuild-required (exit 78), its store not read
+        state.lock().await.children[0].blocked = Some(rebuild_required_reason("mainnet/indexer"));
+        let status = observe_gate(&readers, &state, 1, 0).await.unwrap();
+        assert!(
+            status.needs_rebuild,
+            "an indexer blocked as rebuild-required"
+        );
+
+        // blocked for another reason: no rebuild said
+        state.lock().await.children[0].blocked =
+            Some("exceeded max restart attempts (10)".to_string());
+        let status = observe_gate(&readers, &state, 1, 0).await.unwrap();
+        assert!(!status.needs_rebuild, "a crash loop is no rebuild");
+
+        let mut locked = state.lock().await;
+        let _ = locked.children[0].child.kill().await;
+        let _ = locked.children[0].child.wait().await;
     }
 
     /// resync fix round N7: the supervisor names the blocked chain-store

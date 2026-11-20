@@ -38,6 +38,17 @@ pub(crate) struct GateStatus {
     /// `Some(reason)` while the supervisor has the gating indexer restart-blocked.
     /// A blocked gate never advances and is never torn down — it is reported.
     pub blocked: Option<String>,
+    /// The gating network's stores need a rebuild: its indexer is blocked as
+    /// rebuild-required (exit 78), or its store is one this build refuses. The
+    /// deferred network waits for that (BULK_SYNC rule 11), and says so.
+    pub needs_rebuild: bool,
+}
+
+/// What a deferred network is waiting for, in words: the one wait line the
+/// sequencer logs, naming the gating network and what it waits for it to do.
+pub(crate) fn waiting_for(gating: &str, status: &GateStatus) -> String {
+    let _ = (gating, status);
+    "waiting for gating network to pass bulk sync before starting the next indexer".to_string()
 }
 
 /// Number of polls between "still waiting" logs at `poll` cadence, at least 1 so
@@ -157,7 +168,8 @@ where
                     lag = ?status.lag,
                     bulk_completed = status.bulk_completed,
                     has_signal = status.past_bulk.is_some(),
-                    "waiting for gating network to pass bulk sync before starting the next indexer"
+                    "{}",
+                    waiting_for(gating, &status)
                 );
             }
             ticks = ticks.wrapping_add(1);
@@ -190,6 +202,44 @@ mod tests {
             past_bulk,
             ..GateStatus::default()
         }
+    }
+
+    /// The wait says what it waits for (resync fix round 2, the lead's ruling
+    /// on rule 11: a network refused as rebuild-required stops admission, and
+    /// the next network's wait names it and the rebuild).
+    #[test]
+    fn the_wait_says_what_it_waits_for() {
+        let gating = "mainnet/indexer";
+        let refused = GateStatus {
+            needs_rebuild: true,
+            ..GateStatus::default()
+        };
+        assert_eq!(
+            waiting_for(gating, &refused),
+            "waiting for 'mainnet/indexer', which needs a rebuild"
+        );
+        let blocked_as_rebuild = GateStatus {
+            needs_rebuild: true,
+            blocked: Some("mainnet/indexer refused this network's chain stores".to_string()),
+            ..GateStatus::default()
+        };
+        assert_eq!(
+            waiting_for(gating, &blocked_as_rebuild),
+            "waiting for 'mainnet/indexer', which needs a rebuild"
+        );
+        let blocked = GateStatus {
+            blocked: Some("exceeded max restart attempts (10)".to_string()),
+            ..GateStatus::default()
+        };
+        assert_eq!(
+            waiting_for(gating, &blocked),
+            "waiting for 'mainnet/indexer', whose indexer is blocked: exceeded max restart \
+             attempts (10)"
+        );
+        assert_eq!(
+            waiting_for(gating, &signal(Some(false))),
+            "waiting for 'mainnet/indexer' to pass bulk sync"
+        );
     }
 
     #[test]
@@ -594,6 +644,7 @@ mod tests {
                             lag: Some(12),
                             bulk_completed: true,
                             blocked: None,
+                            needs_rebuild: false,
                         },
                     })
                 }
