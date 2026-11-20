@@ -431,8 +431,13 @@ sampled from `--sample-count` random keys (at most 32), each the first row at or
 data hashes to the row's binary and is code (`keys::is_code_cell`): a row that fails one is a stale
 row. For each sampled row's type script, every live code cell the node lists under it
 (`get_cells`, up to 1,000 cells) must have its row (`GET /verify/live-code-cells?type_hash=`): a
-cell without one is a missing row. A finding stands only when a second read of the type's rows
-still shows it (a block indexed between the reads is not reported); a type whose cells or rows
+cell without one is a missing row; and every row under the type must be one of those cells or
+pass the sampled row's test: a stale row at any position of its type is found, not only its
+first. A finding stands only when it still holds at a second read taken once the indexer has
+caught up with the node (the API's synced block at or past the node's tip, read up to 60 times a
+second apart; an index that does not catch up is an error naming both blocks): the type's rows
+read again, and a missing cell read again at the node. So a code cell created or consumed in a
+block the node has and the indexer had not reached is not reported. A type whose cells or rows
 exceed one walk is named as not compared. A type that lost every row is never sampled (the
 check's blind spot). It needs RPC.
 

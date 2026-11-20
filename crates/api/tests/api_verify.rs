@@ -1203,6 +1203,40 @@ async fn data_hash_rows_rejects_a_limit_over_the_cap() {
 
 // ── `GET /api/v1/verify/live-code-cells` (resync fix round 2, E) ──────────
 
+/// resync fix round 3, item 2 (tests NOTE-5): under a type with more rows
+/// than an answer holds, the export answers `limit` rows and `complete:
+/// false` (S43 then names the type as not compared, never reports its rows
+/// missing); it reads one row past the answer.
+#[tokio::test]
+async fn live_code_cells_export_under_a_type_says_when_more_rows_follow() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(&store);
+    for tx in 0..65u8 {
+        batch.put_live_code_cell(&[0x20; 32], &[tx; 32], 0, &[0xb1; 32]);
+    }
+    batch.commit().unwrap();
+    assert_eq!(
+        store
+            .list_live_code_cells_by_type_up_to(&[0x20; 32], 3)
+            .unwrap()
+            .len(),
+        3,
+        "the read stops at its bound"
+    );
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/live-code-cells?type_hash={}&limit=64",
+            hex0x(&[0x20; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["rows"].as_array().unwrap().len(), 64, "{body}");
+    assert_eq!(body["complete"], false, "{body}");
+}
+
 /// The export reads `live_code_cells_by_type` raw: every row under a type
 /// script hash with `complete`, or the rows from a key on (the verifier's
 /// random start), each with its type hash, outpoint and binary; one of the two

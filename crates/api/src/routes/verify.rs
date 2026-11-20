@@ -102,8 +102,9 @@ pub struct LiveCodeCellRowResponse {
 
 /// `GET /api/v1/verify/live-code-cells?type_hash=0x…` or `?from=0x…` — the
 /// stored `live_code_cells_by_type` rows (resync fix round S3) under one type
-/// script hash, or from a key on: raw and bounded, from the request's one
-/// read pin. The verifier (`live_code_cells_index_matches_chain`) samples the
+/// script hash, or from a key on: raw and bounded (each reads at most one row
+/// past its `limit`, resync fix round 3, item 2), from the request's one read
+/// pin. The verifier (`live_code_cells_index_matches_chain`) samples the
 /// index from random keys and holds each row to the node, and a sampled
 /// type's code cells the node lists to the rows under it (resync fix round
 /// 2, E).
@@ -129,11 +130,12 @@ async fn export_live_code_cells(
     let store = state.store.clone();
     let (rows, complete) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         if under {
-            let all = store.list_live_code_cells_by_type(&start)?;
-            let complete = all.len() <= limit;
+            // one row past the answer, never every row of the type
+            let mut rows = store.list_live_code_cells_by_type_up_to(&start, limit + 1)?;
+            let complete = rows.len() <= limit;
+            rows.truncate(limit);
             Ok((
-                all.into_iter()
-                    .take(limit)
+                rows.into_iter()
                     .map(|row| (start.to_vec(), row))
                     .collect::<Vec<_>>(),
                 complete,

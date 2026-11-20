@@ -723,11 +723,25 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
     ) -> anyhow::Result<Vec<LiveCodeCellRow>> {
+        self.list_live_code_cells_by_type_up_to(type_hash, usize::MAX)
+    }
+
+    /// The first `max_rows` rows of [`Self::list_live_code_cells_by_type`]:
+    /// the read stops there (resync fix round 3, item 2: the verify export
+    /// reads one row past its answer, never every row of the type).
+    pub fn list_live_code_cells_by_type_up_to(
+        &self,
+        type_hash: &[u8],
+        max_rows: usize,
+    ) -> anyhow::Result<Vec<LiveCodeCellRow>> {
         let mut rows = Vec::new();
         for item in self.iterator_cf(
             self.cf_live_code_cells_by_type(),
             rocksdb::IteratorMode::From(type_hash, rocksdb::Direction::Forward),
         ) {
+            if rows.len() == max_rows {
+                break;
+            }
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
                     "failed to seek live_code_cells_by_type for type 0x{}: {e}",
