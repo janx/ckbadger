@@ -927,20 +927,32 @@ mod tests {
         }
     }
 
-    /// But a store holding a row, or a stamp, beside such a set was written:
-    /// it is not being created, and is refused (resync fix round 3, M).
+    /// A partial set of this build's column families beside THIS build's
+    /// stamp is not ready: the stamp says this build made the store, and the
+    /// list is the stale half of a reader's two reads (the families listed
+    /// before the creating open ended, the stamp read after; resync fix round
+    /// 4, A). Beside another layout's stamp, or beside rows with no stamp
+    /// (this build stamps before any row), it is refused. Re-pinned on purpose
+    /// (round 3 refused it beside this build's stamp too, which the race of
+    /// the two reads turns into a refusal of this build's healthy store).
     #[test]
-    fn a_partial_store_holding_a_row_or_a_stamp_is_refused() {
+    fn a_partial_store_is_not_ready_beside_this_builds_stamp_and_refused_beside_another_or_rows() {
         use earlier_layout_for_test::create_domain_store_by_hand;
         let order = domain_creation_order();
         let made = &order[..order.len() - 1];
-        for (row, stamp) in [(true, None), (false, Some(STORE_LAYOUT))] {
+        for (row, stamp, refused) in [
+            (false, Some(STORE_LAYOUT), false),
+            (true, Some(STORE_LAYOUT), false),
+            (false, Some(7), true),
+            (true, None, true),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let domain = dir.path().join("domain");
             create_domain_store_by_hand(&domain, made, row, stamp);
             match inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap() {
-                Some(Err(mismatch)) => assert_eq!(mismatch.found, stamp),
-                other => panic!("row {row}, stamp {stamp:?}: refused, got {other:?}"),
+                Some(Err(mismatch)) if refused => assert_eq!(mismatch.found, stamp),
+                Some(Ok(StoreLayoutState::NotReady)) if !refused => {}
+                other => panic!("row {row}, stamp {stamp:?}: refused {refused}, got {other:?}"),
             }
         }
     }

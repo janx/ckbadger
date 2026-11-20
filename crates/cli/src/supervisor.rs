@@ -1999,6 +1999,56 @@ mod tests {
         }
     }
 
+    /// resync fix round 4, A (the third read's SHOULD-1): the probe's two
+    /// reads straddle the end of creation: the families listed before the
+    /// creating open ended (the first 60 of the creation order), this build's
+    /// stamp read after. Not refused; once the store is whole, read.
+    #[test]
+    fn the_sequencers_probe_reads_a_store_whose_stamp_came_after_its_family_list() {
+        use ckbadger_store::earlier_layout_for_test::create_domain_store_by_hand;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let order = ckbadger_store::domain_creation_order();
+        create_domain_store_by_hand(
+            &domain,
+            &order[..60],
+            false,
+            Some(ckbadger_store::STORE_LAYOUT),
+        );
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain.clone()));
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert_eq!(sample.past_bulk, None, "{sample:?}");
+        drop(CkbadgerStore::open_domain(&domain).unwrap());
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert!(
+            sample.past_bulk.is_some(),
+            "the whole store is read: {sample:?}"
+        );
+    }
+
+    /// resync fix round 4, A: a store of an earlier layout stays refused on
+    /// every poll, and the probe's looking again costs no file in its own
+    /// directory: over 20 polls the secondary's directory holds what it held
+    /// after the first (nothing it can see changed, so it opens nothing).
+    #[test]
+    fn a_refused_store_is_refused_on_every_poll_and_grows_no_file() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        create_earlier_layout_domain_store(&domain, Some(7));
+        let idx = test_sequenced_indexer(domain);
+        let mut reader = BulkStatusReader::new(&idx);
+        let files = |path: &std::path::Path| std::fs::read_dir(path).unwrap().count();
+        assert!(reader.poll().refused);
+        let after_first = files(&reader.secondary_path);
+        for poll in 1..20 {
+            assert!(reader.poll().refused, "poll {poll}");
+        }
+        assert_eq!(files(&reader.secondary_path), after_first);
+    }
+
     /// resync fix round 3, M (logic MUST-1): the sequencer's probe meets the
     /// gating store while its creating open is still making its column
     /// families. It is not refused and no handle is kept (a secondary never

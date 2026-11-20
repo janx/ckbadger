@@ -1262,6 +1262,42 @@ mod tests {
         assert!(db.store_handle().is_some(), "the made store is read");
     }
 
+    /// resync fix round 4, A (the third read's SHOULD-1): the TUI's two reads
+    /// straddle the end of creation: 60 families listed, this build's stamp
+    /// read after. No refusal; once the store is whole, read.
+    #[tokio::test]
+    async fn the_tui_reads_a_store_whose_stamp_came_after_its_family_list() {
+        use ckbadger_store::earlier_layout_for_test::create_domain_store_by_hand;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append = dir.path().join("append-only");
+        let order = ckbadger_store::domain_creation_order();
+        create_domain_store_by_hand(
+            &domain,
+            &order[..60],
+            false,
+            Some(ckbadger_store::STORE_LAYOUT),
+        );
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain.to_str().unwrap(),
+            append.to_str().unwrap(),
+        )
+        .await;
+        let no_refusal = |row: &anyhow::Result<super::SyncStatusRow>| {
+            if let Err(error) = row {
+                let words = format!("{error:#}");
+                assert!(!words.contains("refused"), "{words}");
+            }
+        };
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        no_refusal(&row);
+        drop(CkbadgerStore::open_domain(&domain).unwrap());
+        let (row, _, _, _) = db.get_local_snapshot().await;
+        no_refusal(&row);
+        assert!(db.store_handle().is_some(), "the whole store is read");
+    }
+
     #[test]
     fn parse_epoch_full() {
         assert_eq!(
