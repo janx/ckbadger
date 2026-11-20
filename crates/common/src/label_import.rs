@@ -33,4 +33,7 @@ pub struct LabelImportResult {
     /// Metadata entries skipped because their metadata is malformed; a store
     /// error stops the import instead of landing here.
     pub errors: Vec<String>,
+    /// Each label whose stated standard is not the chain row's (resync fix
+    /// round 4, the third read's NOTE-5), as label import logs it.
+    pub standard_disagreements: Vec<String>,
 }

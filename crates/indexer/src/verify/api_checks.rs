@@ -9772,6 +9772,9 @@ mod tests {
     struct LiveCodeCellsResponder {
         filed: Vec<serde_json::Value>,
         filed_late: Option<Vec<serde_json::Value>>,
+        /// The `complete` of the type's rows once caught up (true unless a
+        /// test says the second read holds more rows than one answer).
+        late_complete: bool,
         node: Vec<NodeCell>,
         catch_up: usize,
         stats_reads: std::sync::atomic::AtomicUsize,
@@ -9782,6 +9785,7 @@ mod tests {
             Self {
                 filed,
                 filed_late: None,
+                late_complete: true,
                 node: default_node(),
                 catch_up: 1,
                 stats_reads: std::sync::atomic::AtomicUsize::new(0),
@@ -9834,10 +9838,12 @@ mod tests {
                 let under = query
                     .get("type_hash")
                     .map(|type_hash| type_hash.trim_start_matches("0x").to_ascii_lowercase());
-                let mut rows = match (&self.filed_late, &under) {
-                    (Some(late), Some(_)) if self.caught_up() => late.clone(),
+                let late = under.is_some() && self.caught_up();
+                let mut rows = match (&self.filed_late, late) {
+                    (Some(filed_late), true) => filed_late.clone(),
                     _ => self.filed.clone(),
                 };
+                let complete = !late || self.late_complete;
                 rows.sort_by_key(live_code_row_key);
                 let rows: Vec<serde_json::Value> = match under {
                     Some(under) => rows
@@ -9853,7 +9859,7 @@ mod tests {
                     }
                 };
                 return ResponseTemplate::new(200)
-                    .set_body_json(json!({"rows": rows, "complete": true}));
+                    .set_body_json(json!({"rows": rows, "complete": complete}));
             }
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
             let result = match body["method"].as_str().unwrap_or_default() {
@@ -10127,6 +10133,38 @@ mod tests {
         let detail = result.detail.unwrap_or_default();
         assert!(
             detail.starts_with("1 sampled rows held to the node; the code cells of 1 type(s)"),
+            "{detail}"
+        );
+    }
+
+    /// resync fix round 4 (the third read's NOTE-3): two stale rows of one
+    /// type whose second read holds more rows than one answer are named as
+    /// not compared, and the pass detail counts the TYPES compared, one
+    /// thing (it subtracted rows from types, and underflowed here).
+    #[test]
+    fn live_code_cells_check_counts_the_types_compared_and_names_rows_not_compared() {
+        let mut responder = LiveCodeCellsResponder {
+            filed_late: Some(vec![live_code_row(0xa1, 0), live_code_row(0xa2, 1)]),
+            late_complete: false,
+            ..LiveCodeCellsResponder::new(vec![
+                live_code_row(0xa1, 0),
+                live_code_row(0xa2, 1),
+                live_code_row(0xa3, 0),
+                live_code_row(0xa9, 0),
+            ])
+        };
+        responder.node.push(NodeCell {
+            listed: false,
+            live: false,
+            ..node_cell(0xa9, 0, LIVE_CODE)
+        });
+        let result = run_live_code_cells_responder(responder);
+        assert!(result.passed(), "{:?}", result.findings);
+        let detail = result.detail.unwrap_or_default();
+        assert!(
+            detail.contains("the code cells of 1 type(s) compared both ways")
+                && detail.contains(&format!("0x{}:0", hex::encode([0xa3; 32])))
+                && detail.contains(&format!("0x{}:0", hex::encode([0xa9; 32]))),
             "{detail}"
         );
     }

@@ -3380,6 +3380,54 @@ mod bundled_label_chain_consistency_tests {
         assert_eq!(disagreeing, expected, "{disagreeing:#?}");
     }
 
+    /// resync fix round 4 (the third read's NOTE-5): label import, meeting
+    /// the chain row of a token whose label says another standard, says so in
+    /// its result (and logs it): mainnet USDI's label says `xudt_compatible`,
+    /// and its pair runs the canonical xUDT.
+    #[test]
+    fn label_import_says_a_labels_other_standard_when_it_meets_the_chain_row() {
+        let usdi = bundled::udt_labels()
+            .into_iter()
+            .find(|token| token.symbol == "USDI" && token.mainnet.is_some())
+            .expect("the bundled labels carry mainnet USDI");
+        let deployment = usdi.mainnet.clone().unwrap();
+        let type_hash = compute_type_hash(&deployment).unwrap();
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_token_direct(
+                &type_hash,
+                &ckbadger_store::types::TokenInfo {
+                    type_code_hash: hex::decode(deployment.code_hash.trim_start_matches("0x"))
+                        .unwrap(),
+                    hash_type: ckbadger_common::hash_type_from_label(&deployment.hash_type)
+                        .unwrap(),
+                    type_args: hex::decode(deployment.args.trim_start_matches("0x")).unwrap(),
+                    standard: "xudt".to_string(),
+                    name: None,
+                    symbol: None,
+                    decimals: None,
+                    max_supply: None,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                    metadata_source: None,
+                    chain_metadata: None,
+                },
+            )
+            .unwrap();
+        let result =
+            super::import_all(&store, "mainnet", std::slice::from_ref(&usdi), &[]).unwrap();
+        assert_eq!(
+            result.standard_disagreements,
+            vec![format!(
+                "USDI 0x{}: the label says standard \"xudt_compatible\", the chain's row \"xudt\"",
+                hex::encode(&type_hash)
+            )]
+        );
+    }
+
     /// resync fix round 3, item 4: label import says each label whose stated
     /// standard is not the chain row's, never silently (the standard is the
     /// pair's; the API answers the chain's).

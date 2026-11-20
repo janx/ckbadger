@@ -809,6 +809,27 @@ mod tests {
         }
     }
 
+    /// resync fix round 4, the third read's NOTE-1: a store of `default`
+    /// alone (no domain family) holding a row in `default` was written (no
+    /// build of ckbadger writes `default`: a foreign store at the path): it is
+    /// refused, never taken for a creating open that has made nothing yet.
+    #[test]
+    fn a_store_with_a_row_in_default_alone_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        {
+            let mut opts = rocksdb::Options::default();
+            opts.create_if_missing(true);
+            let db = rocksdb::DB::open(&opts, &domain).unwrap();
+            db.put(b"foreign", b"row").unwrap();
+            db.flush().unwrap();
+        }
+        match inspect_domain_store(&domain, &dir.path().join("inspect")).unwrap() {
+            Some(Err(mismatch)) => assert_eq!(mismatch.found, None),
+            other => panic!("a row in `default` is refused, got {other:?}"),
+        }
+    }
+
     /// resync fix round 3, tests SHOULD-1: the column families alone refuse
     /// a store no other fact tells apart (each read by the inspection and by
     /// a secondary, nothing written in it): an earlier build's EMPTY store
