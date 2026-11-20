@@ -189,6 +189,26 @@ impl CkbadgerStore {
             .collect()
     }
 
+    /// Every stored token label by type script hash, in key order: one scan of
+    /// the few curated labels (the API joins them to a list of token rows,
+    /// resync fix round 2, B).
+    pub fn list_token_labels(&self) -> anyhow::Result<Vec<(Vec<u8>, crate::types::TokenLabel)>> {
+        self.iterator_cf(self.cf_token_labels(), rocksdb::IteratorMode::Start)
+            .map(|item| {
+                let (key, value) =
+                    item.map_err(|e| anyhow::anyhow!("failed to iterate token labels: {e}"))?;
+                let label = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "corrupt token label row: type_hash=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+                Ok((key.to_vec(), label))
+            })
+            .collect()
+    }
+
     /// Every stored token label's type script hash (label import's preflight).
     pub fn list_token_label_hashes(&self) -> anyhow::Result<Vec<Vec<u8>>> {
         self.iterator_cf(self.cf_token_labels(), rocksdb::IteratorMode::Start)

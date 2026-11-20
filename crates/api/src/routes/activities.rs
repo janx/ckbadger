@@ -602,8 +602,7 @@ fn token_facts(
     if let Some(cached) = cache.get(type_script_hash) {
         return Ok(cached.clone());
     }
-    let result = store
-        .get_token(type_script_hash)
+    let result = crate::token_identity::get_token(store, type_script_hash)
         .map_err(|e| {
             anyhow::anyhow!(
                 "failed to read token 0x{} for activity: {e}",

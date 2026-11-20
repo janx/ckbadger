@@ -553,7 +553,7 @@ async fn get_token(
     let store = state.store.clone();
     let hash_c = hash.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let info = store.get_token(&hash_c)?;
+        let info = crate::token_identity::get_token(&store, &hash_c)?;
         match info {
             Some(info) => {
                 let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
@@ -620,9 +620,7 @@ async fn get_token(
             let mut others = Vec::new();
             let symbols = info.claimed_symbols();
             if !symbols.is_empty() {
-                for (other_hash, other) in state
-                    .store
-                    .list_tokens()
+                for (other_hash, other) in crate::token_identity::list_tokens(&state.store)
                     .map_err(|error| ApiError::internal(error.to_string()))?
                 {
                     if other_hash != hash
@@ -693,8 +691,7 @@ async fn get_token_holders(
     let hash_c = hash.clone();
     let (_token, holders_count, total_supply, mut page, first_rank) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let token = store
-                .get_token(&hash_c)?
+            let token = crate::token_identity::get_token(&store, &hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
             // the rank where the page starts, read in the same view as its rows and its total
@@ -854,7 +851,7 @@ async fn get_token_activities(
     let hash_c = hash.clone();
     let network = state.ckb_network.clone();
     let (results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let token_exists = store.get_token(&hash_c)?.is_some();
+        let token_exists = crate::token_identity::token_exists(&store, &hash_c)?;
         if !token_exists {
             return Err(anyhow::anyhow!("not_found"));
         }
@@ -970,8 +967,7 @@ async fn get_token_transfers(
     let hash_c = hash.clone();
     let network = state.ckb_network.clone();
     let (info, results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let info = store
-            .get_token(&hash_c)?
+        let info = crate::token_identity::get_token(&store, &hash_c)?
             .ok_or_else(|| anyhow::anyhow!("not_found"))?;
         let results = store.list_token_transfers(&hash_c, limit + 1, cursor)?;
         let addresses = resolve_lock_addresses(
@@ -1056,8 +1052,7 @@ async fn get_token_capacity_chart(
     let hash_c = hash.clone();
     let (token, baseline_deltas, deltas) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let token = store
-                .get_token(&hash_c)?
+            let token = crate::token_identity::get_token(&store, &hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let baseline_deltas = if let Some(from) = from_date {
                 store.list_token_daily_deltas_in_range(

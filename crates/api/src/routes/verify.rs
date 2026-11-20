@@ -713,7 +713,7 @@ async fn export_entity_statistics(
                 continue;
             }
 
-            let token = store.get_token(&entity.key)?;
+            let token = crate::token_identity::get_token(&store, &entity.key)?;
             let present = token.is_some();
             let type_script = token
                 .as_ref()

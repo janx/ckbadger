@@ -4100,9 +4100,7 @@ async fn get_cell(
         udt_standard,
         cell_data.as_deref(),
     ) {
-        let token = state
-            .store
-            .get_token(type_hash)
+        let token = crate::token_identity::get_token(&state.store, type_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         match super::transaction_cells::read_udt_amount(&standard, data) {
             super::transaction_cells::UdtAmountReading::Amount(_) => {
@@ -4910,11 +4908,12 @@ async fn get_address_tokens(
         .map(|(type_hash, _)| type_hash.clone())
         .collect();
     let store = state.store.clone();
-    let token_infos =
-        tokio::task::spawn_blocking(move || store.get_tokens_batch(&token_type_hashes))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let token_infos = tokio::task::spawn_blocking(move || {
+        crate::token_identity::get_tokens_batch(&store, &token_type_hashes)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let token_info_by_hash: HashMap<Vec<u8>, ckbadger_store::TokenInfo> = token_infos
         .into_iter()
         .map(|(type_hash, info)| match info {

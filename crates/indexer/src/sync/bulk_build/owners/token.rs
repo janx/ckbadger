@@ -542,9 +542,8 @@ impl BulkReducer for TokenOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let domain_store = materializer.domain_store();
         materializer.materialize_final_snapshot_bounded(|sink| {
-            self.emit_snapshot_rows(domain_store, |row| sink.push(row))
+            self.emit_snapshot_rows(|row| sink.push(row))
         })
     }
 }
@@ -616,35 +615,22 @@ impl TokenOwner {
         Ok(rows)
     }
 
-    pub(crate) fn emit_snapshot_rows<F>(
-        &self,
-        domain_store: &CkbadgerStore,
-        mut emit: F,
-    ) -> Result<()>
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
     where
         F: FnMut(MaterializedRow) -> Result<()>,
     {
         let mut type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
         type_hashes.sort();
-        // The curated labels label import stored (`token_labels`), one
-        // `multi_get` for every token of the run. Bulk sync starts from a
-        // fresh store, where label import wrote no token row (a token row is
-        // the chain's: resync fix round M1), so every row starts from the
-        // chain and its label, as live sync creates it.
-        let labels = domain_store.get_token_labels_batch(&type_hashes)?;
 
-        for (type_hash, label) in type_hashes.iter().zip(labels) {
+        // Every row is the chain's, as live sync creates it: a curated label
+        // is joined when the row is read, never stored in it (resync fix
+        // round 2, B).
+        for type_hash in &type_hashes {
             let token = self
                 .tokens
                 .get(type_hash)
                 .expect("sorted token type hash must exist");
             let mut info = token.to_info(type_hash.clone());
-
-            // The label, attached by the one rule live sync attaches it with
-            // when it creates the row (`TokenInfo::attach_label`).
-            if let Some(label) = &label {
-                info.attach_label(label);
-            }
 
             // max_supply: the token's claim by the one rule
             // (`token_helpers::token_max_supply_claim`: the first claim in
@@ -713,9 +699,9 @@ impl TokenOwner {
     }
 
     #[cfg(test)]
-    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
-        self.emit_snapshot_rows(domain_store, |row| {
+        self.emit_snapshot_rows(|row| {
             rows.push(row);
             Ok(())
         })?;
@@ -723,13 +709,10 @@ impl TokenOwner {
     }
 
     #[cfg(test)]
-    pub(crate) fn build_final_rows(
-        &self,
-        domain_store: &CkbadgerStore,
-    ) -> Result<super::super::materialize::OwnerFinalRows> {
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows()?,
-            snapshot_rows: self.build_snapshot_rows(domain_store)?,
+            snapshot_rows: self.build_snapshot_rows()?,
         })
     }
 }
@@ -2522,6 +2505,11 @@ mod tests {
     /// token therefore ended up with a different name/symbol/decimals
     /// depending on whether its issuance block arrived during bulk or live
     /// sync — and a rebuild from genesis silently changed the answer.
+    ///
+    /// Re-pinned in resync fix round 2, B: the label is in `token_labels` and
+    /// no writer reads it; both paths make the row from the chain alone (the
+    /// live half starts from the chain's row, not a labelled one), and the
+    /// curated icon and description are no part of it.
     #[test]
     fn bulk_and_live_agree_on_onchain_token_metadata_precedence() {
         let dir = tempfile::tempdir().unwrap();
@@ -2565,14 +2553,22 @@ mod tests {
                 .token_onchain_info
                 .insert(type_hash.clone(), observed.clone());
 
-            let rows = owner.build_snapshot_rows(&domain_store).unwrap();
+            let rows = owner.build_snapshot_rows().unwrap();
             let row = rows
                 .iter()
                 .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
                 .expect("bulk snapshot must emit the token row");
             let bulk: TokenInfo = bincode::deserialize(&row.value).unwrap();
 
-            let mut live = labelled.clone();
+            let mut live = TokenInfo {
+                name: None,
+                symbol: None,
+                decimals: None,
+                icon_url: None,
+                description: None,
+                metadata_source: None,
+                ..labelled.clone()
+            };
             crate::db::writer::udt::apply_onchain_token_info(
                 &type_hash,
                 &mut live,
@@ -2584,18 +2580,20 @@ mod tests {
                 (live.name.as_deref(), live.symbol.as_deref(), live.decimals),
                 "bulk and live must store identical token metadata for {binding:?}"
             );
-            // Curated fields the chain never carries survive in both modes.
-            assert_eq!(bulk.icon_url, labelled.icon_url);
-            assert_eq!(bulk.description, labelled.description);
+            assert_eq!(bulk, live, "{binding:?}: the chain's row on both paths");
+            assert_eq!((bulk.icon_url, bulk.description), (None, None));
         }
     }
 
-    /// The bulk snapshot writer must surface a curated label that contradicts
-    /// the token's own Unique Cell, exactly as the live writer does. Bulk is
-    /// the path a rebuild from genesis takes, so detection that only exists in
-    /// live sync never runs for a historically issued token.
+    /// Re-pinned in resync fix round 2, B (it was
+    /// `bulk_snapshot_reports_a_label_that_contradicts_the_chain`): no writer
+    /// reads a label, so the bulk snapshot writes the chain's row and logs
+    /// nothing of the label. A label that contradicts the token's own Unique
+    /// Cell is reported where it is joined, by the API (`metadata.conflict`,
+    /// `api_tokens::a_label_names_a_token_when_it_is_read_...`), on every
+    /// store whichever path built it.
     #[test]
-    fn bulk_snapshot_reports_a_label_that_contradicts_the_chain() {
+    fn bulk_snapshot_writes_the_chains_row_and_reads_no_label() {
         let dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
@@ -2633,18 +2631,20 @@ mod tests {
         );
 
         let (rows, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
-            owner.build_snapshot_rows(&domain_store).unwrap()
+            owner.build_snapshot_rows().unwrap()
         });
 
-        assert!(
-            logs.contains(&hex::encode(&type_hash)),
-            "bulk must identify the contradicted token: {logs}"
+        assert!(!logs.contains("LBL"), "no writer reads the label: {logs}");
+        let row = rows
+            .iter()
+            .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
+            .expect("the token row");
+        let row: TokenInfo = bincode::deserialize(&row.value).unwrap();
+        assert_eq!(
+            (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
+            (Some("OnChain"), Some("OC"), Some(8)),
+            "the chain's fields"
         );
-        assert!(
-            logs.contains("LBL") && logs.contains("OC"),
-            "bulk must show both the stored and the on-chain value: {logs}"
-        );
-        assert!(rows.iter().any(|row| row.cf_name == CF_TOKENS));
     }
 
     /// J15: one transaction's whole `TOKEN_DAILY` contribution reaches the

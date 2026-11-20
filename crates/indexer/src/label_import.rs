@@ -670,13 +670,12 @@ fn token_label(token: &TokenMetadata) -> ckbadger_store::types::TokenLabel {
 /// Write one decoded token label; every store error propagates.
 ///
 /// The label is stored in `token_labels` (domain store, outside the journal:
-/// label import is its only writer). A token row is the chain's (resync fix
-/// round M1): when the chain already holds the token, the label is attached
-/// to its row here by the one rule ([`TokenInfo::attach_label`]); a token the
-/// chain does not hold gets no row, and the writer that creates its row when
-/// the chain first holds it (live sync or the bulk snapshot) attaches the
-/// label by the same rule. So a token row's first block is always the block
-/// of the token's first cell.
+/// label import is its only writer) and NOWHERE else: a token row holds what
+/// the chain says (resync fix round M1, fix round 2 B), and the API joins the
+/// label to the row when it reads the token (`token_identity` in the API,
+/// by [`TokenInfo::attach_label`]). A label that differs from what the
+/// chain's row already says is logged: the page shows the label's fields,
+/// the chain's beside them.
 ///
 /// [`TokenInfo::attach_label`]: ckbadger_store::types::TokenInfo::attach_label
 fn write_token_label(
@@ -685,29 +684,19 @@ fn write_token_label(
     prepared: &PreparedTokenLabel,
 ) -> Result<()> {
     let type_hash = &prepared.type_hash;
-    let label = token_label(token);
-    store.put_token_label_direct(type_hash, &label)?;
-    let Some(mut info) = store.get_token(type_hash)? else {
-        return Ok(());
-    };
-
-    if let Some(conflict) = label_override_conflicts(&info, token) {
-        warn!(
-            type_hash = %format!("0x{}", hex::encode(type_hash)),
-            label = %token.symbol,
-            %conflict,
-            "token label overrides differing pre-existing metadata (labels take \
-             precedence by design; if the previous value is chain-derived, fix \
-             the upstream token-labels entry)"
-        );
+    store.put_token_label_direct(type_hash, &token_label(token))?;
+    if let Some(info) = store.get_token(type_hash)? {
+        if let Some(conflict) = label_override_conflicts(&info, token) {
+            warn!(
+                type_hash = %format!("0x{}", hex::encode(type_hash)),
+                label = %token.symbol,
+                %conflict,
+                "token label differs from what the chain says of the token (the API shows \
+                 the label's fields, the chain's beside them; if the chain is right, fix \
+                 the upstream token-labels entry)"
+            );
+        }
     }
-
-    // The label writes name/symbol/decimals (and says so), its icon,
-    // description and standard; the bound chain values on the row are kept
-    // beside it (IV-26).
-    info.attach_label(&label);
-
-    store.put_token_direct(type_hash, &info)?;
     Ok(())
 }
 
@@ -2988,12 +2977,12 @@ canonical_hash_type = "data1"
 
     /// resync fix round M1: a token row is the chain's. Label import stores
     /// the label (`token_labels`) and writes no token row for a token the
-    /// chain does not hold; on a row the chain made it attaches the label by
-    /// the one rule and keeps the row's chain facts (its first block, max
-    /// supply, transfers); a label no entry carries any more is deleted, so a
-    /// token the chain first holds later never takes a removed label.
+    /// chain does not hold; a row the chain made it leaves as it is (resync
+    /// fix round 2, B: the API joins the label when it reads the token; it
+    /// was "attaches the label to the row", and the test was named so); a
+    /// label no entry carries any more is deleted.
     #[test]
-    fn label_import_writes_no_token_row_and_attaches_a_label_to_a_chain_row() {
+    fn label_import_writes_the_label_alone_and_leaves_a_chain_row_as_it_is() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
         let token = |args: &str, symbol: &str| TokenMetadata {
@@ -3058,19 +3047,12 @@ canonical_hash_type = "data1"
             }
         );
 
-        let labelled = store.get_token(&held_hash).unwrap().unwrap();
-        let mut expected = chain_row.clone();
-        expected.attach_label(&store.get_token_label(&held_hash).unwrap().unwrap());
-        assert_eq!(labelled, expected, "the label attached by the one rule");
         assert_eq!(
-            (
-                labelled.first_seen_block,
-                labelled.max_supply,
-                labelled.transfers_count
-            ),
-            (4_242, Some(21_000_000), 9),
-            "the chain's facts are kept"
+            store.get_token(&held_hash).unwrap().unwrap(),
+            chain_row,
+            "the chain's row, untouched"
         );
+        assert!(store.get_token_label(&held_hash).unwrap().is_some());
 
         // The unheld token's entry removed: its label goes with it.
         import_all(&store, "mainnet", std::slice::from_ref(&held), &[]).unwrap();

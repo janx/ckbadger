@@ -291,12 +291,11 @@ impl BatchWriter {
             let base = match self.store.get_token(type_hash)? {
                 Some(info) => TokenRowBase::Stored(Box::new(info)),
                 // The chain holds the token for the first time: its row is
-                // created at its first cell's block, with its curated label
-                // attached (resync fix round M1).
+                // created at its first cell's block (resync fix round M1),
+                // the chain's alone (fix round 2, B).
                 None => TokenRowBase::CreatedBy {
                     transfer: update.transfer,
                     block_number: update.first_seen_block,
-                    label: self.store.get_token_label(type_hash)?,
                 },
             };
             // The stats CF counter is the source of truth for accumulation;
@@ -573,12 +572,12 @@ enum TokenRowBase<'a> {
     /// The row the store held before the batch.
     Stored(Box<TokenInfo>),
     /// No row yet: the token's first transfer in the batch creates it, at
-    /// that transfer's block, with the token's curated label (`token_labels`)
-    /// attached by the one rule, as the bulk snapshot writer attaches it.
+    /// that transfer's block, from the chain alone, as the bulk snapshot
+    /// writer creates it (a label is joined when the row is read: resync fix
+    /// round 2, B).
     CreatedBy {
         transfer: &'a ParsedUdtTransfer,
         block_number: i64,
-        label: Option<ckbadger_store::types::TokenLabel>,
     },
 }
 
@@ -636,12 +635,11 @@ impl TokenRowThroughBatch<'_> {
             TokenRowBase::CreatedBy {
                 transfer,
                 block_number: created_at,
-                label,
             } => {
                 if block_number < *created_at {
                     return Ok(None);
                 }
-                let mut row = TokenInfo {
+                TokenInfo {
                     type_code_hash: transfer.type_code_hash.clone(),
                     hash_type: transfer.type_hash_type as u8,
                     type_args: transfer.type_args.clone(),
@@ -656,11 +654,7 @@ impl TokenRowThroughBatch<'_> {
                     transfers_count: 0,
                     metadata_source: None,
                     chain_metadata: None,
-                };
-                if let Some(label) = label {
-                    row.attach_label(label);
                 }
-                row
             }
         };
         // The token's row says whose claims count: its owner (type args) and

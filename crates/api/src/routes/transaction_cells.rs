@@ -162,7 +162,7 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
             UdtAmountReading::Amount(amount) => result.amount = Some(amount.to_string()),
             UdtAmountReading::NoAmount { reason } => result.no_amount_reason = Some(reason),
         }
-        let token = store.get_token(type_hash)?;
+        let token = crate::token_identity::get_token(store, type_hash)?;
         // The indexer writes a token row from amount-bearing cells only: an
         // indexed cell with an amount must find one, while a no-amount cell
         // may be of a type no amount ever moved in.

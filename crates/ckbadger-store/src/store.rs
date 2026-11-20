@@ -879,7 +879,7 @@ const PSEUDO_LABELS_REASON: &str =
 const TOKEN_LABELS_REASON: &str =
     "the curated token labels, not chain state: label import rewrites the whole column family \
     at every start and nothing journals it, so a rollback leaves it as the last import wrote it; \
-    a token row the chain creates takes its label from here";
+    the API joins a token's label to its row when it reads the token (no row holds one)";
 const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
 const DERIVE_REASON: &str =
     "a derived aggregate is rebuilt from canonical rows; a rollback resets \
@@ -1076,13 +1076,6 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         LABEL_IMPORT,
         PSEUDO_LABELS_REASON,
         NEVER,
-    ),
-    whole_cf(
-        CF_TOKENS,
-        OutsideWriter::LabelImport,
-        LABEL_IMPORT,
-        LABELS_REASON,
-        ALSO_JOURNALED,
     ),
     whole_cf(
         CF_TOKEN_LABELS,
@@ -6410,12 +6403,15 @@ mod tests {
     }
 
     /// Lane B carry-over 4(c): a whole-CF `OUTSIDE_JOURNAL` entry admits only
-    /// the writer it names. `tokens` and `dao_live_agg` are journaled by live
-    /// batches and written outside the journal only by label import and the
-    /// derive scheduler respectively; any other unjournaled write to them —
+    /// the writer it names. `script_versions` and `dao_live_agg` are journaled
+    /// by live batches and written outside the journal only by label import
+    /// and the derive scheduler respectively; any other unjournaled write to
+    /// them —
     /// an untagged batch, another writer's batch, a direct write outside the
     /// writer's scope or from another thread — is refused.
     #[test]
+    /// (Re-pinned in resync fix round 2, B: its example was `tokens`, which
+    /// label import no longer writes.)
     fn whole_cf_outside_journal_entries_admit_only_their_writer() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -6427,16 +6423,18 @@ mod tests {
 
         // Untagged: refused for both whole-CF entries.
         let mut batch = crate::StoreBatch::new(&store);
-        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
-        refused(batch.commit(), "an untagged batch writing tokens");
+        batch
+            .put_raw_cf_by_name(CF_SCRIPT_VERSIONS, b"t", b"1")
+            .unwrap();
+        refused(batch.commit(), "an untagged batch writing script_versions");
         let mut batch = crate::StoreBatch::new(&store);
         batch
             .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
             .unwrap();
         refused(batch.commit(), "an untagged batch writing dao_live_agg");
         refused(
-            store.put_cf(store.cf_tokens(), b"t", b"1"),
-            "a direct write to tokens outside the label import scope",
+            store.put_cf(store.cf_script_versions(), b"t", b"1"),
+            "a direct write to script_versions outside the label import scope",
         );
 
         // The named writer passes; the other writer does not.
@@ -6449,8 +6447,13 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
         let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
-        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
-        refused(batch.commit(), "the derive scheduler writing tokens");
+        batch
+            .put_raw_cf_by_name(CF_SCRIPT_VERSIONS, b"t", b"1")
+            .unwrap();
+        refused(
+            batch.commit(),
+            "the derive scheduler writing script_versions",
+        );
         let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::LabelImport);
         batch
             .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"2")
@@ -6462,7 +6465,9 @@ mod tests {
             let _scope = store
                 .outside_journal_scope(OutsideWriter::LabelImport)
                 .unwrap();
-            store.put_cf(store.cf_tokens(), b"t", b"1").unwrap();
+            store
+                .put_cf(store.cf_script_versions(), b"t", b"1")
+                .unwrap();
             store.put_cf(store.cf_script_info(), b"s", b"1").unwrap();
             refused(
                 store.put_cf(store.cf_dao_live_agg(), b"d", b"3"),
@@ -6471,7 +6476,7 @@ mod tests {
             std::thread::scope(|threads| {
                 threads.spawn(|| {
                     refused(
-                        store.put_cf(store.cf_tokens(), b"other", b"1"),
+                        store.put_cf(store.cf_script_versions(), b"other", b"1"),
                         "another thread during the label import scope",
                     );
                 });
@@ -6482,7 +6487,7 @@ mod tests {
             );
         }
         refused(
-            store.put_cf(store.cf_tokens(), b"t", b"2"),
+            store.put_cf(store.cf_script_versions(), b"t", b"2"),
             "a direct write after the scope ended",
         );
 

@@ -964,6 +964,7 @@ network store too), no re-sync:
 **Responses**
 
 - `CursorPaginatedResponse<TokenResponse>` / `TokenResponse` — token info + standard, supply, holders/transfers
+- A token's name, symbol, decimals, icon, description and standard, its `metadata` (`source`, `chain`, `conflict`) and its `sameSymbolTokens` are its stored row (what the chain says) with its curated label joined when the route reads it (`crates/api/src/token_identity.rs`, resync fix round 2, B): the label wins where it states a field, the chain's values stay in `metadata.chain`, `metadata.source` says `label`. Every route that names a token (the token page and list, assets and their summary, search, activities, cells, transactions, holdings, Fiber, verify's export) reads it through that module, so a label added or removed changes the answer at once and no stored row. A label for a token the chain does not hold names nothing.
 - `TokenHoldersResponse` — flat cursor page plus `totalSupply`, nullable `anchor` and `firstRank`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`

@@ -107,31 +107,15 @@ impl UdtParser {
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| {
-                Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
-            })
+            .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
             .collect()
     }
 
+    /// The output as a UDT cell, when its type pair is a UDT (THE pair rule);
+    /// no other source makes it one (resync fix round 2, B).
     pub fn parse_udt_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedUdtCell> {
-        Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
-    }
-
-    pub fn parse_udt_cell_with_standard_hint(
-        output: &CellOutput,
-        data_hex: &str,
-        standard_hint: Option<&str>,
-    ) -> Option<ParsedUdtCell> {
         let type_script = output.type_.as_ref()?;
-        let standard = if let Some(standard) =
-            Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)
-        {
-            standard
-        } else if matches!(standard_hint, Some("xudt_compatible")) {
-            UdtStandard::Xudt
-        } else {
-            return None;
-        };
+        let standard = Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)?;
 
         let data = parse_hex_to_bytes(data_hex);
         let amount = Self::parse_amount(&data)?;
@@ -722,18 +706,10 @@ mod tests {
             }),
         };
 
-        // A genuinely unknown code hash should not parse without a metadata hint.
+        // A genuinely unknown code hash does not parse. (Re-pinned in resync
+        // fix round 2, B: the half that parsed it with an `xudt_compatible`
+        // hint is gone with the hint.)
         assert!(UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none());
-
-        let parsed = UdtParser::parse_udt_cell_with_standard_hint(
-            &output,
-            "0x01000000000000000000000000000000",
-            Some("xudt_compatible"),
-        )
-        .unwrap();
-
-        assert_eq!(parsed.amount, 1);
-        assert!(matches!(parsed.standard, UdtStandard::Xudt));
     }
 
     #[test]
@@ -750,11 +726,8 @@ mod tests {
             }),
         };
 
-        let parsed = UdtParser::parse_udt_cell_with_standard_hint(
-            &output,
-            "0x01000000000000000000000000000000",
-            Some("sudt"),
-        );
+        // Re-pinned in resync fix round 2, B: no hint exists any more.
+        let parsed = UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000");
 
         assert!(parsed.is_none());
     }

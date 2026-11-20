@@ -993,11 +993,15 @@ pub(crate) fn load_activity_token_info_cache(
     Ok(token_info_cache)
 }
 
+/// A cell's UDT amount, when its type pair is a UDT (THE pair rule,
+/// `UdtParser::is_udt_code_hash_bytes`). Nothing else makes a cell a UDT: the
+/// standard a token row or a label states is no hint (resync fix round 2, B:
+/// a token row exists only for a UDT pair, so a hint could never change the
+/// answer).
 pub(crate) fn parse_parsed_cell_udt_amount(
     cell: &crate::parser::cell::ParsedCell,
     tx_hash: &[u8],
     output_index: i16,
-    standard_hint: Option<&str>,
 ) -> Result<Option<u128>> {
     let standard = if let (Some(type_code_hash), Some(hash_type)) =
         (cell.type_code_hash.as_deref(), cell.type_hash_type)
@@ -1006,12 +1010,8 @@ pub(crate) fn parse_parsed_cell_udt_amount(
     } else {
         None
     };
-    let standard = match standard {
-        Some(standard) => standard,
-        None => match standard_hint.and_then(crate::parser::UdtStandard::from_standard_hint) {
-            Some(crate::parser::UdtStandard::Xudt) => crate::parser::UdtStandard::Xudt,
-            _ => return Ok(None),
-        },
+    let Some(standard) = standard else {
+        return Ok(None);
     };
     let type_code_hash = cell.type_code_hash.as_deref().unwrap_or(&[]);
 
@@ -1330,7 +1330,7 @@ mod tests {
         cell.data_size = 0;
 
         let tx_hash = [0x81; 32];
-        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3, None).unwrap();
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3).unwrap();
         assert_eq!(amount, None);
     }
 
@@ -1357,12 +1357,15 @@ mod tests {
         };
 
         let tx_hash = [0x82; 32];
-        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap();
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7).unwrap();
         assert_eq!(amount, None);
     }
 
+    /// Re-pinned in resync fix round 2, B: a cell whose type pair is no UDT
+    /// carries no amount; the `xudt_compatible` standard hint a token row
+    /// gave (the half that read it is gone with the hint) never made it one.
     #[test]
-    fn test_parse_parsed_cell_udt_amount_supports_xudt_compatible_hint() {
+    fn test_parse_parsed_cell_udt_amount_of_a_non_udt_pair_is_none() {
         let amount = 15_778_600u128;
         let mut data = vec![0u8; 16];
         data.copy_from_slice(&amount.to_le_bytes());
@@ -1382,12 +1385,12 @@ mod tests {
         };
 
         let tx_hash = [0x83; 32];
-        let parsed =
-            parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, Some("xudt_compatible")).unwrap();
-        assert_eq!(parsed, Some(amount));
-
-        let no_hint = parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, None).unwrap();
-        assert_eq!(no_hint, None);
+        let parsed = parse_parsed_cell_udt_amount(&cell, &tx_hash, 0).unwrap();
+        assert_eq!(
+            parsed, None,
+            "an amount-shaped payload under a non-UDT pair"
+        );
+        let _ = amount;
     }
 
     // -- omnilock tests --------------------------------------------------------

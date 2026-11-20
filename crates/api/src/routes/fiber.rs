@@ -740,7 +740,8 @@ fn aggregate_network(
         .into_iter()
         .map(|(hash, (channels, open_channels))| {
             Ok(FiberTokenChannelsResponse {
-                symbol: store.get_token(&hash)?.and_then(|token| token.symbol),
+                symbol: crate::token_identity::get_token(store, &hash)?
+                    .and_then(|token| token.symbol),
                 udt_type_hash: format_hex(&hash),
                 channels,
                 open_channels,

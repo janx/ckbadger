@@ -422,7 +422,7 @@ fn classify(
     result.class = Class::Script;
     if UdtParser::is_udt_code_hash_bytes(code, hash_type).is_some() {
         ensure!(
-            store.get_token(type_hash)?.is_some(),
+            crate::token_identity::token_exists(store, type_hash)?,
             "missing indexed token metadata 0x{}",
             hex::encode(type_hash)
         );

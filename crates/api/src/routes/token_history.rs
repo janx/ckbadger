@@ -351,8 +351,7 @@ fn require_token(
     store: &CkbadgerStore,
     hash: &[u8],
 ) -> Result<ckbadger_store::TokenInfo, crate::response::ApiRouteError> {
-    store
-        .get_token(hash)
+    crate::token_identity::get_token(store, hash)
         .map_err(internal)?
         .ok_or_else(|| ApiError::not_found("Token not found"))
 }

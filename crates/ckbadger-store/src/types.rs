@@ -1007,10 +1007,9 @@ pub struct TokenInfo {
 }
 
 /// A curated token label (`docs/metadata/tokens/`), as label import stores it
-/// in `CF_TOKEN_LABELS` by the token's type script hash. It is attached to the
-/// token's row ([`TokenInfo::attach_label`]) by label import when the chain
-/// already holds the token, and by the writer that creates the row (live sync
-/// or the bulk snapshot) when the chain first holds it: a label never makes a
+/// in `CF_TOKEN_LABELS` by the token's type script hash. The API joins it to
+/// the token's row when it reads the token ([`TokenInfo::attach_label`]);
+/// no stored row holds it (resync fix round 2, B), and a label never makes a
 /// token row by itself (resync fix round M1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenLabel {

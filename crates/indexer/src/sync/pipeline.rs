@@ -719,12 +719,7 @@ fn parse_single_block(
                 data_size: cell.data_size,
                 data: cell.data.clone(),
                 data_hash: Some(cell.data_hash),
-                udt_amount: parse_parsed_cell_udt_amount(
-                    cell,
-                    &parsed_tx.hash,
-                    output_index_i16,
-                    None,
-                )?,
+                udt_amount: parse_parsed_cell_udt_amount(cell, &parsed_tx.hash, output_index_i16)?,
                 semantic_tag,
                 dao_state: parse_bulk_dao_cell_state(
                     cell,
@@ -961,8 +956,6 @@ pub(crate) fn precompute_live_batch(
     start_block: u64,
     end_block: u64,
 ) -> Result<LiveBatchPrecompute> {
-    let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
-
     let mut precompute_phase_metrics = ParserPrecomputePhaseMetrics::default();
 
     // Pass 1: Build batch_cell_infos
@@ -992,41 +985,10 @@ pub(crate) fn precompute_live_batch(
                     ));
                 }
             };
-            let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref() {
-                if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                    cached.clone()
-                } else {
-                    let looked_up = match store.get_token(type_hash) {
-                        Ok(token) => token.map(|info| info.standard),
-                        Err(e) => {
-                            error!(
-                                block_number = tx_data.block_number,
-                                tx_hash = %hex::encode(tx_data.hash),
-                                output_index,
-                                type_script_hash = %hex::encode(type_hash),
-                                "Parser: token metadata lookup failed while parsing UDT output hint: {}",
-                                e
-                            );
-                            return Err(anyhow!(
-                                    "token metadata lookup failed while parsing UDT output hint: block={}, tx=0x{}, output_index={}, error={}",
-                                    tx_data.block_number,
-                                    hex::encode(tx_data.hash),
-                                    output_index,
-                                    e
-                            ));
-                        }
-                    };
-                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                    looked_up
-                }
-            } else {
-                None
-            };
             let udt_amount = match parse_parsed_cell_udt_amount(
                 cell,
                 &tx_data.hash,
                 output_index_i16,
-                standard_hint.as_deref(),
             ) {
                 Ok(v) => v,
                 Err(e) => {

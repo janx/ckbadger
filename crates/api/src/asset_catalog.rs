@@ -71,7 +71,7 @@ fn tier(btc: i64, pure: i64, decentralized: i64, centralized: i64, unknown: i64)
 impl AssetCatalog {
     pub fn load(store: &CkbadgerStore) -> anyhow::Result<Self> {
         let mut tokens = Vec::new();
-        for (hash, info) in store.list_tokens()? {
+        for (hash, info) in crate::token_identity::list_tokens(store)? {
             if info.name.is_some() || info.symbol.is_some() || positive_holder_exists(store, &hash)?
             {
                 tokens.push((hash, info));

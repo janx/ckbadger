@@ -1,22 +1,24 @@
-//! Token metadata provenance (IV-26): the one rule that decides which source
-//! writes a token's stored `name` / `symbol` / `decimals` — a curated label or
-//! the token's own Unique Cell — and whether the two disagree.
+//! Token metadata provenance (IV-26): the rules that say a token's
+//! `name` / `symbol` / `decimals` — what its own Unique Cell says, and a
+//! curated label joined over it — and whether the two disagree.
 //!
-//! Label import calls [`TokenInfo::apply_label`]; the live writer and the
-//! bulk snapshot writer both call [`TokenInfo::merge_chain_metadata`]
-//! (through `udt::apply_onchain_token_info`); the API reads
-//! [`TokenInfo::checked_metadata_source`], [`TokenInfo::chain_metadata_conflict`]
-//! and [`TokenInfo::claimed_symbols`]. No other code writes
-//! `metadata_source` / `chain_metadata`.
+//! A stored token row is the chain's (resync fix round 2, B): the live writer
+//! and the bulk snapshot writer both call [`TokenInfo::merge_chain_metadata`]
+//! (through `udt::apply_onchain_token_info`) and nothing else. The API joins
+//! a token's curated label when it reads the token, by
+//! [`TokenInfo::attach_label`] (its one `token_identity` function), and reads
+//! [`TokenInfo::checked_metadata_source`],
+//! [`TokenInfo::chain_metadata_conflict`] and [`TokenInfo::claimed_symbols`]
+//! on what that gives.
 use crate::types::{ChainTokenMetadata, OnchainInfoBinding, TokenInfo, TokenMetadataSource};
 
 impl TokenInfo {
-    /// THE label rule (resync fix round M1): a curated label attached to the
-    /// token's row writes its name, symbol and decimals ([`Self::apply_label`]),
-    /// its icon, its description and its standard. Label import calls it on a
-    /// row the chain already made; live sync and the bulk snapshot writer call
-    /// it on the row they create when the chain first holds the token, before
-    /// any chain claim or Unique Cell is merged in, so both paths store one row.
+    /// THE label rule: a curated label joined to the token's row gives its
+    /// name, symbol and decimals ([`Self::apply_label`], the label wins where
+    /// it states a field), its icon, its description and its standard; the
+    /// chain's own values stay beside them (`chain_metadata`). The API applies
+    /// it when it reads a token (resync fix round 2, B); no stored row holds a
+    /// label.
     pub fn attach_label(&mut self, label: &crate::types::TokenLabel) {
         self.apply_label(label.name.clone(), label.symbol.clone(), label.decimals);
         self.icon_url = label.icon_url.clone();

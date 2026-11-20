@@ -30,7 +30,7 @@ use crate::db::writer::LiveDaoBatch;
 use crate::db::BatchWriter;
 use crate::parser::{
     BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser,
-    MnftParser, ScriptParser, SporeParser, TransactionParser, UdtParser,
+    MnftParser, SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -795,24 +795,24 @@ fn should_consume_grouped_mnft_token(
     }
 }
 
-fn parse_udt_cells_with_store_fallback_inner<F>(
+/// A transaction's UDT outputs with their output indexes: an output is a
+/// UDT by its type pair alone (`UdtParser::parse_udt_cell`, THE pair rule).
+/// The store fallback that read a token row's standard as a hint is gone
+/// (resync fix round 2, B: a token row exists only for a UDT pair, so the
+/// hint could never change the answer, and a label's standard is no
+/// indexer decision's input).
+fn parse_udt_outputs(
     tx: &crate::rpc::TransactionView,
-    mut standard_lookup: F,
-) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>>
-where
-    F: FnMut(&[u8]) -> Result<Option<String>>,
-{
+) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>> {
     if tx.outputs.len() != tx.outputs_data.len() {
         bail!(
-            "transaction outputs mismatch while parsing UDT outputs with store fallback: tx_hash={}, outputs={}, outputs_data={}",
+            "transaction outputs mismatch while parsing UDT outputs: tx_hash={}, outputs={}, outputs_data={}",
             tx.hash,
             tx.outputs.len(),
             tx.outputs_data.len()
         );
     }
     let mut parsed = Vec::new();
-    let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
-
     for (output_index, (output, data_hex)) in
         tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
     {
@@ -821,38 +821,8 @@ where
                 checked_usize_to_i16(output_index, "UDT output index while parsing outputs")
                     .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
             parsed.push((output_index_i16, cell));
-            continue;
-        }
-
-        let Some(type_script) = output.type_.as_ref() else {
-            continue;
-        };
-
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
-            cached.clone()
-        } else {
-            let looked_up = standard_lookup(&type_script_hash)?;
-            standard_cache.insert(type_script_hash.clone(), looked_up.clone());
-            looked_up
-        };
-
-        let Some(standard_hint) = standard_hint else {
-            continue;
-        };
-
-        if let Some(cell) =
-            UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
-        {
-            let output_index_i16 = checked_usize_to_i16(
-                output_index,
-                "UDT output index while parsing hinted outputs",
-            )
-            .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
-            parsed.push((output_index_i16, cell));
         }
     }
-
     Ok(parsed)
 }
 
@@ -1498,20 +1468,6 @@ pub(super) fn parse_blocks_parallel(
 }
 
 impl Indexer {
-    /// Parse UDT outputs from a transaction, with a fallback for label-known
-    /// token standards such as `xudt_compatible`.
-    fn parse_udt_cells_with_store_fallback(
-        &self,
-        tx: &crate::rpc::TransactionView,
-    ) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>> {
-        parse_udt_cells_with_store_fallback_inner(tx, |type_script_hash| {
-            self.writer
-                .store()
-                .get_token(type_script_hash)
-                .map(|info| info.map(|token| token.standard))
-        })
-    }
-
     pub(crate) async fn maybe_invalidate_chart_caches(&self, current_block: u64) {
         if !self.cache_invalidator.is_enabled() {
             return;
@@ -2118,7 +2074,7 @@ impl Indexer {
                     }
                     let tx = &block_response.block.transactions[tx_idx];
                     let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                    for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)? {
+                    for (output_index, udt_cell) in parse_udt_outputs(tx)? {
                         batch_udt_cells
                             .insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                         self.udt_cell_cache.insert(
@@ -5823,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_preserves_output_index() {
+    fn test_parse_udt_outputs_preserves_output_index() {
         let lock = crate::rpc::Script {
             code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
                 .to_string(),
@@ -5860,14 +5816,18 @@ mod tests {
             witnesses: vec![],
         };
 
-        let parsed = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap();
+        let parsed = parse_udt_outputs(&tx).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].0, 1);
         assert_eq!(parsed[0].1.amount, 1);
     }
 
+    /// resync fix round 2, B: an output whose type pair is no UDT is no UDT
+    /// output, and nothing is looked up to say otherwise. (It replaces the
+    /// test that the store fallback's lookup error propagated: the lookup is
+    /// gone with the fallback.)
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_propagates_lookup_error() {
+    fn test_parse_udt_outputs_reads_no_store_for_a_non_udt_pair() {
         let lock = crate::rpc::Script {
             code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
                 .to_string(),
@@ -5894,17 +5854,11 @@ mod tests {
             witnesses: vec![],
         };
 
-        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| {
-            Err(anyhow!("synthetic token metadata lookup failure"))
-        })
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("synthetic token metadata lookup failure"));
+        assert!(parse_udt_outputs(&tx).unwrap().is_empty());
     }
 
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_errors_on_outputs_data_length_mismatch() {
+    fn test_parse_udt_outputs_errors_on_outputs_data_length_mismatch() {
         let tx = crate::rpc::TransactionView {
             hash: format!("0x{}", "bb".repeat(32)),
             version: "0x0".to_string(),
@@ -5925,10 +5879,10 @@ mod tests {
             witnesses: vec![],
         };
 
-        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap_err();
-        assert!(err.to_string().contains(
-            "transaction outputs mismatch while parsing UDT outputs with store fallback"
-        ));
+        let err = parse_udt_outputs(&tx).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("transaction outputs mismatch while parsing UDT outputs"));
     }
 
     #[test]
@@ -7210,7 +7164,7 @@ mod tests {
                     // carry their parsed amount into `batch_cell_infos`, which
                     // is what the write path persists as live cell state.
                     let udt_amount =
-                        parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index_i16, None)?;
+                        parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index_i16)?;
                     batch_cell_infos.insert(
                         (tx_data.hash.to_vec(), output_index_i16),
                         PositionedCellInfo::new(
@@ -10774,20 +10728,24 @@ mod tests {
                 decimals: 18,
                 binding: OnchainInfoBinding::IssuanceCooccurrence,
             };
+            // Re-pinned in resync fix round 2, B: the stored row is the
+            // chain's on both paths (the Unique Cell's own name, `Chain`);
+            // the label stays in `token_labels` and the API joins it when it
+            // reads the token. It was the label's fields, `Label`, conflict.
             for (path, bytes) in [("bulk", &bulk_bytes), ("live", &live_bytes)] {
                 let row: TokenInfo = bincode::deserialize(bytes).unwrap();
                 assert_eq!(
                     (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
-                    (Some("RGB++_Jump"), Some("RGB++_Jump"), Some(18)),
-                    "{path}: the label keeps the stored fields"
+                    (Some("RGB++ Protocol"), Some("RGB++"), Some(18)),
+                    "{path}: the chain's fields"
                 );
                 assert_eq!(
                     row.metadata_source,
-                    Some(TokenMetadataSource::Label),
+                    Some(TokenMetadataSource::Chain),
                     "{path}"
                 );
                 assert_eq!(row.chain_metadata.as_ref(), Some(&chain), "{path}");
-                assert!(row.chain_metadata_conflict(), "{path}");
+                assert!(!row.chain_metadata_conflict(), "{path}");
             }
             let live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
             let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
@@ -10801,19 +10759,9 @@ mod tests {
             );
             assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
             assert_eq!(live_bytes, bulk_bytes, "live and bulk CF_TOKENS rows, raw");
-            // The label import stored is the one attached.
-            assert_eq!(
-                (
-                    live.name.as_deref(),
-                    live.icon_url.as_deref(),
-                    live.standard.as_str()
-                ),
-                (
-                    Some(label.name.as_str()),
-                    label.icon_url.as_deref(),
-                    label.standard.as_str()
-                )
-            );
+            // The label import stored stays in `token_labels`, beside the row.
+            assert_eq!(store.get_token_label(&type_hash).unwrap(), Some(label));
+            assert_eq!(live.icon_url, None);
         }
     }
 
@@ -14995,7 +14943,9 @@ mod tests {
         /// chain holds no cell of the token; block 102 issues the token and
         /// claims 8800. Bulk, live a block per batch and live in one batch
         /// store the same `CF_TOKENS` row, byte for byte: first block 102, max
-        /// supply 8800, the label attached.
+        /// supply 8800, the chain's (re-pinned in resync fix round 2, B: it
+        /// was "the label attached"; the label is joined when the row is
+        /// read).
         #[tokio::test]
         async fn a_labelled_tokens_first_block_and_max_supply_are_the_chains_on_every_path() {
             let blocks = vec![
@@ -15062,21 +15012,20 @@ mod tests {
                 (bulk_row.first_seen_block, bulk_row.max_supply),
                 (102, Some(8800))
             );
+            fn no_label(_: &CkbadgerStore) -> Result<()> {
+                Ok(())
+            }
+            let unlabelled =
+                crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                    &blocks, no_label,
+                )
+                .expect("bulk");
             assert_eq!(
-                (
-                    bulk_row.name.as_deref(),
-                    bulk_row.symbol.as_deref(),
-                    bulk_row.decimals,
-                    bulk_row.icon_url.as_deref(),
-                ),
-                (
-                    Some("Supply One"),
-                    Some("SUP1"),
-                    Some(8),
-                    Some("https://example.invalid/sup1.png")
-                ),
-                "the label is attached"
+                unlabelled.token_rows.tokens.get(&type_hash),
+                Some(&bulk_bytes),
+                "the label is no part of the row"
             );
+            assert_eq!(bulk_row.icon_url, None, "the label is not attached");
 
             // While the chain holds no cell of the token, nothing writes its
             // row: not label import, not the claim's block (in its scope).

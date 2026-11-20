@@ -11283,12 +11283,8 @@ mod tests {
             );
         }
 
-        // -- TokenOwner (needs domain store) --
-        let token_final = runtime
-            .owners
-            .token
-            .build_final_rows(&domain_store)
-            .unwrap();
+        // -- TokenOwner (its rows are the chain's: it reads no store) --
+        let token_final = runtime.owners.token.build_final_rows().unwrap();
         {
             let mut mat = Materializer::new(&domain_store, &append_store);
             runtime.owners.token.flush_sealed(&mut mat).unwrap();
