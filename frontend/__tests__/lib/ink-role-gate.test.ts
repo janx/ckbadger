@@ -18,7 +18,10 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  *   a `TokenAmount`'s default);
  * - `td`: a table cell — a `<td>`, the `className` of a `ListTable` column (an object with
  *   `render` and `minWidth`), or the root element its `render` returns;
- * - `prose`: a paragraph, `<p>`.
+ * - `prose`: a paragraph, `<p>`;
+ * - `line`: a loading or an empty-state line drawn in another element (a `div`, a `span`, …), by
+ *   its own words (`LOADING_OR_EMPTY`: they end in the ellipsis, or open with "No"): a sentence
+ *   wherever it is drawn (BRIEF-roles-rest part C; the round's ruling B27).
  *
  * An element carries the quiet ink by its own class (`text-text-dim` at rest: with no variant, or a
  * responsive one; `hover:text-text-dim` is a pointer's state; an arbitrary value naming the quiet
@@ -55,8 +58,17 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  * kind in the same file.
  */
 
-type Kind = 'link' | 'amount' | 'td' | 'prose';
-const KINDS: readonly Kind[] = ['link', 'amount', 'td', 'prose'];
+type Kind = 'link' | 'amount' | 'td' | 'prose' | 'line';
+const KINDS: readonly Kind[] = ['link', 'amount', 'td', 'prose', 'line'];
+
+/**
+ * A loading line or an empty-state line, by its own words (BRIEF-roles-rest part C; the ink and
+ * size round's ruling B27: a loading line is a sentence, site-wide, and so is an empty-state line):
+ * words that end in the ellipsis ("Loading peer evidence…", "Resolving code…", ": reading…", a
+ * lone "…" where a value is being read), or that open with "No" or "no" and a word ("No results.",
+ * "No type script", "no CKB moved for").
+ */
+const LOADING_OR_EMPTY = /…$|^no \S/i;
 
 /** The lane whose pages a file belongs to (the hand-back groups the list by them). */
 type Family = 'chain' | 'assets' | 'lists' | 'topics' | 'shared';
@@ -541,6 +553,26 @@ function scanInkRoles(
     return out;
   };
 
+  /**
+   * Whether an element's own words are a loading or an empty-state line (`LOADING_OR_EMPTY`): its
+   * text children read as one line, or one of the strings its child expressions can reach (a
+   * branch's words), never the words of an element inside it, which is read on its own.
+   */
+  const loadingOrEmpty = (el: ts.JsxElement): boolean => {
+    const own = el.children
+      .filter(ts.isJsxText)
+      .map((t) => t.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const reached = el.children.flatMap((c) =>
+      ts.isJsxExpression(c) && c.expression && !ts.isJsxElement(unwrap(c.expression))
+        ? leaves(c.expression).map((l) => l.trim())
+        : []
+    );
+    return [own, ...reached].some((words) => words !== '' && LOADING_OR_EMPTY.test(words));
+  };
+
   const sites: Site[] = [];
   const quiet: QuietSite[] = [];
   const visit = (node: ts.Node) => {
@@ -555,7 +587,9 @@ function scanInkRoles(
             ? 'td'
             : tag === 'p'
               ? 'prose'
-              : null;
+              : /^[a-z]/.test(tag) && ts.isJsxElement(node) && loadingOrEmpty(node)
+                ? 'line'
+                : null;
       if (kind !== null) {
         const own = classes(node);
         let dim = false;
@@ -984,6 +1018,35 @@ describe('the ink-role scan finds what it must, and only that', () => {
         '</div>;',
       ])
     ).toEqual(['4 link <BlockLink>', '5 link <Link>']);
+  });
+
+  // BRIEF-roles-rest part C: a loading or an empty-state line drawn in a div or a span was no kind
+  // of the gate (only a <p> was prose), so "Resolving script page…" and twenty more stood quiet.
+  it('finds a loading or an empty-state line in the quiet ink outside a <p>, and only that', () => {
+    expect(
+      sitesOf([
+        '<div className="text-text-dim text-small">Loading the daily AR history…</div>;',
+        '<span className="text-text-dim">{unitText(title)}: reading…</span>;',
+        '<div className="text-text-dim">{searching ? "Searching…" : "No results."}</div>;',
+        '<div className="text-text-dim"><span>No peers match these evidence filters.</span></div>;',
+        '<span className="text-text-dim text-small">no CKB moved for </span>;',
+        '<span className="text-text-dim">…</span>;',
+        '<span className="text-text-dim">held by</span>;',
+        '<span className="text-text-dim">since <Utc8Date timestamp={t} /></span>;',
+        '<div className="text-text-dim"><span className="text-text">Loading…</span></div>;',
+        '<p className="text-text-dim">Loading the page…</p>;',
+        '<tr className="quiet"><td><span>No data yet</span></td></tr>;',
+        '<dt className="text-text-dim">Nonce</dt>;',
+      ])
+    ).toEqual([
+      '1 line <div>',
+      '2 line <span>',
+      '3 line <div>',
+      '4 line <span>',
+      '5 line <span>',
+      '6 line <span>',
+      '10 prose <p>',
+    ]);
   });
 
   it('pins the components known to ink a prop: four, six props, each with its reason', () => {

@@ -683,7 +683,7 @@ export function ScriptHistoryReading({
           ]}
         />
       ) : (
-        <span className="text-text-dim">No capacity history in this range.</span>
+        <span className="text-text">No capacity history in this range.</span>
       )}
     </div>
   );

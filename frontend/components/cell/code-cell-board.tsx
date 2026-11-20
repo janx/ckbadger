@@ -70,7 +70,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               </span>
             </>
           ) : (
-            <span className="text-text-dim">
+            <span className="text-text">
               No type script: no one can name this binary by type hash.
             </span>
           )}
@@ -193,7 +193,7 @@ function BuiltWith({ elf }: { elf: CellElfAnalysis }) {
           </span>
         ))
       ) : (
-        <span className="text-text-dim">No .comment section</span>
+        <span className="text-text">No .comment section</span>
       )}
       <span>
         {attributes?.status === 'parsed' && attributes.arch ? `target ${attributes.arch} · ` : ''}

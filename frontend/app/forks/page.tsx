@@ -259,7 +259,7 @@ function Shape({ event }: { event: ReorgEvent }) {
 function Miners({ event, size }: { event: ReorgEvent; size: ShortSize }): ReactNode {
   if (event.eventType === 'deep') return <span className="text-text-dim">—</span>;
   if (!event.preview)
-    return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
+    return <span className="text-text">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
   const {
     oldMinerLockHash: dropped,
     oldMinerAddress,
@@ -331,7 +331,7 @@ function Fate({ event }: { event: ReorgEvent }) {
       </span>
     );
   if (!event.preview)
-    return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
+    return <span className="text-text">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
   const { fate, uncleInBlock, noncellbaseTransactions, committedLaterTransactions } = event.preview;
   const words = orphanFateWords(fate as Parameters<typeof orphanFateWords>[0]);
   return (

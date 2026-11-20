@@ -166,9 +166,9 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           AR history could not be read: {String(history.error)}
         </div>
       ) : history.data === undefined ? (
-        <div className="text-text-dim text-small">Loading the daily AR history…</div>
+        <div className="text-text text-small">Loading the daily AR history…</div>
       ) : history.data.length === 0 ? (
-        <div className="text-text-dim text-small">No complete day has closed yet.</div>
+        <div className="text-text text-small">No complete day has closed yet.</div>
       ) : (
         <ArByDay days={history.data} evidence={evidence} />
       )}

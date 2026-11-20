@@ -433,7 +433,7 @@ function PeerEvidenceRow({ peerId }: { peerId: string }) {
   return (
     <TerminalRow data-testid="peer-evidence-row">
       {isAwaited(detail) ? (
-        <div className="text-text-dim text-small px-4 py-3 font-mono">Loading evidence…</div>
+        <div className="text-text text-small px-4 py-3 font-mono">Loading evidence…</div>
       ) : detail.isError || !detail.data ? (
         <div className="text-negative text-small px-4 py-3 font-mono">
           Failed to load peer evidence.
@@ -704,7 +704,7 @@ export function PeersTable() {
             )}
 
             {showSkeleton ? (
-              <div className="text-text-dim text-body py-12 text-center font-mono">
+              <div className="text-text text-body py-12 text-center font-mono">
                 Loading peer evidence…
               </div>
             ) : isError ? (
@@ -712,7 +712,7 @@ export function PeersTable() {
                 Failed to load peer evidence.
               </div>
             ) : showEmpty ? (
-              <div className="text-text-dim text-body py-12 text-center font-mono">
+              <div className="text-text text-body py-12 text-center font-mono">
                 No peers match these evidence filters.
               </div>
             ) : (

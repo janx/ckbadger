@@ -302,7 +302,7 @@ function Hero({
             DAO daily history could not be loaded from indexed snapshots.
           </div>
         ) : series === null ? (
-          <div className="text-text-dim text-small mt-[18px]">Loading canonical daily history…</div>
+          <div className="text-text text-small mt-[18px]">Loading canonical daily history…</div>
         ) : (
           <DaoHistoryFigure series={series} pin={pin} />
         )}
