@@ -271,6 +271,7 @@ describe('renderMarkdownPage', () => {
             participantCount: 1,
             partyIds: [[`0x${'0a'.repeat(20)}`, 8]],
             feePayer: null,
+            items: [],
           },
         ],
         total: 1,
@@ -432,6 +433,7 @@ describe('renderMarkdownPage', () => {
             participantCount: 1,
             partyIds: [[`0x${'0a'.repeat(20)}`, 8]],
             feePayer: null,
+            items: [],
           },
         ],
         total: 1,
@@ -497,6 +499,7 @@ describe('renderMarkdownPage', () => {
             participantCount: 0,
             partyIds: [],
             feePayer: null,
+            items: [],
           },
         ],
         total: 1,
@@ -571,10 +574,13 @@ describe('renderMarkdownPage', () => {
             typeCalls: [],
             lockCalls: [],
             protocolActions: [],
-            participants: [0, 1, 2, 3, 4, 5].map(party),
+            // re-pinned on purpose (lane feed, part 4): a row of 770 parties with no fee payer
+            // draws the five largest CKB changes alone (it drew six)
+            participants: [0, 1, 2, 3, 4].map(party),
             participantCount: 770,
             partyIds: Array.from({ length: 770 }, (_, i) => [party(i).lockHash, 0]),
             feePayer: null,
+            items: [],
           },
         ],
         limit: 1,
@@ -598,12 +604,101 @@ describe('renderMarkdownPage', () => {
       return row.split('|').map((c) => c.trim())[names.indexOf(name)];
     };
     expect(cell('participants')).toBe('770');
-    expect(cell('drawn')).toBe('6');
+    expect(cell('drawn')).toBe('5');
     expect(cell('firstDrawnParty')).toBe('ckt1qyq9pa...00000000');
     expect(cell('firstDrawnCkbDelta')).toBe('-500000000000');
+    // re-pinned on purpose (lane feed, part 4): a row draws no party for moving an item, and the
+    // detail is the row's stated item
     expect(result.body).toContain(
-      'firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes, the fee payer and every party whose items moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.'
+      "firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes and the fee payer. detail names the row's first item as the route states it from every party: its movement and, for a token, its amount moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}."
     );
+  });
+
+  // Lane feed, part 4: the detail is the row's first item as the route states it from every party
+  // (its movement, a token's amount moved), not a drawn party's delta: none of the drawn moved it
+  it('details a token row by its stated item, which none of its drawn parties moved', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 1,
+      transferCount: 0,
+      daoDepositCount: 0,
+      daoWithdrawRequestCount: 0,
+      daoWithdrawCompleteCount: 0,
+      tokenCount: 1,
+      objectCount: 0,
+      identityCount: 0,
+      scriptCallCount: 0,
+      unknownCount: 0,
+      coinbaseCount: 0,
+      uniqueAddressCount: 300,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      scriptCalls: 0,
+      scriptRest: null,
+      hoursCovered: 24,
+      kindOccurrences: 1,
+      daoCount: 0,
+    });
+    const party = (i: number) => ({
+      address: `ckt1qyq9party${String(i).padStart(4, '0')}0000000000000000000000000`,
+      lockHash: `0x${String(i).padStart(64, '0')}`,
+      lockHashPrefix: null,
+      roles: [],
+      ckbDelta: `-${9 - i}00000000000`,
+      usedDelta: '0',
+      itemDeltas: [],
+      tags: 0,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'e'.repeat(64)}`,
+            blockNumber: 126,
+            txIndex: 1,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [],
+            participants: [0, 1, 2, 3, 4].map(party),
+            participantCount: 300,
+            partyIds: Array.from({ length: 300 }, (_, i) => [party(i).lockHash, 0]),
+            feePayer: null,
+            items: [
+              {
+                kind: 'token',
+                typeScriptHash: `0x${'7e'.repeat(32)}`,
+                symbol: 'USDC',
+                decimals: 6,
+                movement: 'burn',
+                amount: '1234567890123456789012345678901',
+                parties: 295,
+              },
+            ],
+          },
+        ],
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    const lines = result.body.split('\n');
+    const head = lines.find((line) => line.startsWith('| timestamp'))!;
+    const row = lines.find((line) => line.includes('0xeeeeeeee'))!;
+    const cell = (name: string) => {
+      const names = head.split('|').map((c) => c.trim());
+      return row.split('|').map((c) => c.trim())[names.indexOf(name)];
+    };
+    expect(cell('kind')).toBe('token');
+    expect(cell('detail')).toBe('USDC burn amount=1234567890123456789012345678901');
   });
 
   it('names a lock party without an address by its lock hash in the activities table', async () => {
@@ -667,6 +762,7 @@ describe('renderMarkdownPage', () => {
             participantCount: 1,
             partyIds: [[lockHash.slice(0, 42), 8]],
             feePayer: lockHash,
+            items: [],
           },
         ],
         limit: 1,

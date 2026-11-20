@@ -17,7 +17,7 @@ import type {
   ActivityTypeCall,
   ActivityLockCall,
   ActivityProtocolAction,
-  RowItemDelta,
+  ClassifiedItem,
 } from '@/lib/api';
 import { sentField } from '@/lib/api-fields';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -192,7 +192,7 @@ export function globalTxEvents(activity: ActivityBody): TxEvent[] {
  * (lane feed): its net over every party rose (mint), fell (burn) or held (transfer). The route
  * computes it from every party; a row draws some of them, so the page sums nothing.
  */
-function itemMovement(activity: ActivityBody, primary: RowItemDelta | null): string {
+function itemMovement(activity: ActivityBody, primary: ClassifiedItem | null): string {
   const where = `transaction ${activity.txHash ?? 'uncommitted'}`;
   if (!primary) throw new Error(`${where}: item headline has no item delta`);
   return sentField(primary.movement, where, 'movement');

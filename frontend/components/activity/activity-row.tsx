@@ -37,6 +37,7 @@ import type {
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
+  ClassifiedItem,
   GlobalActivity,
   ItemDelta,
   ParticipantInfo,
@@ -1167,10 +1168,9 @@ function partiesShown<T extends ActivityParticipant>(
  * explicit "+N" to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that
  * participant comes first, always shown; the others keep their order and that rule among
  * themselves. A row that draws some of the transaction's parties (lane feed: the route draws the
- * five largest, the fee payer and every party whose items moved) says how many: its fold opens
- * "8 of 770 participants", and once its drawn lines are all shown, the others are a way onward to
- * the transaction's page, where every party stands ("762 more participants on the transaction
- * page").
+ * five largest CKB changes and the fee payer, at most six, so all are shown) names the others as
+ * a way onward to the transaction's page, where every party stands ("765 more participants on the
+ * transaction page"); one that draws more than six of them is refused (a fold would say "all").
  */
 function Participants({
   participants,
@@ -1210,6 +1210,10 @@ function Participants({
     throw new Error(
       `transaction ${txHash}: it draws ${participants.length} parties of ${participantCount}`
     );
+  if (rest > 0 && participants.length > PARTICIPANT_LIMIT)
+    throw new Error(
+      `transaction ${txHash}: it draws ${participants.length} of its ${participantCount} parties, where a row draws at most ${PARTICIPANT_LIMIT}`
+    );
   if (participants.length === 0) return null;
   return (
     <div id={listId} data-role="participants" className="flex min-w-0 flex-col">
@@ -1234,7 +1238,6 @@ function Participants({
           <FoldToggle
             open={expanded}
             count={participants.length}
-            of={rest > 0 ? participantCount! : undefined}
             singular="participant"
             controls={listId}
             onToggle={setExpanded}
@@ -1254,9 +1257,14 @@ function Participants({
   );
 }
 
-export type ActivityRowData = Omit<GlobalActivity, 'blockNumber' | 'timestamp' | 'txIndex'> & {
+export type ActivityRowData = Omit<
+  GlobalActivity,
+  'blockNumber' | 'timestamp' | 'txIndex' | 'items'
+> & {
   blockNumber: number | null;
   timestamp: string | null;
+  /** The row's items: the route's statement (an address's own page: its own items). */
+  items: readonly ClassifiedItem[];
   poolStatus?: PoolStatus;
   timeAddedToPool?: string;
   interpretation?: PoolInterpretation;

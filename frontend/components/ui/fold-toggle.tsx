@@ -1,6 +1,6 @@
 'use client';
 
-import { formatCount, groupCount } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
 
 /**
  * The one control of a fold that opens a list in place (review of phases C and D, SHOULD 5; lane
@@ -16,9 +16,7 @@ import { formatCount, groupCount } from '@/lib/format-count';
  *   box: celadon words in a thumb's box, 32 px below 640 and 28 px from it. A list the route sends
  *   no count of (a collection's activity before its count is derived) folds too, asked for by name,
  *   `uncounted` (lane P2's third round, item 9): "all activity ↓", no number where there is none;
- *   the count stays required of a caller that has one. A list that is a part of a whole the page
- *   does not hold says so, `of` (lane feed: a row draws some of a transaction's parties): "8 of 770
- *   participants ↓", never "all".
+ *   the count stays required of a caller that has one.
  * - `inline` (the lead's final round, item 3), the rest of a list INSIDE a line of names (a head's
  *   calls, a participant's objects): folded, how many are folded, "+3 more locks", or the words of
  *   a figure that stands for them (`words`, a phone line's "+1 −1 objects"); opened, "fewer". It is
@@ -50,11 +48,6 @@ export function FoldToggle(
          * never "all".
          */
         soFar?: boolean;
-        /**
-         * The whole the list is a part of, where the page holds the list alone (lane feed: the
-         * parties a row draws of its transaction's): `8 of 770 participants ↓`, never "all".
-         */
-        of?: number;
       }
     | {
         form?: 'box';
@@ -97,19 +90,12 @@ export function FoldToggle(
     throw new Error(`a box fold writes its own words (all … ↓), not "${String(props.words)}"`);
   const counted =
     'uncounted' in props ? null : formatCount(props.count, props.singular, props.plural);
-  const whole = 'of' in props ? props.of : undefined;
-  if (whole !== undefined && 'soFar' in props && props.soFar)
-    throw new Error('a fold is a part of a whole or a count so far, not both');
-  if (whole !== undefined && 'count' in props && whole <= props.count)
-    throw new Error(`a fold of ${props.count} is no part of ${whole}`);
   const folded =
     counted === null
       ? `all ${(props as { uncounted: string }).uncounted} ↓`
-      : whole !== undefined && 'singular' in props
-        ? `${groupCount(props.count)} of ${formatCount(whole, props.singular, props.plural)} ↓`
-        : 'soFar' in props && props.soFar
-          ? `${counted} so far ↓`
-          : `all ${counted} ↓`;
+      : 'soFar' in props && props.soFar
+        ? `${counted} so far ↓`
+        : `all ${counted} ↓`;
   return (
     <button
       type="button"

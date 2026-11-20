@@ -1355,6 +1355,16 @@ export type RowItemDelta = ItemDelta & { movement: ItemMovement };
 type DeltaOf<K extends ItemDelta['kind']> = Extract<ItemDelta, { kind: K }>;
 
 /**
+ * An item as what names it, with its movement in the whole transaction: what a page classifies a
+ * row by (a row's stated item, or an address's own delta on its own page).
+ */
+export type ClassifiedItem = (
+  | Omit<DeltaOf<'token'>, 'delta'>
+  | Omit<DeltaOf<'object'>, 'delta'>
+  | Omit<DeltaOf<'identity'>, 'delta'>
+) & { movement: ItemMovement };
+
+/**
  * One item of a transaction as a row states it once (lane feed, part 4; docs/API.md, "The parties
  * a row draws"), computed by the route from every party: what names it, its movement, how many
  * parties' holdings of it changed and, for a token, the amount moved (the larger of what holders
@@ -1457,12 +1467,6 @@ interface ActivityProtocolAction {
    */
   metadata: Record<string, ExactJson>;
 }
-
-/** Tag bitmask constants for activity classification. */
-const TAG_TOKEN = 1;
-const TAG_OBJECT = 2;
-const TAG_IDENTITY = 4;
-const TAG_CELLBASE = 32;
 
 /**
  * Address activity response (GET /addresses/{addr}/activities): this address's changes, and every
@@ -4133,8 +4137,6 @@ export type {
   FiberChannelState,
   FiberChannelQueryParams,
 };
-
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE };
 
 export interface LabelCount {
   label: string;

@@ -133,7 +133,13 @@ function addressRow(activity: Activity, address: Address) {
   };
   // The endpoint supplies this participant's deltas only, and every party by its short id
   // (`partyIds`); do not invent zero balances for the others to construct a cross-user transaction.
-  const row: ActivityRowData = { ...activity, participants: [participant] };
+  // The row is this address's: its items, by which it is classified, headed and folded, are the
+  // address's own (each with the route's movement), never the transaction's (lane feed, part 4).
+  const row: ActivityRowData = {
+    ...activity,
+    participants: [participant],
+    items: activity.itemDeltas,
+  };
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;

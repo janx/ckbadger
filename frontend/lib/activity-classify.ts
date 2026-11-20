@@ -1,19 +1,23 @@
 import type {
-  RowItemDelta,
+  ClassifiedItem,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
   GlobalActivity,
 } from '@/lib/api';
-import { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE } from '@/lib/api';
+import { rowItems } from '@/lib/activity-parties';
 
-/** Interpretation needs only transaction contents, including before a block is known. */
+/**
+ * Interpretation needs only transaction contents, including before a block is known: its items as
+ * the route states them once (lane feed, part 4; an address's own page, its own items), never the
+ * parties a row draws.
+ */
 export type ActivityBody = Readonly<
   Pick<
     GlobalActivity,
     'participants' | 'protocolActions' | 'typeCalls' | 'lockCalls' | 'isCellbase'
   >
-> & { readonly txHash?: string };
+> & { readonly txHash?: string; readonly items: readonly ClassifiedItem[] };
 
 export type ActivityType =
   | 'daoDeposit'
@@ -46,8 +50,8 @@ export interface ClassifiedActivity<T extends ActivityBody = ActivityBody> {
   activity: T;
   /** Layer 3: highest-level interpretation, if a ProtocolDetector matched. */
   primaryProtocolAction: ActivityProtocolAction | null;
-  /** Layer 2: primary recognized item delta, if present, with its movement as the route states it. */
-  primaryItemDelta: RowItemDelta | null;
+  /** Layer 2: the primary item, if present, with its movement as the route states it. */
+  primaryItemDelta: ClassifiedItem | null;
   /** Layer 2: primary unrecognized type script call, if present. */
   primaryTypeCall: ActivityTypeCall | null;
   /** Layer 2: primary non-standard lock script, if present. */
@@ -55,38 +59,14 @@ export interface ClassifiedActivity<T extends ActivityBody = ActivityBody> {
   /* Layer 1: CKB position (ckbDelta, usedDelta) is per participant — not repeated here. */
 }
 
-/**
- * Find the first item delta across the parties drawn: every party whose items moved is one (the
- * route's rule), so these are every item delta of the transaction.
- */
-function findFirstItemDelta(activity: ActivityBody): RowItemDelta | null {
-  for (const p of activity.participants) {
-    if (p.itemDeltas.length > 0) {
-      return p.itemDeltas[0];
-    }
-  }
-  return null;
+/** The first of the row's stated items, in the order they first appear among its parties. */
+function findFirstItemDelta(activity: ActivityBody): ClassifiedItem | null {
+  return rowItems(activity)[0] ?? null;
 }
 
-/** Find the first item delta of a specific kind across the parties drawn (every item's party). */
-function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): RowItemDelta | null {
-  for (const p of activity.participants) {
-    const match = p.itemDeltas.find((d) => d.kind === kind);
-    if (match) return match;
-  }
-  return null;
-}
-
-/**
- * Compute combined tags bitmask from the parties drawn: its item bits are every item's (each
- * party that moved one is drawn), the only bits read here beside the cellbase's.
- */
-function combinedTags(activity: ActivityBody): number {
-  let tags = 0;
-  for (const p of activity.participants) {
-    tags |= p.tags;
-  }
-  return tags;
+/** The first of the row's stated items of a kind. */
+function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): ClassifiedItem | null {
+  return rowItems(activity).find((i) => i.kind === kind) ?? null;
 }
 
 /**
@@ -119,7 +99,6 @@ const ITEM_KIND_PRIORITY: Array<{ kind: string; activityType: ActivityType }> = 
 
 export function classifyActivity<T extends ActivityBody>(activity: T): ClassifiedActivity<T> {
   const primaryLockCall = activity.lockCalls[0] ?? null;
-  const tags = combinedTags(activity);
 
   // Layer 3: Protocol actions — highest level interpretation
   if (activity.protocolActions.length > 0) {
@@ -147,21 +126,18 @@ export function classifyActivity<T extends ActivityBody>(activity: T): Classifie
     };
   }
 
-  // Layer 2: Item deltas (via tags bitmask for fast check, then find actual delta)
+  // Layer 2: the row's items, the first kind of the three it moved
   for (const { kind, activityType } of ITEM_KIND_PRIORITY) {
-    const tagBit = kind === 'token' ? TAG_TOKEN : kind === 'object' ? TAG_OBJECT : TAG_IDENTITY;
-    if (tags & tagBit) {
-      const match = findFirstItemDeltaByKind(activity, kind);
-      if (match) {
-        return {
-          displayType: activityType,
-          activity,
-          primaryItemDelta: match,
-          primaryTypeCall: activity.typeCalls[0] ?? null,
-          primaryLockCall,
-          primaryProtocolAction: null,
-        };
-      }
+    const match = findFirstItemDeltaByKind(activity, kind);
+    if (match) {
+      return {
+        displayType: activityType,
+        activity,
+        primaryItemDelta: match,
+        primaryTypeCall: activity.typeCalls[0] ?? null,
+        primaryLockCall,
+        primaryProtocolAction: null,
+      };
     }
   }
 
@@ -178,17 +154,6 @@ export function classifyActivity<T extends ActivityBody>(activity: T): Classifie
   }
 
   // Cellbase or CKB transfer — Layer 1 only
-  if (tags & TAG_CELLBASE) {
-    return {
-      displayType: 'ckbTransfer',
-      activity,
-      primaryItemDelta: null,
-      primaryTypeCall: null,
-      primaryLockCall,
-      primaryProtocolAction: null,
-    };
-  }
-
   return {
     displayType: 'ckbTransfer',
     activity,

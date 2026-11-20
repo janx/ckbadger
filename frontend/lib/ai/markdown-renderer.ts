@@ -12,6 +12,7 @@ import {
   type DotCellOutPoint,
   type GlobalActivity,
   type GlobalActivityFilter,
+  type RowItem,
   type GraphResponse,
   type HardforkTimelineResponse,
   type MinerDistributionResponse,
@@ -262,14 +263,16 @@ function renderActivityDetail(activity: GlobalActivity): string {
     return `${pa.protocol}:${pa.action}`;
   }
 
-  if (classified.primaryItemDelta) {
-    switch (classified.primaryItemDelta.kind) {
+  // the row's first stated item (lane feed, part 4): its movement, and a token's amount moved
+  const item = classified.primaryItemDelta as RowItem | null;
+  if (item) {
+    switch (item.kind) {
       case 'token':
-        return `${classified.primaryItemDelta.symbol ?? hashShort(classified.primaryItemDelta.typeScriptHash)} delta=${classified.primaryItemDelta.delta}`;
+        return `${item.symbol ?? hashShort(item.typeScriptHash)} ${item.movement} amount=${item.amount}`;
       case 'object':
-        return `object ${hashShort(classified.primaryItemDelta.objectId)} delta=${classified.primaryItemDelta.delta}`;
+        return `object ${hashShort(item.objectId)} ${item.movement}`;
       case 'identity':
-        return `identity ${hashShort(classified.primaryItemDelta.identityId)} delta=${classified.primaryItemDelta.delta}`;
+        return `identity ${hashShort(item.identityId)} ${item.movement}`;
     }
   }
 
@@ -302,9 +305,12 @@ const GLOBAL_ACTIVITY_COLUMNS = [
   'detail',
 ];
 
-/** What the table's party columns hold, said under it (lane feed, ruling 14 of gate P). */
+/**
+ * What the table's party columns and its detail hold, said under it (lane feed, ruling 14 of gate
+ * P; part 4: a row draws no party for moving an item, its items are stated once).
+ */
 const GLOBAL_ACTIVITY_PARTIES_NOTE =
-  'firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes, the fee payer and every party whose items moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.';
+  "firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes and the fee payer. detail names the row's first item as the route states it from every party: its movement and, for a token, its amount moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.";
 
 /**
  * One line an activity: every party counted (the route's `participantCount`), how many the row

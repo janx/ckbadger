@@ -142,7 +142,7 @@ export type WrittenParty = Omit<ParticipantInfo, 'itemDeltas'> & {
 
 /** A row as a fixture writes it: the route's statements its own, or left to the checker. */
 export type Written<R> = Omit<R, StatementKey | 'participants'> &
-  Partial<Statements> &
+  Partial<Pick<R, StatementKey & keyof R>> &
   (R extends { participants: ParticipantInfo[] } ? { participants: WrittenParty[] } : unknown);
 
 type WrittenRow = Written<GlobalActivity> | Written<Activity> | Written<ActivityRowData>;

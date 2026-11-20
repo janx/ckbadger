@@ -13,7 +13,7 @@ import type {
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject, type FeedRow } from '@/components/activity/activity-runs';
 import { ActivityReadError } from '@/components/activity-event-row';
-import { namesLock, partyIds } from '@/lib/activity-parties';
+import { namesLock, partyIds, rowItems } from '@/lib/activity-parties';
 import {
   collectionFeedHeadline,
   itemFeedHeadline as itemHeadlineFromContext,
@@ -108,19 +108,23 @@ function classCellNote(activity: ItemActivity): ReadonlyMap<string, string> | un
   return new Map([[cell.lockHash, 'holds the class cell']]);
 }
 
+/**
+ * How much of a token a transaction moved, as the route states it from every party (lane feed,
+ * part 4: its `items` entry's `amount`, the larger of what holders gained and gave; the page summed
+ * the positive deltas of the parties it was sent). A token the transaction moved none of is not
+ * among its items: it moved 0.
+ */
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
   if (!transaction.activity)
     throw new Error(`${transaction.hash}: token transaction is missing its full activity`);
-  let value = BigInt(0);
-  for (const p of transaction.activity.participants)
-    for (const item of p.itemDeltas) {
-      if (item.kind !== 'token' || item.typeScriptHash !== typeHash) continue;
-      if (!/^-?(0|[1-9]\d*)$/.test(item.delta))
-        throw new Error(`${transaction.hash}: invalid token delta ${item.delta}`);
-      const delta = BigInt(item.delta);
-      if (delta > BigInt(0)) value += delta;
-    }
-  return value.toString();
+  const item = rowItems(transaction.activity).find(
+    (i) => i.kind === 'token' && i.typeScriptHash === typeHash
+  );
+  if (!item) return '0';
+  if (item.kind !== 'token') throw new Error(`${transaction.hash}: a token item of another kind`);
+  if (!/^(0|[1-9]\d*)$/.test(item.amount))
+    throw new Error(`${transaction.hash}: invalid token amount ${item.amount}`);
+  return item.amount;
 }
 export interface AssetTransactionsProps {
   rows: readonly Transaction[];

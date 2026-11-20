@@ -9,7 +9,7 @@ import { foldRuns, runKey, runParties, runTokens, type RunSubject } from '@/lib/
 import { readable } from '@/components/activity-event-row';
 import { sentField } from '@/lib/api-fields';
 import { classifyActivity } from '@/lib/activity-classify';
-import { partyIds } from '@/lib/activity-parties';
+import { partyIds, rowItems } from '@/lib/activity-parties';
 
 /**
  * What a row's part draws, by which its boundary starts again (B4 third round): its transaction and
@@ -44,8 +44,8 @@ export interface FeedRow {
  * protocol actions and the code its items carry and its scripts called; and what a run counts: its
  * transaction's every party, by the route's ids (`partyIds`, lane feed: the row draws some of them,
  * the address page its own alone), and on a token row the tokens its items moved, by their type
- * script's hash (ruling 6 of gate P; the address page's row carries the address's own items, a
- * feed's row every party's that moved one). Null for a row that cannot read one of its protocol
+ * script's hash (ruling 6 of gate P), from the row's stated items (lane feed, part 4: the route's,
+ * of every party; the address page states its own). Null for a row that cannot read one of its protocol
  * actions (`rowReadFails`): it
  * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1); and for
  * a committed row whose item types the API could not state (`itemTypesUnread`): its code is not
@@ -78,9 +78,7 @@ export function runSubject(activity: ActivityRowData, title: string): RunSubject
       classifyActivity(activity).displayType === 'token'
         ? [
             ...new Set(
-              activity.participants.flatMap((p) =>
-                p.itemDeltas.flatMap((i) => (i.kind === 'token' ? [i.typeScriptHash] : []))
-              )
+              rowItems(activity).flatMap((i) => (i.kind === 'token' ? [i.typeScriptHash] : []))
             ),
           ]
         : null,

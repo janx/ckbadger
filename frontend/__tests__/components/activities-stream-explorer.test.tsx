@@ -32,10 +32,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
-  TAG_TOKEN: 1,
-  TAG_OBJECT: 2,
-  TAG_IDENTITY: 4,
-  TAG_CELLBASE: 32,
 }));
 
 /**

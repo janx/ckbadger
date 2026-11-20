@@ -105,10 +105,20 @@ describe('the page reads what the route states of every party', () => {
 
   // the route states the item's movement from every party; the page sums nothing (its two drawn
   // amounts here net to zero, which it read as "transfer")
+  // re-pinned on purpose (lane feed, part 4): the movement is the row's stated item's, which the
+  // route computes from every party (it was the drawn parties' deltas', themselves the route's)
   it('heads a token row by the movement the route states', () => {
-    const giver = party('aaaaaa', '-1', { tags: 1, itemDeltas: [usdc('-5', 'mint')] });
-    const taker = party('bbbbbb', '1', { tags: 1, itemDeltas: [usdc('5', 'mint')] });
-    const row = routeRow(3, [giver, taker], [giver, taker], null, [ITEM_TYPE.sudt]);
+    const giver = party('aaaaaa', '-1', { tags: 1, itemDeltas: [usdc('-5', 'transfer')] });
+    const taker = party('bbbbbb', '1', { tags: 1, itemDeltas: [usdc('5', 'transfer')] });
+    const { delta: _delta, ...named } = usdc('5', 'mint');
+    const row = routeRow(
+      3,
+      [giver, taker],
+      [giver, taker],
+      null,
+      [ITEM_TYPE.sudt],
+      [{ ...named, amount: '5', parties: 2 }]
+    );
     expect(activityHeadline(row)).toBe('Token mint');
   });
 
@@ -213,18 +223,14 @@ describe('a row that draws some of its parties says how many it does not', () =>
     expect(rest).toHaveAttribute('href', expect.stringContaining(`/tx/${row.txHash}`));
   });
 
-  it('folds eight of 770 to five, opens the eight, then says the other 762', async () => {
-    const user = userEvent.setup();
+  // re-pinned on purpose (lane feed, part 4): a row draws at most six parties of a larger
+  // transaction (the five largest and the fee payer), so one that draws eight of 770 is refused;
+  // it was folded to five behind "8 of 770 participants ↓"
+  it('refuses a row that draws more than six of a larger transaction’s parties', () => {
     const { row } = big(8, 8);
-    const { container } = render(<ActivityRow activity={row} />);
-    expect(lines(container)).toHaveLength(5);
-    expect(screen.queryByRole('link', { name: /more\sparticipants/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: /^8 of 770\sparticipants ↓$/ }));
-    expect(lines(container)).toHaveLength(8);
-    expect(screen.getByRole('button', { name: /^fewer ↑$/ })).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: /762\smore\sparticipants on the transaction page/ })
-    ).toBeInTheDocument();
+    expect(() => render(<ActivityRow activity={row} />)).toThrow(
+      `transaction ${row.txHash}: it draws 8 of its 770 parties, where a row draws at most 6`
+    );
   });
 
   it('keeps a row that draws every party as it was: all of them behind "all 8 participants"', async () => {
@@ -273,6 +279,8 @@ describe('a response from an API older than this page is refused by name', () =>
     );
   });
 
+  // re-pinned on purpose (lane feed, part 4): the headline reads the row's stated item's movement
+  // (it read the drawn party's delta's)
   it('refuses an item without its movement where a headline reads it', () => {
     const usdc = { kind: 'token' as const, typeScriptHash: `0x${'7e'.repeat(32)}`, delta: '5' };
     const moved = routeRow(
@@ -280,11 +288,20 @@ describe('a response from an API older than this page is refused by name', () =>
       [{ ...x, tags: 1, itemDeltas: [{ ...usdc, movement: 'mint' }] }],
       [x],
       null,
-      [ITEM_TYPE.sudt]
+      [ITEM_TYPE.sudt],
+      [
+        {
+          kind: 'token',
+          typeScriptHash: usdc.typeScriptHash,
+          movement: 'mint',
+          amount: '5',
+          parties: 1,
+        },
+      ]
     );
     // the row as an older API sends it: its item without the movement
     const older = structuredClone(moved);
-    delete (older.participants[0].itemDeltas[0] as { movement?: string }).movement;
+    delete (older.items[0] as { movement?: string }).movement;
     expect(() => activityHeadline(older)).toThrow(
       `transaction ${moved.txHash}: the API sends no movement: it is older than this page`
     );

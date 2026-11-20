@@ -7,7 +7,7 @@
  * distinct parties from them), and the party whose only movement is the fee. Each reader refuses a
  * response without its field, as an API older than this page (`sentField`).
  */
-import type { PartyId } from '@/lib/api';
+import type { ClassifiedItem, PartyId } from '@/lib/api';
 import { sentField } from '@/lib/api-fields';
 
 /** A row as the route sends it: its transaction, named where a field is refused. */
@@ -16,6 +16,18 @@ interface StatedRow {
   participantCount?: number;
   partyIds?: readonly PartyId[];
   feePayer?: string | null;
+}
+
+/**
+ * The items of a row's transaction, each once, as the route states them from every party (lane
+ * feed, part 4: `items`; an address's own page states its own items there, its perspective): what
+ * a page says of a row's items it reads here, never from the parties a row draws.
+ */
+export function rowItems<I extends ClassifiedItem>(row: {
+  txHash?: string;
+  items?: readonly I[];
+}): readonly I[] {
+  return sentField(row.items, `transaction ${row.txHash ?? 'uncommitted'}`, 'items');
 }
 
 const where = (row: StatedRow) => `transaction ${row.txHash}`;
