@@ -1355,7 +1355,7 @@ fn reject_multi_network_overrides(
 fn verify_failed_start(domain_data_path: &Path) -> Option<String> {
     match ckbadger_store::inspect_domain_store(
         domain_data_path,
-        &secondary_store_path(domain_data_path, SecondaryStoreOwner::Cli),
+        &secondary_store_path(domain_data_path, SecondaryStoreOwner::Verify),
     ) {
         Err(error) => Some(format!(
             "the domain store {} could not be read: {error:#}",
@@ -1381,12 +1381,17 @@ fn being_created(domain_data_path: &Path) -> String {
     )
 }
 
-/// The local domain store verify inspects before it runs `target`.
-fn local_store_to_inspect<'a>(
-    target: &'a VerifyTarget,
-    _api_url: Option<&str>,
-) -> Option<&'a Path> {
-    Some(&target.domain_data_path)
+/// The local domain store verify inspects before it runs `target`: the
+/// network's own when verify reads the network's own API (no `--api-url`, or
+/// one naming it); none when `--api-url` names another API, whose store is not
+/// the local one, which may not exist (resync fix round 4, item 2).
+fn local_store_to_inspect<'a>(target: &'a VerifyTarget, api_url: Option<&str>) -> Option<&'a Path> {
+    match api_url {
+        Some(api_url) if api_url.trim_end_matches('/') != target.api_url.trim_end_matches('/') => {
+            None
+        }
+        _ => Some(&target.domain_data_path),
+    }
 }
 
 /// Resolve and validate every network before starting any potentially long-running

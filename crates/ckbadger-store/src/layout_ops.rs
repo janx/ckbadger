@@ -130,8 +130,14 @@ pub enum StoreLayoutState {
 
 /// The domain column families the newest layouts added, newest first: a
 /// creating open makes them before every other ([`domain_creation_order`]).
-/// Layout 8 added both. A layout that adds a column family puts it at the
-/// front.
+/// Layout 8 added both.
+///
+/// THE RULE FOR THE NEXT LAYOUT: a layout's new column families are created
+/// first. A layout that adds a column family puts it at the FRONT of this list
+/// (and raises [`STORE_LAYOUT`]), so a store still being created always holds
+/// the newest column families once it holds any, and a store of an earlier
+/// layout, which lacks them, is never such a store and is refused by its
+/// column families alone (resync fix round 3, M).
 pub const DOMAIN_CFS_CREATED_FIRST: [&str; 2] = [CF_TOKEN_LABELS, CF_LIVE_CODE_CELLS_BY_TYPE];
 
 /// The order in which a creating open makes the domain column families: the

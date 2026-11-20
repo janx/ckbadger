@@ -113,6 +113,10 @@ pub enum SecondaryStoreOwner {
     /// (`layout_ops::inspect_domain_store`: the indexer's startup, label
     /// import).
     Inspect,
+    /// `ckbadger verify`'s read of a network's store before its run, its own
+    /// beside `status` (`Cli`), which can run at the same time (resync fix
+    /// round 4, item 2).
+    Verify,
 }
 
 impl SecondaryStoreOwner {
@@ -123,6 +127,7 @@ impl SecondaryStoreOwner {
             Self::Cli => "cli-secondary",
             Self::Supervisor => "supervisor-secondary",
             Self::Inspect => "inspect-secondary",
+            Self::Verify => "verify-secondary",
         }
     }
 }
@@ -141,7 +146,7 @@ pub fn secondary_store_path<P: AsRef<Path>>(
     PathBuf::from(path)
 }
 
-pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 5] {
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 6] {
     let primary_path = primary_path.as_ref();
     [
         secondary_store_path(primary_path, SecondaryStoreOwner::Api),
@@ -149,6 +154,7 @@ pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [P
         secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
         secondary_store_path(primary_path, SecondaryStoreOwner::Supervisor),
         secondary_store_path(primary_path, SecondaryStoreOwner::Inspect),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Verify),
     ]
 }
 
@@ -5232,13 +5238,22 @@ mod tests {
             SecondaryStoreOwner::Supervisor.suffix(),
             "supervisor-secondary"
         );
+        // verify's beside status's (resync fix round 4, item 2)
         let owners = [
             SecondaryStoreOwner::Api,
             SecondaryStoreOwner::Tui,
             SecondaryStoreOwner::Cli,
             SecondaryStoreOwner::Supervisor,
             SecondaryStoreOwner::Inspect,
+            SecondaryStoreOwner::Verify,
         ];
+        let known = super::known_domain_secondary_store_paths("/x/domain");
+        for owner in owners {
+            assert!(
+                known.contains(&secondary_store_path("/x/domain", owner)),
+                "purge removes {owner:?}'s"
+            );
+        }
         for i in 0..owners.len() {
             for j in (i + 1)..owners.len() {
                 assert_ne!(owners[i].suffix(), owners[j].suffix());
