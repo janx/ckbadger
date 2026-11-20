@@ -208,6 +208,27 @@ enum ChildExitAction {
     Restart,
 }
 
+/// Whether a supervised service holds this network's chain stores: the
+/// indexer writes them and the API reads them, and each refuses a store it
+/// must not use (another layout, a store left half built) with
+/// rebuild-required, exit 78. The two refusals are one case to the operator
+/// (resync fix round N7).
+fn holds_chain_stores(service: &str) -> bool {
+    matches!(service, "indexer" | "api")
+}
+
+/// What the supervisor says, in its log line and in the blocked reason, of
+/// a chain-store child it blocked on exit 78: the child named, the way out.
+/// The child's own error line, in its log, names the stores and the layouts.
+fn rebuild_required_reason(label: &str) -> String {
+    format!(
+        "{label} refused this network's chain stores (exit {}): they need a rebuild, so it is \
+         not restarted; delete the network's RocksDB data and re-sync from genesis (the error \
+         line in {label}'s log names the stores and both layouts)",
+        ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
+    )
+}
+
 /// Classify a child exit by its exit *code*, i.e. what the child itself reported
 /// about its own termination. Rate/backoff is a separate axis, decided by
 /// [`decide_restart`] for the [`ChildExitAction::Restart`] case only.
@@ -226,7 +247,7 @@ fn classify_child_exit(
     if spec.service == "indexer" && exit_success {
         return ChildExitAction::CleanHandoff;
     }
-    if spec.service == "indexer"
+    if holds_chain_stores(&spec.service)
         && exit_code
             == Some(i32::from(
                 ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE,
@@ -1239,17 +1260,14 @@ async fn monitor_children_multi(
                         continue;
                     }
                     ChildExitAction::BlockRebuildRequired => {
+                        let reason = rebuild_required_reason(label);
                         error!(
                             child = %label,
                             exit_status = %status,
                             workdir = %specs[i].workdir,
-                            "indexer requires an explicit RocksDB purge and genesis rebuild; automatic restart is blocked"
+                            "{reason}"
                         );
-                        locked.children[i].blocked = Some(format!(
-                            "indexer requires an explicit RocksDB purge and genesis rebuild \
-                             (exit {})",
-                            ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
-                        ));
+                        locked.children[i].blocked = Some(reason);
                         continue;
                     }
                     ChildExitAction::Restart => {}
@@ -1876,6 +1894,23 @@ mod tests {
             classify_child_exit(&frontend, false, Some(rebuild_code)),
             ChildExitAction::Restart
         );
+    }
+
+    /// resync fix round N7: the supervisor names the blocked chain-store
+    /// child and the way out, the same words for the indexer and the API.
+    #[test]
+    fn a_blocked_chain_store_child_is_named_with_the_way_out() {
+        for label in ["testnet/indexer", "testnet/api"] {
+            let reason = rebuild_required_reason(label);
+            assert_eq!(
+                reason,
+                format!(
+                    "{label} refused this network's chain stores (exit 78): they need a rebuild, \
+                     so it is not restarted; delete the network's RocksDB data and re-sync from \
+                     genesis (the error line in {label}'s log names the stores and both layouts)"
+                )
+            );
+        }
     }
 
     #[test]

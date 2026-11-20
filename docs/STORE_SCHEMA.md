@@ -540,10 +540,15 @@ namespace includes:
   store was built with. The indexer owns it (`ckbadger_indexer::store_layout`): every process
   that writes the chain stores (the indexer, `ckbadger label-import`) checks it before its
   first write, stamps a store with no row in any domain CF, and refuses any other store with
-  no stamp or another layout (`RebuildRequiredError`, both layouts named, nothing written); the
-  API reads the same check at open (`check_store_layout`) and serves no other layout, and
-  `/statistics/network` states it (`storeLayout`) for the verify check
-  `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
+  no stamp or another layout (`RebuildRequiredError`, both layouts named, nothing written). The
+  indexer stamps a fresh store before it creates the append-only store, so a fresh start is
+  never read as an old store: the API reads the same check at open (`check_store_layout`) and
+  serves this build's layout, waits (503 "initializing") while the stores are not created or the
+  domain store holds no row and no stamp yet, and refuses any other store as rebuild-required
+  (exit 78), which the supervisor blocks, as the indexer's refusal, naming the service;
+  `ckbadger status` and the TUI read the check after opening and show a store of another layout
+  as the refusal, never its tip. `/statistics/network` states the stamp (`storeLayout`) for the
+  verify check `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
   2 is the re-sync set's one number (resync/all): pair-keyed script labels (pseudo deployments
   only), usage counters of generic type references by their live code, one-kind activity rows,
   the senders bit; 1 was the script changes alone, never re-synced, and is refused. Layout

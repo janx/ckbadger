@@ -2421,6 +2421,74 @@ mod tests {
         assert_eq!(crate::store_layout::tests::domain_rows(&store), before);
     }
 
+    /// resync fix round N7 (a fresh start is never read as an old store):
+    /// the indexer leaves no moment at which the stores the API waits for
+    /// hold rows and no stamp. On a fresh start the stamp is the domain
+    /// store's first write, made before the append-only store is created (so
+    /// when both `CURRENT` files exist the stamp is written), and a secondary
+    /// (the API's view) reads it from the WAL while the primary holds it
+    /// unflushed, even when another column family's rows are already flushed
+    /// to a table file, as bulk build's are.
+    #[test]
+    fn a_fresh_start_is_stamped_before_the_api_can_read_its_stores() {
+        use ckbadger_store::{types::CachedBlockHeader, StoreBatch, StoreLayoutState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append_only = dir.path().join("append-only");
+        let opened = open_chain_stores_for_startup(
+            domain.to_str().unwrap(),
+            append_only.to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap();
+        assert!(opened.decision.fresh);
+        assert!(append_only.join("CURRENT").is_file());
+
+        let header = CachedBlockHeader {
+            hash: vec![0x7f; 32],
+            timestamp: 1_704_067_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_704_067_200_000,
+        };
+        let mut batch = StoreBatch::new(&opened.store);
+        batch.put_block_header(0, &header);
+        batch.commit().unwrap();
+        opened
+            .store
+            .flush_column_families(&[ckbadger_store::CF_BLOCK_HEADERS])
+            .unwrap();
+
+        let secondary = dir.path().join("domain-api");
+        let view = CkbadgerStore::open_domain_secondary_with_runtime(
+            &domain,
+            &secondary,
+            startup_runtime_config(),
+        )
+        .unwrap();
+        assert!(
+            !view.holds_no_domain_rows().unwrap(),
+            "the secondary sees the flushed rows"
+        );
+        assert_eq!(
+            view.check_store_layout().unwrap(),
+            Ok(StoreLayoutState::Current),
+            "and the stamp with them"
+        );
+        drop(opened);
+    }
+
     /// On a fresh store the import stamps the layout first, then writes.
     #[tokio::test]
     async fn label_import_stamps_a_fresh_store_then_imports() {

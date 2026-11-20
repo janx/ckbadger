@@ -1172,8 +1172,24 @@ async fn print_single_network_sync_status(workdir: &Path) -> Result<()> {
 }
 
 /// The lines `ckbadger status` prints for the domain store opened at
-/// `domain_data_path`.
-fn sync_status_report(store: &CkbadgerStore, _domain_data_path: &Path) -> Vec<String> {
+/// `domain_data_path`. The store's layout is read first (resync fix round
+/// N7): a store of another layout is shown as the refusal, both layouts
+/// named, with the way out, never as its tip; a fresh store (no row, no
+/// stamp yet) is a fresh start and its status is shown.
+fn sync_status_report(store: &CkbadgerStore, domain_data_path: &Path) -> Vec<String> {
+    match store.check_store_layout() {
+        Err(e) => return vec![format!("Could not read the store layout: {e:#}")],
+        Ok(Err(mismatch)) => {
+            return vec![
+                format!(
+                    "Sync status: refused (domain store {})",
+                    domain_data_path.display()
+                ),
+                format!("  {mismatch}"),
+            ]
+        }
+        Ok(Ok(_)) => {}
+    }
     match store.get_sync_status() {
         Ok(status) => {
             let mut lines = vec![

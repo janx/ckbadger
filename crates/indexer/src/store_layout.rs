@@ -7,7 +7,10 @@
 //! (`entry::run_label_import`). A fresh store is stamped; a store of the
 //! build's layout passes; any other store is refused, nothing written, with
 //! both layouts named and the remedy. The API reads the same check when it
-//! opens the store and never stamps.
+//! opens the store and never stamps: it waits on a store with no row and no
+//! stamp yet (a fresh start, stamped here before the append-only store is
+//! created) and refuses any other as rebuild-required, exit 78, as this
+//! refusal is (resync fix round N7).
 
 use anyhow::Result;
 use ckbadger_store::{CkbadgerStore, StoreLayoutState, STORE_LAYOUT};

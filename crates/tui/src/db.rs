@@ -4,7 +4,8 @@ use ckbadger_common::{
     MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
 };
 use ckbadger_store::{
-    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig,
+    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreLayoutMismatch,
+    StoreRuntimeConfig,
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -204,8 +205,48 @@ fn sync_progress_is_stale(progress: &SyncProgressData, now_ts: i64) -> bool {
     now_ts.saturating_sub(progress.updated_at) > SYNC_PROGRESS_STALE_SECS
 }
 
+/// The TUI's domain store, opened as a secondary, with its layout as the
+/// TUI read it (resync fix round N7).
+#[derive(Clone)]
+enum TuiStore {
+    /// This build's layout, or a fresh store (no row, no stamp yet: a fresh
+    /// start, not an old store): read.
+    Read(Arc<CkbadgerStore>),
+    /// Another layout: never read, shown as the refusal. Held, so that a
+    /// tick catches it up and reads its layout again instead of reopening it.
+    Refused(Arc<CkbadgerStore>, StoreLayoutMismatch),
+}
+
+impl TuiStore {
+    /// The one layout check (`check_store_layout`) on a store the TUI opened.
+    fn read_layout(store: Arc<CkbadgerStore>) -> Result<Self> {
+        Ok(match store.check_store_layout()? {
+            Ok(_) => Self::Read(store),
+            Err(mismatch) => Self::Refused(store, mismatch),
+        })
+    }
+
+    fn store(&self) -> &Arc<CkbadgerStore> {
+        match self {
+            Self::Read(store) | Self::Refused(store, _) => store,
+        }
+    }
+
+    /// `Ok` for a store the TUI reads; the refusal, the store and both
+    /// layouts named with the way out, for one it does not.
+    fn readable(&self, domain_data_path: &Path) -> Result<()> {
+        match self {
+            Self::Read(_) => Ok(()),
+            Self::Refused(_, mismatch) => Err(anyhow::anyhow!(
+                "domain store {} refused: {mismatch}",
+                domain_data_path.display()
+            )),
+        }
+    }
+}
+
 pub struct TuiDb {
-    store: RwLock<Option<Arc<CkbadgerStore>>>,
+    store: RwLock<Option<TuiStore>>,
     api_url: String,
     supervisor_socket_path: Option<PathBuf>,
     service_log_dir: Option<PathBuf>,
@@ -311,20 +352,26 @@ impl TuiDb {
         service_log_dir: Option<&str>,
         store_runtime_config: StoreRuntimeConfig,
     ) -> Self {
-        // Try to open the domain store in secondary (read-only) mode
+        // Try to open the domain store in secondary (read-only) mode, and
+        // read its layout with it.
         let secondary_path =
             secondary_store_path(path_config.domain_data_path, SecondaryStoreOwner::Tui);
         let store = match CkbadgerStore::open_domain_secondary_with_runtime(
             Path::new(path_config.domain_data_path),
             secondary_path.as_path(),
             store_runtime_config,
-        ) {
-            Ok(s) => {
-                eprintln!(
-                    "TUI: opened domain store (secondary) at {}",
-                    path_config.domain_data_path
-                );
-                Some(Arc::new(s))
+        )
+        .and_then(|store| TuiStore::read_layout(Arc::new(store)))
+        {
+            Ok(opened) => {
+                match opened.readable(Path::new(path_config.domain_data_path)) {
+                    Ok(()) => eprintln!(
+                        "TUI: opened domain store (secondary) at {}",
+                        path_config.domain_data_path
+                    ),
+                    Err(refusal) => eprintln!("TUI: {refusal}"),
+                }
+                Some(opened)
             }
             Err(e) => {
                 eprintln!("TUI: failed to open domain store: {e}");
@@ -352,11 +399,13 @@ impl TuiDb {
         }
     }
 
+    /// The domain store the TUI reads: none before it exists, and none while
+    /// it is a store of another layout.
     fn store_handle(&self) -> Option<Arc<CkbadgerStore>> {
-        self.store
-            .read()
-            .expect("TUI store handle lock poisoned")
-            .clone()
+        match &*self.store.read().expect("TUI store handle lock poisoned") {
+            Some(TuiStore::Read(store)) => Some(store.clone()),
+            Some(TuiStore::Refused(..)) | None => None,
+        }
     }
 
     /// The latest store-lifecycle notice, for the UI to render. `None` once
@@ -377,20 +426,39 @@ impl TuiDb {
 
     /// Refresh the secondary store to catch up with the primary. If the TUI
     /// started before the indexer created RocksDB, open the secondary as soon as
-    /// the primary's `CURRENT` marker appears.
+    /// the primary's `CURRENT` marker appears. A store of another layout is
+    /// held unread and its layout read again on each refresh: the refusal is
+    /// the error (resync fix round N7).
     fn refresh_store(&self) -> Result<()> {
-        if let Some(store) = self.store_handle() {
+        let held = self
+            .store
+            .read()
+            .expect("TUI store handle lock poisoned")
+            .clone();
+        if let Some(held) = held {
+            let store = held.store().clone();
             if let Err(error) = store.refresh() {
                 let mut slot = self.store.write().expect("TUI store handle lock poisoned");
                 if slot
                     .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &store))
+                    .is_some_and(|current| Arc::ptr_eq(current.store(), &store))
                 {
                     *slot = None;
                 }
                 return Err(error).context("failed to refresh TUI domain-store secondary");
             }
-            return Ok(());
+            // The layout read again after each catch-up (one point read on a
+            // stamped store): a store first seen fresh that is then written
+            // without this build's stamp is refused from that tick on.
+            let reread = TuiStore::read_layout(store.clone())?;
+            let mut slot = self.store.write().expect("TUI store handle lock poisoned");
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current.store(), &store))
+            {
+                *slot = Some(reread.clone());
+            }
+            return reread.readable(&self.domain_data_path);
         }
 
         if !self.domain_data_path.join("CURRENT").is_file() {
@@ -413,14 +481,19 @@ impl TuiDb {
                 self.domain_data_path.display()
             )
         })?;
+        let opened = TuiStore::read_layout(Arc::new(store))?;
+        let readable = opened.readable(&self.domain_data_path);
         // State, not stderr: this runs inside a refresh tick, long after
         // EnterAlternateScreen.
-        self.set_store_notice(Some(format!(
-            "opened newly-created domain store (secondary) at {}",
-            self.domain_data_path.display()
-        )));
-        *slot = Some(Arc::new(store));
-        Ok(())
+        self.set_store_notice(Some(match &readable {
+            Ok(()) => format!(
+                "opened newly-created domain store (secondary) at {}",
+                self.domain_data_path.display()
+            ),
+            Err(refusal) => refusal.to_string(),
+        }));
+        *slot = Some(opened);
+        readable
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
@@ -1276,6 +1349,11 @@ mod tests {
         assert!(db.get_sync_status().await.is_err());
 
         let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        // A store the indexer wrote carries its layout stamp (resync fix
+        // round N7: the TUI reads no store of another layout).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
         store
             .set_sync_status(&ckbadger_store::types::SyncStatus {
                 tip_block_number: 42,
@@ -1314,6 +1392,11 @@ mod tests {
         std::fs::create_dir_all(&append_path).unwrap();
 
         let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        // A store the indexer wrote carries its layout stamp (resync fix
+        // round N7: the TUI reads no store of another layout).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
 
         let mut progress = sample_progress();
         progress.updated_at = chrono::Utc::now().timestamp();
@@ -1473,6 +1556,11 @@ mod tests {
         std::fs::create_dir_all(&append_path).unwrap();
 
         let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        // A store the indexer wrote carries its layout stamp (resync fix
+        // round N7: the TUI reads no store of another layout).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
 
         let mut stale_progress = sample_progress();
         stale_progress.current_block = 100;
@@ -1531,6 +1619,11 @@ mod tests {
         std::fs::create_dir_all(&append_path).unwrap();
 
         let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        // A store the indexer wrote carries its layout stamp (resync fix
+        // round N7: the TUI reads no store of another layout).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
         store
             .set_runtime_status(&RuntimeStatus {
                 active_run_id: Some("run-active".to_string()),
