@@ -172,4 +172,33 @@ describe('the genesis block page', () => {
     expect(screen.getByText('No proposals in this block.')).toBeInTheDocument();
     expect(screen.getByText('No uncles in this block.')).toBeInTheDocument();
   });
+
+  // The genesis cellbase has 671 outputs and 667 parties (no later cellbase has more than one
+  // output); since lane feed part 4 its row draws the five largest of them. The page refused it
+  // ("cellbase 0xe2fb…: it draws 5 of its 667 parties") and went to the error page: it read the
+  // one-output rule of a cellbase that pays a block's reward into the one that pays none.
+  it('draws five of the genesis cellbase’s 667 parties and leaves the other 662 to its page', async () => {
+    render(<BlockDetailPage />);
+    const cellbase = genesisActivities[0];
+    await screen.findByText('Cellbase');
+    expect(screen.queryByRole('alert')).toBeNull();
+    const row = document.querySelector(`[data-feed-row="${cellbase.txHash}"]`) as HTMLElement;
+    // its headline names no one: it pays no block's reward
+    const headline = row.querySelector('[data-role="headline"]') as HTMLElement;
+    expect(headline).toHaveTextContent(/^Cellbase$/);
+    // the five it draws, the largest the burn cell's zero lock, then the way to the other 662
+    const drawn = [...row.querySelectorAll('[data-role="participant"]')];
+    expect(drawn.map((line) => line.textContent!.match(/\+[\d,]+ CKB/)![0])).toEqual([
+      '+8,400,000,000 CKB',
+      '+2,856,000,000 CKB',
+      '+1,428,000,000 CKB',
+      '+1,260,000,000 CKB',
+      '+840,000,000 CKB',
+    ]);
+    expect(drawn[0]).toHaveTextContent('Zero Lock');
+    const rest = within(row).getByRole('link', {
+      name: /^662\smore\sparticipants on the transaction page$/,
+    });
+    expect(rest).toHaveAttribute('href', expect.stringContaining(`/tx/${cellbase.txHash}`));
+  });
 });
