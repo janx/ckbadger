@@ -12,7 +12,8 @@ use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_indexer::entry::EXIT_CODE_UNRECOVERABLE;
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
 use ckbadger_store::{
-    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreRuntimeConfig,
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreLayoutMismatch,
+    StoreRuntimeConfig,
 };
 use std::future::Future;
 use std::path::Path;
@@ -551,6 +552,9 @@ struct BulkStatusReader {
     runtime_config: StoreRuntimeConfig,
     store: Option<CkbadgerStore>,
     failures: ReadFailureTracker,
+    /// The store's refusal was logged (resync fix round 2, A): logged once,
+    /// again only after the store reads as this build's.
+    refusal_logged: bool,
 }
 
 impl BulkStatusReader {
@@ -566,6 +570,7 @@ impl BulkStatusReader {
             runtime_config: idx.store_runtime_config,
             store: None,
             failures: ReadFailureTracker::default(),
+            refusal_logged: false,
         }
     }
 
@@ -581,7 +586,24 @@ impl BulkStatusReader {
     /// counter and the gate simply keeps waiting.
     fn poll(&mut self) -> BulkStatusSample {
         match self.read() {
+            // A store this build refuses (resync fix round 2, A) is no read
+            // failure: no signal, the refusal said once, the handle kept so
+            // the next poll reads its layout again without reopening it.
+            Err(error) if error.downcast_ref::<StoreLayoutMismatch>().is_some() => {
+                if !self.refusal_logged {
+                    error!(
+                        child = %self.label,
+                        store = %self.domain_data_path.display(),
+                        "sequencer status read refuses this store: domain store {} refused: \
+                         {error}; the next network stays deferred",
+                        self.domain_data_path.display()
+                    );
+                    self.refusal_logged = true;
+                }
+                BulkStatusSample::default()
+            }
             Ok(sample) => {
+                self.refusal_logged = false;
                 let recovered_from = self.failures.record_success();
                 if recovered_from > 0 {
                     info!(
@@ -663,6 +685,11 @@ impl BulkStatusReader {
                 self.domain_data_path.display()
             )
         })?;
+        // The layout first: a store this build must not use is refused,
+        // never read for a bulk status (resync fix round 2, A).
+        if let Err(mismatch) = store.check_store_layout()? {
+            return Err(anyhow::Error::new(mismatch));
+        }
         let status = store.get_sync_status().with_context(|| {
             format!(
                 "failed to read sync status from {}",
@@ -1566,6 +1593,15 @@ mod tests {
         }
     }
 
+    /// A store this build's indexer wrote carries its layout stamp, its first
+    /// write: the sequencer's probe refuses any other (resync fix round 2,
+    /// A), so the fixtures that seed a store as the indexer would stamp it.
+    fn stamp_as_this_builds(store: &CkbadgerStore) {
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+    }
+
     #[test]
     fn sequencer_waits_only_while_domain_store_is_absent() {
         let dir = TempDir::new().unwrap();
@@ -1584,6 +1620,7 @@ mod tests {
         let domain = dir.path().join("domain");
         let store = CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
             .unwrap();
+        stamp_as_this_builds(&store);
         store.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
 
@@ -1603,6 +1640,7 @@ mod tests {
         let primary =
             CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
                 .unwrap();
+        stamp_as_this_builds(&primary);
         primary.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
         let mut reader = BulkStatusReader::new(&idx);
@@ -1756,6 +1794,7 @@ mod tests {
         let primary =
             CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
                 .unwrap();
+        stamp_as_this_builds(&primary);
         primary.put_sync_progress(&progress_json(9, 10)).unwrap();
 
         assert_eq!(reader.read().unwrap().past_bulk, Some(true));

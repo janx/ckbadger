@@ -109,6 +109,10 @@ pub enum SecondaryStoreOwner {
     Tui,
     Cli,
     Supervisor,
+    /// The read an opener makes before an open that could change the store
+    /// (`layout_ops::inspect_domain_store`: the indexer's startup, label
+    /// import).
+    Inspect,
 }
 
 impl SecondaryStoreOwner {
@@ -118,6 +122,7 @@ impl SecondaryStoreOwner {
             Self::Tui => "tui-secondary",
             Self::Cli => "cli-secondary",
             Self::Supervisor => "supervisor-secondary",
+            Self::Inspect => "inspect-secondary",
         }
     }
 }
@@ -131,13 +136,14 @@ pub fn secondary_store_path<P: AsRef<Path>>(
     PathBuf::from(path)
 }
 
-pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 4] {
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 5] {
     let primary_path = primary_path.as_ref();
     [
         secondary_store_path(primary_path, SecondaryStoreOwner::Api),
         secondary_store_path(primary_path, SecondaryStoreOwner::Tui),
         secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
         secondary_store_path(primary_path, SecondaryStoreOwner::Supervisor),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Inspect),
     ]
 }
 
@@ -1367,6 +1373,11 @@ pub struct CkbadgerStore {
     /// inside [`Self::outside_journal_scope`].
     outside_writer_scope: Mutex<Option<(std::thread::ThreadId, OutsideWriter)>>,
     is_secondary: bool,
+    /// How the store's column families differ from this build's: empty for a
+    /// primary; a domain secondary opens the column families the store holds
+    /// and records the rest, which the layout check refuses (resync fix
+    /// round 2, A).
+    column_families: crate::layout_ops::StoreColumnFamilies,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
     /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
@@ -1613,6 +1624,7 @@ impl CkbadgerStore {
             journal_discipline: AtomicBool::new(false),
             outside_writer_scope: Mutex::new(None),
             is_secondary: false,
+            column_families: crate::layout_ops::StoreColumnFamilies::default(),
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
@@ -1667,35 +1679,57 @@ impl CkbadgerStore {
             }
         };
         let allowed = Self::cfs_for_class(store_class);
-        let allowed_set = allowed
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        for cf in &existing_cfs {
-            if cf == "default" {
-                continue;
-            }
-            if !allowed_set.contains(cf.as_str()) {
-                anyhow::bail!(
-                    "found column family '{}' in {} store at '{}' but it is not allowed there; \
-                     expected only {:?}. Please rebuild this RocksDB path.",
-                    cf,
-                    match store_class {
-                        StoreClass::Domain => "domain",
-                        StoreClass::AppendOnly => "append-only",
-                        StoreClass::TestUnified => "test-unified",
-                        StoreClass::Network => "network",
-                    },
-                    db_path.display(),
+        // A domain secondary opens the column families the store holds and
+        // records how they differ from this build's, so the layout check
+        // reads an earlier build's store and refuses it (a secondary cannot
+        // create a column family, and RocksDB refuses one it lacks): resync
+        // fix round 2, A. Every domain secondary reads that check before it
+        // serves. Other classes keep the strict set.
+        let (opened, column_families): (Vec<&str>, _) =
+            if store_class == StoreClass::Domain && !existing_cfs.is_empty() {
+                (
                     allowed
-                );
-            }
-        }
+                        .iter()
+                        .copied()
+                        .filter(|name| existing_cfs.iter().any(|have| have == name))
+                        .collect(),
+                    crate::layout_ops::StoreColumnFamilies::of(allowed, &existing_cfs),
+                )
+            } else {
+                let allowed_set = allowed
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>();
+                for cf in &existing_cfs {
+                    if cf == "default" {
+                        continue;
+                    }
+                    if !allowed_set.contains(cf.as_str()) {
+                        anyhow::bail!(
+                            "found column family '{}' in {} store at '{}' but it is not allowed \
+                             there; expected only {:?}. Please rebuild this RocksDB path.",
+                            cf,
+                            match store_class {
+                                StoreClass::Domain => "domain",
+                                StoreClass::AppendOnly => "append-only",
+                                StoreClass::TestUnified => "test-unified",
+                                StoreClass::Network => "network",
+                            },
+                            db_path.display(),
+                            allowed
+                        );
+                    }
+                }
+                (
+                    allowed.to_vec(),
+                    crate::layout_ops::StoreColumnFamilies::default(),
+                )
+            };
         // The same per-CF options as the primary: opened by name, every CF
         // got RocksDB's defaults instead (a private 32 MB block cache and no
         // bloom filter), so a point get read a data block in every sorted run.
         let cf_descriptors =
-            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+            Self::cf_descriptors(&opened, &block_cache, &memory_profile, runtime_config);
         let db = DB::open_cf_descriptors_as_secondary(
             &opts,
             primary_path,
@@ -1716,6 +1750,7 @@ impl CkbadgerStore {
             journal_discipline: AtomicBool::new(false),
             outside_writer_scope: Mutex::new(None),
             is_secondary: true,
+            column_families,
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
@@ -2226,6 +2261,17 @@ impl CkbadgerStore {
         self.db
             .cf_handle(name)
             .unwrap_or_else(|| panic!("CF '{}' not found", name))
+    }
+
+    /// The RocksDB handle, for the layout check's reads (`layout_ops`).
+    pub(crate) fn raw_db(&self) -> &DB {
+        &self.db
+    }
+
+    /// How the store's column families differ from this build's (empty for
+    /// a primary).
+    pub(crate) fn column_families(&self) -> &crate::layout_ops::StoreColumnFamilies {
+        &self.column_families
     }
 
     /// Returns true when the DB currently holds a live handle for `name`.
@@ -5159,6 +5205,7 @@ mod tests {
             SecondaryStoreOwner::Tui,
             SecondaryStoreOwner::Cli,
             SecondaryStoreOwner::Supervisor,
+            SecondaryStoreOwner::Inspect,
         ];
         for i in 0..owners.len() {
             for j in (i + 1)..owners.len() {

@@ -1344,10 +1344,23 @@ fn reject_multi_network_overrides(
 /// Resolve and validate every network before starting any potentially long-running
 /// verification. A plain workdir produces one target; an orchestrator root produces
 /// one target per `[[network]]`, in declaration order.
-/// The refusal of a network's domain store, when this build refuses it.
-/// Verify reads no store today.
-fn verify_store_refusal(_domain_data_path: &Path) -> Result<Option<String>> {
-    Ok(None)
+/// The refusal of a network's domain store, when this build refuses it
+/// (resync fix round 2, A): the store read without writing anything in it
+/// (`ckbadger_store::inspect_domain_store`), the refusal in the words every
+/// opener says. No store, a fresh store and a store of this build's layout
+/// are no refusal: verify then reads the network through its API.
+fn verify_store_refusal(domain_data_path: &Path) -> Result<Option<String>> {
+    let inspected = ckbadger_store::inspect_domain_store(
+        domain_data_path,
+        &secondary_store_path(domain_data_path, SecondaryStoreOwner::Cli),
+    )?;
+    Ok(match inspected {
+        Some(Err(mismatch)) => Some(format!(
+            "domain store {} refused: {mismatch}",
+            domain_data_path.display()
+        )),
+        None | Some(Ok(_)) => None,
+    })
 }
 
 fn resolve_verify_targets(workdir: &Path) -> Result<Vec<VerifyTarget>> {
@@ -2365,7 +2378,7 @@ mod tests {
                 format!("Sync status: refused (domain store {})", path.display()),
                 format!(
                     "  {}",
-                    ckbadger_store::StoreLayoutMismatch { found: Some(7) }
+                    ckbadger_store::StoreLayoutMismatch::stamped(Some(7))
                 ),
             ],
             "the refusal, not the old store's tip"

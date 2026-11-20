@@ -10,7 +10,8 @@
 //! re-sync from genesis.
 
 use crate::keys::sync_meta_keys;
-use crate::store::{CkbadgerStore, DOMAIN_CFS};
+use crate::store::{CkbadgerStore, CF_SYNC_META, DOMAIN_CFS};
+use rocksdb::DB;
 
 /// The layout of the domain store this build writes and reads.
 ///
@@ -112,26 +113,89 @@ pub enum StoreLayoutState {
     Current,
 }
 
+/// How a store's column families differ from this build's (resync fix
+/// round 2, A): the ones this build has that the store lacks, and the ones
+/// the store has that this build does not know. Empty for a store this build
+/// opened as primary (its open creates every column family it lacks, and
+/// refuses one it does not know); a secondary opens the ones it holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoreColumnFamilies {
+    pub missing: Vec<String>,
+    pub unknown: Vec<String>,
+}
+
+impl StoreColumnFamilies {
+    /// The difference between `expected` (this build's column families of
+    /// the store's class) and `existing` (the store's, `default` aside).
+    pub fn of(expected: &[&str], existing: &[String]) -> Self {
+        let missing = expected
+            .iter()
+            .filter(|name| !existing.iter().any(|have| have == *name))
+            .map(|name| name.to_string())
+            .collect();
+        let unknown = existing
+            .iter()
+            .filter(|have| have.as_str() != "default" && !expected.contains(&have.as_str()))
+            .cloned()
+            .collect();
+        Self { missing, unknown }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.missing.is_empty() && self.unknown.is_empty()
+    }
+}
+
 /// A store this build must not use: built with another layout, or before
-/// layouts were stamped (`found: None`).
+/// layouts were stamped (`found: None`), or with column families that are not
+/// this build's (`column_families`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreLayoutMismatch {
     pub found: Option<u32>,
+    pub column_families: StoreColumnFamilies,
 }
 
 impl StoreLayoutMismatch {
+    /// A store stamped `found` (or not stamped) with this build's column
+    /// families.
+    pub fn stamped(found: Option<u32>) -> Self {
+        Self {
+            found,
+            column_families: StoreColumnFamilies::default(),
+        }
+    }
+
     /// What is wrong, both layouts named, without the remedy (the indexer's
     /// `RebuildRequiredError` adds it with the network's store paths).
     pub fn diagnosis(&self) -> String {
         let built = match self.found {
             Some(layout) => format!("store layout {layout}"),
-            None => {
+            None if self.column_families.is_empty() => {
                 "no store layout stamp (a build from before store layouts were stamped)".to_string()
             }
+            None => "no store layout stamp".to_string(),
+        };
+        let mut column_families = Vec::new();
+        if !self.column_families.missing.is_empty() {
+            column_families.push(format!(
+                "without the column families {}",
+                self.column_families.missing.join(", ")
+            ));
+        }
+        if !self.column_families.unknown.is_empty() {
+            column_families.push(format!(
+                "with the column families {}, which this build does not know",
+                self.column_families.unknown.join(", ")
+            ));
+        }
+        let column_families = if column_families.is_empty() {
+            String::new()
+        } else {
+            format!(" and {}", column_families.join(" and "))
         };
         format!(
-            "the domain store was built with {built}; this build reads and writes store layout \
-             {STORE_LAYOUT} ({STORE_LAYOUT_CHANGE})"
+            "the domain store was built with {built}{column_families}; this build reads and \
+             writes store layout {STORE_LAYOUT} ({STORE_LAYOUT_CHANGE})"
         )
     }
 }
@@ -152,19 +216,7 @@ impl CkbadgerStore {
     /// The layout stamp, if the store carries one. A value that is not four
     /// bytes is an error, named: it is no layout of any build.
     pub fn get_store_layout(&self) -> anyhow::Result<Option<u32>> {
-        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::STORE_LAYOUT)? {
-            None => Ok(None),
-            Some(bytes) => {
-                let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "store_layout record is {} bytes, not 4: delete RocksDB and re-sync from \
-                         genesis",
-                        bytes.len()
-                    )
-                })?;
-                Ok(Some(u32::from_le_bytes(bytes)))
-            }
-        }
+        stamp_in(self.raw_db())
     }
 
     /// Stamp the store with `layout`. The indexer stamps a fresh store, and
@@ -180,46 +232,94 @@ impl CkbadgerStore {
     /// Whether no domain column family holds a row: a store no build has
     /// written yet.
     pub fn holds_no_domain_rows(&self) -> anyhow::Result<bool> {
-        for name in DOMAIN_CFS {
-            if !self.cf_handle_exists(name) {
-                continue;
-            }
-            if let Some(row) = self
-                .iterator_cf(self.cf(name), rocksdb::IteratorMode::Start)
-                .next()
-            {
-                row.map_err(|e| anyhow::anyhow!("read the first row of {name}: {e}"))?;
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        Ok(!holds_domain_rows_in(self.raw_db())?)
     }
 
-    /// THE layout check, read by the indexer before its first write and by
-    /// the API when it opens the store: the store's stamp against
-    /// [`STORE_LAYOUT`]. A store without a stamp is fresh only when it holds
-    /// no row at all; any other store without one was built before layouts
-    /// were stamped. The outer error is a read failure; the inner one is a
-    /// store this build must not use.
+    /// THE layout check, read by every opener: the indexer and label import
+    /// before their first write, the API, `status`, the TUI and the
+    /// sequencer on the secondary they open; and before an open that could
+    /// change the store, by [`inspect_domain_store`]. The rule is
+    /// [`layout_of`].
     pub fn check_store_layout(
         &self,
     ) -> anyhow::Result<Result<StoreLayoutState, StoreLayoutMismatch>> {
-        match self.get_store_layout()? {
-            Some(layout) if layout == STORE_LAYOUT => Ok(Ok(StoreLayoutState::Current)),
-            Some(layout) => Ok(Err(StoreLayoutMismatch {
-                found: Some(layout),
-            })),
-            None if self.holds_no_domain_rows()? => Ok(Ok(StoreLayoutState::Fresh)),
-            None => Ok(Err(StoreLayoutMismatch { found: None })),
+        layout_of(self.raw_db(), self.column_families())
+    }
+}
+
+/// The layout stamp in `db`'s `sync_meta`, if any (none when the store has no
+/// `sync_meta` at all).
+fn stamp_in(db: &DB) -> anyhow::Result<Option<u32>> {
+    let Some(sync_meta) = db.cf_handle(CF_SYNC_META) else {
+        return Ok(None);
+    };
+    match db.get_cf(sync_meta, sync_meta_keys::STORE_LAYOUT)? {
+        None => Ok(None),
+        Some(bytes) => {
+            let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "store_layout record is {} bytes, not 4: delete RocksDB and re-sync from \
+                     genesis",
+                    bytes.len()
+                )
+            })?;
+            Ok(Some(u32::from_le_bytes(bytes)))
         }
     }
 }
 
-/// What the domain store at `primary_path` is, for an opener that must not
-/// change a store it refuses (resync fix round 2, A): `None` while no store
-/// exists there (no `CURRENT`), else the layout check. As every reader
-/// reads it today: a secondary of this build's column families at
-/// `secondary_path`, then [`CkbadgerStore::check_store_layout`].
+/// Whether any domain column family `db` opened holds a row.
+fn holds_domain_rows_in(db: &DB) -> anyhow::Result<bool> {
+    for name in DOMAIN_CFS {
+        let Some(cf) = db.cf_handle(name) else {
+            continue;
+        };
+        if let Some(row) = db.iterator_cf(cf, rocksdb::IteratorMode::Start).next() {
+            row.map_err(|e| anyhow::anyhow!("read the first row of {name}: {e}"))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// THE layout rule over a store's facts: its stamp against [`STORE_LAYOUT`],
+/// its column families against this build's, whether it holds a row. A store
+/// of this build's column families and layout is `Current`; one of this
+/// build's column families with no row and no stamp is `Fresh`: this build
+/// created it (its open creates every column family before any write) and
+/// has not stamped it yet. Any other is the inner error: another stamp, rows
+/// and no stamp (a build from before stamps), or column families that are not
+/// this build's (an earlier build's store, empty or not). The outer error is
+/// a read failure.
+fn layout_of(
+    db: &DB,
+    column_families: &StoreColumnFamilies,
+) -> anyhow::Result<Result<StoreLayoutState, StoreLayoutMismatch>> {
+    let found = stamp_in(db)?;
+    if column_families.is_empty() {
+        match found {
+            Some(layout) if layout == STORE_LAYOUT => return Ok(Ok(StoreLayoutState::Current)),
+            None if !holds_domain_rows_in(db)? => return Ok(Ok(StoreLayoutState::Fresh)),
+            _ => {}
+        }
+    }
+    Ok(Err(StoreLayoutMismatch {
+        found,
+        column_families: column_families.clone(),
+    }))
+}
+
+/// What the domain store at `primary_path` is, read without writing anything
+/// in it, for an opener whose open could create or change something
+/// (resync fix round 2, A: the indexer's startup, label import, verify):
+/// `None` while no store exists there (no `CURRENT`), else [`layout_of`].
+///
+/// The read: the store's column families listed from its MANIFEST, then a
+/// secondary of the domain column families it holds, at `secondary_path`
+/// (the only directory the read writes in: RocksDB's info log), with
+/// options of its own: not the process's shared block cache, which the
+/// first open in a process sizes for the opens after it, and no create
+/// flag. The secondary is closed when this returns.
 pub fn inspect_domain_store(
     primary_path: &std::path::Path,
     secondary_path: &std::path::Path,
@@ -227,8 +327,33 @@ pub fn inspect_domain_store(
     if !primary_path.join("CURRENT").exists() {
         return Ok(None);
     }
-    let store = CkbadgerStore::open_domain_secondary(primary_path, secondary_path)?;
-    Ok(Some(store.check_store_layout()?))
+    let mut opts = rocksdb::Options::default();
+    let mut table = rocksdb::BlockBasedOptions::default();
+    // Index and filter blocks through a small cache of the read's own, not
+    // held for every table file the secondary keeps open.
+    table.set_block_cache(&rocksdb::Cache::new_lru_cache(8 << 20));
+    table.set_cache_index_and_filter_blocks(true);
+    opts.set_block_based_table_factory(&table);
+    let existing = DB::list_cf(&opts, primary_path).map_err(|e| {
+        anyhow::anyhow!(
+            "list the column families of the domain store at '{}': {e}",
+            primary_path.display()
+        )
+    })?;
+    let column_families = StoreColumnFamilies::of(DOMAIN_CFS, &existing);
+    let held: Vec<&str> = DOMAIN_CFS
+        .iter()
+        .copied()
+        .filter(|name| existing.iter().any(|have| have == name))
+        .collect();
+    let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, held).map_err(|e| {
+        anyhow::anyhow!(
+            "read the domain store at '{}' (secondary at '{}'): {e}",
+            primary_path.display(),
+            secondary_path.display()
+        )
+    })?;
+    Ok(Some(layout_of(&db, &column_families)?))
 }
 
 /// A domain store as an earlier build left it, for the tests of every opener
@@ -324,7 +449,7 @@ mod tests {
         let (_dir, store) = store();
         store.set_network_identity("mainnet").unwrap();
         let mismatch = store.check_store_layout().unwrap().unwrap_err();
-        assert_eq!(mismatch, StoreLayoutMismatch { found: None });
+        assert_eq!(mismatch, StoreLayoutMismatch::stamped(None));
         let words = mismatch.to_string();
         assert!(
             words.contains("no store layout stamp")
@@ -343,7 +468,7 @@ mod tests {
         store.set_store_layout(1).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(1) })
+            Err(StoreLayoutMismatch::stamped(Some(1)))
         );
     }
 
@@ -356,7 +481,7 @@ mod tests {
         store.set_store_layout(2).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(2) })
+            Err(StoreLayoutMismatch::stamped(Some(2)))
         );
     }
 
@@ -369,7 +494,7 @@ mod tests {
         store.set_store_layout(3).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(3) })
+            Err(StoreLayoutMismatch::stamped(Some(3)))
         );
     }
 
@@ -382,7 +507,7 @@ mod tests {
         store.set_store_layout(4).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(4) })
+            Err(StoreLayoutMismatch::stamped(Some(4)))
         );
     }
 
@@ -395,7 +520,7 @@ mod tests {
         store.set_store_layout(5).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(5) })
+            Err(StoreLayoutMismatch::stamped(Some(5)))
         );
     }
 
@@ -408,7 +533,7 @@ mod tests {
         store.set_store_layout(6).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(6) })
+            Err(StoreLayoutMismatch::stamped(Some(6)))
         );
     }
 
@@ -422,7 +547,7 @@ mod tests {
         store.set_store_layout(7).unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: Some(7) })
+            Err(StoreLayoutMismatch::stamped(Some(7)))
         );
     }
 
@@ -433,9 +558,7 @@ mod tests {
         let mismatch = store.check_store_layout().unwrap().unwrap_err();
         assert_eq!(
             mismatch,
-            StoreLayoutMismatch {
-                found: Some(STORE_LAYOUT + 1)
-            }
+            StoreLayoutMismatch::stamped(Some(STORE_LAYOUT + 1))
         );
         let words = mismatch.to_string();
         assert!(
@@ -460,7 +583,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store.check_store_layout().unwrap(),
-            Err(StoreLayoutMismatch { found: None })
+            Err(StoreLayoutMismatch::stamped(None))
         );
     }
 

@@ -924,6 +924,11 @@ pub(crate) fn open_chain_stores_for_startup(
     let mut probe_config = runtime_config;
     probe_config.vector_memtable = false;
 
+    // A store this build must not use is refused before the probe open,
+    // which would create the column families it lacks (resync fix round 2,
+    // A): nothing is created in it.
+    crate::store_layout::refuse_before_open(std::path::Path::new(domain_data_path))?;
+
     info!(
         path = domain_data_path,
         "Probe-opening ckbadger domain store for the startup decision"
@@ -1000,6 +1005,15 @@ fn store_location_from_config(config: &Config) -> StoreLocation {
 
 /// Run label import from a service config.
 pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
+    let location = StoreLocation::new(
+        config.network.as_str(),
+        config.domain_data_path.as_str(),
+        config.append_only_data_path.as_str(),
+    );
+    // Before the open, which would create the column families an earlier
+    // build's store lacks (resync fix round 2, A).
+    crate::store_layout::refuse_before_open(std::path::Path::new(&config.domain_data_path))
+        .map_err(|error| annotate_rebuild_required(error, &location))?;
     info!(
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
@@ -1010,16 +1024,8 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
     )?);
     // Before the import writes a label: the store's layout must be this
     // build's (`store_layout`), a fresh store stamped with it.
-    crate::store_layout::ensure_store_layout(core_store.as_ref()).map_err(|error| {
-        annotate_rebuild_required(
-            error,
-            &StoreLocation::new(
-                config.network.as_str(),
-                config.domain_data_path.as_str(),
-                config.append_only_data_path.as_str(),
-            ),
-        )
-    })?;
+    crate::store_layout::ensure_store_layout(core_store.as_ref())
+        .map_err(|error| annotate_rebuild_required(error, &location))?;
 
     let label_config = LabelImportConfig {
         metadata_path: config.metadata_path,
@@ -2309,6 +2315,12 @@ mod tests {
             let store =
                 CkbadgerStore::open_domain_with_runtime(domain.path(), startup_runtime_config())
                     .unwrap();
+            // A store this build wrote carries its layout stamp, its first
+            // write (re-pinned in resync fix round 2, A: an unstamped store
+            // with rows is refused before the bulk session is read).
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
             store
                 .set_bulk_build_session_marker(Some(
                     &ckbadger_store::types::BulkBuildSessionMarker {

@@ -547,8 +547,18 @@ namespace includes:
   domain store holds no row and no stamp yet, and refuses any other store as rebuild-required
   (exit 78), which the supervisor blocks, as the indexer's refusal, naming the service;
   `ckbadger status` and the TUI read the check after opening and show a store of another layout
-  as the refusal, never its tip. `/statistics/network` states the stamp (`storeLayout`) for the
-  verify check `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
+  as the refusal, never its tip. A store is also refused when its column families are not this
+  build's (an earlier build's store lacks the ones a later layout added): THE rule
+  (`layout_ops::layout_of`) reads the stamp, the column families and whether a row exists, and a
+  store of this build's column families with no row and no stamp is the only fresh one (this
+  build's open creates every column family before any write). No opener changes a store it
+  refuses: the indexer's startup and `label-import`, whose open would create the column families
+  a store lacks, and `ckbadger verify` first read it with `inspect_domain_store` (a secondary of
+  the column families it holds, its own options, writing only RocksDB's info log in
+  `<domain>-inspect-secondary`); the API, `status`, the TUI and the sequencer's probe open a
+  secondary of the column families the store holds and read the check before anything else. Each
+  says the one refusal. `/statistics/network` states the stamp (`storeLayout`) for the verify
+  check `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
   2 is the re-sync set's one number (resync/all): pair-keyed script labels (pseudo deployments
   only), usage counters of generic type references by their live code, one-kind activity rows,
   the senders bit; 1 was the script changes alone, never re-synced, and is refused. Layout

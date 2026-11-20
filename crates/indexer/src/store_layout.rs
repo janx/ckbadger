@@ -1,10 +1,12 @@
 //! The store layout guard: the indexer owns the domain store's layout stamp
 //! (`ckbadger_store::STORE_LAYOUT`, `sync_meta` `store_layout`).
 //!
-//! Every process that writes the chain stores calls [`ensure_store_layout`]
-//! before its first write: the indexer (`entry::run_indexer_sync`, before the
-//! network identity, its first write) and `ckbadger label-import`
-//! (`entry::run_label_import`). A fresh store is stamped; a store of the
+//! Every process that writes the chain stores calls [`refuse_before_open`]
+//! before it opens them (an open creates the column families a store lacks:
+//! a store this build refuses is read without writing anything in it,
+//! resync fix round 2, A) and [`ensure_store_layout`] before its first write:
+//! the indexer (`entry::open_chain_stores_for_startup`) and `ckbadger
+//! label-import` (`entry::run_label_import`). A fresh store is stamped; a store of the
 //! build's layout passes; any other store is refused, nothing written, with
 //! both layouts named and the remedy. The API reads the same check when it
 //! opens the store and never stamps: it waits on a store with no row and no
@@ -13,9 +15,32 @@
 //! refusal is (resync fix round N7).
 
 use anyhow::Result;
-use ckbadger_store::{CkbadgerStore, StoreLayoutState, STORE_LAYOUT};
+use ckbadger_store::{
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreLayoutState, STORE_LAYOUT,
+};
 
 use crate::lifecycle::RebuildRequiredError;
+
+/// Before an open that could create or change anything in the domain store
+/// at `domain_data_path` (resync fix round 2, A): read the store for what it
+/// is, writing nothing in it (`ckbadger_store::inspect_domain_store`), and
+/// refuse a store this build must not use (another stamp, rows and no stamp,
+/// column families that are not this build's), rebuild-required, so nothing
+/// is created in it and the build that wrote it can still open it. No store
+/// yet, a fresh store and a store of this build's layout pass; the open then
+/// stamps a fresh one ([`ensure_store_layout`]).
+pub fn refuse_before_open(domain_data_path: &std::path::Path) -> Result<()> {
+    let inspected = ckbadger_store::inspect_domain_store(
+        domain_data_path,
+        &secondary_store_path(domain_data_path, SecondaryStoreOwner::Inspect),
+    )?;
+    match inspected {
+        Some(Err(mismatch)) => Err(anyhow::Error::new(RebuildRequiredError::new(
+            mismatch.diagnosis(),
+        ))),
+        None | Some(Ok(_)) => Ok(()),
+    }
+}
 
 /// Stamp a fresh store with [`STORE_LAYOUT`], pass a store of that layout,
 /// and refuse any other (`RebuildRequiredError`) before anything is written.
