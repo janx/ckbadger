@@ -10446,7 +10446,8 @@ mod tests {
     fn participant_rows_check_reads_every_party_not_only_the_drawn() {
         const TX: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
         let lock = |i: usize| format!("0x{i:02x}{}", "ab".repeat(31));
-        let party = |i: usize| json!({ "lockHash": lock(i), "lockHashPrefix": null });
+        let party =
+            |i: usize| json!({ "lockHash": lock(i), "lockHashPrefix": null, "itemDeltas": [] });
         let ids = |n: usize| -> Vec<serde_json::Value> {
             (0..n)
                 .map(|i| json!([lock(i)[..42].to_string(), 0]))
@@ -10469,6 +10470,7 @@ mod tests {
                         "participantCount": 8,
                         "partyIds": feed_ids,
                         "feePayer": null,
+                        "items": [],
                         "participants": (0..5).map(party).collect::<Vec<_>>(),
                     }], "nextCursor": null}),
                 )
@@ -10530,6 +10532,119 @@ mod tests {
             "{:?}",
             result.findings
         );
+    }
+
+    /// Lane feed, part 4: a row states its items once (`items`), computed by the route from every
+    /// party, and draws no party for moving one; the check holds that statement against every
+    /// party of the transaction's own activity: each item once in the order it first appears, its
+    /// movement, how many parties' holdings changed (each party's deltas netted first) and a
+    /// token's amount moved (the larger of what holders gained and gave). A statement right in
+    /// all passes; a wrong amount, mover count or movement is a finding naming the transaction.
+    #[test]
+    fn participant_rows_check_holds_the_row_items_against_every_party() {
+        const TX: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
+        let t = format!("0x{}", "71".repeat(32));
+        let u = format!("0x{}", "72".repeat(32));
+        let o = format!("0x{}", "73".repeat(32));
+        let lock = |i: usize| format!("0x{i:02x}{}", "cd".repeat(31));
+        let token = |id: &str, delta: &str| json!({ "kind": "token", "typeScriptHash": id, "delta": delta });
+        // T: 0 gives 10, 1 and 2 take 4 and 6; O: 3 gains an object no one gave; U: 4 gives 5 from
+        // one cell and takes 3 back in another (−2), 5 takes 2
+        let deltas = [
+            json!([token(&t, "-10")]),
+            json!([token(&t, "4")]),
+            json!([token(&t, "6")]),
+            json!([{ "kind": "object", "objectId": o, "delta": 1 }]),
+            json!([token(&u, "-5"), token(&u, "3")]),
+            json!([token(&u, "2")]),
+        ];
+        let stated = |t_amount: &str, o_movement: &str, u_parties: usize| {
+            json!([
+                { "kind": "token", "typeScriptHash": t, "movement": "transfer", "amount": t_amount, "parties": 3 },
+                { "kind": "object", "objectId": o, "movement": o_movement, "parties": 1 },
+                { "kind": "token", "typeScriptHash": u, "movement": "transfer", "amount": "2", "parties": u_parties },
+            ])
+        };
+        let run = |items: serde_json::Value| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            let parties: Vec<serde_json::Value> = deltas
+                .iter()
+                .enumerate()
+                .map(|(i, d)| json!({ "lockHash": lock(i), "lockHashPrefix": null, "itemDeltas": d }))
+                .collect();
+            let ids: Vec<serde_json::Value> = (0..6)
+                .map(|i| json!([lock(i)[..42].to_string(), 1]))
+                .collect();
+            runtime.block_on(async {
+                let get = |route: String, body: serde_json::Value| {
+                    Mock::given(method("GET"))
+                        .and(path(format!("/api/v1/{route}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                };
+                get(
+                    "activities".into(),
+                    json!({"data": [{
+                        "txHash": TX,
+                        "blockNumber": 9,
+                        "participantCount": 6,
+                        "partyIds": ids,
+                        "feePayer": null,
+                        "items": items,
+                        "participants": parties[..5].to_vec(),
+                    }], "nextCursor": null}),
+                )
+                .mount(&server)
+                .await;
+                get(
+                    format!("transactions/{TX}/activity"),
+                    json!({
+                        "txHash": TX,
+                        "participantCount": 6,
+                        "partyIds": ids,
+                        "feePayer": null,
+                        "items": items,
+                        "participants": parties,
+                    }),
+                )
+                .mount(&server)
+                .await;
+                for i in 0..6 {
+                    get(
+                        format!("addresses/{}/transactions", lock(i)),
+                        json!({"data": [{ "txHash": TX }], "nextCursor": null}),
+                    )
+                    .mount(&server)
+                    .await;
+                }
+            });
+            let check = registered_check("participant_rows_consistency");
+            let completed = execute_check(
+                check.as_ref(),
+                &mock_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            let result = completed.result.expect("a completed run has a result");
+            (completed.status, result)
+        };
+
+        let (status, result) = run(stated("10", "mint", 2));
+        assert_eq!(status, CheckStatus::Pass, "{:?}", result.findings);
+        for wrong in [
+            stated("9", "mint", 2),
+            stated("10", "transfer", 2),
+            stated("10", "mint", 3),
+        ] {
+            let (status, result) = run(wrong.clone());
+            assert_eq!(status, CheckStatus::Fail, "{wrong}: {:?}", result.findings);
+            assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+            assert_eq!(result.findings[0].entity, format!("tx={TX}"));
+            assert!(
+                result.findings[0].details[0].contains("items"),
+                "{:?}",
+                result.findings
+            );
+        }
     }
 
     /// An owner holding more names than one `dotcell-names` page must be read
