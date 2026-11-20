@@ -19,7 +19,6 @@ use crate::parser::block::BlockParser;
 use crate::parser::cell::{CellParser, ParsedCell};
 use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::transaction::TransactionParser;
-use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
     BitCellParser, DidCkbParser, DotCellParser, DotbitParser, MnftParser, SporeParser, UdtParser,
@@ -345,10 +344,7 @@ pub fn classify_type_script_semantic_tag(
 
     {
         if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type) {
-            return match standard {
-                UdtStandard::Sudt => CellSemanticTag::Sudt,
-                UdtStandard::Xudt => CellSemanticTag::Xudt,
-            };
+            return CellSemanticTag::of_udt(standard);
         }
     }
 

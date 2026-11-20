@@ -307,7 +307,11 @@ impl TokenOwner {
         // Exactly one minted xUDT type among amount-carrying outputs.
         let mut minted: Option<&[u8]> = None;
         for cell in tx.cells.iter() {
-            if !matches!(cell.semantic_tag, CellSemanticTag::Xudt) {
+            if !cell
+                .semantic_tag
+                .udt_standard()
+                .is_some_and(|standard| standard.is_xudt())
+            {
                 continue;
             }
             if cell.udt_amount.is_none() {
@@ -922,10 +926,11 @@ impl TokenCellView {
         tx: &ResolvedTxFacts<'_>,
         location: CellLocator<'_>,
     ) -> Result<Option<Self>> {
-        let standard = match semantic_tag {
-            CellSemanticTag::Sudt => "sudt",
-            CellSemanticTag::Xudt => "xudt",
-            _ => return Ok(None),
+        let Some(standard) = semantic_tag
+            .udt_standard()
+            .map(|standard| standard.as_str())
+        else {
+            return Ok(None);
         };
 
         let Some(amount) = udt_amount else {
@@ -1031,7 +1036,7 @@ fn token_daily_type_id(
     tx: &ResolvedTxFacts<'_>,
     side: &str,
 ) -> Result<Option<InternId>> {
-    if !matches!(semantic_tag, CellSemanticTag::Sudt | CellSemanticTag::Xudt) {
+    if semantic_tag.udt_standard().is_none() {
         return Ok(None);
     }
     type_script_hash_id.map(Some).ok_or_else(|| {

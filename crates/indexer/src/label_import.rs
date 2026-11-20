@@ -3342,6 +3342,44 @@ mod bundled_label_chain_consistency_tests {
         }
     }
 
+    /// resync fix round 4, item 1: the bundled labels whose stated standard is
+    /// not what their deployment's pair runs (the chain row's standard, by the
+    /// registry), each said by label import when it meets the row. With the
+    /// compatible deployments' rows `xudt_compatible`, only a label that is
+    /// wrong about its deployment is left.
+    #[test]
+    fn the_bundled_labels_that_disagree_with_their_pairs_standard() {
+        let mut disagreeing = Vec::new();
+        for token in bundled::udt_labels() {
+            for (network, deployment) in [("mainnet", &token.mainnet), ("testnet", &token.testnet)]
+            {
+                let Some(deployment) = deployment else {
+                    continue;
+                };
+                let runs = crate::parser::UdtParser::is_udt_code_hash_bytes(
+                    &crate::rpc::parse_hex_to_bytes(&deployment.code_hash),
+                    crate::parser::script::ScriptParser::hash_type_to_i16(&deployment.hash_type),
+                )
+                .map_or("no UDT", |standard| standard.as_str());
+                if runs != token.standard {
+                    disagreeing.push(format!(
+                        "{} ({network}): the label says {}, its pair runs {runs}",
+                        token.symbol, token.standard
+                    ));
+                }
+            }
+        }
+        disagreeing.sort();
+        // 2 of the bundled labels' deployments (24 before the compatible
+        // deployments' rows said `xudt_compatible`: these two and 22 compatible
+        // ones the label rightly calls so), each wrong about its deployment
+        let expected: Vec<&str> = vec![
+            "LTO (testnet): the label says sudt, its pair runs xudt",
+            "USDI (mainnet): the label says xudt_compatible, its pair runs xudt",
+        ];
+        assert_eq!(disagreeing, expected, "{disagreeing:#?}");
+    }
+
     /// resync fix round 3, item 4: label import says each label whose stated
     /// standard is not the chain row's, never silently (the standard is the
     /// pair's; the API answers the chain's).
@@ -3376,6 +3414,16 @@ mod bundled_label_chain_consistency_tests {
         };
         assert_eq!(
             super::label_standard_disagreement(&row, &label("xudt")),
+            None
+        );
+        // a compatible deployment's row says `xudt_compatible` (resync fix
+        // round 4, item 1): its label, saying so too, is no disagreement
+        let compatible = ckbadger_store::types::TokenInfo {
+            standard: "xudt_compatible".to_string(),
+            ..row.clone()
+        };
+        assert_eq!(
+            super::label_standard_disagreement(&compatible, &label("xudt_compatible")),
             None
         );
         assert_eq!(
@@ -3420,7 +3468,15 @@ mod bundled_label_chain_consistency_tests {
             type_code_hash: hex::decode(deployment.code_hash.trim_start_matches("0x")).unwrap(),
             hash_type: ckbadger_common::hash_type_from_label(&deployment.hash_type).unwrap(),
             type_args: hex::decode(deployment.args.trim_start_matches("0x")).unwrap(),
-            standard: "xudt".to_string(),
+            // the chain's: what the deployment's pair runs (resync fix round 4,
+            // item 1)
+            standard: crate::parser::UdtParser::is_udt_code_hash_bytes(
+                &crate::rpc::parse_hex_to_bytes(&deployment.code_hash),
+                crate::parser::script::ScriptParser::hash_type_to_i16(&deployment.hash_type),
+            )
+            .expect("a bundled token deployment runs a UDT")
+            .as_str()
+            .to_string(),
             name: None,
             symbol: None,
             decimals: None,
@@ -3539,9 +3595,11 @@ mod bundled_label_chain_consistency_tests {
         assert_eq!(stored.symbol.as_deref(), Some("USDI"));
         assert_eq!(stored.decimals, Some(6));
         // Re-pinned on purpose (resync fix round 3, item 4, the lead's
-        // ruling): the label says `xudt_compatible`, and the token's standard
-        // is the chain's, what its pair runs (it was the label's)
-        assert_eq!(stored.standard, "xudt");
+        // ruling): the token's standard is the chain's, what its pair runs;
+        // and again in round 4, item 1: testnet USDI's pair is a deployment of
+        // the compatible list, so the chain says `xudt_compatible`, as its
+        // label does (round 3 pinned `xudt`, the fold of before)
+        assert_eq!(stored.standard, "xudt_compatible");
     }
 
     /// A Unique Cell observation that says exactly what the stored row says.

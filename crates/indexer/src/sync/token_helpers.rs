@@ -641,13 +641,9 @@ pub(crate) fn collect_token_onchain_info(
                 let Some(type_hash_type) = cell.type_hash_type else {
                     continue;
                 };
-                if !matches!(
-                    crate::parser::UdtParser::is_udt_code_hash_bytes(
-                        type_code_hash,
-                        type_hash_type
-                    ),
-                    Some(crate::parser::udt::UdtStandard::Xudt)
-                ) {
+                if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+                    .is_some_and(|standard| standard.is_xudt())
+                {
                     continue;
                 }
 
@@ -779,10 +775,9 @@ fn collect_issuance_cooccurrence_binding(
         else {
             continue;
         };
-        if !matches!(
-            crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-            Some(crate::parser::udt::UdtStandard::Xudt)
-        ) {
+        if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+            .is_some_and(|standard| standard.is_xudt())
+        {
             continue;
         }
         if crate::parser::UdtParser::parse_amount(&cell.data).is_none() {
@@ -892,10 +887,9 @@ pub(crate) fn collect_token_max_supply_observations(
             let Some(type_hash_type) = cell.type_hash_type else {
                 continue;
             };
-            if !matches!(
-                crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-                Some(crate::parser::udt::UdtStandard::Xudt)
-            ) {
+            if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+                .is_some_and(|standard| standard.is_xudt())
+            {
                 continue;
             }
 
@@ -964,7 +958,7 @@ pub(crate) fn parse_parsed_cell_udt_amount(
         // xUDT-compatible cells can carry non-amount payloads (for example owner-mode
         // cells). They should not be indexed as fungible UDT balances/transfers —
         // common and expected, tolerated silently.
-        if matches!(standard, crate::parser::UdtStandard::Xudt) {
+        if standard.is_xudt() {
             return Ok(None);
         }
         // A cell using the sUDT type script but with data too short for a u128 amount is

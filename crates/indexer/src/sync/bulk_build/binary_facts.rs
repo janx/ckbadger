@@ -14,7 +14,7 @@ use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::dotbit::DotbitWitnessBundle;
 use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use crate::parser::script::ScriptParser;
-use crate::parser::udt::{UdtParser, UdtStandard};
+use crate::parser::udt::UdtParser;
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
 
 use super::facts::{BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, TxFacts};
@@ -465,7 +465,7 @@ pub(crate) fn parse_block_to_facts(
                 // Keep this match exhaustive so adding a protocol-backed semantic
                 // tag cannot silently drop its protocol facts again.
                 // Witnesses are read only for an extension in witness mode.
-                CellSemanticTag::Xudt => {
+                CellSemanticTag::Xudt | CellSemanticTag::XudtCompatible => {
                     super::facts::xudt_extension_facts(type_args_bytes.as_deref(), || {
                         (0..witnesses.len()).map(|i| {
                             witnesses
@@ -695,10 +695,7 @@ fn parse_binary_dotbit_witnesses(witnesses: &ckb_types::packed::BytesVec) -> Dot
 /// `code_hash` through the registry.
 fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTag {
     if let Some(standard) = UdtParser::is_udt_code_hash_bytes(code_hash, hash_type) {
-        return match standard {
-            UdtStandard::Sudt => CellSemanticTag::Sudt,
-            UdtStandard::Xudt => CellSemanticTag::Xudt,
-        };
+        return CellSemanticTag::of_udt(standard);
     }
 
     // Exhaustive on purpose: no `_` arm. A new `ProtocolScript` variant must
@@ -1353,7 +1350,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_testnet_xudt_compatible_assets_as_xudt() {
+    fn classify_testnet_xudt_compatible_assets_as_xudt_compatible() {
         // These deployments back the USDI and RUSD verification failures. They
         // use the xUDT amount encoding but have application-specific type-script
         // code hashes declared as UDTs in the bundled script metadata.
@@ -1364,7 +1361,8 @@ mod tests {
             let hash = crate::rpc::parse_hex_to_bytes(code_hash);
             assert_eq!(
                 code_hash_to_semantic_tag(&hash, 1),
-                CellSemanticTag::Xudt,
+                // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own; it reaches the bulk token owner as the xUDT layout does
+                CellSemanticTag::XudtCompatible,
                 "xUDT-compatible deployment {code_hash} must reach the bulk token owner"
             );
         }

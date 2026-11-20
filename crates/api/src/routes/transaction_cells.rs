@@ -85,6 +85,7 @@ pub fn read_udt_amount(standard: &UdtStandard, data: &[u8]) -> UdtAmountReading 
                 match standard {
                     UdtStandard::Sudt => "sUDT",
                     UdtStandard::Xudt => "xUDT",
+                    UdtStandard::XudtCompatible => "xUDT-compatible",
                 },
                 data.len(),
                 if data.len() == 1 { "" } else { "s" }

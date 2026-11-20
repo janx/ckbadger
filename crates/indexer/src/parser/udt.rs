@@ -18,9 +18,14 @@ pub const XUDT_CODE_HASH_TYPE: &str =
     "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A token's standard: which registered deployment its type script's pair
+/// runs, by the registry (resync fix round 4, item 1, the lead's ruling): the
+/// canonical xUDT, a deployment of the registry's xUDT-compatible list, or
+/// sUDT. A chain fact; a label never states it.
 pub enum UdtStandard {
     Sudt,
     Xudt,
+    XudtCompatible,
 }
 
 impl UdtStandard {
@@ -28,13 +33,23 @@ impl UdtStandard {
         match self {
             UdtStandard::Sudt => "sudt",
             UdtStandard::Xudt => "xudt",
+            UdtStandard::XudtCompatible => "xudt_compatible",
         }
+    }
+
+    /// THE predicate of the xUDT layout (its amount, its args and extension,
+    /// its holders and transfers): the canonical xUDT and a compatible
+    /// deployment alike. Everything that treats the two alike asks this, never
+    /// the standard's string.
+    pub fn is_xudt(&self) -> bool {
+        matches!(self, UdtStandard::Xudt | UdtStandard::XudtCompatible)
     }
 
     pub fn from_standard_hint(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "sudt" => Some(UdtStandard::Sudt),
-            "xudt" | "xudt_compatible" => Some(UdtStandard::Xudt),
+            "xudt" => Some(UdtStandard::Xudt),
+            "xudt_compatible" => Some(UdtStandard::XudtCompatible),
             _ => None,
         }
     }
@@ -88,7 +103,7 @@ impl UdtParser {
             Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
             Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
             _ if crate::parser::registry::is_xudt_compatible(code_hash, hash_type) => {
-                Some(UdtStandard::Xudt)
+                Some(UdtStandard::XudtCompatible)
             }
             _ => None,
         }
@@ -512,9 +527,10 @@ mod tests {
             "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a",
         ] {
             let code_hash = parse_hex_to_bytes(code_hash);
+            // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
             assert_eq!(
                 UdtParser::is_udt_code_hash_bytes(&code_hash, 1),
-                Some(UdtStandard::Xudt)
+                Some(UdtStandard::XudtCompatible)
             );
         }
     }
@@ -532,7 +548,8 @@ mod tests {
         for data_type in [0i16, 2, 4] {
             assert_eq!(
                 UdtParser::is_udt_code_hash_bytes(&binary, data_type),
-                Some(UdtStandard::Xudt),
+                // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
+                Some(UdtStandard::XudtCompatible),
                 "the Stable++ Asset binary by hash type {data_type}"
             );
         }
@@ -549,7 +566,8 @@ mod tests {
         );
         assert_eq!(
             UdtParser::is_udt_code_hash_bytes(&reference, 1),
-            Some(UdtStandard::Xudt),
+            // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
+            Some(UdtStandard::XudtCompatible),
             "the Stable++ Asset reference by type"
         );
         for data_type in [0i16, 2, 4] {
@@ -679,10 +697,13 @@ mod tests {
     fn test_udt_standard_parse() {
         assert!(matches!(UdtStandard::parse("sudt"), UdtStandard::Sudt));
         assert!(matches!(UdtStandard::parse("xudt"), UdtStandard::Xudt));
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
         assert!(matches!(
             UdtStandard::parse("xudt_compatible"),
-            UdtStandard::Xudt
+            UdtStandard::XudtCompatible
         ));
+        assert!(UdtStandard::XudtCompatible.is_xudt() && UdtStandard::Xudt.is_xudt());
+        assert!(!UdtStandard::Sudt.is_xudt());
     }
 
     #[test]
@@ -707,9 +728,10 @@ mod tests {
             UdtStandard::from_standard_hint("xudt"),
             Some(UdtStandard::Xudt)
         ));
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
         assert!(matches!(
             UdtStandard::from_standard_hint("xudt_compatible"),
-            Some(UdtStandard::Xudt)
+            Some(UdtStandard::XudtCompatible)
         ));
         assert!(UdtStandard::from_standard_hint("omiga_inscription").is_none());
     }

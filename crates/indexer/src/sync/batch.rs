@@ -5990,7 +5990,8 @@ mod tests {
             .expect("expected live UDT input to be resolved");
         assert_eq!(entry.0, type_hash);
         assert_eq!(entry.5, 145_203);
-        assert_eq!(entry.6, "xudt");
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own, read from the row
+        assert_eq!(entry.6, "xudt_compatible");
         assert!(cache.get(&([0x33; 32], output_index)).is_some());
     }
 

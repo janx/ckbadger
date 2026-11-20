@@ -259,6 +259,9 @@ pub enum CellSemanticTag {
     Dao,
     Sudt,
     Xudt,
+    /// A cell of a deployment of the registry's xUDT-compatible list (resync
+    /// fix round 4, item 1): the xUDT layout, its own standard.
+    XudtCompatible,
     Dotbit,
     BitCell,
     DidCkb,
@@ -269,6 +272,29 @@ pub enum CellSemanticTag {
 }
 
 impl CellSemanticTag {
+    /// The tag of a UDT cell of `standard`: the one mapping from a standard
+    /// to a tag, live and bulk.
+    pub fn of_udt(standard: crate::parser::UdtStandard) -> Self {
+        use crate::parser::UdtStandard;
+        match standard {
+            UdtStandard::Sudt => Self::Sudt,
+            UdtStandard::Xudt => Self::Xudt,
+            UdtStandard::XudtCompatible => Self::XudtCompatible,
+        }
+    }
+
+    /// The standard of a UDT cell's tag; `None` for any other tag: the one
+    /// mapping back.
+    pub fn udt_standard(self) -> Option<crate::parser::UdtStandard> {
+        use crate::parser::UdtStandard;
+        match self {
+            Self::Sudt => Some(UdtStandard::Sudt),
+            Self::Xudt => Some(UdtStandard::Xudt),
+            Self::XudtCompatible => Some(UdtStandard::XudtCompatible),
+            _ => None,
+        }
+    }
+
     /// Convert to bitmask bit for `TxIndexEntry.semantic_tags`.
     pub fn to_bit(self) -> u16 {
         use ckbadger_store::types::semantic_tags;
@@ -276,7 +302,9 @@ impl CellSemanticTag {
             Self::Plain => semantic_tags::PLAIN,
             Self::Dao => semantic_tags::DAO,
             Self::Sudt => semantic_tags::SUDT,
-            Self::Xudt => semantic_tags::XUDT,
+            // one bit for the xUDT layout in the transaction index, canonical
+            // or compatible: what it was before the two were told apart
+            Self::Xudt | Self::XudtCompatible => semantic_tags::XUDT,
             Self::Dotbit => semantic_tags::DOTBIT,
             Self::BitCell => semantic_tags::BIT_CELL,
             Self::DidCkb => semantic_tags::DID_CKB,
@@ -459,7 +487,8 @@ pub(crate) fn parse_protocol_facts(
         CellSemanticTag::Plain
         | CellSemanticTag::Dao
         | CellSemanticTag::Sudt
-        | CellSemanticTag::Xudt => Ok(None),
+        | CellSemanticTag::Xudt
+        | CellSemanticTag::XudtCompatible => Ok(None),
         CellSemanticTag::DotCell => {
             let name = DotCellParser::parse_name_parsed_cell(cell)
                 .map_err(|e| {

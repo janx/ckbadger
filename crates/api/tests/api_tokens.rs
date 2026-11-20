@@ -1705,6 +1705,39 @@ async fn a_label_never_states_a_tokens_standard() {
     }
 }
 
+/// resync fix round 4, item 1: a token under a deployment of the registry's
+/// compatible list is answered as the chain row says, `xudt_compatible`, on the
+/// token page and in the list's filter, and without the canonical xUDT's
+/// issuance semantics (its max supply status is unknown, not unlimited).
+#[tokio::test]
+async fn a_compatible_deployments_token_is_answered_as_its_row_says() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let token = vec![0xe6; 32];
+    let mut row = provenance_token(0x32, "Compat", "CMP", TokenMetadataSource::Chain, None);
+    row.standard = "xudt_compatible".to_string();
+    store.put_token_direct(&token, &row).unwrap();
+
+    let (status, json) = token_detail(store.clone(), &token).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["standard"], "xudt_compatible", "{json}");
+    assert_eq!(json["maximumSupplyStatus"], "unknown", "{json}");
+
+    let app = create_router(test_config(store)).await;
+    for (standard, listed) in [("xudt_compatible", true), ("xudt", false)] {
+        let (status, json) =
+            get_json(&app, &format!("/assets?type=token&standard={standard}")).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let symbols: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|asset| asset["symbol"].as_str())
+            .collect();
+        assert_eq!(symbols.contains(&"CMP"), listed, "{standard}: {json}");
+    }
+}
+
 /// resync fix round 3, item 4: the answer's `conflict` is true exactly when
 /// the token's own binding (its Unique Cell) states another name, symbol or
 /// decimals than the answer, the label's where it states them: a label that

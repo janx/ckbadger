@@ -6235,11 +6235,7 @@ fn parsed_udt_cell_from_parts(
 }
 
 fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option<UdtStandard> {
-    match semantic_tag {
-        facts::CellSemanticTag::Sudt => Some(UdtStandard::Sudt),
-        facts::CellSemanticTag::Xudt => Some(UdtStandard::Xudt),
-        _ => None,
-    }
+    semantic_tag.udt_standard()
 }
 
 fn emit_final_snapshot_rows<F>(
