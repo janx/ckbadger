@@ -182,7 +182,9 @@ pub(crate) fn ensure_store_layout_readable(store: &CkbadgerStore) -> Result<()> 
 }
 
 /// Open the domain store the API serves, as a secondary of the indexer's
-/// primary at `domain_data_path`.
+/// primary at `domain_data_path`: handed out only with this build's layout
+/// ([`ensure_store_layout_readable`], resync fix round T3), so the API
+/// cannot serve a store of another layout.
 pub(crate) fn open_api_domain_store(
     domain_data_path: &str,
     store_runtime_config: StoreRuntimeConfig,
@@ -193,11 +195,13 @@ pub(crate) fn open_api_domain_store(
         domain_data_path,
         secondary_path.display()
     );
-    Ok(Arc::new(CkbadgerStore::open_domain_secondary_with_runtime(
+    let store = CkbadgerStore::open_domain_secondary_with_runtime(
         Path::new(domain_data_path),
         secondary_path.as_path(),
         store_runtime_config,
-    )?))
+    )?;
+    ensure_store_layout_readable(&store)?;
+    Ok(Arc::new(store))
 }
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
@@ -225,7 +229,6 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
 
     // Phase 2: stores exist — open them and serve the real router (unchanged below).
     let store = open_api_domain_store(&config.domain_data_path, config.store_runtime_config)?;
-    ensure_store_layout_readable(&store)?;
 
     let append_only_secondary_path =
         secondary_store_path(&config.append_only_data_path, SecondaryStoreOwner::Api);

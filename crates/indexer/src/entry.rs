@@ -192,11 +192,9 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         "Startup sync decision"
     );
 
-    // Before the first write: the store's layout must be this build's (a fresh
-    // store is stamped with it). Any other store is refused here, nothing
-    // written, with both layouts named (`store_layout`).
-    crate::store_layout::ensure_store_layout(&store)
-        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
+    // The store's layout is this build's: `open_chain_stores_for_startup`
+    // refused any other store before handing it out (a fresh store is stamped
+    // there), so nothing below can write into a store of another layout.
     // This is the first domain-store mutation on startup after the layout
     // stamp, and it happens on the FINAL handle (the probe handle only reads).
     // Existing tagged DBs must match; old untagged DBs must prove their chain
@@ -965,6 +963,14 @@ pub(crate) fn open_chain_stores_for_startup(
     } else {
         Arc::new(probe_store)
     };
+
+    // The store is handed out only with this build's layout (resync fix
+    // round T3): a fresh store is stamped with it, any other store is
+    // refused here, before the first write and before the append-only store
+    // is created, nothing written, with both layouts named
+    // (`store_layout`). The only earlier work reads (the bulk session probe,
+    // the sync tip).
+    crate::store_layout::ensure_store_layout(&store)?;
 
     info!(
         path = append_only_data_path,
@@ -2204,6 +2210,11 @@ mod tests {
 
         let store =
             CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
+        // A store this build wrote carries its layout stamp (resync fix
+        // round T3: the startup open refuses any other).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
         let header = CachedBlockHeader {
             hash: vec![0x7f; 32],
             timestamp: 1_704_067_200_000,
