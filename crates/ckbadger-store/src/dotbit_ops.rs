@@ -207,40 +207,6 @@ impl CkbadgerStore {
 
         Ok(outpoints)
     }
-
-    /// A .bit account's first recorded cell BY KEY (the lowest transaction hash, then index), not
-    /// the first in time: one seek on its prefix and one entry, never a list of its history.
-    pub fn first_dotbit_account_outpoint_by_account_id(
-        &self,
-        account_id: &[u8],
-    ) -> anyhow::Result<Option<(Vec<u8>, i16)>> {
-        let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
-        let Some(item) = self
-            .prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix)
-            .next()
-        else {
-            return Ok(None);
-        };
-        let (key, _) = item.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to iterate object_outpoint_by_id in first_dotbit_account_outpoint_by_account_id: account_id=0x{}, error={}",
-                bytes_to_hex(account_id),
-                e
-            )
-        })?;
-        if !key.starts_with(&prefix) {
-            return Ok(None);
-        }
-        if key.len() != keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE {
-            anyhow::bail!(
-                "invalid dotbit outpoint_by_account_id key length: expected {}, got {}, account_id=0x{}",
-                keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE,
-                key.len(),
-                bytes_to_hex(account_id)
-            );
-        }
-        Ok(Some(keys::decode_dotbit_outpoint_by_account_id_key(&key)))
-    }
 }
 
 #[cfg(test)]
@@ -253,32 +219,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
-    }
-
-    /// The third read's La S1: a .bit account's first recorded cell by one seek, the lowest key
-    /// (transaction hash, then index), never a list of its whole history.
-    #[test]
-    fn first_dotbit_account_outpoint_is_the_lowest_key() {
-        use crate::types::AssetAction;
-        let (_dir, store) = test_store();
-        let account = [0x51u8; 20];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_dotbit_outpoint_by_account_id(&account, &[0xc9u8; 32], 1, AssetAction::Transfer);
-        batch.put_dotbit_outpoint_by_account_id(&account, &[0x3bu8; 32], 7, AssetAction::Mint);
-        batch.put_dotbit_outpoint_by_account_id(&[0x52u8; 20], &[0x01u8; 32], 0, AssetAction::Mint);
-        batch.commit().unwrap();
-        assert_eq!(
-            store
-                .first_dotbit_account_outpoint_by_account_id(&account)
-                .unwrap(),
-            Some(([0x3bu8; 32].to_vec(), 7))
-        );
-        assert_eq!(
-            store
-                .first_dotbit_account_outpoint_by_account_id(&[0x50u8; 20])
-                .unwrap(),
-            None
-        );
     }
 
     #[test]

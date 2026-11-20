@@ -1,4 +1,5 @@
 import { api, isServiceUnavailableError, type DaoCalculatorResult } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { expectTypeOf } from 'vitest';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
@@ -1692,13 +1693,15 @@ describe('api', () => {
       expect(result.results[0].resultType).toBe('block');
     });
 
-    it('lookupScripts sends POST request', async () => {
+    it('lookupScripts sends POST request, each script by its pair', async () => {
       server.use(
         http.post('/api/:network/v1/scripts/lookup', async ({ request }) => {
-          const body = (await request.json()) as { codeHashes: string[] };
-          expect(body.codeHashes).toContain('0xabc');
+          const body = (await request.json()) as {
+            scripts: { codeHash: string; hashType: string }[];
+          };
+          expect(body.scripts).toEqual([{ codeHash: '0xabc', hashType: 'type' }]);
           return HttpResponse.json({
-            '0xabc': {
+            '0xabc:type': {
               codeHash: '0xabc',
               name: 'Test Script',
               scriptKind: 'lock',
@@ -1708,8 +1711,8 @@ describe('api', () => {
         })
       );
 
-      const result = await api.lookupScripts(['0xabc']);
-      expect(result['0xabc'].name).toBe('Test Script');
+      const result = await api.lookupScripts([{ codeHash: '0xabc', hashType: 'type' }]);
+      expect(result[scriptLookupKey('0xabc', 'type')].name).toBe('Test Script');
     });
 
     it('lookupScripts returns empty object for empty array', async () => {

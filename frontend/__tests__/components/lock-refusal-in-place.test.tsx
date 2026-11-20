@@ -39,8 +39,7 @@ describe('a refused lock fails its part, in its place', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
-        itemTypes: [],
-        itemTypesUnread: null,
+        recognizedTypes: [],
         participants: [
           {
             address,
@@ -52,6 +51,7 @@ describe('a refused lock fails its part, in its place', () => {
             ckbDelta: String(-n),
             usedDelta: '0',
             itemDeltas: [],
+            sent: false,
           },
         ],
       });
@@ -89,9 +89,9 @@ describe('a refused lock fails its part, in its place', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
-        // a pool row states no item types, as the route sends it (the third read's T SHOULD-1)
-        itemTypes: blockNumber === null ? null : [],
-        itemTypesUnread: null,
+        // a pool row states its recognised codes as a committed row does (C7: the mirror builds
+        // its rows with the indexer's builder)
+        recognizedTypes: [],
         participants: [
           {
             address,
@@ -103,6 +103,7 @@ describe('a refused lock fails its part, in its place', () => {
             ckbDelta: '-1',
             usedDelta: '0',
             itemDeltas: [],
+            sent: true,
           },
         ],
       });

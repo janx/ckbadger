@@ -20,6 +20,7 @@
         "hashType": "type"
       },
       "lockName": "Default Lock",
+      "lockNameBy": null,
       "occupiedCapacity": "20200000000",
       "outputIndex": 0,
       "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgmnt9xa",
@@ -32,7 +33,8 @@
         "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
         "hashType": "data1"
       },
-      "typeName": "Spore"
+      "typeName": "Spore",
+      "typeNameBy": null
     },
     {
       "anatomy": {
@@ -54,6 +56,7 @@
         "hashType": "type"
       },
       "lockName": "Default Lock",
+      "lockNameBy": null,
       "occupiedCapacity": "20200000000",
       "outputIndex": 0,
       "ownerAddress": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqs84gg6t",
@@ -66,7 +69,8 @@
         "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
         "hashType": "data1"
       },
-      "typeName": "Spore"
+      "typeName": "Spore",
+      "typeNameBy": null
     }
   ],
   "total": 2

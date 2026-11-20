@@ -114,8 +114,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
         protocolActions: [],
         typeCalls: [],
         lockCalls: [],
-        itemTypes: [],
-        itemTypesUnread: null,
+        recognizedTypes: [],
         participants: [
           {
             lockHash: '0x' + '01'.repeat(32),
@@ -127,6 +126,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
             ckbDelta: '-267999759670',
             usedDelta: '-266000000000',
             itemDeltas: [],
+            sent: true,
           },
         ],
       })}

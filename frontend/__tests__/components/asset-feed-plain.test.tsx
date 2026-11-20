@@ -30,6 +30,8 @@ const party = (lock: string, kind: string, delta: string, items: ReturnType<type
   lockHashPrefix: null,
   lockKind: kind,
   tags: 4,
+  // a party whose CKB fell held an input
+  sent: delta.startsWith('-'),
   ckbDelta: delta,
   usedDelta: '0',
   itemDeltas: items,
@@ -53,8 +55,7 @@ const batch: GlobalActivity = activityRead({
       scriptName: 'M-NFT',
     },
   ],
-  itemTypes: [ITEM_TYPE.spore],
-  itemTypesUnread: null,
+  recognizedTypes: [ITEM_TYPE.spore],
   lockCalls: [
     {
       lockCodeHash: '0x' + '0c'.repeat(32),
@@ -142,7 +143,7 @@ describe('phone form of a collection activity entry (L6)', () => {
   it("keeps occupied on the participant's line in the plain rows only", async () => {
     const withOccupied = activityRead({
       ...batch,
-      itemTypes: [ITEM_TYPE.spore],
+      recognizedTypes: [ITEM_TYPE.spore],
       participants: batch.participants.map((p) => ({ ...p, usedDelta: '32400000000' })),
     });
     const { container } = render(

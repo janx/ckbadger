@@ -144,6 +144,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       lockHash: LOCK_HASH,
       lockHashPrefix: null,
       roles: [],
+      sent: false,
     };
     // re-pinned on purpose (lane cd-fixes-controls, SHOULD-4): the standalone form states its
     // Address's look, which is required (it drew the resting look of a caller that stated none)
@@ -171,6 +172,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       usedDelta: '0',
       itemDeltas: [],
       tags: 0,
+      sent: true,
     };
     for (const sample of Object.values(feedSamples)) {
       const { container, unmount } = render(

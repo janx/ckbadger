@@ -10,7 +10,6 @@ use std::{collections::BTreeMap, sync::Arc};
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::script_resolution::registered_script_name;
 use crate::utils::{address_to_lock_script_hash, is_ckb_address, parse_hash32, script_to_address};
 use crate::AppState;
 
@@ -73,9 +72,13 @@ pub struct FiberChannelResponse {
 pub struct FiberParticipantResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
-    /// The script registry's name for the party's lock code hash ("JoyID",
-    /// "Default Lock", …); `None` when the lock is not indexed or unregistered.
+    /// The name of the code the party's lock pair (code hash, hash type) runs
+    /// ("JoyID", "Default Lock", …: `utils::ScriptNamer`); `None` when the
+    /// lock is not indexed or its pair runs no code the registry names.
     pub lock_script_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_script_name_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +167,9 @@ pub struct FiberPartyResponse {
     /// Unknown is a valid observation when the indexed lock script is absent.
     pub address: Option<String>,
     pub lock_script_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_script_name_by: Option<String>,
     pub channels: u64,
     pub open_channels: u64,
     pub cooperatively_closed_channels: u64,
@@ -348,6 +354,7 @@ fn build_timeline(
 
 fn observed_party(
     store: &ckbadger_store::CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     network: &str,
     lock_hash: &[u8],
 ) -> anyhow::Result<FiberParticipantResponse> {
@@ -370,7 +377,7 @@ fn observed_party(
                     script_to_address(&lock.code_hash, lock.hash_type, &lock.args, network)
                         .map_err(anyhow::Error::msg)?,
                 ),
-                registered_script_name(store, &lock.code_hash)?,
+                names.name_stored(&lock.code_hash, lock.hash_type)?,
             )
         }
         None => (None, None),
@@ -378,7 +385,8 @@ fn observed_party(
     Ok(FiberParticipantResponse {
         lock_script_hash: format_hex(lock_hash),
         address,
-        lock_script_name,
+        lock_script_name_by: lock_script_name.as_ref().and_then(|name| name.by()),
+        lock_script_name: lock_script_name.map(|name| name.name),
     })
 }
 
@@ -452,6 +460,7 @@ fn channel_lifetime(
 
 fn enrich_channel(
     store: &ckbadger_store::CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     network: &str,
     id: &[u8],
     ch: &ckbadger_store::types::FiberChannel,
@@ -462,7 +471,7 @@ fn enrich_channel(
     response.observed_parties = ch
         .participants
         .iter()
-        .map(|hash| observed_party(store, network, hash))
+        .map(|hash| observed_party(store, names, network, hash))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let (duration, anchor) = channel_lifetime(store, id, ch, tip_number, tip_chain_time_ms)?;
     response.observed_lifetime_ms = Some(duration.to_string());
@@ -534,6 +543,7 @@ fn fiber_view(state: &AppState) -> anyhow::Result<Arc<FiberView>> {
     let channels = load_channels(&state.store)?;
     let network = aggregate_network(
         &state.store,
+        &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
         &state.ckb_network,
         &channels,
         tip_number,
@@ -597,6 +607,7 @@ fn median_lifetime(mut durations: Vec<i64>) -> Option<String> {
 
 fn aggregate_network(
     store: &ckbadger_store::CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     network: &str,
     channels: &[(Vec<u8>, ckbadger_store::types::FiberChannel)],
     tip_number: i64,
@@ -729,7 +740,8 @@ fn aggregate_network(
         .into_iter()
         .map(|(hash, (channels, open_channels))| {
             Ok(FiberTokenChannelsResponse {
-                symbol: store.get_token(&hash)?.and_then(|token| token.symbol),
+                symbol: crate::token_identity::get_token(store, &hash)?
+                    .and_then(|token| token.symbol),
                 udt_type_hash: format_hex(&hash),
                 channels,
                 open_channels,
@@ -739,7 +751,7 @@ fn aggregate_network(
     let parties = parties
         .into_iter()
         .map(|(hash, counts)| {
-            let party = observed_party(store, network, &hash)?;
+            let party = observed_party(store, names, network, &hash)?;
             let (first_open_block, first_open_timestamp) = counts
                 .first_open
                 .ok_or_else(|| anyhow::anyhow!("Fiber party has no first open block"))?;
@@ -747,6 +759,7 @@ fn aggregate_network(
                 lock_script_hash: party.lock_script_hash,
                 address: party.address,
                 lock_script_name: party.lock_script_name,
+                lock_script_name_by: party.lock_script_name_by,
                 channels: counts.channels,
                 open_channels: counts.open,
                 cooperatively_closed_channels: counts.cooperative,
@@ -854,11 +867,13 @@ async fn list_channels(
         } else {
             None
         };
+        let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
         let data = page
             .iter()
             .map(|(id, ch)| {
                 enrich_channel(
                     &state.store,
+                    &mut names,
                     &state.ckb_network,
                     id,
                     ch,
@@ -903,6 +918,7 @@ async fn get_channel(
         .ok_or_else(|| ApiError::initializing("Fiber channel requires an indexed tip"))?;
     let resp = enrich_channel(
         &state.store,
+        &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
         &state.ckb_network,
         &id_bytes,
         &channel,
@@ -946,11 +962,13 @@ async fn get_address_channels(
         .get_sync_tip_block()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::initializing("Fiber channels require an indexed tip"))?;
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let data: Vec<FiberChannelResponse> = rows
         .iter()
         .map(|(id, ch)| {
             enrich_channel(
                 &state.store,
+                &mut names,
                 &state.ckb_network,
                 id,
                 ch,

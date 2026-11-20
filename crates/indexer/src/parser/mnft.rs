@@ -53,23 +53,26 @@ pub struct ParsedMnftToken {
 pub struct MnftParser;
 
 impl MnftParser {
-    pub fn is_issuer_type_script(code_hash: &[u8]) -> bool {
+    pub fn is_issuer_type_script(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::MnftIssuer,
         )
     }
 
-    pub fn is_class_type_script(code_hash: &[u8]) -> bool {
+    pub fn is_class_type_script(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::MnftClass,
         )
     }
 
-    pub fn is_token_type_script(code_hash: &[u8]) -> bool {
+    pub fn is_token_type_script(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::MnftToken,
         )
     }
@@ -78,7 +81,10 @@ impl MnftParser {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
 
-        if !Self::is_issuer_type_script(&type_code_hash) {
+        if !Self::is_issuer_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -102,7 +108,7 @@ impl MnftParser {
 
     pub fn parse_issuer_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftIssuer> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
-        if !Self::is_issuer_type_script(type_code_hash) {
+        if !Self::is_issuer_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -124,7 +130,10 @@ impl MnftParser {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
 
-        if !Self::is_class_type_script(&type_code_hash) {
+        if !Self::is_class_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -160,7 +169,7 @@ impl MnftParser {
 
     pub fn parse_class_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftClass> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
-        if !Self::is_class_type_script(type_code_hash) {
+        if !Self::is_class_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -189,7 +198,10 @@ impl MnftParser {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
 
-        if !Self::is_token_type_script(&type_code_hash) {
+        if !Self::is_token_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -223,7 +235,7 @@ impl MnftParser {
 
     pub fn parse_token_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftToken> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
-        if !Self::is_token_type_script(type_code_hash) {
+        if !Self::is_token_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -515,24 +527,24 @@ mod tests {
     #[test]
     fn test_is_issuer_type_script() {
         let hash = parse_hex_to_bytes(MNFT_ISSUER_CODE_HASH);
-        assert!(MnftParser::is_issuer_type_script(&hash));
+        assert!(MnftParser::is_issuer_type_script(&hash, 1));
 
         let other = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
-        assert!(!MnftParser::is_issuer_type_script(&other));
+        assert!(!MnftParser::is_issuer_type_script(&other, 1));
     }
 
     #[test]
     fn test_is_class_type_script() {
         let hash = parse_hex_to_bytes(MNFT_CLASS_CODE_HASH);
-        assert!(MnftParser::is_class_type_script(&hash));
+        assert!(MnftParser::is_class_type_script(&hash, 1));
     }
 
     #[test]
     fn test_is_token_type_script() {
         let hash = parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH);
-        assert!(MnftParser::is_token_type_script(&hash));
+        assert!(MnftParser::is_token_type_script(&hash, 1));
     }
 
     #[test]
@@ -542,7 +554,7 @@ mod tests {
         let t = parse_hex_to_bytes(
             "0xb59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed",
         );
-        assert!(MnftParser::is_issuer_type_script(&t));
+        assert!(MnftParser::is_issuer_type_script(&t, 1));
     }
 
     #[test]

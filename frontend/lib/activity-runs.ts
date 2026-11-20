@@ -22,21 +22,26 @@
  *    outputs were two runs, which no reader would call two things done). Not the args: the same
  *    code with other args is the same (the three oracles' 0x00, 0x01, 0x02; two tokens of one
  *    standard). Three lists, as the API states them:
- *    - `itemTypes`, the type script of every token, object and identity the row moved and the
- *      Nervos DAO's, as the indexer classified each item (the page-phase review's MUST-1: an
- *      item's type is never a call, so without them an sUDT and an xUDT transfer were one run);
+ *    - `recognizedTypes`, every type script code the indexer recognises that ran, read from the
+ *      row (C7): the codes of the items that changed hands and of a recognised script that moved
+ *      nothing, so a wallet merging its own sUDT cells never folds with a plain CKB transfer, and
+ *      an sUDT and an xUDT transfer are two runs (the page-phase review's MUST-1);
  *    - `typeCalls`, the type scripts the indexer does not recognise;
  *    - `lockCalls`, the non-standard locks ATTACHED to the row's outputs. An output's lock does
  *      not run: these are not the locks the transaction ran. The locks that ran, its inputs', are
- *      not stated per activity yet; they wait for the indexer's per-participant input flag (a
- *      re-sync), which also turns a run's "participants" into "senders" (`FoldedActivityRow`);
+ *      the parties that sent (the indexer's per-participant input flag, `TAG_INPUT`, the senders bit
+ *      every party's tags carry in the route's `partyIds`), which a run counts as its "senders"
+ *      (`FoldedActivityRow`), not compared;
  * 4. **the state**: both committed. A row still in the node's pool never folds (it is its own run):
- *    its status can change before the next read.
+ *    its status can change before the next read;
+ * 5. **a cellbase or not**: a cellbase has no input, so no party of it sent; a run of cellbases
+ *    folds with no count of senders, and never with a transaction that has one.
  *
  * The parties are NOT compared (the owner: "not the args, not the parties"), nor are amounts, items
  * moved, protocol facts and times: they are what the folded rows differ in, and the folded row
- * shows none of them. Nothing is summed: a run counts its rows, its parties (`runParties`) and, a
- * run of token rows, its tokens (`runTokens`, ruling 6 of gate P), and its newest time is its first
+ * shows none of them. Nothing is summed: a run counts its rows, the parties that sent
+ * (`runSenders`, read from every party's tags in the route's `partyIds`, drawn or not) and, a run
+ * of token rows, its tokens (`runTokens`, ruling 6 of gate P), and its newest time is its first
  * row's (a feed is newest first). A run is consecutive by definition: it never crosses a row whose
  * key differs, so a row that says something else ends it.
  *
@@ -46,7 +51,7 @@
  * are consecutive on the screen.
  */
 
-import type { PartyId } from '@/lib/api';
+import { TAG_INPUT, type PartyId } from '@/lib/api';
 
 /** What a feed knows of a row, to compare it with its neighbours. */
 export interface RunSubject {
@@ -56,14 +61,16 @@ export interface RunSubject {
   txHash: string;
   /** Null while the transaction is in the pool. */
   blockNumber: number | null;
+  /** The block's cellbase: it has no input, so none of its parties sent. */
+  isCellbase: boolean;
   protocolActions: readonly { protocol: string; action: string }[];
   typeCalls: readonly { typeCodeHash: string; typeHashType: string }[];
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
-  /** Its items' and its DAO step's type scripts, each code once (the API's `itemTypes`). */
-  itemTypes: readonly { typeCodeHash: string; typeHashType: string }[];
+  /** The recognised type script codes that ran, each once (the API's `recognizedTypes`). */
+  recognizedTypes: readonly { typeCodeHash: string; typeHashType: string }[];
   /**
    * Every party of the row's transaction, by its short id and tags, as the route names them
-   * (`partyIds`, lane feed): a row draws some of them, and the run counts them all.
+   * (`partyIds`, lane feed): a row draws some of them, and the run counts its senders among them all.
    */
   parties: readonly PartyId[];
   /**
@@ -81,22 +88,39 @@ export function runKey(s: RunSubject): string {
   if (s.blockNumber === null) return JSON.stringify(['pending', s.txHash]);
   return JSON.stringify([
     'committed',
+    s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
     codeSet(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
-    codeSet(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
+    codeSet(s.recognizedTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
   ]);
 }
 
 /**
- * How many parties a run's rows name, each once, by its short id (the first 20 bytes of its lock
- * hash, or the prefix a protocol named it by: the route's `partyIds`), drawn or not: a count, the
- * folded row's "N participants".
+ * How many parties of a run's rows sent, each once by its short id (the route's `partyIds`, drawn or
+ * not: the first 20 bytes of its lock hash, or the prefix a protocol named it by), read from the
+ * senders bit its tags carry (`TAG_INPUT`): a count, the folded row's "N senders". Every committed
+ * transaction but a cellbase has an input, so each row of a run of them names at least one sender;
+ * a row that names none (a store synced before the bit) is refused, never counted as no sender. A
+ * run of cellbases has no senders to count.
  */
-export function runParties(subjects: readonly RunSubject[]): number {
+export function runSenders(subjects: readonly RunSubject[]): number {
   const ids = new Set<string>();
-  for (const s of subjects) for (const [id] of s.parties) ids.add(id);
+  for (const s of subjects) {
+    if (s.isCellbase) throw new Error(`transaction ${s.txHash}: a cellbase has no sender to count`);
+    let sent = false;
+    for (const [id, tags] of s.parties) {
+      if (tags & TAG_INPUT) {
+        ids.add(id);
+        sent = true;
+      }
+    }
+    if (!sent)
+      throw new Error(
+        `transaction ${s.txHash}: a committed transaction with no party that sent (every transaction but a cellbase has an input)`
+      );
+  }
   return ids.size;
 }
 

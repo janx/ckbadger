@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
-import { api, dayUserTransactions } from '@/lib/api';
+import { api, dayActivityCount } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
@@ -54,11 +54,20 @@ import {
   shortChars,
 } from '@/lib/list-bounds';
 
-type TransactionKind = 'all' | 'ckb' | 'script' | 'dao' | 'token' | 'object' | 'identity';
+type TransactionKind =
+  | 'all'
+  | 'ckb'
+  | 'script'
+  | 'dao'
+  | 'token'
+  | 'object'
+  | 'identity'
+  | 'protocol';
 /**
  * The user transactions' kinds, in the board's order: the kind filter's values (lib/kind-filter.ts,
  * the words and marks the activities stream's filter shares, PA-15). "all" is every user
- * transaction; the cellbases are a tab of their own (lists lane P3, plan §7.6), not a kind.
+ * transaction; the cellbases are a tab of their own (lists lane P3, plan §7.6), not a kind. Each
+ * user transaction is in exactly one kind (F-6), so the kinds make "all".
  */
 const TRANSACTION_KINDS: readonly TransactionKind[] = [
   'all',
@@ -68,6 +77,7 @@ const TRANSACTION_KINDS: readonly TransactionKind[] = [
   'token',
   'object',
   'identity',
+  'protocol',
 ];
 /**
  * The kind a URL names (`/transactions?kind=dao`, the DAO page's "DAO transactions →"): a known
@@ -489,13 +499,11 @@ export default function TransactionsPage() {
   });
   const yesterday = previousChainDay();
   const day = daily ? completedYesterdayActivities(daily) : undefined;
-  // yesterday's user transactions: the route's count, the day's committed transactions less its
-  // cellbases (the activities page states the same figure; no page subtracts)
-  const users = day === undefined ? undefined : dayUserTransactions(day);
-  const counts: Partial<Record<TransactionKind, number>> = day
-    ? activityFilterCounts(day, users)
-    : {};
-  const occurrences = day ? day.kindOccurrences : 0;
+  // yesterday's user transactions: the route's activity count, every committed transaction of the
+  // day but its cellbases, each in exactly one kind (the activities page states the same figure; no
+  // page sums or subtracts); an API older than the page sends none, refused by name
+  const counts: Partial<Record<TransactionKind, number>> = day ? activityFilterCounts(day) : {};
+  const users = day ? dayActivityCount(day) : 0;
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;
@@ -554,7 +562,7 @@ export default function TransactionsPage() {
             {/* What the page says first (lists lane P3): yesterday's transactions, the users' and the
                 cellbases' apart, as the lists below are; what waits now is the pool's line. */}
             <p data-role="lede" className="text-text text-body max-w-measure">
-              {users === undefined || !day ? (
+              {!day ? (
                 'Yesterday’s counts are unavailable.'
               ) : (
                 <>
@@ -589,16 +597,14 @@ export default function TransactionsPage() {
             />
             {day && (
               // a note that is a sentence, the reading ink at 13 px (BRIEF-ink-size-roles item 3: it
-              // was quiet at 12)
-              <p className="text-small max-w-measure">
-                Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions, “all” counts each
-                user transaction once.
-              </p>
+              // was quiet at 12); its words are the one-kind counts' (resync/int: each user
+              // transaction in exactly one kind, so no kind overlaps and "all" is their sum)
+              <p className="text-small max-w-measure">Yesterday’s counts (UTC+8).</p>
             )}
-            {occurrences > 0 && (
+            {users > 0 && (
               <div
                 role="img"
-                aria-label={`Yesterday's kind occurrences; categories overlap`}
+                aria-label="Yesterday's transactions by kind"
                 className="flex h-2 overflow-hidden"
               >
                 {TRANSACTION_KINDS.filter(
@@ -608,7 +614,7 @@ export default function TransactionsPage() {
                     key={k}
                     title={`${kindWords(k)}: ${counts[k]}`}
                     style={{
-                      width: `${(counts[k]! / occurrences) * 100}%`,
+                      width: `${(counts[k]! / users) * 100}%`,
                       backgroundColor: kindColor(k),
                     }}
                   />

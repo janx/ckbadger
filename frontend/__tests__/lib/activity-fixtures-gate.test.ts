@@ -5,33 +5,40 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Every activity row a test serves goes through the checker (the third read's T SHOULD-1): 45
- * fixtures said `itemTypes: []` on rows that move an item or take a Nervos DAO step, and a pool row
- * said `[]` where the route sends `null`, so the feeds' folds ran on keys the API cannot send. So a
- * row is checked as it is made: `activityRead` (__tests__/utils/activity-read.ts) refuses a row
- * whose item types the route would not state, as `pagedRead` refuses a page.
+ * fixtures said `itemTypes: []` on rows that move an item or take a Nervos DAO step, so the feeds'
+ * folds ran on keys the API cannot send. So a row is checked as it is made: `activityRead`
+ * (__tests__/utils/activity-read.ts) refuses a row whose recognised codes the route and the
+ * indexer would not state (C7, restated at the merge into resync/type-codes: `recognizedTypes`
+ * replaced `itemTypes` and `itemTypesUnread`), as `pagedRead` refuses a page.
  *
- * The reader: an object literal in `__tests__/**` is an activity row where it states the field
- * only the API's activity rows carry, `itemTypesUnread`, or `itemTypes` beside `participants`; and
- * a row's override, where it writes over a spread a field the checker's rules read: the parties
- * (`participants`, whose items a row moves), its `protocolActions` (a DAO step) or its `itemTypes`
- * (the home fixture's DAO deposit was a .bit oracle's row with its actions written over, so it
- * kept the oracle's `[]`). It passes where it is written inside the argument of a call of
- * `activityRead(…)`, through the expressions it may sit in (parentheses, `as`, `satisfies`, a `?:`
- * branch, a spread into the row), or where it is handed to a row builder of its own file: a
- * function whose body makes its row through `activityRead(…)`, so the overrides are checked in the
- * row it makes (`makeActivity({ itemTypes: [DAO], protocolActions: [deposit], … })`). And the
- * checker's own output: a row `activityRead` returns from its own body in its own module
- * (`CHECKER_MODULE`), the row it checked as the route states it (lane feed, the lead's F4), not
- * one a function nested in it returns. The fold rule's subjects (`RunSubject`: a `title` and
- * `parties`)
- * and an item's context rows (an `itemId` and its own `protocolActions`) are not the route's
- * activity rows, and the reader leaves them.
+ * The reader: an object literal in `__tests__/**` is an activity row where it states
+ * `recognizedTypes` beside `participants` (the field only the API's activity rows carry); and a
+ * row's override, where it writes over a spread a field the checker's rules read: the parties
+ * (`participants`, whose items a row moves and whose tags mark a script call), its
+ * `protocolActions` (a DAO step) or its `recognizedTypes` (the home fixture's DAO deposit was a
+ * .bit oracle's row with its actions written over, so it kept the oracle's `[]`). It passes where
+ * it is written inside the argument of a call of `activityRead(…)`, through the expressions it may
+ * sit in (parentheses, `as`, `satisfies`, a `?:` branch, a spread into the row), or where it is
+ * handed to a row builder of its own file: a function whose body makes its row through
+ * `activityRead(…)`, so the overrides are checked in the row it makes
+ * (`makeActivity({ recognizedTypes: [DAO], protocolActions: [deposit], … })`). And the checker's
+ * own output: a row `activityRead` returns from its own body in its own module
+ * (`CHECKER_MODULE`), the row it checked as the route states it (lane feed, the lead's F4), not one
+ * a function nested in it returns. The fold rule's subjects (`RunSubject`: a `title` and
+ * `parties`) and an item's context rows (an `itemId` and its own `protocolActions`) are not the
+ * route's activity rows, and the reader leaves them.
  *
- * Its limits, what it cannot see: a row over a spread that writes only other fields (a pool row
- * made from a committed one by its block alone inherits the committed row's item types: write the
- * pool's `null`s, and the reader sees it), a row with no literal of its own (built from a variable,
- * or its keys computed), a row in a JSON fixture (`*.json` is not read: the live feeds' fixture is
- * the route's own answer, its capture said in it), and a row a helper outside `__tests__/` builds.
+ * Its limits, what it cannot see: a row over a spread that writes only other fields, a row with no
+ * literal of its own (built from a variable, or its keys computed), a row in a JSON fixture
+ * (`*.json` is not read: the live feeds' fixture is a capture of the route's answer of
+ * 2026-11-19, said in it, read through a translation, `__tests__/utils/live-activities.ts`), and a
+ * row a helper outside `__tests__/` builds.
+ *
+ * A stand-in, until the live capture is redone after the re-sync: the capture predates the senders
+ * bit, so its rows carry no `sent`. The folding tests mark as senders the parties whose CKB fell
+ * (`components/activity-runs.test.tsx`), and the sender counts they pin ("31 senders", the twelve
+ * runs) are counts of that stand-in, not of the route's `sent`. Re-capture the feeds over the
+ * re-synced store (which states `sent`), read `sent` from the rows, and re-pin those counts.
  *
  * EXEMPT: the checker's own tests, whose rows are its inputs on purpose, to see them refused; and
  * the flow rule's (lib/tx-flows.ts), whose inputs are its pick of a row (the parties and the
@@ -51,7 +58,7 @@ const UNSENT: Readonly<Record<string, { count: number; reason: string }>> = {
   '__tests__/components/activity-runs.test.tsx': {
     count: 1,
     reason:
-      'runSubject refuses a committed row whose item types are null with no reason, by name (T MUST-2)',
+      'runSubject refuses a row whose recognised codes are no list (null), by name (T MUST-2, carried to C7)',
   },
 };
 
@@ -182,10 +189,9 @@ function rowsOf(code: string, fileName: string): { unchecked: string[]; unsent: 
       const other = ['title', 'parties', 'itemId'].some((k) => keys.includes(k));
       const row =
         !other &&
-        (keys.includes('itemTypesUnread') ||
-          (keys.includes('itemTypes') && keys.includes('participants')) ||
+        ((keys.includes('recognizedTypes') && keys.includes('participants')) ||
           (spread &&
-            ['participants', 'protocolActions', 'itemTypes'].some((k) => keys.includes(k))));
+            ['participants', 'protocolActions', 'recognizedTypes'].some((k) => keys.includes(k))));
       const by = row && checked(node);
       if (by === 'unsent') unsent += 1;
       if (row && !by) {
@@ -203,49 +209,49 @@ describe('the activity-row reader finds a row no checker holds, and passes one i
   it('finds a bare row, a row in a mock, a row over a spread; passes activityRead’s and the rule’s subjects', () => {
     expect(
       uncheckedRows(`
-        const bare = { txHash: h, itemTypes: [], itemTypesUnread: null, participants: [] };
-        vi.mocked(api.getGlobalActivities).mockResolvedValue({ data: [{ itemTypes: [], participants: [] }] });
-        const pool = { ...committed, blockNumber: null, itemTypes: null, itemTypesUnread: null };
-        const held = activityRead({ txHash: h, itemTypes: [], itemTypesUnread: null, participants: [] });
-        const over = activityRead({ ...committed, itemTypes: [SUDT] } as Activity);
-        const branch = activityRead(dao ? { ...base, itemTypes: [DAO], itemTypesUnread: null } : base);
-        const subject = { title: 'Script call', itemTypes: [], parties: [] };
+        const bare = { txHash: h, recognizedTypes: [], participants: [] };
+        vi.mocked(api.getGlobalActivities).mockResolvedValue({ data: [{ recognizedTypes: [], participants: [] }] });
+        const pool = { ...committed, blockNumber: null, recognizedTypes: [SUDT] };
+        const held = activityRead({ txHash: h, recognizedTypes: [], participants: [] });
+        const over = activityRead({ ...committed, recognizedTypes: [SUDT] } as Activity);
+        const branch = activityRead(dao ? { ...base, recognizedTypes: [DAO] } : base);
+        const subject = { title: 'Script call', recognizedTypes: [], parties: [] };
       `)
-    ).toEqual(['2: txHash', '3: itemTypes', '4: blockNumber']);
+    ).toEqual(['2: txHash', '3: recognizedTypes', '4: blockNumber']);
   });
 
   it('leaves an override handed to a row builder of the file, which the builder checks as its row', () => {
     expect(
       uncheckedRows(`
-        function makeActivity(o) { return activityRead({ txHash: h, itemTypes: [], itemTypesUnread: null, participants: [], ...o }); }
+        function makeActivity(o) { return activityRead({ txHash: h, recognizedTypes: [], participants: [], ...o }); }
         const row = (ps, over) => activityRead({ ...base, participants: ps, ...over });
-        const deposit = makeActivity({ itemTypes: [DAO], protocolActions: [dao], participants: [p] });
-        const moved = row([party('a')], { ...over, itemTypes: [SUDT] });
-        const elsewhere = build({ txHash: h, itemTypes: [], participants: [] });
+        const deposit = makeActivity({ recognizedTypes: [DAO], protocolActions: [dao], participants: [p] });
+        const moved = row([party('a')], { ...over, recognizedTypes: [SUDT] });
+        const elsewhere = build({ txHash: h, recognizedTypes: [], participants: [] });
       `)
     ).toEqual(['6: txHash']);
   });
 
   // the home fixture's DAO deposit was a .bit oracle's row with its actions written over, so it kept
-  // the oracle's itemTypes []: an override of a field the rules read is a row of its own
-  it('finds a row’s parties, actions or item types written over a spread; leaves the rule’s subjects and an item’s context', () => {
+  // the oracle's codes []: an override of a field the rules read is a row of its own
+  it('finds a row’s parties, actions or recognised codes written over a spread; leaves the rule’s subjects and an item’s context', () => {
     expect(
       uncheckedRows(`
         const deposit = { ...base, typeCalls: [], protocolActions: [dao] };
         const moved = { ...latest[2], participants: [{ ...p, itemDeltas: [token] }] };
-        const typed = { ...row, itemTypes: [SUDT] };
-        const held = activityRead({ ...base, protocolActions: [dao], itemTypes: [DAO] });
+        const typed = { ...row, recognizedTypes: [SUDT] };
+        const held = activityRead({ ...base, protocolActions: [dao], recognizedTypes: [DAO] });
         const subject = { ...over, title: 'DAO Deposit', protocolActions: [dao] };
         const context = { ...context, itemId: '0x41', protocolActions: [] };
         const age = { ...feedSamples.tokenTransfer, blockNumber: 7 };
       `)
-    ).toEqual(['2: typeCalls', '3: participants', '4: itemTypes']);
+    ).toEqual(['2: typeCalls', '3: participants', '4: recognizedTypes']);
   });
 
   it('counts a row unsentRow holds apart, as no checker’s', () => {
     const code = `
-      const refused = unsentRow({ ...unread(1), itemTypesUnread: null });
-      const held = activityRead({ ...unread(1), itemTypesUnread: 'why' });
+      const refused = unsentRow({ ...moved(1), recognizedTypes: null });
+      const held = activityRead({ ...moved(1), recognizedTypes: [SUDT] });
     `;
     expect(rowsOf(code, 'x.tsx')).toEqual({ unchecked: [], unsent: 1 });
   });
@@ -282,10 +288,8 @@ describe('the activity-row reader finds a row no checker holds, and passes one i
 
   it('does not take a row handed to another call inside activityRead as held', () => {
     expect(
-      uncheckedRows(
-        `activityRead(build({ itemTypes: [], itemTypesUnread: null, participants: [] }));`
-      )
-    ).toEqual(['1: itemTypes']);
+      uncheckedRows(`activityRead(build({ recognizedTypes: [], participants: [] }));`)
+    ).toEqual(['1: recognizedTypes']);
   });
 });
 

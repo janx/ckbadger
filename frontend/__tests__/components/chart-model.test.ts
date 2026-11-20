@@ -168,8 +168,8 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
     );
   if (definition.slug === 'activity-type-breakdown')
     return withWhole(
-      keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall']),
-      'kindOccurrences'
+      keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall', 'protocol']),
+      'activityCount'
     );
   if (definition.slug === 'epoch-time-length')
     return {

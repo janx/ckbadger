@@ -255,9 +255,20 @@ fn bulk_build_core_owner_pass_materializes_multiple_reducers_from_single_resolve
             .expect("core owner snapshot");
 
     assert!(snapshot.address_balances.contains_key(lock_hash.as_slice()));
-    assert!(snapshot
-        .script_infos
-        .contains_key(spore_code_hash.as_slice()));
+    // The Spore type is counted under its own pair, by `data1` (the fixture's
+    // hash type), and under no other hash type of its code hash (T N2, lane
+    // rd/api-lock-names).
+    let spore_pairs: Vec<u8> = snapshot
+        .script_reference_infos
+        .keys()
+        .filter(|(code_hash, _)| code_hash.as_slice() == spore_code_hash.as_slice())
+        .map(|(_, hash_type)| *hash_type)
+        .collect();
+    assert_eq!(spore_pairs, vec![2], "the Spore type's pairs");
+    assert!(
+        snapshot.script_reference_infos[&(spore_code_hash.clone(), 2)].type_cells_count > 0,
+        "the Spore type by data1 counts its cell as a type"
+    );
     assert!(snapshot
         .object_state
         .spores

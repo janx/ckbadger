@@ -26,13 +26,20 @@ import {
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
-vi.mock('@/lib/api', async (importOriginal) => ({
-  // a row's error is said in its own words (readErrorText knows the API's own error class)
-  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
-  api: {
-    getGlobalActivities: vi.fn(),
-  },
-}));
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    // a row's error is said in its own words (readErrorText knows the API's own error class)
+    ApiRequestError: actual.ApiRequestError,
+    api: {
+      getGlobalActivities: vi.fn(),
+    },
+    // the module's own tag bits, never copies (resync fix round 3, tests NOTE-7): C7's
+    // classifier reads a party's TAG_TYPE_CALL, the fold every party's senders bit (TAG_INPUT)
+    TAG_TYPE_CALL: actual.TAG_TYPE_CALL,
+    TAG_INPUT: actual.TAG_INPUT,
+  };
+});
 
 /**
  * A lock hash for a fixture address, one per address as on chain (B4: a feed folds consecutive
@@ -56,6 +63,7 @@ function makeParticipant(overrides: Partial<WrittenParty> = {}): WrittenParty {
     usedDelta: overrides.usedDelta ?? '0',
     itemDeltas: overrides.itemDeltas ?? [],
     tags: overrides.tags ?? 0,
+    sent: overrides.sent ?? true,
   };
 }
 
@@ -70,9 +78,9 @@ function makeActivity(
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
-    // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
-    itemTypes: overrides.itemTypes ?? [],
-    itemTypesUnread: null,
+    // the row's recognised codes as its caller states them, as the route would (the third read's T
+    // SHOULD-1, carried to C7's list)
+    recognizedTypes: overrides.recognizedTypes ?? [],
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants,
   });
@@ -143,7 +151,7 @@ describe('ActivitiesStreamExplorer', () => {
     vi.useRealTimers();
   });
 
-  it('shows exact completed-day counts, including zero, and leaves unavailable protocol count unnumbered', async () => {
+  it('shows exact completed-day counts, including zero, a count for every kind and All', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
         data: [],
@@ -155,30 +163,41 @@ describe('ActivitiesStreamExplorer', () => {
     );
     render(
       <ActivitiesStreamExplorer
-        totalCount={100}
         summary={{
           ...dailyActivities[0],
-          transferCount: 12,
-          daoDepositCount: 1,
-          daoWithdrawRequestCount: 2,
-          daoWithdrawCompleteCount: 3,
-          // the API's count of the DAO actions (lists lane P3: the page sums none)
-          daoCount: 6,
-          tokenCount: 0,
-          objectCount: 4,
-          identityCount: 5,
-          scriptCallCount: 6,
+          activityCount: 100,
+          kindCounts: {
+            dao: 6,
+            token: 0,
+            object: 4,
+            identity: 5,
+            protocol: 67,
+            script: 6,
+            ckb: 12,
+          },
+          protocolActionCounts: { 'dao:deposit': 9 },
         }}
       />
     );
     // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
     // radio per kind named by its lowercase words and its count (they were the aria-pressed
-    // buttons "All", "Tokens", "Nervos DAO", "Protocols", named by their words alone).
+    // buttons "All", "Tokens", "Nervos DAO", "Protocols", named by their words alone). All is the
+    // day's activities, the summary's activityCount, which the kinds make (F-6).
     expect(screen.getByRole('radio', { name: 'all 100' })).toHaveTextContent('all 100');
     expect(screen.getByRole('radio', { name: 'tokens 0' })).toHaveTextContent('tokens 0');
+    // DAO transactions, not the day's nine deposit actions.
     expect(screen.getByRole('radio', { name: 'nervos dao 6' })).toHaveTextContent('nervos dao 6');
-    expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'protocols' })).toHaveTextContent(/^protocols$/);
+    // F-6, re-pinned on purpose: the protocols are a kind with a count (they had none, being in no
+    // kind's count), and no note says the kinds overlap or the DAO counts actions.
+    expect(screen.getByRole('radio', { name: 'protocols 67' })).toHaveTextContent('protocols 67');
+    expect(screen.queryByText(/overlap|DAO counts actions/)).not.toBeInTheDocument();
+    expect(screen.getByText('Yesterday’s counts (UTC+8).')).toBeInTheDocument();
+    const bar = screen.getByRole('img', {
+      name: `Activities by kind on ${dailyActivities[0].date}`,
+    });
+    // One kind per activity: the bar's widths are shares of All and sum to 100%.
+    const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
     expect(
       await screen.findByText('Nothing of this kind in the latest activities.')
     ).toBeInTheDocument();
@@ -247,7 +266,7 @@ describe('ActivitiesStreamExplorer', () => {
         pagedRead({
           data: [
             makeActivity({
-              itemTypes: [ITEM_TYPE.xudt],
+              recognizedTypes: [ITEM_TYPE.xudt],
               txHash: '0xtoken-only',
               participants: [
                 makeParticipant({
@@ -276,7 +295,7 @@ describe('ActivitiesStreamExplorer', () => {
         pagedRead({
           data: [
             makeActivity({
-              itemTypes: [ITEM_TYPE.xudt],
+              recognizedTypes: [ITEM_TYPE.xudt],
               txHash: '0xtoken-only',
               participants: [
                 makeParticipant({
@@ -650,7 +669,7 @@ describe('ActivitiesStreamExplorer', () => {
       pagedRead({
         data: [
           makeActivity({
-            itemTypes: [ITEM_TYPE.dao],
+            recognizedTypes: [ITEM_TYPE.dao],
             txHash: '0xbad0000000000000000000000000000000000000000000000000000000000001',
             protocolActions: [
               {
@@ -663,7 +682,7 @@ describe('ActivitiesStreamExplorer', () => {
             participants: [makeParticipant({ ckbDelta: '100000000' })],
           }),
           makeActivity({
-            itemTypes: [ITEM_TYPE.dao],
+            recognizedTypes: [ITEM_TYPE.dao],
             txHash: '0x9000000000000000000000000000000000000000000000000000000000000002',
             protocolActions: [
               {

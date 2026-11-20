@@ -13,6 +13,7 @@ function party(over: Partial<WrittenParty> = {}): WrittenParty {
   return {
     lockHash: '0x' + '01'.repeat(32),
     lockHashPrefix: null,
+    sent: true,
     address:
       'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26',
     roles: [],
@@ -35,7 +36,7 @@ const objectArrived: ItemDelta = {
 function activity(
   participants: WrittenParty[],
   // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
-  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+  over: Pick<ActivityRowData, 'recognizedTypes'> = { recognizedTypes: [] }
 ): ActivityRowData {
   return activityRead({
     txHash: '0x' + 'cd'.repeat(32),
@@ -46,7 +47,6 @@ function activity(
     typeCalls: [],
     lockCalls: [],
 
-    itemTypesUnread: null,
     participants,
     ...over,
   });
@@ -75,7 +75,7 @@ describe('activity participant lines (A1 → T7: one wrapping line at every widt
             party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
             party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
           ],
-          { itemTypes: [ITEM_TYPE.spore] }
+          { recognizedTypes: [ITEM_TYPE.spore] }
         )}
       />
     );

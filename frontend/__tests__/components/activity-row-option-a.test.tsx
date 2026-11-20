@@ -26,6 +26,7 @@ function party(tail: string, over: Partial<WrittenParty> = {}): WrittenParty {
     address: seededAddress(tail, named ? namedLockCodeHash(over.lockKind!) : undefined),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
+    sent: false,
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,
@@ -49,8 +50,7 @@ function row(participants: WrittenParty[], over: Partial<ActivityRowData> = {}):
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
     ...over,
   });
@@ -112,7 +112,7 @@ const swap = row(
     zeroParty,
   ],
   {
-    itemTypes: [ITEM_TYPE.xudt],
+    recognizedTypes: [ITEM_TYPE.xudt],
     blockNumber: 20724160,
     protocolActions: [
       {
@@ -206,7 +206,10 @@ describe('option A: the headline line', () => {
     // re-pinned on purpose (the tests review, MUST-1's lines: a lock's words are the one
     // decision's, lockNoun): each name says it is a lock, so the run's "lock " label went (it read
     // "lock Nervape Shadow Lock"; a lock the registry does not name reads "lock 0x…")
-    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
+    // re-pinned on purpose (C7, at the merge into resync/type-codes): a row names the recognised
+    // code that ran first, where it names its scripts (the row's `recognizedTypes`, now stated
+    // in the fixture as the route sends it), then its calls
+    expect(details).toEqual([' · Spore', ' · CKBFS', ' · Nervape Shadow Lock']);
     expect(
       within(head(container)).getByRole('link', { name: 'Nervape Shadow Lock' })
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
@@ -384,6 +387,10 @@ describe('option A: every participant, one line each (D1)', () => {
 // rendered head stays one line (headline, facts and evidence on one 18 px line), else the list.
 // Mixed actions name each action per line. Every action stays reachable.
 // (Was, follow-up 1: five lines inline and "+46 more deposits" opening the rest inline.)
+// Re-pinned on purpose (C7, at the merge into resync/type-codes): a DAO row names the Nervos DAO's
+// code that ran after its actions (the row's `recognizedTypes`, now stated in its fixture as the
+// route sends it), where it names its scripts: each head below ends "· Nervos DAO". Which actions
+// stand inline and which become a list is unchanged.
 describe('option A: a run of protocol actions becomes a list, one action per line', () => {
   const withdraw = (n: number) => ({
     protocol: 'dao',
@@ -398,7 +405,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     metadata: { capacity: `${(n + 1) * 1000}00000000` },
   });
   const batch = row([party('r43nr7', { ckbDelta: '-1000' })], {
-    itemTypes: [ITEM_TYPE.dao],
+    recognizedTypes: [ITEM_TYPE.dao],
     protocolActions: Array.from({ length: 51 }, (_, n) => withdraw(n)),
   });
   const headMain = (c: HTMLElement) =>
@@ -416,7 +423,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(<ActivityRow activity={batch} />);
     // Σ (n + 1) × 100 CKB for n = 0…50 = 132,600 CKB, exact.
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 51 deposits · 132,600\.00000000 CKB$/
+      /^DAO Withdraw Request · 51 deposits · 132,600\.00000000 CKB · Nervos DAO$/
     );
     expect(head(container)).not.toHaveTextContent('deposited at');
     expect(within(head(container)).queryByRole('button')).toBeNull();
@@ -466,7 +473,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('names each action on its line when the run is mixed, and heads the count without a total', () => {
     const mixed = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [
         withdraw(0),
         withdraw(1),
@@ -478,7 +485,9 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
       ],
     });
     const { container } = render(<ActivityRow activity={mixed} />);
-    expect(headMain(container)).toHaveTextContent(/^DAO Withdraw Request · 7 actions$/);
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Withdraw Request · 7 actions · Nervos DAO$/
+    );
     fireEvent.click(toggle(container)!);
     const rows = listRows(container).map((r) => r.textContent);
     expect(rows).toHaveLength(7);
@@ -489,14 +498,14 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('keeps two actions inline while the head stays one line at 1440', () => {
     const two = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [deposit(0), deposit(1)],
     });
     const { container } = render(<ActivityRow activity={two} />);
     // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
     // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Deposit · 1,000 CKB locked · DAO Deposit · 2,000 CKB locked$/
+      /^DAO Deposit · 1,000 CKB locked · DAO Deposit · 2,000 CKB locked · Nervos DAO$/
     );
     expect(toggle(container)).toBeNull();
     expect(listRows(container)).toHaveLength(0);
@@ -527,7 +536,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     // Regression (dCKB 0xfe6f0cd0): a character budget of 130 listed a head that fit one line.
     layOut({});
     const two = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       // re-pinned on purpose (the P3 follow-up's 2c): the facts are the summary form in a line, so
       // the head keeps its length past 130 characters with larger deposits (it was 545,000 CKB
       // at #6,012,189 in the padded column form)
@@ -548,12 +557,12 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   it('lists three actions whose inline head wraps (was: three runs inline)', () => {
     layOut({ main: true });
     const three = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [withdraw(0), withdraw(1), withdraw(2)],
     });
     const { container } = render(<ActivityRow activity={three} />);
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 3 deposits · 600\.00000000 CKB$/
+      /^DAO Withdraw Request · 3 deposits · 600\.00000000 CKB · Nervos DAO$/
     );
     fireEvent.click(toggle(container)!);
     expect(listRows(container).map((r) => r.textContent)).toEqual([
@@ -567,12 +576,12 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   it('lists a short run whose evidence the line can no longer hold', () => {
     layOut({ evidence: true });
     const two = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [deposit(0), deposit(1)],
     });
     const { container } = render(<ActivityRow activity={two} />);
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB$/
+      /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB · Nervos DAO$/
     );
     expect(toggle(container)).toHaveTextContent('all 2 deposits ↓');
     vi.restoreAllMocks();
@@ -580,7 +589,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
 
   it('lists actions that read alike once with their count, as the inline head does (A12c)', () => {
     const run = row([party('r43nr7')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [...Array.from({ length: 7 }, (_, n) => withdraw(n)), withdraw(6)],
     });
     const { container } = render(<ActivityRow activity={run} />);
@@ -595,7 +604,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(
       <ActivityRow
         activity={row([party('r43nr7')], {
-          itemTypes: [ITEM_TYPE.dao],
+          recognizedTypes: [ITEM_TYPE.dao],
           protocolActions: [withdraw(0)],
         })}
       />
@@ -603,7 +612,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     // re-pinned on purpose (the P3 follow-up's 2c): a fact in a line is the summary form, cut, its
     // exact value in its title (it was the padded column form in the line)
     expect(headMain(container)).toHaveTextContent(
-      /^DAO Withdraw Request · 100 CKB · deposited at #6,000,000$/
+      /^DAO Withdraw Request · 100 CKB · deposited at #6,000,000 · Nervos DAO$/
     );
     expect(toggle(container)).toBeNull();
   });

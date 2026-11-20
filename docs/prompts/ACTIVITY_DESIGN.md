@@ -148,10 +148,17 @@ CKB Transfer                -100.00 CKB              <- Layer 1 only
 
 ## Statistics
 
-Daily activity stats classify each activity for aggregate counting. The classification is **per-layer**, not mutually exclusive:
+Daily activity stats count each transaction in **one kind**, by the same classification the activity
+and transaction filters list it under (the global activity bucket: DAO, token, object, identity,
+protocol, script, CKB). Every non-cellbase transaction is in exactly one kind, so a day's kinds sum to
+its non-cellbase transactions, and each kind's count is what that kind's filter lists. The layers stay
+visible beside the kinds, as measures rather than kinds:
 
 - Layer 1: every non-coinbase activity contributes to `total_ckb_moved`
-- Layer 2: item deltas contribute to `token_count`, `object_count`, etc.
-- Layer 3: protocol actions contribute to `protocol_action_counts` (`"rgbpp:leap_to_ckb" -> 3`, `"dao:deposit" -> 5`)
+- Layer 3: protocol actions contribute to `protocol_action_counts` (`"rgbpp:leap_to_ckb" -> 3`,
+  `"dao:deposit" -> 5`), counted per action; the DAO split by action is read there
+- Script calls contribute to `script_counts`, per code hash
 
-A single activity may increment counters at multiple layers.
+(Owner's ruling of 2026-11-18, F-6: one classification for the filter and the daily counts. Before it
+the counts were per layer and overlapped, and a transaction whose only signal was a non-DAO protocol
+action was counted in no kind.)

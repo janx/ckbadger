@@ -284,34 +284,6 @@ impl CkbadgerStore {
         Ok(outpoints)
     }
 
-    /// The first cell the indexer recorded for an item of the shared id space (a spore, a
-    /// did:ckb, a .bit Cell, a `.cell`) BY KEY, the lowest transaction hash then index, not the
-    /// first in time: one seek on its prefix and the keys after it until the first of the item's
-    /// own length (a longer id that starts with the item's bytes is another item), never a list
-    /// of its whole history, which anyone can lengthen with cheap self-transfers.
-    pub fn first_spore_outpoint_by_spore_id(
-        &self,
-        spore_id: &[u8],
-    ) -> anyhow::Result<Option<(Vec<u8>, i16)>> {
-        let prefix = keys::encode_spore_outpoint_by_id_prefix(spore_id);
-        let expected_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
-        for item in self.prefix_iterator_cf(self.cf_object_outpoint_by_id(), &prefix) {
-            let (key, _value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate object_outpoint_by_id in first_spore_outpoint_by_spore_id: {}",
-                    e
-                )
-            })?;
-            if !key.starts_with(&prefix) {
-                return Ok(None);
-            }
-            if key.len() == expected_key_len {
-                return Ok(Some(keys::decode_spore_outpoint_by_id_key(&key)));
-            }
-        }
-        Ok(None)
-    }
-
     pub fn get_cluster_daily_delta(
         &self,
         cluster_id: &[u8],
@@ -558,44 +530,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
-    }
-
-    /// The third read's La S1: an item's first recorded cell is read by one seek, never by
-    /// listing its whole history (anyone can lengthen it with cheap self-transfers). First is by
-    /// key: the lowest transaction hash, then the lowest index. A longer id that starts with the
-    /// item's bytes is another item and is passed over.
-    #[test]
-    fn first_spore_outpoint_is_the_lowest_key_of_the_item_alone() {
-        use crate::batch::StoreBatch;
-        let (_dir, store) = test_store();
-        let did = [0x52u8; 20];
-        let mut longer = [0x52u8; 32];
-        longer[20] = 0x00;
-        let mut batch = StoreBatch::new(&store);
-        // a longer id sharing the 20 bytes, whose key sorts before the item's own
-        batch.put_spore_outpoint(&[0x01u8; 32], 0, &longer);
-        batch.put_spore_outpoint(&[0x9au8; 32], 3, &did);
-        batch.put_spore_outpoint(&[0x7cu8; 32], 5, &did);
-        batch.put_spore_outpoint(&[0x7cu8; 32], 2, &did);
-        batch.commit().unwrap();
-        assert_eq!(
-            store.first_spore_outpoint_by_spore_id(&did).unwrap(),
-            Some(([0x7cu8; 32].to_vec(), 2))
-        );
-        assert_eq!(
-            store
-                .list_spore_outpoints_by_spore_id(&did)
-                .unwrap()
-                .first()
-                .cloned(),
-            store.first_spore_outpoint_by_spore_id(&did).unwrap()
-        );
-        assert_eq!(
-            store
-                .first_spore_outpoint_by_spore_id(&[0x53u8; 20])
-                .unwrap(),
-            None
-        );
     }
 
     /// C-4b: the object outpoint indexes are two CFs of their own, keyed by

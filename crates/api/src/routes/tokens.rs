@@ -196,7 +196,13 @@ pub struct TokenIssuer {
     pub lock_hash: String,
     pub address: Option<String>,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
 }
 
 /// One holder; its lock as [`TokenIssuer`] names it.
@@ -207,7 +213,13 @@ pub struct TokenHolderResponse {
     pub address: Option<String>,
     pub balance: String,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -541,7 +553,7 @@ async fn get_token(
     let store = state.store.clone();
     let hash_c = hash.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let info = store.get_token(&hash_c)?;
+        let info = crate::token_identity::get_token(&store, &hash_c)?;
         match info {
             Some(info) => {
                 let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
@@ -608,9 +620,7 @@ async fn get_token(
             let mut others = Vec::new();
             let symbols = info.claimed_symbols();
             if !symbols.is_empty() {
-                for (other_hash, other) in state
-                    .store
-                    .list_tokens()
+                for (other_hash, other) in crate::token_identity::list_tokens(&state.store)
                     .map_err(|error| ApiError::internal(error.to_string()))?
                 {
                     if other_hash != hash
@@ -641,11 +651,18 @@ async fn get_token(
                 let lock: [u8; 32] = info.type_args[..32]
                     .try_into()
                     .expect("validated owner hash width");
-                let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
+                let owner = super::assets::owner_lock(
+                    &state.store,
+                    &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
+                    &lock,
+                    &state.ckb_network,
+                )?;
                 response.issuer = Some(TokenIssuer {
                     lock_hash: format!("0x{}", hex::encode(lock)),
                     address: owner.as_ref().and_then(|owner| owner.address.clone()),
                     lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                    lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+                    lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
                     lock_kind: owner.and_then(|owner| owner.lock_kind),
                 });
             }
@@ -674,8 +691,7 @@ async fn get_token_holders(
     let hash_c = hash.clone();
     let (_token, holders_count, total_supply, mut page, first_rank) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let token = store
-                .get_token(&hash_c)?
+            let token = crate::token_identity::get_token(&store, &hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
             // the rank where the page starts, read in the same view as its rows and its total
@@ -725,6 +741,7 @@ async fn get_token_holders(
 
     // Only the rendered rows: the `limit + 1`-th row existed solely to detect
     // `has_more` and was truncated away above.
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
         .map(|(lock_script_hash, balance)| {
@@ -732,10 +749,13 @@ async fn get_token_holders(
                 .as_slice()
                 .try_into()
                 .map_err(|_| ApiError::internal("invalid token holder lock length"))?;
-            let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
+            let owner =
+                super::assets::owner_lock(&state.store, &mut names, &lock, &state.ckb_network)?;
             Ok(TokenHolderResponse {
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+                lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 lock_script_hash: format!("0x{}", hex::encode(lock)),
                 balance: balance.to_string(),
@@ -831,7 +851,7 @@ async fn get_token_activities(
     let hash_c = hash.clone();
     let network = state.ckb_network.clone();
     let (results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let token_exists = store.get_token(&hash_c)?.is_some();
+        let token_exists = crate::token_identity::token_exists(&store, &hash_c)?;
         if !token_exists {
             return Err(anyhow::anyhow!("not_found"));
         }
@@ -947,8 +967,7 @@ async fn get_token_transfers(
     let hash_c = hash.clone();
     let network = state.ckb_network.clone();
     let (info, results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let info = store
-            .get_token(&hash_c)?
+        let info = crate::token_identity::get_token(&store, &hash_c)?
             .ok_or_else(|| anyhow::anyhow!("not_found"))?;
         let results = store.list_token_transfers(&hash_c, limit + 1, cursor)?;
         let addresses = resolve_lock_addresses(
@@ -1033,8 +1052,7 @@ async fn get_token_capacity_chart(
     let hash_c = hash.clone();
     let (token, baseline_deltas, deltas) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let token = store
-                .get_token(&hash_c)?
+            let token = crate::token_identity::get_token(&store, &hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let baseline_deltas = if let Some(from) = from_date {
                 store.list_token_daily_deltas_in_range(

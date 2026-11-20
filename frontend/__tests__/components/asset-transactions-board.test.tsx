@@ -310,8 +310,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [ITEM_TYPE.xudt],
-      itemTypesUnread: null,
+      recognizedTypes: [ITEM_TYPE.xudt],
       participants: [
         {
           address: seededAddress('usdc1'),
@@ -330,6 +329,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
               decimals: 6,
             },
           ],
+          sent: true,
         },
       ],
     }),

@@ -1,21 +1,28 @@
 /**
- * An activity row as a test serves it, checked to say what the route says of its item types (the
- * third read's T SHOULD-1: 45 fixtures said `itemTypes: []` on rows that move an item or take a
- * Nervos DAO step, the "unchanged real create_router JSON" among them, and a pool row said `[]`
- * where the route sends `null`; the feeds fold by `itemTypes`, so every page test of a token,
- * object or DAO feed ran on a key the API cannot send). The rule is the route's, read from
- * `item_types` in crates/api/src/routes/activities.rs:
+ * An activity row as a test serves it, checked to say what the route says of the type script codes
+ * that ran (the third read's T SHOULD-1, restated for C7 at the merge into resync/type-codes: 45
+ * fixtures said `itemTypes: []` on rows that move an item or take a Nervos DAO step; the feeds fold
+ * by these codes, so every page test of a token, object or DAO feed ran on a key the API cannot
+ * send). The rule is the route's and the indexer's: the route reads `recognizedTypes` from the row
+ * (`recognized_types` in crates/api/src/routes/activities.rs), which the indexer's one builder
+ * writes (`recognized_type_codes`, crates/indexer/src/db/writer/activities.rs):
  *
- * - every row states both fields, `itemTypes` and `itemTypesUnread`;
- * - a pool row (no block) states `null` and `null`: the route reads no item's type for the pool;
- * - a committed row whose item the stores cannot name states `null` and the reason, and only an
- *   item's type can be unread, so the row moves one;
- * - otherwise the list, each code (code hash, hash type) once, in the route's order (the code's
- *   bytes, then the hash type's byte), and no reason: the Nervos DAO's code exactly when the row
- *   takes a DAO step, at least one other code when the row moves an item, and, on a row that
- *   states every party's items (a feed's row), no other code when it moves none and no more codes
- *   than the items it moves. An address's row states its own items only (its parties are the
- *   others), so another party's item may name a code on a row that moves none of its own.
+ * - every row states `recognizedTypes`, a list, a committed row and a pool row alike (the pool
+ *   mirror builds its rows with the same builder);
+ * - each code (code hash, hash type) once, in the route's order (the code's bytes, then the hash
+ *   type's byte);
+ * - the Nervos DAO's code exactly when the row takes a DAO step;
+ * - at least one other code when the row moves an item (an item's type is a recognised code that
+ *   ran);
+ * - on a row that states every item of its transaction, a recognised code that ran where no item
+ *   moved and no DAO step was taken marks a party a script call: some party carries TAG_TYPE_CALL
+ *   (the builder sets it on a party whose recognised script moved none of its items: a wallet
+ *   merging its own token cells), read from every party's tags as the route names them
+ *   (`partyIds`) where the row states them, else from the parties it writes in full.
+ *
+ * Gone with the item-type resolver: `itemTypes` and `itemTypesUnread` (no row's codes are unread:
+ * they are the row's), a pool row's `null`, and "no more codes than items moved" (a recognised
+ * script may run and move nothing, and one item's transaction may run several recognised codes).
  *
  * And what the route states of every party (lane feed, ruling 14 of gate P; `activity_parties` in
  * crates/api/src/routes/activities.rs), which a page reads and never derives: a row a fixture
@@ -27,9 +34,17 @@
  * statement writes all four, and they agree with its parties; an address's row (no
  * `participants`: the route sends no other party in full) writes them, since its own party's lock
  * hash is the page's, not the row's.
+ *
+ * And the senders bit (resync/int, at the merge of lane feed): the route states a party's `sent`
+ * and the bit in its tags (TAG_INPUT, bit 8) from one fact, the indexer's tags, in a drawn party's
+ * `tags`, in its id's tags (`partyIds`) and in an address row's own `tags`. A fixture writes
+ * `sent`; the checker states the bit in those tags (`routeTags`), and refuses a party or a row
+ * whose tags carry the bit while it says it did not send, and an id list that names a drawn party
+ * by tags that say otherwise than its `sent`.
  */
 
 import type { ActivityRowData } from '@/components/activity/activity-row';
+import { TAG_INPUT, TAG_TYPE_CALL } from '@/lib/api';
 import type {
   Activity,
   GlobalActivity,
@@ -43,54 +58,71 @@ import type {
 /** The Nervos DAO's type code hash (crates/indexer/src/parser/dao.rs `DAO_CODE_HASH`). */
 const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
 
-interface ItemTypeFixture {
+// The party tag bits the checker reads, TAG_TYPE_CALL and TAG_INPUT (the senders bit), are the
+// page's own constants (`lib/api.ts`), which `__tests__/lib/party-tags-gate.test.ts` holds to the
+// indexer's (crates/ckbadger-store/src/types.rs): resync fix round 3, tests NOTE-7. A test that
+// mocks '@/lib/api' and reads rows through the checker gives the module's own constants.
+
+interface RecognizedTypeFixture {
   typeCodeHash: string;
   typeHashType: string;
   scriptName: string | null;
+  scriptNameBy: string | null;
 }
 
 /**
- * The item types the route names on mainnet, for a fixture to state what the route sends: each as
- * the live capture shows it (fixtures/activities-live-mainnet.json: sUDT, Spore, the .bit account,
- * the DAO) or as the bundled script labels name it (docs/metadata/scripts/xudt.toml, and
- * dotcell-account.toml: a .cell name's type, by its Type ID). A row lists its codes in their bytes'
- * order: Spore 0x4a…, .bit account 0x4f…, xUDT 0x50…, sUDT 0x5e…, the DAO 0x82…, .cell 0xd9….
+ * The recognised codes the route names on mainnet, for a fixture to state what the route sends:
+ * each as the live capture shows it (fixtures/activities-live-mainnet.json: sUDT, Spore, the .bit
+ * account, the DAO) or as the bundled script labels name it (docs/metadata/scripts/xudt.toml, and
+ * dotcell-account.toml: a .cell name's type, by its Type ID), each by its registered reference (no
+ * hash type beside the name). A row lists its codes in their bytes' order: Spore 0x4a…, .bit
+ * account 0x4f…, xUDT 0x50…, sUDT 0x5e…, the DAO 0x82…, .cell 0xd9….
  */
 export const ITEM_TYPE: Readonly<
-  Record<'spore' | 'dotbit' | 'xudt' | 'sudt' | 'dao' | 'dotcell', ItemTypeFixture>
+  Record<'spore' | 'dotbit' | 'xudt' | 'sudt' | 'dao' | 'dotcell', RecognizedTypeFixture>
 > = {
   spore: {
     typeCodeHash: '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
     typeHashType: 'data1',
     scriptName: 'Spore',
+    scriptNameBy: null,
   },
   dotbit: {
     typeCodeHash: '0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918',
     typeHashType: 'type',
     scriptName: '.bit Account',
+    scriptNameBy: null,
   },
   xudt: {
     typeCodeHash: '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
     typeHashType: 'data1',
     scriptName: 'xUDT',
+    scriptNameBy: null,
   },
   sudt: {
     typeCodeHash: '0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5',
     typeHashType: 'type',
     scriptName: 'Simple UDT',
+    scriptNameBy: null,
   },
-  dao: { typeCodeHash: DAO_CODE_HASH, typeHashType: 'type', scriptName: 'Nervos DAO' },
+  dao: {
+    typeCodeHash: DAO_CODE_HASH,
+    typeHashType: 'type',
+    scriptName: 'Nervos DAO',
+    scriptNameBy: null,
+  },
   dotcell: {
     typeCodeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
     typeHashType: 'type',
     scriptName: 'Cells Account',
+    scriptNameBy: null,
   },
 };
 
 /** A script's hash type as its byte, the second half of the route's order. */
 const HASH_TYPE_BYTE: Readonly<Record<string, number>> = { data: 0, type: 1, data1: 2, data2: 4 };
 
-interface ItemTypeLike {
+interface RecognizedTypeLike {
   typeCodeHash: string;
   typeHashType: string;
 }
@@ -106,14 +138,15 @@ interface RowLike {
   txHash?: string;
   blockNumber?: number | null;
   protocolActions?: readonly { protocol: string }[];
-  itemTypes?: readonly ItemTypeLike[] | null;
-  itemTypesUnread?: string | null;
+  recognizedTypes?: readonly RecognizedTypeLike[] | null;
   /** An address's row: its own items. */
   itemDeltas?: readonly ItemLike[];
-  /** A feed's row: the parties it draws, with their items. */
-  participants?: readonly { itemDeltas?: readonly ItemLike[] }[];
+  /** A feed's row: the parties it draws, with their items and tags. */
+  participants?: readonly { itemDeltas?: readonly ItemLike[]; tags?: number }[];
   /** The transaction's items, stated once by the route (lane feed, part 4): every one it moves. */
   items?: readonly ItemLike[];
+  /** Every party by its short id and tags, stated by the route (lane feed). */
+  partyIds?: readonly PartyId[];
 }
 
 const itemKey = (item: ItemLike): string => {
@@ -173,8 +206,10 @@ export function activityRead<R extends WrittenRow>(
 /** The item types a row states, checked by the route's rule (see the module's head). */
 function checkItemTypes(row: RowLike): void {
   const where = `activityRead: transaction ${row.txHash ?? '(no hash)'}`;
-  if (row.itemTypes === undefined || row.itemTypesUnread === undefined)
-    throw new Error(`${where} states no itemTypes or no itemTypesUnread: the route states both`);
+  if (!Array.isArray(row.recognizedTypes))
+    throw new Error(
+      `${where} states recognizedTypes ${String(row.recognizedTypes)}: the route states a list on every row`
+    );
   const parties = row.participants ?? [];
   // the transaction's items: the route's statement of them where the fixture writes it (a row
   // draws no party for moving an item), else the parties it writes, every one of them (a
@@ -191,21 +226,7 @@ function checkItemTypes(row: RowLike): void {
       ...parties.flatMap((p) => p.itemDeltas ?? []),
     ].map(itemKey)
   );
-  if (row.blockNumber === null) {
-    if (row.itemTypes !== null || row.itemTypesUnread !== null)
-      throw new Error(`${where} is a pool row: the route sends itemTypes null and no reason`);
-    return;
-  }
-  if (row.itemTypes === null) {
-    if (typeof row.itemTypesUnread !== 'string' || row.itemTypesUnread.trim() === '')
-      throw new Error(`${where} states itemTypes null and no reason: the route says why`);
-    if (whole && items.size === 0)
-      throw new Error(`${where} reads no item and says its type is unread: only an item’s can be`);
-    return;
-  }
-  if (row.itemTypesUnread !== null)
-    throw new Error(`${where} lists its item types and gives a reason they are unread`);
-  const keys = row.itemTypes.map((t) => {
+  const keys = row.recognizedTypes.map((t) => {
     const byte = HASH_TYPE_BYTE[t.typeHashType];
     if (byte === undefined) throw new Error(`${where}: no hash type "${t.typeHashType}"`);
     return { code: t.typeCodeHash.toLowerCase(), byte };
@@ -227,10 +248,18 @@ function checkItemTypes(row: RowLike): void {
   const others = keys.length - (dao ? 1 : 0);
   if (items.size > 0 && others === 0)
     throw new Error(`${where} moves ${items.size} item(s) and names no code they carry`);
-  if (whole && others > items.size)
-    throw new Error(
-      `${where} names ${others} item code(s) for ${items.size} item(s) moved: each item carries one`
-    );
+  if (whole && items.size === 0 && !step && others > 0) {
+    // the id list the fixture writes, else its parties' (a list the checker stated for a row
+    // spread here is the spread row's, and is stated again from this row's parties)
+    const tags =
+      row.partyIds !== undefined && !stated.has(row.partyIds)
+        ? row.partyIds.map(([, t]) => t)
+        : parties.map((p) => p.tags ?? 0);
+    if (!tags.some((t) => (t & TAG_TYPE_CALL) !== 0))
+      throw new Error(
+        `${where} names ${others} recognised code(s) that moved no item and no party is a script call (TAG_TYPE_CALL)`
+      );
+  }
   return;
 }
 
@@ -249,6 +278,29 @@ export function partyShortId(
   const id = party.lockHash ?? party.lockHashPrefix;
   if (typeof id !== 'string') throw new Error(`${where}: a party with no lock hash and no prefix`);
   return id;
+}
+
+/**
+ * A party's tags as the route states them: the senders bit set where it sent (the route states
+ * `sent` and the bit from one fact); a party whose tags carry the bit while it says it did not
+ * send is refused. A party written without `sent` (an API older than the page, written to see a
+ * page refuse it) keeps the tags it writes.
+ */
+function routeTags(party: { tags: number; sent?: boolean }, where: string, who: string): number {
+  if (typeof party.sent !== 'boolean') return party.tags;
+  if (!party.sent && (party.tags & TAG_INPUT) !== 0)
+    throw new Error(
+      `${where}: ${who} carries the senders bit (TAG_INPUT) in its tags and says it did not send: the route states both from one bit`
+    );
+  return party.sent ? party.tags | TAG_INPUT : party.tags;
+}
+
+/** A fixture's party as the route names it in `partyIds`: its id and its tags, senders bit set. */
+export function partyId(party: WrittenParty, where: string): PartyId {
+  return [
+    partyShortId(party, where),
+    routeTags(party, where, `party ${partyShortId(party, where)}`),
+  ];
 }
 
 /** The same item, by its kind and id (and, for an identity, its standard): the route's identity. */
@@ -378,6 +430,8 @@ function stateParties(
   const row = written as Partial<Statements> & {
     txHash?: string;
     ckbDelta?: string;
+    tags?: number;
+    sent?: boolean;
     isCellbase?: boolean;
     protocolActions?: readonly { protocol: string; action: string }[];
     participants?: WrittenParty[];
@@ -403,19 +457,35 @@ function stateParties(
       );
     if (row.partyIds!.length !== row.participantCount)
       throw new Error(`${where} names ${row.partyIds!.length} parties of ${row.participantCount}`);
+    if (row.tags !== undefined) routeTags({ tags: row.tags, sent: row.sent }, where, 'the address');
     return null;
   }
   const parties = row.participants;
   if (parties === undefined) throw new Error(`${where} is no address's row and draws no party`);
   const spread = row.partyIds === undefined ? undefined : stated.get(row.partyIds);
-  // a row written over a stated one carries its parties' movements stale too: stated again
-  const drawn = withRouteMovements(parties, spread !== undefined);
+  // a row written over a stated one carries its parties' movements stale too: stated again; and
+  // each drawn party's tags as the route states them, the senders bit where it sent
+  const drawn = withRouteMovements(parties, spread !== undefined).map((p) => ({
+    ...p,
+    tags: routeTags(p, where, `party ${partyShortId(p, where)}`),
+  }));
   if (written4.length === 4 && spread === undefined) {
     const ids = row.partyIds as PartyId[];
     if (ids.length !== row.participantCount || drawn.length > ids.length)
       throw new Error(
         `${where} draws ${drawn.length} parties and names ${ids.length} of ${row.participantCount}`
       );
+    // the route names a drawn party by the tags it draws it with: the senders bit agrees
+    for (const p of drawn) {
+      if (typeof p.sent !== 'boolean') continue;
+      const id = partyShortId(p, where);
+      const named = ids.find(([n]) => n === id || n === id.slice(0, 42));
+      if (named === undefined) throw new Error(`${where} draws party ${id} and names it nowhere`);
+      if (((named[1] & TAG_INPUT) !== 0) !== p.sent)
+        throw new Error(
+          `${where} draws party ${id} as ${p.sent ? 'a sender' : 'no sender'} and names it with tags ${named[1]}: the route states both from one bit (TAG_INPUT)`
+        );
+    }
     return {
       drawn,
       statements: {
@@ -426,7 +496,7 @@ function stateParties(
       },
     };
   }
-  const partyIds = parties.map((p): PartyId => [partyShortId(p, where), p.tags]);
+  const partyIds = parties.map((p) => partyId(p, where));
   const own = {
     participantCount: parties.length,
     feePayer: feePayerOf(row, parties, where),
@@ -450,9 +520,9 @@ function stateParties(
 }
 
 /**
- * A row the route cannot send, written on purpose to see a page refuse it (a committed row whose
- * item types are null with no reason). It checks nothing; the gate pins each use by file (`UNSENT`
- * in __tests__/lib/activity-fixtures-gate.test.ts), so it cannot stand in for the checker.
+ * A row the route cannot send, written on purpose to see a page refuse it (a row whose recognised
+ * codes are no list). It checks nothing; the gate pins each use by file (`UNSENT` in
+ * __tests__/lib/activity-fixtures-gate.test.ts), so it cannot stand in for the checker.
  */
 export function unsentRow<R extends GlobalActivity | Activity | ActivityRowData>(row: R): R {
   return row;

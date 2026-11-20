@@ -41,12 +41,22 @@ fn picks() -> Vec<(&'static str, Pick)> {
     ]
 }
 
+/// The store layout the rows below are pinned at. A row-format change re-pins
+/// a row here and raises `ckbadger_store::STORE_LAYOUT` in the same commit
+/// (a store re-synced by the old format must be refused): change both
+/// together (resync fix round, tests report NOTE-7).
+const EXPECTED_STORE_LAYOUT: u32 = 8;
+
 /// `(cf, key hex, value hex)` of every pick, as the store holds them now.
 const EXPECTED: &[(&str, &str, &str)] = &[
     (
         "activities",
         "7fffffffffffffef7ffffffe",
-        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff0000000000000000000000",
+        // re-pinned on purpose (resync/int, step 2): the one participant spent an input, so its
+        // tags carry TAG_INPUT (0x0100, little-endian 00 01); it was 00 00
+        // re-pinned on purpose (resync/type-codes, C7): the row ends with its recognised type
+        // codes, none in this plain transfer: an empty list's 8-byte length, 00 × 8
+        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff00000000000000000001000000000000000000",
     ),
     (
         "addr_balance",
@@ -56,7 +66,9 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     (
         "addr_txs",
         "1e2d62803000d30926bfba76bd85e87cd422e837a7778e89ddc2d28df59eef3d7ffffffffffffff57ffffffe",
-        "003793b1e8ffffff019000",
+        // re-pinned on purpose (resync/int, step 2): this lock sent, so the row's tags gain
+        // TAG_INPUT: 0x0190 (TAG_PROTOCOL | TAG_LOCK_CALL | TAG_INPUT), it was 0x0090
+        "003793b1e8ffffff019001",
     ),
     (
         "addr_txs_by_prefix",
@@ -92,6 +104,12 @@ const EXPECTED: &[(&str, &str, &str)] = &[
 
 #[tokio::test]
 async fn one_row_of_every_pointer_layout_cf_has_its_pinned_bytes() {
+    assert_eq!(
+        ckbadger_store::STORE_LAYOUT,
+        EXPECTED_STORE_LAYOUT,
+        "the pinned rows are layout {EXPECTED_STORE_LAYOUT}'s: a new layout re-reads them (and a \
+         re-pinned row raises the layout)"
+    );
     let chain = protocol_chain(0);
     let stores = open_stores();
     let plan = single_block_plan(chain.len());

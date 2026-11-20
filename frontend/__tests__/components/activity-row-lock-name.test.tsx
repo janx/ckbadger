@@ -28,6 +28,7 @@ function party(address: string, lockKind: string | null, lockHash: string): Part
     ckbDelta: '-100000000',
     usedDelta: '0',
     itemDeltas: [],
+    sent: true,
   };
 }
 
@@ -40,8 +41,7 @@ const row = (participants: ParticipantInfo[]): ActivityRowData =>
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
   });
 

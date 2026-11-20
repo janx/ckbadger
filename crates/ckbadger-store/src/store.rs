@@ -109,6 +109,14 @@ pub enum SecondaryStoreOwner {
     Tui,
     Cli,
     Supervisor,
+    /// The read an opener makes before an open that could change the store
+    /// (`layout_ops::inspect_domain_store`: the indexer's startup, label
+    /// import).
+    Inspect,
+    /// `ckbadger verify`'s read of a network's store before its run, its own
+    /// beside `status` (`Cli`), which can run at the same time (resync fix
+    /// round 4, item 2).
+    Verify,
 }
 
 impl SecondaryStoreOwner {
@@ -118,26 +126,105 @@ impl SecondaryStoreOwner {
             Self::Tui => "tui-secondary",
             Self::Cli => "cli-secondary",
             Self::Supervisor => "supervisor-secondary",
+            Self::Inspect => "inspect-secondary",
+            Self::Verify => "verify-secondary",
         }
     }
+}
+
+/// Where `owner` keeps its secondary of the store at `primary_path`: the
+/// store's sibling, named after it. The path is read by its components, so a
+/// trailing separator (a config's `data/domain/`) names the same store and
+/// never puts the directory inside it (resync fix round 3, item 5).
+/// How many info logs a secondary keeps in its own directory (its `LOG` and
+/// the rotated `LOG.old.*`): each open of a secondary rotates one, and a
+/// long-lived reader opens again whenever the store changed (resync fix round
+/// 4, A).
+pub const SECONDARY_INFO_LOG_FILES: usize = 4;
+
+/// Refuse a secondary directory that is the store's own directory or lies
+/// inside it (resync fix round 4, the lead's guard): a secondary's rotated
+/// info logs are pruned there ([`prune_secondary_info_logs`]), and nothing
+/// of the store's may be. Read by the normalised components, as
+/// [`secondary_store_path`] derives the path, both paths named.
+pub(crate) fn refuse_secondary_in_store(
+    primary_path: &Path,
+    secondary_path: &Path,
+) -> anyhow::Result<()> {
+    let primary: PathBuf = primary_path.components().collect();
+    let secondary: PathBuf = secondary_path.components().collect();
+    if secondary.starts_with(&primary) {
+        anyhow::bail!(
+            "the secondary directory '{}' is the store '{}' or lies inside it: a secondary's \
+             directory is its own, beside the store",
+            secondary_path.display(),
+            primary_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Before a secondary opens at `secondary_path`: remove its oldest rotated
+/// info logs (`LOG.old.*`, named by the time they were rotated), keeping the
+/// newest `SECONDARY_INFO_LOG_FILES - 2`, so that after the open rotates its
+/// `LOG` the directory holds at most `SECONDARY_INFO_LOG_FILES` info logs.
+/// RocksDB prunes no info log of a secondary (`keep_log_file_num` is a
+/// primary's). The directory is the reader's own, never the store's.
+pub(crate) fn prune_secondary_info_logs(secondary_path: &Path) -> anyhow::Result<()> {
+    let entries = match std::fs::read_dir(secondary_path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => anyhow::bail!(
+            "list the secondary directory '{}': {error}",
+            secondary_path.display()
+        ),
+    };
+    let mut rotated = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            anyhow::anyhow!(
+                "list the secondary directory '{}': {error}",
+                secondary_path.display()
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("LOG.old.") {
+            rotated.push(name);
+        }
+    }
+    // rotated at increasing times: the decimal number in the name orders
+    // them, as (length, name) does; the newest kept, the rest removed
+    rotated.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
+    for name in rotated.iter().rev().skip(SECONDARY_INFO_LOG_FILES - 2) {
+        std::fs::remove_file(secondary_path.join(name)).map_err(|error| {
+            anyhow::anyhow!(
+                "remove the rotated info log '{}' of the secondary: {error}",
+                secondary_path.join(name).display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 pub fn secondary_store_path<P: AsRef<Path>>(
     primary_path: P,
     owner: SecondaryStoreOwner,
 ) -> PathBuf {
-    let mut path = primary_path.as_ref().as_os_str().to_os_string();
+    let normalised: PathBuf = primary_path.as_ref().components().collect();
+    let mut path = normalised.into_os_string();
     path.push(format!("-{}", owner.suffix()));
     PathBuf::from(path)
 }
 
-pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 4] {
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 6] {
     let primary_path = primary_path.as_ref();
     [
         secondary_store_path(primary_path, SecondaryStoreOwner::Api),
         secondary_store_path(primary_path, SecondaryStoreOwner::Tui),
         secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
         secondary_store_path(primary_path, SecondaryStoreOwner::Supervisor),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Inspect),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Verify),
     ]
 }
 
@@ -439,6 +526,16 @@ pub const CF_DAO_BY_BLOCK: &str = "dao_by_block";
 pub const CF_DAO_BY_LOCK_BLOCK: &str = "dao_by_lock_block";
 pub const CF_DAO_BY_STATUS_BLOCK: &str = "dao_by_status_block";
 pub const CF_TOKENS: &str = "tokens";
+/// The curated token labels label import read (`TokenLabel`), by type script
+/// hash: attached to a token's row when the chain first holds the token
+/// (resync fix round M1). Label import is its only writer.
+pub const CF_TOKEN_LABELS: &str = "token_labels";
+/// The live code cells by their type script (resync fix round S3): one row
+/// per live cell whose data is code (`keys::is_code_cell`) under a type
+/// script that is not Type ID, keyed `type_hash ‖ outpoint`, its binary (the
+/// data hash) the value. What a generic type reference runs is read from
+/// here, bounded by its code cells.
+pub const CF_LIVE_CODE_CELLS_BY_TYPE: &str = "live_code_cells_by_type";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_TOKEN_HOLDERS_BY_BALANCE: &str = "token_holders_by_balance";
 pub const CF_ADDR_TOKENS_BY_BALANCE: &str = "addr_tokens_by_balance";
@@ -735,6 +832,8 @@ mod cf_table {
         cf(CF_OBJECT_OUTPOINTS,                       Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_OBJECT_OUTPOINT_BY_ID,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_REORG_EVENTS,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
+        cf(CF_TOKEN_LABELS,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_LIVE_CODE_CELLS_BY_TYPE,                Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -850,6 +949,18 @@ const LABEL_IMPORT: &str = "label import (indexer startup, `ckbadger label-impor
 const LABELS_REASON: &str =
     "label metadata, not chain state; a rollback through a block journaled \
     before a label change restores that block's pre-change rows until the next import";
+/// `script_info` (lane rd/api-lock-names, L N1): the registry's labels of the
+/// pseudo deployments, which no batch journals.
+const PSEUDO_LABELS_REASON: &str =
+    "the registry's labels of the pseudo deployments (Zero Lock, Type ID), not chain state: \
+    label import rewrites the whole column family at every start and nothing journals it, so a \
+    rollback leaves it as the last import wrote it";
+/// `token_labels` (resync fix round M1): the curated token labels, which no
+/// batch journals.
+const TOKEN_LABELS_REASON: &str =
+    "the curated token labels, not chain state: label import rewrites the whole column family \
+    at every start and nothing journals it, so a rollback leaves it as the last import wrote it; \
+    the API joins a token's label to its row when it reads the token (no row holds one)";
 const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
 const DERIVE_REASON: &str =
     "a derived aggregate is rebuilt from canonical rows; a rollback resets \
@@ -915,6 +1026,13 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         keys::sync_meta_keys::NETWORK_IDENTITY,
         "network guard (first start)",
         "the network the store is built for; constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::STORE_LAYOUT,
+        "store layout guard (stamps a fresh store)",
+        "the layout the store is built with; constant",
         NEVER,
     ),
     outside(
@@ -1037,15 +1155,15 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         CF_SCRIPT_INFO,
         OutsideWriter::LabelImport,
         LABEL_IMPORT,
-        LABELS_REASON,
-        ALSO_JOURNALED,
+        PSEUDO_LABELS_REASON,
+        NEVER,
     ),
     whole_cf(
-        CF_TOKENS,
+        CF_TOKEN_LABELS,
         OutsideWriter::LabelImport,
         LABEL_IMPORT,
-        LABELS_REASON,
-        ALSO_JOURNALED,
+        TOKEN_LABELS_REASON,
+        NEVER,
     ),
 ];
 
@@ -1329,6 +1447,11 @@ pub struct CkbadgerStore {
     /// inside [`Self::outside_journal_scope`].
     outside_writer_scope: Mutex<Option<(std::thread::ThreadId, OutsideWriter)>>,
     is_secondary: bool,
+    /// How the store's column families differ from this build's: empty for a
+    /// primary; a domain secondary opens the column families the store holds
+    /// and records the rest, which the layout check refuses (resync fix
+    /// round 2, A).
+    column_families: crate::layout_ops::StoreColumnFamilies,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
     /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
@@ -1556,8 +1679,20 @@ impl CkbadgerStore {
             }
         }
 
-        let cf_descriptors =
-            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+        // A creating open makes the missing column families in its
+        // descriptors' order; a domain store's is the creation order, the
+        // newest layout's column families first (resync fix round 3, M), so a
+        // store still being created is never an earlier layout's set.
+        let creation_order = match store_class {
+            StoreClass::Domain => crate::layout_ops::domain_creation_order(),
+            _ => allowed.to_vec(),
+        };
+        let cf_descriptors = Self::cf_descriptors(
+            &creation_order,
+            &block_cache,
+            &memory_profile,
+            runtime_config,
+        );
 
         Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -1575,6 +1710,7 @@ impl CkbadgerStore {
             journal_discipline: AtomicBool::new(false),
             outside_writer_scope: Mutex::new(None),
             is_secondary: false,
+            column_families: crate::layout_ops::StoreColumnFamilies::default(),
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
@@ -1617,6 +1753,8 @@ impl CkbadgerStore {
         let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
             Self::configured_options(&memory_profile, runtime_config);
+        refuse_secondary_in_store(primary_path.as_ref(), secondary_path.as_ref())?;
+        prune_secondary_info_logs(secondary_path.as_ref())?;
         let existing_cfs = match DB::list_cf(&opts, &primary_path) {
             Ok(cfs) => cfs,
             Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
@@ -1629,35 +1767,57 @@ impl CkbadgerStore {
             }
         };
         let allowed = Self::cfs_for_class(store_class);
-        let allowed_set = allowed
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        for cf in &existing_cfs {
-            if cf == "default" {
-                continue;
-            }
-            if !allowed_set.contains(cf.as_str()) {
-                anyhow::bail!(
-                    "found column family '{}' in {} store at '{}' but it is not allowed there; \
-                     expected only {:?}. Please rebuild this RocksDB path.",
-                    cf,
-                    match store_class {
-                        StoreClass::Domain => "domain",
-                        StoreClass::AppendOnly => "append-only",
-                        StoreClass::TestUnified => "test-unified",
-                        StoreClass::Network => "network",
-                    },
-                    db_path.display(),
+        // A domain secondary opens the column families the store holds and
+        // records how they differ from this build's, so the layout check
+        // reads an earlier build's store and refuses it (a secondary cannot
+        // create a column family, and RocksDB refuses one it lacks): resync
+        // fix round 2, A. Every domain secondary reads that check before it
+        // serves. Other classes keep the strict set.
+        let (opened, column_families): (Vec<&str>, _) =
+            if store_class == StoreClass::Domain && !existing_cfs.is_empty() {
+                (
                     allowed
-                );
-            }
-        }
+                        .iter()
+                        .copied()
+                        .filter(|name| existing_cfs.iter().any(|have| have == name))
+                        .collect(),
+                    crate::layout_ops::StoreColumnFamilies::of(allowed, &existing_cfs),
+                )
+            } else {
+                let allowed_set = allowed
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>();
+                for cf in &existing_cfs {
+                    if cf == "default" {
+                        continue;
+                    }
+                    if !allowed_set.contains(cf.as_str()) {
+                        anyhow::bail!(
+                            "found column family '{}' in {} store at '{}' but it is not allowed \
+                             there; expected only {:?}. Please rebuild this RocksDB path.",
+                            cf,
+                            match store_class {
+                                StoreClass::Domain => "domain",
+                                StoreClass::AppendOnly => "append-only",
+                                StoreClass::TestUnified => "test-unified",
+                                StoreClass::Network => "network",
+                            },
+                            db_path.display(),
+                            allowed
+                        );
+                    }
+                }
+                (
+                    allowed.to_vec(),
+                    crate::layout_ops::StoreColumnFamilies::default(),
+                )
+            };
         // The same per-CF options as the primary: opened by name, every CF
         // got RocksDB's defaults instead (a private 32 MB block cache and no
         // bloom filter), so a point get read a data block in every sorted run.
         let cf_descriptors =
-            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+            Self::cf_descriptors(&opened, &block_cache, &memory_profile, runtime_config);
         let db = DB::open_cf_descriptors_as_secondary(
             &opts,
             primary_path,
@@ -1678,6 +1838,7 @@ impl CkbadgerStore {
             journal_discipline: AtomicBool::new(false),
             outside_writer_scope: Mutex::new(None),
             is_secondary: true,
+            column_families,
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
@@ -2190,6 +2351,17 @@ impl CkbadgerStore {
             .unwrap_or_else(|| panic!("CF '{}' not found", name))
     }
 
+    /// The RocksDB handle, for the layout check's reads (`layout_ops`).
+    pub(crate) fn raw_db(&self) -> &DB {
+        &self.db
+    }
+
+    /// How the store's column families differ from this build's (empty for
+    /// a primary).
+    pub(crate) fn column_families(&self) -> &crate::layout_ops::StoreColumnFamilies {
+        &self.column_families
+    }
+
     /// Returns true when the DB currently holds a live handle for `name`.
     ///
     /// Unlike [`Self::has_cf`] (which checks the store-class allow-list), this
@@ -2251,6 +2423,12 @@ impl CkbadgerStore {
     }
     pub fn cf_tokens(&self) -> &ColumnFamily {
         self.cf(CF_TOKENS)
+    }
+    pub fn cf_token_labels(&self) -> &ColumnFamily {
+        self.cf(CF_TOKEN_LABELS)
+    }
+    pub fn cf_live_code_cells_by_type(&self) -> &ColumnFamily {
+        self.cf(CF_LIVE_CODE_CELLS_BY_TYPE)
     }
     pub fn cf_token_holders(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_HOLDERS)
@@ -4264,7 +4442,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 74);
+        assert_eq!(DOMAIN_CFS.len(), 76);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -5087,6 +5265,28 @@ mod tests {
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
     }
 
+    /// resync fix round 3, item 5 (logic N-3, tests NOTE-9): a primary path
+    /// with a trailing separator names the same store, and every owner's
+    /// secondary directory is the store's sibling, never inside it.
+    #[test]
+    fn a_trailing_separator_puts_no_secondary_inside_the_store() {
+        for owner in [
+            SecondaryStoreOwner::Api,
+            SecondaryStoreOwner::Tui,
+            SecondaryStoreOwner::Cli,
+            SecondaryStoreOwner::Supervisor,
+            SecondaryStoreOwner::Inspect,
+        ] {
+            let given = secondary_store_path("x/domain/", owner);
+            assert!(
+                !given.starts_with("x/domain"),
+                "{owner:?}: {} is inside the store",
+                given.display()
+            );
+            assert_eq!(given, secondary_store_path("x/domain", owner), "{owner:?}");
+        }
+    }
+
     #[test]
     fn test_secondary_store_path_uses_owner_suffix() {
         assert_eq!(
@@ -5103,6 +5303,81 @@ mod tests {
         );
     }
 
+    /// resync fix round 4 (the lead's guard): a secondary's directory, where
+    /// its rotated info logs are pruned, is never the store's own directory
+    /// nor inside it: an open of a secondary there, and the inspection there,
+    /// are refused with both paths named, and nothing in the store's
+    /// directory is removed (its `LOG.old.1` is still there).
+    #[test]
+    fn a_secondary_at_or_inside_the_store_is_refused_and_removes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("domain");
+        drop(CkbadgerStore::open_domain(&primary).unwrap());
+        std::fs::write(primary.join("LOG.old.1"), b"the store's own").unwrap();
+        for secondary in [
+            primary.clone(),
+            primary.join("inside"),
+            PathBuf::from(format!("{}/", primary.display())),
+        ] {
+            let words = match CkbadgerStore::open_domain_secondary(&primary, &secondary) {
+                Ok(_) => panic!(
+                    "{}: a secondary in the store is refused",
+                    secondary.display()
+                ),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(
+                words.contains(&primary.display().to_string())
+                    && words.contains(&secondary.display().to_string()),
+                "{words}"
+            );
+            assert!(
+                crate::layout_ops::inspect_domain_store(&primary, &secondary).is_err(),
+                "{}: the inspection there is refused too",
+                secondary.display()
+            );
+            assert!(
+                primary.join("LOG.old.1").exists(),
+                "{}: nothing in the store's directory is removed",
+                secondary.display()
+            );
+        }
+    }
+
+    /// resync fix round 4, A (the third read's NOTE-2): each open of a
+    /// secondary rotates its info log, and a long-lived reader opens again
+    /// whenever the store changed; the secondary's own directory keeps at
+    /// most `SECONDARY_INFO_LOG_FILES` info logs, however often it reopens.
+    #[test]
+    fn a_secondary_keeps_a_bounded_number_of_info_logs() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("domain");
+        let secondary = dir.path().join("domain-tui-secondary");
+        let store = CkbadgerStore::open_domain(&primary).unwrap();
+        for open in 0..12u8 {
+            store
+                .put_cf(store.cf_sync_meta(), &[open], &[open])
+                .unwrap();
+            drop(CkbadgerStore::open_domain_secondary(&primary, &secondary).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let logs = std::fs::read_dir(&secondary)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("LOG")
+            })
+            .count();
+        assert!(
+            logs <= SECONDARY_INFO_LOG_FILES,
+            "{logs} info logs after 12 opens"
+        );
+    }
+
     #[test]
     fn supervisor_secondary_owner_is_distinct() {
         use super::{secondary_store_path, SecondaryStoreOwner};
@@ -5110,12 +5385,22 @@ mod tests {
             SecondaryStoreOwner::Supervisor.suffix(),
             "supervisor-secondary"
         );
+        // verify's beside status's (resync fix round 4, item 2)
         let owners = [
             SecondaryStoreOwner::Api,
             SecondaryStoreOwner::Tui,
             SecondaryStoreOwner::Cli,
             SecondaryStoreOwner::Supervisor,
+            SecondaryStoreOwner::Inspect,
+            SecondaryStoreOwner::Verify,
         ];
+        let known = super::known_domain_secondary_store_paths("/x/domain");
+        for owner in owners {
+            assert!(
+                known.contains(&secondary_store_path("/x/domain", owner)),
+                "purge removes {owner:?}'s"
+            );
+        }
         for i in 0..owners.len() {
             for j in (i + 1)..owners.len() {
                 assert_ne!(owners[i].suffix(), owners[j].suffix());
@@ -5766,8 +6051,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 78);
-        assert_eq!(DOMAIN_CFS.len(), 74);
+        assert_eq!(CF_SPECS.len(), 80);
+        assert_eq!(DOMAIN_CFS.len(), 76);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -5829,7 +6114,7 @@ mod tests {
         );
         assert_eq!(
             (FINALIZE_WRITTEN_CFS.len(), BATCH_LOOP_ONLY_CFS.len()),
-            (52, 22)
+            (54, 22)
         );
         for name in BATCH_LOOP_ONLY_CFS {
             assert!(
@@ -6319,11 +6604,15 @@ mod tests {
     }
 
     /// Lane B carry-over 4(c): a whole-CF `OUTSIDE_JOURNAL` entry admits only
-    /// the writer it names. `tokens` and `dao_live_agg` are journaled by live
-    /// batches and written outside the journal only by label import and the
-    /// derive scheduler respectively; any other unjournaled write to them —
+    /// the writer it names. `script_versions` and `dao_live_agg` are journaled
+    /// by live batches and written outside the journal only by label import
+    /// and the derive scheduler respectively; any other unjournaled write to
+    /// them —
     /// an untagged batch, another writer's batch, a direct write outside the
     /// writer's scope or from another thread — is refused.
+    ///
+    /// (Re-pinned in resync fix round 2, B: its example was `tokens`, which
+    /// label import no longer writes.)
     #[test]
     fn whole_cf_outside_journal_entries_admit_only_their_writer() {
         let dir = TempDir::new().unwrap();
@@ -6336,16 +6625,18 @@ mod tests {
 
         // Untagged: refused for both whole-CF entries.
         let mut batch = crate::StoreBatch::new(&store);
-        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
-        refused(batch.commit(), "an untagged batch writing tokens");
+        batch
+            .put_raw_cf_by_name(CF_SCRIPT_VERSIONS, b"t", b"1")
+            .unwrap();
+        refused(batch.commit(), "an untagged batch writing script_versions");
         let mut batch = crate::StoreBatch::new(&store);
         batch
             .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"1")
             .unwrap();
         refused(batch.commit(), "an untagged batch writing dao_live_agg");
         refused(
-            store.put_cf(store.cf_tokens(), b"t", b"1"),
-            "a direct write to tokens outside the label import scope",
+            store.put_cf(store.cf_script_versions(), b"t", b"1"),
+            "a direct write to script_versions outside the label import scope",
         );
 
         // The named writer passes; the other writer does not.
@@ -6358,8 +6649,13 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
         let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::Derive);
-        batch.put_raw_cf_by_name(CF_TOKENS, b"t", b"1").unwrap();
-        refused(batch.commit(), "the derive scheduler writing tokens");
+        batch
+            .put_raw_cf_by_name(CF_SCRIPT_VERSIONS, b"t", b"1")
+            .unwrap();
+        refused(
+            batch.commit(),
+            "the derive scheduler writing script_versions",
+        );
         let mut batch = crate::StoreBatch::outside_journal(&store, OutsideWriter::LabelImport);
         batch
             .put_raw_cf_by_name(CF_DAO_LIVE_AGG, b"d", b"2")
@@ -6371,7 +6667,9 @@ mod tests {
             let _scope = store
                 .outside_journal_scope(OutsideWriter::LabelImport)
                 .unwrap();
-            store.put_cf(store.cf_tokens(), b"t", b"1").unwrap();
+            store
+                .put_cf(store.cf_script_versions(), b"t", b"1")
+                .unwrap();
             store.put_cf(store.cf_script_info(), b"s", b"1").unwrap();
             refused(
                 store.put_cf(store.cf_dao_live_agg(), b"d", b"3"),
@@ -6380,7 +6678,7 @@ mod tests {
             std::thread::scope(|threads| {
                 threads.spawn(|| {
                     refused(
-                        store.put_cf(store.cf_tokens(), b"other", b"1"),
+                        store.put_cf(store.cf_script_versions(), b"other", b"1"),
                         "another thread during the label import scope",
                     );
                 });
@@ -6391,7 +6689,7 @@ mod tests {
             );
         }
         refused(
-            store.put_cf(store.cf_tokens(), b"t", b"2"),
+            store.put_cf(store.cf_script_versions(), b"t", b"2"),
             "a direct write after the scope ended",
         );
 
@@ -6462,6 +6760,60 @@ mod tests {
         // The DAO tip summary's never-journaled rows still admit any writer.
         let latest = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         write(None, CF_STATS_DAO, &latest).unwrap();
+    }
+
+    /// L N1 / T N3 (lane rd/api-lock-names): label import is the only writer
+    /// of `script_info`. Its whole-CF entry is never journaled and admits
+    /// label import alone, so a live block batch writing a label row is
+    /// refused at commit (no journal row can name it either), as is a direct
+    /// write outside label import's scope; inside the scope it is written.
+    /// (Bulk build writes none: `bulk_build_writes_no_script_info_row…`.)
+    #[test]
+    fn label_import_is_the_only_writer_of_script_info() {
+        let entry = outside_journal_entry(CF_SCRIPT_INFO, &[0x11; 33]).unwrap();
+        assert!(entry.never_journaled, "nothing journals script_info");
+        assert_eq!(entry.writer, Some(OutsideWriter::LabelImport));
+        assert!(crate::block_overlay::is_outside_journal(
+            CF_SCRIPT_INFO,
+            &keys::encode_script_info_key(&[0x11; 32], 0)
+        ));
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let label = crate::types::ScriptInfo {
+            name: "Zero Lock".to_string(),
+            ..Default::default()
+        };
+        let refused = |result: anyhow::Result<()>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(error.contains("OUTSIDE_JOURNAL"), "{what}: {error}");
+        };
+        let key = keys::encode_script_info_key(&[0x11; 32], 0);
+        refused(
+            crate::commit_journaled_block(&store, 3, |batch| {
+                batch
+                    .put_raw_cf_by_name(CF_SCRIPT_INFO, &key, b"live")
+                    .unwrap();
+            })
+            .map(|_| ()),
+            "a live block batch writing a label row",
+        );
+        refused(
+            store.put_script_info_direct(&[0x11; 32], 0, &label),
+            "a direct write outside label import's scope",
+        );
+        assert!(store.list_script_infos().unwrap().is_empty());
+        {
+            let _scope = store
+                .outside_journal_scope(OutsideWriter::LabelImport)
+                .unwrap();
+            store
+                .put_script_info_direct(&[0x11; 32], 0, &label)
+                .unwrap();
+        }
+        assert_eq!(store.list_script_infos().unwrap().len(), 1);
+        assert!(store.journal_entries(3).unwrap().is_empty());
     }
 
     /// A never-journaled key written through a journaled batch goes straight
@@ -6621,6 +6973,8 @@ mod tests {
     "object_outpoints FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "object_outpoint_by_id FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "reorg_events BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "token_labels FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "live_code_cells_by_type FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

@@ -32,6 +32,8 @@ function party(seed: string, ckbDelta: string, over: Partial<WrittenParty> = {})
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,
+    // a party whose CKB fell held an input
+    sent: ckbDelta.startsWith('-'),
     ckbDelta,
     usedDelta: '0',
     itemDeltas: [],
@@ -51,8 +53,7 @@ function row(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
     ...over,
   });
@@ -120,7 +121,7 @@ describe('a line whose only movement is the fee (B4 item 3)', () => {
     const { container } = render(
       <ActivityRow
         activity={row([party('tokenp', '-30000', { itemDeltas: [token] })], {
-          itemTypes: [ITEM_TYPE.xudt],
+          recognizedTypes: [ITEM_TYPE.xudt],
         })}
       />
     );
@@ -129,7 +130,7 @@ describe('a line whose only movement is the fee (B4 item 3)', () => {
 
   it('is not the fee where CKB entered: a Nervos DAO withdrawal’s compensation, a cellbase', () => {
     const withdrawal = row([party('daowd1', '-30000')], {
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',

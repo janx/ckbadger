@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::{
-    types::{PositionedCellInfo, ScriptInfo, ScriptVersionInfo},
-    CkbadgerStore,
+    types::{PositionedCellInfo, ScriptVersionInfo},
+    CkbadgerStore, ReferenceCode,
 };
 
 const UNKNOWN_SCRIPT_NAME: &str = "unknown";
@@ -15,19 +15,32 @@ pub fn is_known_script_name(name: Option<&str>) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
 }
 
-/// The script registry's name for a reference (`code_hash`): the name label
-/// import recorded for it — the registry's and Scripts page's name, so a COTA
-/// or JoyID reference is named even though no protocol parser covers it.
-/// `None` when the reference is not registered or carries no known name.
-pub fn registered_script_name(
-    store: &CkbadgerStore,
+/// A script's hash type as stored (`i16`), checked to be one CKB defines
+/// (data 0, type 1, data1 2, data2 4); anything else names the script.
+pub fn script_hash_type(code_hash: &[u8], hash_type: i16) -> anyhow::Result<u8> {
+    u8::try_from(hash_type)
+        .ok()
+        .filter(|byte| hash_type_to_string(*byte).is_some())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "script 0x{} has hash type {hash_type}, not a CKB hash type",
+                hex::encode(code_hash)
+            )
+        })
+}
+
+/// The deployment hashes a script's pair names: by `type` the code hash is
+/// the deployment's type hash, by `data` / `data1` / `data2` its data hash.
+/// `(type hash, data hash)`.
+pub fn pair_deployment_hashes(
     code_hash: &[u8],
-) -> anyhow::Result<Option<String>> {
-    Ok(store
-        .get_script_info(code_hash)?
-        .and_then(|info| info.name)
-        .map(|name| name.trim().to_string())
-        .filter(|name| is_known_script_name(Some(name))))
+    hash_type: u8,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    if hash_type == 1 {
+        (Some(code_hash.to_vec()), None)
+    } else {
+        (None, Some(code_hash.to_vec()))
+    }
 }
 
 pub fn hash_type_to_u8(hash_type: &str) -> Option<u8> {
@@ -38,12 +51,23 @@ pub fn hash_type_to_string(hash_type: u8) -> Option<&'static str> {
     ckbadger_common::hash_type_label(hash_type)
 }
 
+/// One live cell a type reference's resolution reads: its outpoint and its
+/// binary (data hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeReferenceLiveMatch {
     pub tx_hash: Vec<u8>,
     pub output_index: i16,
     pub version_hash: Vec<u8>,
+}
+
+/// A type reference's live cells, read bounded ([`resolve_live_type_reference`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeReferenceLive {
+    /// The type script under the hash is the consensus Type ID script.
     pub native_type_id: bool,
+    /// A native Type ID reference: its one live Type ID cell. Any other: its
+    /// live CODE cells, never its other live cells.
+    pub matches: Vec<TypeReferenceLiveMatch>,
 }
 
 pub type VersionCodeCell = (Vec<u8>, i16, PositionedCellInfo, bool);
@@ -64,238 +88,6 @@ pub enum CurrentScriptVersionResolution {
     NotFound,
     Resolved(Box<CurrentScriptVersion>),
     Ambiguous(Box<AmbiguousCurrentScriptVersion>),
-}
-
-fn matches_any_reference(info: &ScriptInfo, refs: &HashSet<Vec<u8>>) -> bool {
-    refs.contains(&info.code_hash)
-        || info
-            .dep_type_hash
-            .as_ref()
-            .map(|h| refs.contains(h))
-            .unwrap_or(false)
-        || info
-            .dep_data_hash
-            .as_ref()
-            .map(|h| refs.contains(h))
-            .unwrap_or(false)
-}
-
-fn extend_references(info: &ScriptInfo, refs: &mut HashSet<Vec<u8>>) -> bool {
-    let mut changed = false;
-
-    if refs.insert(info.code_hash.clone()) {
-        changed = true;
-    }
-    if let Some(dep_type_hash) = &info.dep_type_hash {
-        if refs.insert(dep_type_hash.clone()) {
-            changed = true;
-        }
-    }
-    if let Some(dep_data_hash) = &info.dep_data_hash {
-        if refs.insert(dep_data_hash.clone()) {
-            changed = true;
-        }
-    }
-
-    changed
-}
-
-fn collect_related_infos<'a>(
-    all_infos: &'a [ScriptInfo],
-    reference_hash: &[u8],
-) -> Vec<&'a ScriptInfo> {
-    let mut refs = HashSet::new();
-    refs.insert(reference_hash.to_vec());
-
-    let mut seen_codes = HashSet::new();
-    let mut related = Vec::new();
-
-    loop {
-        let mut changed = false;
-
-        for info in all_infos {
-            if seen_codes.contains(&info.code_hash) {
-                continue;
-            }
-            if matches_any_reference(info, &refs) {
-                seen_codes.insert(info.code_hash.clone());
-                related.push(info);
-                extend_references(info, &mut refs);
-                changed = true;
-            }
-        }
-
-        if !changed {
-            break;
-        }
-    }
-
-    related
-}
-
-fn preferred_info<'a>(infos: &[&'a ScriptInfo], reference_hash: &[u8]) -> &'a ScriptInfo {
-    infos
-        .iter()
-        .copied()
-        .max_by_key(|info| {
-            (
-                u8::from(is_known_script_name(info.name.as_deref())),
-                u8::from(info.hash_type == 1),
-                u8::from(info.dep_type_hash.is_some()),
-                u8::from(info.code_cell_tx_hash.is_some() && info.code_cell_output_index.is_some()),
-                u8::from(info.code_hash == reference_hash),
-            )
-        })
-        .unwrap_or(infos[0])
-}
-
-pub fn related_code_hashes_for_reference(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-) -> Vec<Vec<u8>> {
-    let mut seen = HashSet::new();
-    let mut hashes = Vec::new();
-
-    for info in collect_related_infos(all_infos, reference_hash) {
-        if seen.insert(info.code_hash.clone()) {
-            hashes.push(info.code_hash.clone());
-        }
-    }
-
-    hashes
-}
-
-pub fn merge_script_info_for_reference(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-) -> Option<ScriptInfo> {
-    let related = collect_related_infos(all_infos, reference_hash);
-    if related.is_empty() {
-        return None;
-    }
-
-    let direct = related
-        .iter()
-        .copied()
-        .find(|info| info.code_hash == reference_hash);
-    let preferred = preferred_info(&related, reference_hash);
-
-    let mut merged = direct.cloned().unwrap_or_else(|| preferred.clone());
-    merged.code_hash = reference_hash.to_vec();
-
-    if !is_known_script_name(merged.name.as_deref()) {
-        merged.name = related
-            .iter()
-            .find_map(|info| {
-                if is_known_script_name(info.name.as_deref()) {
-                    info.name.clone()
-                } else {
-                    None
-                }
-            })
-            .or_else(|| preferred.name.clone());
-    }
-    if !merged.deprecated {
-        merged.deprecated = related.iter().any(|info| info.deprecated);
-    }
-
-    if merged.description.is_none() {
-        merged.description = preferred.description.clone();
-    }
-    if merged.website.is_none() {
-        merged.website = preferred.website.clone();
-    }
-    if merged.category.is_none() {
-        merged.category = preferred.category.clone();
-    }
-
-    if merged.dep_type_hash.is_none() {
-        merged.dep_type_hash = preferred
-            .dep_type_hash
-            .clone()
-            .or_else(|| related.iter().find_map(|info| info.dep_type_hash.clone()));
-    }
-    if merged.dep_data_hash.is_none() {
-        merged.dep_data_hash = preferred
-            .dep_data_hash
-            .clone()
-            .or_else(|| related.iter().find_map(|info| info.dep_data_hash.clone()));
-    }
-
-    if merged.code_cell_tx_hash.is_none() || merged.code_cell_output_index.is_none() {
-        if let Some(info) = related
-            .iter()
-            .copied()
-            .find(|info| info.code_cell_tx_hash.is_some() && info.code_cell_output_index.is_some())
-        {
-            merged.code_cell_tx_hash = info.code_cell_tx_hash.clone();
-            merged.code_cell_output_index = info.code_cell_output_index;
-        }
-    }
-
-    Some(merged)
-}
-
-pub fn resolve_code_hash_for_hash_type(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-    hash_type: &str,
-) -> Option<Vec<u8>> {
-    let hash_type_u8 = hash_type_to_u8(hash_type)?;
-    let related = collect_related_infos(all_infos, reference_hash);
-    if related.is_empty() {
-        return None;
-    }
-
-    if let Some(info) = related
-        .iter()
-        .copied()
-        .find(|info| info.hash_type == hash_type_u8)
-    {
-        return Some(info.code_hash.clone());
-    }
-
-    // "type" is a strict capability: if no type reference exists in the deployment,
-    // do not silently fall back to a data-family reference.
-    if hash_type_u8 == 1 {
-        return None;
-    }
-
-    if related
-        .iter()
-        .any(|info| info.code_hash.as_slice() == reference_hash)
-    {
-        return Some(reference_hash.to_vec());
-    }
-
-    Some(preferred_info(&related, reference_hash).code_hash.clone())
-}
-
-pub fn deployment_key_for_script(info: &ScriptInfo) -> Vec<u8> {
-    if let Some(dep_type_hash) = &info.dep_type_hash {
-        return dep_type_hash.clone();
-    }
-    if info.hash_type == 1 {
-        return info.code_hash.clone();
-    }
-    if let Some(dep_data_hash) = &info.dep_data_hash {
-        return dep_data_hash.clone();
-    }
-    info.code_hash.clone()
-}
-
-pub fn deployment_reference_hashes(info: &ScriptInfo) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let type_ref = info
-        .dep_type_hash
-        .clone()
-        .or_else(|| (info.hash_type == 1).then(|| info.code_hash.clone()));
-
-    let data_ref = info.dep_data_hash.clone().or_else(|| {
-        (info.hash_type == 0 || info.hash_type == 2 || info.hash_type == 4)
-            .then(|| info.code_hash.clone())
-    });
-
-    (type_ref, data_ref)
 }
 
 /// Minimal cell metadata needed for per-transaction script resolution.
@@ -535,35 +327,74 @@ pub fn resolve_dep_cells_for_transaction(
     Ok(Some(build_dep_cell_mappings(&dep_cells)))
 }
 
-pub fn resolve_live_type_reference_matches(
+/// What a type reference's live cells are, read bounded by its code cells
+/// (resync fix round S3, the read the indexer's rollup makes): one prefix
+/// seek over `live_code_cells_by_type` (the reference's live code cells under
+/// a type script that is not Type ID), and, only when that holds none, the
+/// reference's first live cell (one row of `cell_by_type`): every cell under
+/// one type hash carries the one script, so that cell says whether the
+/// reference is the consensus Type ID script (its one live cell) or holds no
+/// code. Never a read of the type's whole live set: a populous type a
+/// stranger names costs its code cells, which cost their owner capacity.
+pub fn resolve_live_type_reference(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
     reference_hash: &[u8],
-) -> anyhow::Result<Vec<TypeReferenceLiveMatch>> {
-    let mut matches = Vec::new();
-    for (tx_hash, output_index, cell) in
-        store.list_cells_by_type(reference_hash, usize::MAX, None, cells_store)?
-    {
-        let version_hash = cell.cell.data_hash.map(|hash| hash.to_vec()).ok_or_else(|| {
-            anyhow::anyhow!(
-                "live type-referenced code cell is missing data_hash: reference_hash=0x{}, outpoint=0x{}:{}",
-                hex::encode(reference_hash),
-                hex::encode(&tx_hash),
-                output_index
-            )
-        })?;
-        matches.push(TypeReferenceLiveMatch {
-            tx_hash,
-            output_index,
-            version_hash,
-            native_type_id: cell
+) -> anyhow::Result<TypeReferenceLive> {
+    let code = store.list_live_code_cells_by_type(reference_hash)?;
+    if !code.is_empty() {
+        return Ok(TypeReferenceLive {
+            native_type_id: false,
+            matches: code
+                .into_iter()
+                .map(|(tx_hash, output_index, binary)| TypeReferenceLiveMatch {
+                    tx_hash,
+                    output_index,
+                    version_hash: binary.to_vec(),
+                })
+                .collect(),
+        });
+    }
+    let first = store
+        .list_cells_by_type(reference_hash, 1, None, cells_store)?
+        .into_iter()
+        .next();
+    match first {
+        Some((tx_hash, output_index, cell))
+            if cell
                 .type_code_hash
                 .as_ref()
                 .zip(cell.type_hash_type)
-                .is_some_and(|(hash, kind)| ckbadger_store::keys::is_type_id_script(hash, kind)),
-        });
+                .is_some_and(|(hash, kind)| {
+                    ckbadger_store::keys::is_type_id_script(hash, kind)
+                }) =>
+        {
+            let version_hash = cell
+                .cell
+                .data_hash
+                .map(|hash| hash.to_vec())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "live Type ID cell is missing data_hash: reference_hash=0x{}, outpoint=0x{}:{}",
+                    hex::encode(reference_hash),
+                    hex::encode(&tx_hash),
+                    output_index
+                )
+                })?;
+            Ok(TypeReferenceLive {
+                native_type_id: true,
+                matches: vec![TypeReferenceLiveMatch {
+                    tx_hash,
+                    output_index,
+                    version_hash,
+                }],
+            })
+        }
+        _ => Ok(TypeReferenceLive {
+            native_type_id: false,
+            matches: Vec::new(),
+        }),
     }
-    Ok(matches)
 }
 
 /// Return the persisted reference->version mapping when it constitutes a real
@@ -646,16 +477,30 @@ pub fn reference_form_member_version(
     reference_hash: &[u8],
     is_allowed_version: &dyn Fn(&[u8]) -> bool,
 ) -> anyhow::Result<Option<Vec<u8>>> {
-    reference_form_member_version_with_lineage(
+    Ok(reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         is_allowed_version,
         None,
-    )
+    )?
+    .current()
+    .map(<[u8]>::to_vec))
 }
 
+/// What one reference form runs now ([`ReferenceCode`], the input of the one
+/// family rule, `ScriptFamilyMembershipIndex::family_of_form`):
+///
+/// - a native Type ID reference (a live Type ID cell under it, or observed
+///   lineage and no live cell): its binding, the indexer's canonical one, or
+///   none when retired;
+/// - a generic type reference: the distinct binaries its live code cells
+///   hold, none, one or several (it reached `None` for both "no live cell"
+///   and "several live binaries" before the lead's ruling; `Several` now
+///   carries them);
+/// - a data form: its own hash where a code cell carries it.
+///
 /// Callers that already loaded all version records provide the observed Type
 /// ID set, avoiding another full version scan for each retired reference.
 pub fn reference_form_member_version_with_lineage(
@@ -665,42 +510,42 @@ pub fn reference_form_member_version_with_lineage(
     reference_hash: &[u8],
     is_allowed_version: &dyn Fn(&[u8]) -> bool,
     observed_type_id: Option<bool>,
-) -> anyhow::Result<Option<Vec<u8>>> {
+) -> anyhow::Result<ReferenceCode> {
+    let one = |binary: Option<Vec<u8>>| binary.map_or(ReferenceCode::None, ReferenceCode::One);
     if hash_type == 1 {
-        let matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-        if matches.iter().any(|candidate| candidate.native_type_id)
-            || (matches.is_empty()
+        let live = resolve_live_type_reference(store, cells_store, reference_hash)?;
+        if live.native_type_id
+            || (live.matches.is_empty()
                 && match observed_type_id {
                     Some(observed) => observed,
                     None => has_observed_type_id_lineage(store, reference_hash)?,
                 })
         {
-            return persisted_reference_version_candidate(
+            return Ok(one(persisted_reference_version_candidate(
                 store,
                 cells_store,
                 hash_type,
                 reference_hash,
-            );
+            )?));
         }
-        let unique: HashSet<Vec<u8>> = matches
-            .into_iter()
-            .map(|candidate| candidate.version_hash)
-            .collect();
-        return Ok(if unique.len() == 1 {
-            unique.into_iter().next()
-        } else {
-            None
-        });
+        // A generic type reference: the distinct binaries its live code
+        // cells hold (the read carries code cells only).
+        return Ok(ReferenceCode::of_live_binaries(
+            live.matches
+                .into_iter()
+                .map(|candidate| candidate.version_hash)
+                .collect(),
+        ));
     }
     if let Some(version_hash) =
         persisted_reference_version_candidate(store, cells_store, hash_type, reference_hash)?
     {
-        return Ok(Some(version_hash));
+        return Ok(ReferenceCode::One(version_hash));
     }
     if matches!(hash_type, 0 | 2 | 4) && is_allowed_version(reference_hash) {
-        return Ok(Some(reference_hash.to_vec()));
+        return Ok(ReferenceCode::One(reference_hash.to_vec()));
     }
-    Ok(None)
+    Ok(ReferenceCode::None)
 }
 
 /// Family charts and usage describe the whole indexed history of a reference.
@@ -755,48 +600,17 @@ pub fn resolve_script_form_by_hash(
     // Defer lineage: `reference_form_member_version_with_lineage` only scans
     // when live type matches are empty (passing None). The common cell-detail
     // path has live matches and must not pay a full versions table scan.
-    let member_version = reference_form_member_version_with_lineage(
+    // The one reading of what the form runs: one binary, several (a generic
+    // type reference's live code cells), or none.
+    match reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         &|hash: &[u8]| has_own_code_cell && hash == reference_hash,
         None,
-    )?;
-    if let Some(version_hash) = member_version {
-        let version_info = store.get_script_version(&version_hash)?;
-        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
-            CurrentScriptVersion {
-                version_hash,
-                version_info,
-            },
-        )));
-    }
-
-    if hash_type != 1 {
-        return Ok(CurrentScriptVersionResolution::NotFound);
-    }
-
-    let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-    if type_matches
-        .iter()
-        .any(|candidate| candidate.native_type_id)
-        || (type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?)
-    {
-        return Ok(CurrentScriptVersionResolution::NotFound);
-    }
-    let unique_versions: Vec<Vec<u8>> = {
-        let mut seen = HashSet::new();
-        type_matches
-            .iter()
-            .filter(|m| seen.insert(m.version_hash.clone()))
-            .map(|m| m.version_hash.clone())
-            .collect()
-    };
-    match unique_versions.len() {
-        0 => Ok(CurrentScriptVersionResolution::NotFound),
-        1 => {
-            let version_hash = unique_versions[0].clone();
+    )? {
+        ReferenceCode::One(version_hash) => {
             let version_info = store.get_script_version(&version_hash)?;
             Ok(CurrentScriptVersionResolution::Resolved(Box::new(
                 CurrentScriptVersion {
@@ -805,11 +619,10 @@ pub fn resolve_script_form_by_hash(
                 },
             )))
         }
-        _ => Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
-            AmbiguousCurrentScriptVersion {
-                version_hashes: unique_versions,
-            },
-        ))),
+        ReferenceCode::Several(version_hashes) => Ok(CurrentScriptVersionResolution::Ambiguous(
+            Box::new(AmbiguousCurrentScriptVersion { version_hashes }),
+        )),
+        ReferenceCode::None => Ok(CurrentScriptVersionResolution::NotFound),
     }
 }
 
@@ -822,11 +635,9 @@ pub fn resolve_script_by_hash(
     reference_hash: &[u8],
 ) -> anyhow::Result<CurrentScriptVersionResolution> {
     let direct_version = store.get_script_version(reference_hash)?;
-    let live_type_matches =
-        resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-    let native_type_id = live_type_matches
-        .iter()
-        .any(|candidate| candidate.native_type_id);
+    let live = resolve_live_type_reference(store, cells_store, reference_hash)?;
+    let native_type_id = live.native_type_id;
+    let live_type_matches = live.matches;
     let retired_type_id =
         live_type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?;
     let persisted_versions = {
@@ -1068,6 +879,11 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(reference, 10, &tx, 0);
+        // a code cell: filed in the code-cell index, as only code is a binary
+        // (lane rd/api-lock-names, the lead's ruling), and by its type script
+        // (resync fix round S3), as the indexer writes it
+        batch.put_cell_by_data_hash(binary, 10, &tx, 0);
+        batch.put_live_code_cell(reference, &tx, 0, binary);
         batch.commit().unwrap();
     }
 
@@ -1160,79 +976,6 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_reference_uses_known_metadata() {
-        let data_hash = vec![0x70; 32];
-        let type_hash = vec![0x9b; 32];
-
-        let data_ref = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            name: None,
-            lock_live_cells_count: 7,
-            ..Default::default()
-        };
-
-        let type_ref = ScriptInfo {
-            code_hash: type_hash.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1_BLAKE160".to_string()),
-            dep_data_hash: Some(data_hash.clone()),
-            dep_type_hash: Some(type_hash.clone()),
-            ..Default::default()
-        };
-
-        let merged = merge_script_info_for_reference(&[data_ref, type_ref], &data_hash).unwrap();
-        assert_eq!(merged.code_hash, data_hash);
-        assert_eq!(merged.hash_type, 0);
-        assert_eq!(merged.name.as_deref(), Some("SECP256K1_BLAKE160"));
-        assert_eq!(merged.dep_type_hash, Some(type_hash));
-    }
-
-    #[test]
-    fn test_resolve_code_hash_for_hash_type_switches_reference() {
-        let data_hash = vec![0x70; 32];
-        let type_hash = vec![0x9b; 32];
-
-        let data_ref = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        };
-        let type_ref = ScriptInfo {
-            code_hash: type_hash.clone(),
-            hash_type: 1,
-            dep_data_hash: Some(data_hash.clone()),
-            dep_type_hash: Some(type_hash.clone()),
-            ..Default::default()
-        };
-
-        let all = [data_ref, type_ref];
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&all, &data_hash, "data"),
-            Some(data_hash.clone())
-        );
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&all, &data_hash, "type"),
-            Some(type_hash)
-        );
-    }
-
-    #[test]
-    fn test_resolve_code_hash_for_hash_type_does_not_fallback_to_data_for_type_request() {
-        let data_hash = vec![0x70; 32];
-        let data_only = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&[data_only], &data_hash, "type"),
-            None
-        );
-    }
-
-    #[test]
     fn test_resolve_script_by_hash_returns_ambiguity_for_live_type_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -1254,13 +997,17 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash_a),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x70; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash_a, 10, &[0x70; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x70; 32], 0, &version_hash_a);
         batch.put_cell(
             &[0x71; 32],
             0,
@@ -1272,13 +1019,17 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash_b),
             },
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x71; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash_b, 11, &[0x71; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x71; 32], 0, &version_hash_b);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1329,13 +1080,17 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(mapped_version_hash),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x90; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&mapped_version_hash, 10, &[0x90; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x90; 32], 0, &mapped_version_hash);
         batch.put_cell(
             &[0x91; 32],
             0,
@@ -1347,13 +1102,17 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(conflicting_version_hash),
             },
             11,
         );
         batch.put_cell_by_type(&reference_hash, 11, &[0x91; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&conflicting_version_hash, 11, &[0x91; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x91; 32], 0, &conflicting_version_hash);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1408,13 +1167,17 @@ mod tests {
                 type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
-                data_size: 0,
+                data_size: 64,
                 udt_amount: None,
                 data_hash: Some(version_hash),
             },
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        // a live code cell, as the indexer files it (resync fix round S3; tests
+        // report NOTE-2: code has data, and the code-cell index files it)
+        batch.put_cell_by_data_hash(&version_hash, 10, &[0x92; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x92; 32], 0, &version_hash);
         batch.commit().unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
@@ -1617,6 +1380,11 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        // the live type match is a code cell (only code is a binary: lane
+        // rd/api-lock-names, the lead's ruling), filed by its type script as
+        // the indexer files it (resync fix round S3)
+        batch.put_cell_by_data_hash(&version_hash, 10, &[0x92; 32], 0);
+        batch.put_live_code_cell(&reference_hash, &[0x92; 32], 0, &version_hash);
         batch.commit().unwrap();
 
         match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {
@@ -1822,18 +1590,6 @@ mod tests {
         let reference_hash = vec![0x52; 32];
 
         store
-            .put_script_info_direct(
-                &reference_hash,
-                &ScriptInfo {
-                    code_hash: reference_hash.clone(),
-                    hash_type: 0,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
             .put_script_version(
                 &reference_hash,
                 &ScriptVersionInfo {
@@ -1857,6 +1613,87 @@ mod tests {
                 );
             }
             other => panic!("expected direct version resolution, got {other:?}"),
+        }
+    }
+
+    /// The cells the indexer leaves for a generic type reference `reference`:
+    /// a live code cell per binary (marker, payload, `cell_by_type`,
+    /// `cell_by_data_hash`, `live_code_cells_by_type`), and `traps` live cells of the same type that are
+    /// not code, each with its append-only payload withheld, so any read of
+    /// one fails.
+    fn seed_generic_reference(
+        store: &CkbadgerStore,
+        reference: &[u8],
+        binaries: &[[u8; 32]],
+        traps: u8,
+    ) {
+        let mut batch = ckbadger_store::StoreBatch::new(store);
+        for (index, binary) in binaries.iter().enumerate() {
+            let tx = [0xd0 + index as u8; 32];
+            batch.put_cell(
+                &tx,
+                0,
+                &ckbadger_store::LiveCellInfo {
+                    capacity: 100,
+                    lock_code_hash: [0x12; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some([0x13; 32]),
+                    type_hash_type: Some(1),
+                    type_args: Some(vec![0x5e; 4]),
+                    data_size: 64,
+                    udt_amount: None,
+                    data_hash: Some(*binary),
+                },
+                11,
+            );
+            batch.put_cell_by_type(reference, 11, &tx, 0);
+            batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+            batch.put_live_code_cell(reference, &tx, 0, binary);
+        }
+        for trap in 0..traps {
+            let tx = [0xa0u8.wrapping_add(trap); 32];
+            batch.put_live_cell_marker(&ckbadger_store::keys::encode_outpoint(&tx, 0), 11);
+            batch.put_cell_by_type(reference, 11, &tx, 0);
+        }
+        batch.commit().unwrap();
+    }
+
+    /// resync fix round S3 (the lead's option B): the API settles a generic
+    /// type reference from its live CODE cells only, the read the indexer
+    /// makes. The type holds two live code cells and fifty live cells that are
+    /// not code, each a trap (any read of one fails): the reference runs the
+    /// two binaries, and no trap is touched, for the form's code and for the
+    /// hash's resolution.
+    #[test]
+    fn a_generic_type_reference_is_read_from_its_code_cells_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = crate::utils::address::compute_script_hash(&[0x13; 32], 1, &[0x5e; 4]);
+        let binaries = [[0x61u8; 32], [0x62; 32]];
+        seed_generic_reference(&store, &reference, &binaries, 50);
+
+        let code = reference_form_member_version_with_lineage(
+            &store,
+            &store,
+            1,
+            &reference,
+            &|_| true,
+            Some(false),
+        );
+        assert_eq!(
+            code.map_err(|e| e.to_string()),
+            Ok(ReferenceCode::Several(
+                binaries.iter().map(|b| b.to_vec()).collect()
+            )),
+            "the form's code, from its code cells only"
+        );
+        match resolve_script_by_hash(&store, &store, &reference) {
+            Ok(CurrentScriptVersionResolution::Ambiguous(ambiguous)) => assert_eq!(
+                ambiguous.version_hashes,
+                binaries.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+            ),
+            other => panic!("the hash's resolution, from its code cells only: {other:?}"),
         }
     }
 }

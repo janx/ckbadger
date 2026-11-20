@@ -20,14 +20,6 @@
           "role": "spore"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore",
-          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "items": [
         {
           "class": "object",
@@ -48,7 +40,7 @@
       "partyIds": [
         [
           "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
-          2
+          258
         ],
         [
           "0xbf7373a319dce28331dfdf2b158db8b67ba213c6",
@@ -56,8 +48,17 @@
         ]
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
-      "tags": 2,
+      "sent": true,
+      "tags": 258,
       "timestamp": "1790040600000",
       "txHash": "0x7e28b01df5473700f5fa0038acce77cdc5d9a2ccc3862c0c4ecc401efe204970",
       "txIndex": 1,
@@ -84,14 +85,6 @@
           "role": "spore"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore",
-          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "items": [
         {
           "class": "object",
@@ -116,11 +109,20 @@
         ],
         [
           "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6",
-          0
+          256
         ]
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
+      "sent": false,
       "tags": 2,
       "timestamp": "1790040000000",
       "txHash": "0x7ab75305ec5cadfe5a4bc814f712f8c4dbf6f121dde0419fe394e69b88424c64",
@@ -148,14 +150,6 @@
           "role": "cluster"
         }
       ],
-      "itemTypes": [
-        {
-          "scriptName": "Spore Cluster",
-          "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
-          "typeHashType": "data1"
-        }
-      ],
-      "itemTypesUnread": null,
       "items": [
         {
           "class": "object",
@@ -180,11 +174,20 @@
         ],
         [
           "0xc7f452d9580bd9e6d031614261265af1c85ed2ae",
-          0
+          256
         ]
       ],
       "protocolActions": [],
+      "recognizedTypes": [
+        {
+          "scriptName": "Spore Cluster",
+          "scriptNameBy": null,
+          "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+          "typeHashType": "data1"
+        }
+      ],
       "roles": [],
+      "sent": false,
       "tags": 2,
       "timestamp": "1790039400000",
       "txHash": "0x89b28cfe549365ccc3a3caecb9982065bf24b0ae9d27274a02c665a0d3fd19c7",

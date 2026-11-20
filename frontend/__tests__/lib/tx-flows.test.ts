@@ -36,6 +36,7 @@ function party(
     usedDelta: '0',
     itemDeltas,
     tags: itemDeltas.length ? 1 : 0,
+    sent: false,
   };
 }
 const token = (delta: string): ItemDelta => ({
@@ -69,6 +70,7 @@ const GENESIS_DEP_GROUP_PARTICIPANTS: ParticipantInfo[] = [
     usedDelta: '-6100000000',
     itemDeltas: [],
     tags: 128,
+    sent: true,
   },
   {
     address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
@@ -80,6 +82,7 @@ const GENESIS_DEP_GROUP_PARTICIPANTS: ParticipantInfo[] = [
     usedDelta: '23400000000',
     itemDeltas: [],
     tags: 0,
+    sent: false,
   },
 ];
 

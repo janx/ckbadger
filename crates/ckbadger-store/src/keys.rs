@@ -74,6 +74,29 @@ pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_S
     key
 }
 
+/// Width of a `live_code_cells_by_type` key: `type_hash(32) ‖ outpoint(34)`.
+pub const LIVE_CODE_CELL_KEY_SIZE: usize = 32 + OUTPOINT_KEY_SIZE;
+
+/// `live_code_cells_by_type` key (resync fix round S3): the live code cell
+/// `tx_hash:output_index` under the type script whose hash is `type_hash`.
+/// One type's code cells are one contiguous range (the prefix `type_hash`).
+pub fn encode_live_code_cell_key(
+    type_hash: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; LIVE_CODE_CELL_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_live_code_cell_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
+    let mut key = [0u8; LIVE_CODE_CELL_KEY_SIZE];
+    key[..32].copy_from_slice(type_hash);
+    key[32..].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
 pub fn decode_outpoint(key: &[u8]) -> (Vec<u8>, i16) {
     let tx_hash = key[..32].to_vec();
     let output_index = i16::from_be_bytes([key[32], key[33]]);
@@ -202,6 +225,55 @@ pub fn decode_script_reference_key(key: &[u8]) -> (u8, Vec<u8>) {
         key.len()
     );
     (key[0], key[1..].to_vec())
+}
+
+/// A `script_info` key: the script's pair, its code hash (32 B) then its hash
+/// type (1 B). CKB identifies a script by the pair, so the registry's label is
+/// keyed by it (lane rd/api-lock-names; it was the code hash alone).
+pub const SCRIPT_INFO_KEY_SIZE: usize = SCRIPT_VERSION_HASH_SIZE + 1;
+
+/// The hash types a script can have on chain: data, type, data1, data2.
+const SCRIPT_HASH_TYPES: [u8; 4] = [0, 1, 2, 4];
+
+pub fn encode_script_info_key(code_hash: &[u8], hash_type: u8) -> [u8; SCRIPT_INFO_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_script_info_key",
+        "code_hash",
+        code_hash.len(),
+        SCRIPT_VERSION_HASH_SIZE,
+    );
+    assert!(
+        SCRIPT_HASH_TYPES.contains(&hash_type),
+        "encode_script_info_key: hash_type {hash_type} is not a CKB hash type (0, 1, 2, 4): \
+         code_hash=0x{}",
+        hex::encode(code_hash)
+    );
+    let mut key = [0u8; SCRIPT_INFO_KEY_SIZE];
+    key[..SCRIPT_VERSION_HASH_SIZE].copy_from_slice(code_hash);
+    key[SCRIPT_VERSION_HASH_SIZE] = hash_type;
+    key
+}
+
+/// The pair a `script_info` key names; a key of another length or hash type
+/// is a corrupt row, named.
+pub fn decode_script_info_key(key: &[u8]) -> anyhow::Result<(Vec<u8>, u8)> {
+    // A 32-byte key is the layout before store layout 1 (a label row by the
+    // code hash alone), written by an older build: the store-layout stamp
+    // cannot refuse a build from before it, so the reader says the way out.
+    anyhow::ensure!(
+        key.len() == SCRIPT_INFO_KEY_SIZE,
+        "script_info key is {} bytes, not {SCRIPT_INFO_KEY_SIZE} (code hash + hash type): \
+         key=0x{}; a row of another store layout: delete RocksDB and re-sync from genesis",
+        key.len(),
+        hex::encode(key)
+    );
+    let hash_type = key[SCRIPT_VERSION_HASH_SIZE];
+    anyhow::ensure!(
+        SCRIPT_HASH_TYPES.contains(&hash_type),
+        "script_info key names hash type {hash_type}, not a CKB hash type: key=0x{}",
+        hex::encode(key)
+    );
+    Ok((key[..SCRIPT_VERSION_HASH_SIZE].to_vec(), hash_type))
 }
 
 pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
@@ -2241,6 +2313,9 @@ pub mod sync_meta_keys {
     pub const BACKGROUND_TASKS: &[u8] = b"background_tasks";
     /// Chain-network tag ("mainnet"/"testnet") the DB was first synced for.
     pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
+    /// The layout the domain store was built with (LE u32,
+    /// `layout_ops::STORE_LAYOUT`): stamped by the indexer on a fresh store.
+    pub const STORE_LAYOUT: &[u8] = b"store_layout";
     /// Genesis economic baseline (bincode `GenesisBaseline`), derived at block 0.
     pub const GENESIS_BASELINE: &[u8] = b"genesis_baseline";
     /// Consensus secondary issuance per epoch in shannons (LE u64), fetched
@@ -2481,6 +2556,48 @@ mod tests {
 
     /// C-2 (narrowed in the fix round, findings 7 + 9): code is ELF data and
     /// nothing else — a Type ID cell whose data is not ELF is state.
+    /// T N6 (lane rd/api-lock-names): the `script_info` key's edges. A pair
+    /// round-trips; a hash type outside 0/1/2/4 is refused on the way in (a
+    /// panic naming the code hash: no caller passes a stored byte) and on the
+    /// way out (an error naming the key); a 32-byte key, the layout before,
+    /// says the remedy.
+    #[test]
+    fn script_info_key_round_trips_a_pair_and_refuses_its_edges() {
+        let code_hash = [0x5au8; 32];
+        for hash_type in [0u8, 1, 2, 4] {
+            let key = encode_script_info_key(&code_hash, hash_type);
+            assert_eq!(
+                decode_script_info_key(&key).unwrap(),
+                (code_hash.to_vec(), hash_type)
+            );
+        }
+        let panic = std::panic::catch_unwind(|| encode_script_info_key(&code_hash, 3))
+            .expect_err("hash type 3 is refused");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("hash_type 3 is not a CKB hash type")
+                && message.contains(&hex::encode(code_hash)),
+            "{message}"
+        );
+        let mut bad = encode_script_info_key(&code_hash, 1).to_vec();
+        bad[32] = 3;
+        let refused = decode_script_info_key(&bad).unwrap_err().to_string();
+        assert!(
+            refused.contains("names hash type 3, not a CKB hash type")
+                && refused.contains(&hex::encode(&bad)),
+            "{refused}"
+        );
+        let refused = decode_script_info_key(&code_hash).unwrap_err().to_string();
+        assert!(
+            refused.contains("is 32 bytes, not 33")
+                && refused.contains("delete RocksDB and re-sync from genesis"),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn is_code_cell_is_elf_data_only() {
         let elf = b"\x7fELF\x02\x01\x01rest";

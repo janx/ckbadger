@@ -19,6 +19,8 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getScripts: vi.fn(),
     getScriptFamilyDetail: vi.fn(),
     getScriptUsage: vi.fn(),
+    lookupScripts: vi.fn(),
+    getCodeCell: vi.fn(),
     getGlobalActivities: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionLifecycle: vi.fn(),
@@ -218,26 +220,21 @@ describe('renderMarkdownPage', () => {
   it('renders activities markdown', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 12,
-      daoDepositCount: 3,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 1,
-      tokenCount: 4,
-      objectCount: 2,
-      identityCount: 1,
-      scriptCallCount: 5,
-      unknownCount: 0,
+      kindCounts: { dao: 5, token: 4, object: 2, identity: 1, protocol: 0, script: 5, ckb: 12 },
       coinbaseCount: 1,
       uniqueAddressCount: 9,
       totalCkbMoved: '123000000000',
       // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
       // said 5 transactions with a call beside no call)
-      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 5 }],
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 5 }],
       scriptCalls: 5,
       scriptRest: null,
+      protocolActionCounts: {
+        'dao:deposit': 3,
+        'dao:withdraw_complete': 1,
+        'dao:withdraw_request': 1,
+      },
       hoursCovered: 24,
-      kindOccurrences: 29,
-      daoCount: 5,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -291,7 +288,11 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Activities');
     expect(result.body).toContain('## Last 24 Hours');
     expect(result.body).toContain('daoDeposit');
-    expect(result.body).toContain('daoDepositCount');
+    // One kind per transaction, and the DAO split by action from the action counts.
+    expect(result.body).toContain('| kindCounts.dao | 5 |');
+    expect(result.body).toContain('| kindCounts.ckb | 12 |');
+    expect(result.body).toContain('| protocolActionCounts.dao:deposit | 3 |');
+    expect(result.body).not.toContain('unknownCount');
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
       limit: 1,
       cursor: undefined,
@@ -305,35 +306,32 @@ describe('renderMarkdownPage', () => {
   // another hash type") and its markdown view say the same lock: a lock on the Default Lock's code
   // hash by data, which today's API names "Default Lock", is its code hash and "by data".
   it('writes an activity’s called lock as the page’s row does, by the lock decision', async () => {
+    // the 24 h summary as the one-kind API states it (merged with resync/int: its kinds partition
+    // its activities; the per-action counters and kindOccurrences/daoCount are gone)
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 1,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
       // said 1 transactions with a call beside no call)
-      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 1 }],
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 1 }],
       scriptCalls: 1,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     const byData = {
       lockCodeHash: DEFAULT_LOCK_CODE_HASH,
       lockHashType: 'data',
       lockArgs: '0x' + 'ab'.repeat(20),
       scriptHash: '0x' + 'cd'.repeat(32),
-      lockScriptName: 'Default Lock',
+      // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+      // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+      // stopgap that dropped the name is gone. A called lock's name is `lockScriptName` (the third
+      // read's T SHOULD-5)
+      lockScriptName: null,
       decoded: null,
       decodeError: null,
     };
@@ -350,8 +348,7 @@ describe('renderMarkdownPage', () => {
             lockCalls: [byData],
             protocolActions: [],
             participants: [],
-            itemTypes: [],
-            itemTypesUnread: null,
+            recognizedTypes: [],
           }),
         ],
         limit: 1,
@@ -365,11 +362,9 @@ describe('renderMarkdownPage', () => {
       origin: 'http://localhost:3000',
     });
     expect(result.status).toBe(200);
+    // the page's decision fed what the API sends: no name for that lock (re-keyed at the merge)
     const page = lockNoun(
-      namedLockWords(
-        { name: 'Default Lock', codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data' },
-        'column'
-      ),
+      namedLockWords({ name: null, codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data' }, 'column'),
       'row'
     );
     expect(page).toBe('lock 0x9bd7e06f…a3cce8 by data');
@@ -380,26 +375,17 @@ describe('renderMarkdownPage', () => {
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): one activity of
-      // one kind, as its kind counts say (it was 29 activities with one kind occurrence among them)
+      // one kind, as its kind counts say (it was 29 activities with one kind among them)
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 1, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: { 'dao:withdraw_request': 1 },
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 1,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -459,26 +445,17 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 1,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 0,
       totalCkbMoved: '0',
       // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
       // said 1 transactions with a call beside no call)
-      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 1 }],
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, hashType: 'type', name: null, count: 1 }],
       scriptCalls: 1,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -532,25 +509,17 @@ describe('renderMarkdownPage', () => {
   // the first one the row draws, and says where every party is read
   it('counts every party from the route and names its listed party as the first one drawn', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      // the summary as the route states it (resync/int: the kinds counted by `kindCounts`)
       activityCount: 1,
-      transferCount: 1,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 1 },
       coinbaseCount: 0,
       uniqueAddressCount: 770,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     const party = (i: number) => ({
       address: `ckt1qyq9party${String(i).padStart(4, '0')}0000000000000000000000000`,
@@ -618,25 +587,17 @@ describe('renderMarkdownPage', () => {
   // (its movement, a token's amount moved), not a drawn party's delta: none of the drawn moved it
   it('details a token row by its stated item, which none of its drawn parties moved', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      // the summary as the route states it (resync/int: the kinds counted by `kindCounts`)
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 1,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 1, object: 0, identity: 0, protocol: 0, script: 0, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 300,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     const party = (i: number) => ({
       address: `ckt1qyq9party${String(i).padStart(4, '0')}0000000000000000000000000`,
@@ -708,24 +669,15 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
       activityCount: 1,
-      transferCount: 1,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 1 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -820,6 +772,56 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Chart miner-address-distribution');
     expect(result.body).toContain('ExampleMiner');
     expect(result.body).toContain('Total blocks: 100');
+  });
+
+  // Lane rd/api-lock-names, L S5: a code hash alone names no script. The view of
+  // /script/{codeHash} with no hashType asked lists the pairs on it, as the HTML page does; it
+  // asked the lookup by `type` alone and wrote that pair as the script.
+  it('lists the pairs on a code hash asked without a hash type, guessing none', async () => {
+    const codeHash = `0x${'9b'.repeat(32)}`;
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [`${codeHash}:type`]: {
+        codeHash,
+        hashType: 'type',
+        name: 'Default Lock',
+        nameBy: null,
+        scriptKind: 'lock',
+        liveCellsCount: 7,
+        cellsCount: 9,
+        ownedCapacitySum: '700',
+      },
+      [`${codeHash}:data1`]: {
+        codeHash,
+        hashType: 'data1',
+        name: 'Default Lock',
+        nameBy: 'data1',
+        scriptKind: 'lock',
+        liveCellsCount: 2,
+        cellsCount: 2,
+        ownedCapacitySum: '200',
+      },
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/script/${codeHash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(vi.mocked(api.lookupScripts)).toHaveBeenCalledWith(
+      ['type', 'data', 'data1', 'data2'].map((hashType) => ({ codeHash, hashType }))
+    );
+    expect(vi.mocked(api.getCodeCell)).not.toHaveBeenCalled();
+    expect(result.body).toContain(
+      'A code hash alone names no script: a script is its code hash and its hash type.'
+    );
+    expect(result.body).toContain(
+      '| hashType | name | nameBy | scriptKind | liveCellsCount | cellsCount | ownedCapacitySum |'
+    );
+    expect(result.body).toContain('| type | Default Lock | - | lock | 7 | 9 | 700 |');
+    expect(result.body).toContain('| data1 | Default Lock | data1 | lock | 2 | 2 | 200 |');
+    expect(result.body).not.toContain('queryHashType');
   });
 
   // lane exactness, part A2 (the routes review's N8): a chart's columns are named with its axes, so the two duration

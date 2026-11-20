@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
@@ -72,8 +73,8 @@ describe('Cell page against the Cell board', () => {
     outpoint = `${cell.txHash}-1`;
     vi.mocked(api.getCell).mockResolvedValue(cell);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(cell.lock!.codeHash, cell.lock!.hashType)]: { name: 'Nervape Shadow Lock' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     mockObjectReads();
   });
@@ -351,8 +352,12 @@ describe('Cell page against the Cell board', () => {
     );
     expect(within(facts).getByRole('link', { name: 'Spore' })).toBeInTheDocument();
     expect(facts.textContent).not.toContain(cell.lock!.codeHash);
+    // each script by its pair (lane rd/api-lock-names)
     expect(api.lookupScripts).toHaveBeenCalledWith(
-      [cell.lock!.codeHash, cell.type!.codeHash],
+      [
+        { codeHash: cell.lock!.codeHash, hashType: cell.lock!.hashType },
+        { codeHash: cell.type!.codeHash, hashType: cell.type!.hashType },
+      ],
       cell.txHash
     );
     expect(transactionsProps).toHaveBeenLastCalledWith(
@@ -361,9 +366,10 @@ describe('Cell page against the Cell board', () => {
   });
 
   // Lane P1 follow-up (the lock-words gate's writers 8, 9, 10): the cell page names its lock by the
-  // one decision. The registry names a lock by its code hash, so the name it sends for the default
-  // lock's code hash is the default lock's; a lock on that code hash by data is another lock (no
-  // cell's data hashes to it), and its words are its code hash and "by data", never that name.
+  // one decision. A lock on the default lock's code hash by data is another lock (no cell's data
+  // hashes to it), and its words are its code hash and "by data", never the default lock's name.
+  // Re-keyed (lane rd/api-lock-names): the lookup answers each pair asked; the registry names the
+  // default lock's pair (its code hash by type) and not the pair by data.
   it('names a lock on the default lock’s code hash by data by its code hash, not the default’s name', async () => {
     const args = `0x${'ab'.repeat(20)}`;
     const byData: Cell = {
@@ -373,8 +379,9 @@ describe('Cell page against the Cell board', () => {
     };
     vi.mocked(api.getCell).mockResolvedValue(byData);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [DEFAULT_LOCK_CODE_HASH]: { name: 'SECP256K1/blake160' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: { name: 'SECP256K1/blake160' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'data')]: { name: 'Unknown' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
@@ -401,8 +408,9 @@ describe('Cell page against the Cell board', () => {
     };
     vi.mocked(api.getCell).mockResolvedValue(onDefault);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [DEFAULT_LOCK_CODE_HASH]: { name: 'SECP256K1/blake160' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: { name: 'SECP256K1/blake160' },
+      [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'data')]: { name: 'Unknown' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
@@ -532,8 +540,8 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
     outpoint = `${cell.txHash}-1`;
     vi.mocked(api.getCell).mockResolvedValue(cell);
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
-      [cell.type!.codeHash]: { name: 'Spore' },
+      [scriptLookupKey(cell.lock!.codeHash, cell.lock!.hashType)]: { name: 'Nervape Shadow Lock' },
+      [scriptLookupKey(cell.type!.codeHash, cell.type!.hashType)]: { name: 'Spore' },
     } as never);
     mockObjectReads();
   });

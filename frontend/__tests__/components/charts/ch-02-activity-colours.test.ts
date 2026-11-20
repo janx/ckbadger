@@ -9,7 +9,8 @@ import { color } from '@/lib/palette';
 // The types are the classes the rest of the site colours: transfers the data ink, DAO gold,
 // tokens azurite, objects lotus violet, identities rose, script calls the moss "script call" ink.
 
-const KEYS = ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'] as const;
+// F-6 (2026-11-18): one kind per transaction, so Protocols is a band of its own.
+const KEYS = ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall', 'protocol'] as const;
 const payload = {
   title: 'Activity Type Breakdown',
   series: KEYS.map((key) => ({ key, label: key, color: '#000' })),
@@ -23,8 +24,9 @@ const payload = {
         object: '2',
         identity: '22',
         scriptCall: '6317',
-        // the day's kind occurrences, the route's (the D1 hand-back, item 2)
-        kindOccurrences: '7693',
+        protocol: '6',
+        // the day's activities, the route's: the seven kinds partition it (F-6)
+        activityCount: '7699',
       },
     },
   ],
@@ -36,6 +38,7 @@ const CLASS_INK: Record<(typeof KEYS)[number], string> = {
   object: CLASS_COLORS.objects,
   identity: CLASS_COLORS.identities,
   scriptCall: color('amber'),
+  protocol: color('ink-muted'),
 };
 
 describe('Activity by type in the class colours (CH-02)', () => {

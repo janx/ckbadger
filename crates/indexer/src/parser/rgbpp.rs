@@ -32,24 +32,26 @@ pub struct RgbppLockArgs {
 pub struct RgbppParser;
 
 impl RgbppParser {
-    pub fn is_rgbpp_lock_code_hash(code_hash: &[u8]) -> bool {
+    pub fn is_rgbpp_lock_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::RgbppLock,
         )
     }
 
-    pub fn is_btc_time_lock_code_hash(code_hash: &[u8]) -> bool {
+    pub fn is_btc_time_lock_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::BtcTimeLock,
         )
     }
 
-    pub fn detect_lock_type(code_hash: &[u8]) -> RgbppLockType {
-        if Self::is_rgbpp_lock_code_hash(code_hash) {
+    pub fn detect_lock_type(code_hash: &[u8], hash_type: i16) -> RgbppLockType {
+        if Self::is_rgbpp_lock_code_hash(code_hash, hash_type) {
             RgbppLockType::RgbppLock
-        } else if Self::is_btc_time_lock_code_hash(code_hash) {
+        } else if Self::is_btc_time_lock_code_hash(code_hash, hash_type) {
             RgbppLockType::BtcTimeLock
         } else {
             RgbppLockType::Other
@@ -97,20 +99,20 @@ mod tests {
     #[test]
     fn test_is_rgbpp_lock_code_hash_mainnet() {
         let code_hash = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
-        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash));
-        assert!(!RgbppParser::is_btc_time_lock_code_hash(&code_hash));
+        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash, 1));
+        assert!(!RgbppParser::is_btc_time_lock_code_hash(&code_hash, 1));
     }
 
     #[test]
     fn test_is_rgbpp_lock_code_hash_testnet() {
         let code_hash = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_TESTNET);
-        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash));
+        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash, 1));
     }
 
     #[test]
     fn test_is_rgbpp_lock_code_hash_signet() {
         let code_hash = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_SIGNET);
-        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash));
+        assert!(RgbppParser::is_rgbpp_lock_code_hash(&code_hash, 1));
     }
 
     /// Testnet3 RGB++ lock deployment must be detected (registry-backed).
@@ -120,38 +122,41 @@ mod tests {
         let t = parse_hex_to_bytes(
             "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248",
         );
-        assert!(RgbppParser::is_rgbpp_lock_code_hash(&t));
+        assert!(RgbppParser::is_rgbpp_lock_code_hash(&t, 1));
     }
 
     #[test]
     fn test_is_btc_time_lock_code_hash_mainnet() {
         let code_hash = parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_MAINNET);
-        assert!(RgbppParser::is_btc_time_lock_code_hash(&code_hash));
-        assert!(!RgbppParser::is_rgbpp_lock_code_hash(&code_hash));
+        assert!(RgbppParser::is_btc_time_lock_code_hash(&code_hash, 1));
+        assert!(!RgbppParser::is_rgbpp_lock_code_hash(&code_hash, 1));
     }
 
     #[test]
     fn test_is_btc_time_lock_code_hash_testnet() {
         let code_hash = parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_TESTNET);
-        assert!(RgbppParser::is_btc_time_lock_code_hash(&code_hash));
+        assert!(RgbppParser::is_btc_time_lock_code_hash(&code_hash, 1));
     }
 
     #[test]
     fn test_detect_lock_type() {
         let rgbpp = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
         assert_eq!(
-            RgbppParser::detect_lock_type(&rgbpp),
+            RgbppParser::detect_lock_type(&rgbpp, 1),
             RgbppLockType::RgbppLock
         );
 
         let btc_time = parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_MAINNET);
         assert_eq!(
-            RgbppParser::detect_lock_type(&btc_time),
+            RgbppParser::detect_lock_type(&btc_time, 1),
             RgbppLockType::BtcTimeLock
         );
 
         let other = vec![0u8; 32];
-        assert_eq!(RgbppParser::detect_lock_type(&other), RgbppLockType::Other);
+        assert_eq!(
+            RgbppParser::detect_lock_type(&other, 1),
+            RgbppLockType::Other
+        );
     }
 
     #[test]

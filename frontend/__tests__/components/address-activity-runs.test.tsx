@@ -7,10 +7,13 @@ import { render, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtures/address';
 import { AddressActivities } from '@/components/address/address-history';
-import type { Activity } from '@/lib/api';
+import { TAG_INPUT, type Activity } from '@/lib/api';
 import { activityRead } from '@/__tests__/utils/activity-read';
 
 const NOW = Date.now();
+
+/** This address by the short id the route names it by. */
+const OWN = addressFixture.lockScriptHash.slice(0, 42);
 
 describe('an address page folds its own runs (B4 item 5)', () => {
   const update = (n: number): Activity =>
@@ -21,6 +24,8 @@ describe('an address page folds its own runs (B4 item 5)', () => {
       timestamp: String(NOW - n * 49_000),
       ckbDelta: '-30000',
       usedDelta: '0',
+      // the oracle spends its own cell to write the next: this address sent
+      sent: true,
       typeCalls: [
         {
           typeCodeHash: `0x${'3a'.repeat(32)}`,
@@ -30,7 +35,9 @@ describe('an address page folds its own runs (B4 item 5)', () => {
           scriptName: '.bit Time Index State',
         },
       ],
-      // the address alone, its one change the fee: the route names it the fee payer (lane feed)
+      // the address alone, its one change the fee: the route names it the fee payer (lane feed);
+      // it sent: its tags carry the senders bit, as the route names every party (`partyIds`)
+      partyIds: [[OWN, TAG_INPUT]],
       feePayer: addressFixture.lockScriptHash,
     });
 
@@ -41,13 +48,14 @@ describe('an address page folds its own runs (B4 item 5)', () => {
       <AddressActivities more rows={[update(1), update(2), update(3)]} address={addressFixture} />
     );
     expect(document.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^3\stransactions so far ↓ · 1 participant so far$/
+      /^3\stransactions so far ↓ · 1 sender so far$/
     );
   });
 
   // re-pinned on purpose (Gate B's rule, lane P3): the folded row wrote this address, the one
-  // party of every row; it counts the parties now and names none
-  it('folds its consecutive same rows, counting this address', () => {
+  // party of every row; it counts the parties now and names none. Re-pinned on purpose
+  // (resync/int): it counts the parties that sent, this address among them ("1 participant")
+  it('folds its consecutive same rows, counting this address, which sent', () => {
     render(
       <AddressActivities
         more={false}
@@ -58,7 +66,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '3');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 1 participant$/
+      /^all 3 transactions ↓ · 1 sender$/
     );
     expect(within(folded).queryByTitle(addressFixture.address!)).toBeNull();
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
@@ -69,13 +77,26 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   // and received 40 folded into one run that said neither; a CKB row is headed by its direction for
   // this address, as a token's is, and the two directions are two runs.
   it('heads a CKB row by its direction here, and folds received with received only', () => {
-    const transfer = (n: number, ckbDelta: string): Activity => ({
-      ...update(n),
-      typeCalls: [],
-      ckbDelta,
-      // another party's CKB changed too: the route names no fee payer (lane feed)
-      feePayer: null,
-    });
+    // a received row's other party paid it (it sent); a sent row's sender is this address: each
+    // by its short id and tags, as the route names every party (lane feed)
+    const transfer = (n: number, ckbDelta: string): Activity => {
+      const sent = ckbDelta.startsWith('-');
+      return activityRead({
+        ...update(n),
+        typeCalls: [],
+        ckbDelta,
+        sent,
+        participantCount: sent ? 1 : 2,
+        partyIds: sent
+          ? [[OWN, TAG_INPUT]]
+          : [
+              [OWN, 0],
+              [`0x${'payer0'.padStart(40, '0')}`, TAG_INPUT],
+            ],
+        // another party's CKB changed too: the route names no fee payer (lane feed)
+        feePayer: null,
+      });
+    };
     render(
       <AddressActivities
         more={false}
@@ -162,16 +183,19 @@ describe('an address page folds its own runs (B4 item 5)', () => {
 
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
   // differ fold, and the run counts them (it did not fold them by the old rule). Re-pinned on
-  // purpose (lane feed, ruling 14 of gate P): the other party is named by its short id, as the
-  // route names every party (it was sent in full as one of the row's `participants`)
-  it('folds rows whose other parties differ, and counts every party once', () => {
+  // purpose (resync/int): it counts the parties that sent, each once. Re-pinned on purpose (lane
+  // feed, ruling 14 of gate P): the other party is named by its short id and tags, as the route
+  // names every party (it was sent in full as one of the row's `participants`), the senders bit in
+  // its tags
+  it('folds rows whose other parties differ, and counts every sender once', () => {
     const withOther = (n: number, seed: string): Activity =>
       activityRead({
         ...update(n),
         participantCount: 2,
         partyIds: [
-          [addressFixture.lockScriptHash.slice(0, 42), 0],
-          [`0x${seed.padStart(40, '0')}`, 0],
+          [OWN, TAG_INPUT],
+          // each other party spent a cell beside this address's
+          [`0x${seed.padStart(40, '0')}`, TAG_INPUT],
         ],
         feePayer: addressFixture.lockScriptHash,
       });
@@ -184,9 +208,9 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '2');
-    // this address, and the two others
+    // this address, and the two others, each of which sent
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 2 transactions ↓ · 3 participants$/
+      /^all 2 transactions ↓ · 3 senders$/
     );
   });
 });

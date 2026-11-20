@@ -13,6 +13,7 @@ pub mod request_log;
 pub mod response;
 pub mod routes;
 pub mod store_readiness;
+pub mod token_identity;
 pub mod utils;
 pub mod warmup;
 pub mod ws;

@@ -453,7 +453,10 @@ describe('.cell parties name their locks through the decision', () => {
       hashPrefix: '0x' + seed.repeat(20),
       lockHash: '0x' + seed.repeat(32),
       address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
-      lockScriptName: 'Default Lock',
+      // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+      // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+      // stopgap that dropped the name is gone
+      lockScriptName: null,
     };
   };
   it('writes a by-data lock on the default code hash by its code hash, in the facts and the summary', () => {

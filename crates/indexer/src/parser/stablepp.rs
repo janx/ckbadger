@@ -20,39 +20,43 @@ pub const INTENT_LOCK_CODE_HASH_MAINNET: &str =
 pub const VAULT_LOCK_CODE_HASH_MAINNET: &str =
     "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67";
 
-pub fn is_stablepp_asset(code_hash: &[u8]) -> bool {
+pub fn is_stablepp_asset(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::StablePpAsset,
     )
 }
 
-pub fn is_stablepp_pool(code_hash: &[u8]) -> bool {
+pub fn is_stablepp_pool(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::StablePpPool,
     )
 }
 
-pub fn is_stablepp_intent_lock(code_hash: &[u8]) -> bool {
+pub fn is_stablepp_intent_lock(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::StablePpIntent,
     )
 }
 
-pub fn is_stablepp_vault_lock(code_hash: &[u8]) -> bool {
+pub fn is_stablepp_vault_lock(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::StablePpVault,
     )
 }
 
-pub fn is_stablepp_script(code_hash: &[u8]) -> bool {
-    is_stablepp_asset(code_hash)
-        || is_stablepp_pool(code_hash)
-        || is_stablepp_intent_lock(code_hash)
-        || is_stablepp_vault_lock(code_hash)
+pub fn is_stablepp_script(code_hash: &[u8], hash_type: i16) -> bool {
+    is_stablepp_asset(code_hash, hash_type)
+        || is_stablepp_pool(code_hash, hash_type)
+        || is_stablepp_intent_lock(code_hash, hash_type)
+        || is_stablepp_vault_lock(code_hash, hash_type)
 }
 
 #[cfg(test)]
@@ -65,19 +69,19 @@ mod tests {
     #[test]
     fn test_is_stablepp_asset_mainnet() {
         let code_hash = parse_hex_to_bytes(ASSET_CODE_HASH_MAINNET);
-        assert!(is_stablepp_asset(&code_hash));
+        assert!(is_stablepp_asset(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_asset_testnet() {
         let code_hash = parse_hex_to_bytes(ASSET_CODE_HASH_TESTNET);
-        assert!(is_stablepp_asset(&code_hash));
+        assert!(is_stablepp_asset(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_asset_rejects_pool() {
         let code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
-        assert!(!is_stablepp_asset(&code_hash));
+        assert!(!is_stablepp_asset(&code_hash, 1));
     }
 
     // --- is_stablepp_pool tests ---
@@ -85,13 +89,13 @@ mod tests {
     #[test]
     fn test_is_stablepp_pool_mainnet() {
         let code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
-        assert!(is_stablepp_pool(&code_hash));
+        assert!(is_stablepp_pool(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_pool_rejects_asset() {
         let code_hash = parse_hex_to_bytes(ASSET_CODE_HASH_MAINNET);
-        assert!(!is_stablepp_pool(&code_hash));
+        assert!(!is_stablepp_pool(&code_hash, 1));
     }
 
     // --- is_stablepp_intent_lock tests ---
@@ -99,13 +103,13 @@ mod tests {
     #[test]
     fn test_is_stablepp_intent_lock_mainnet() {
         let code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_stablepp_intent_lock(&code_hash));
+        assert!(is_stablepp_intent_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_intent_lock_rejects_vault() {
         let code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
-        assert!(!is_stablepp_intent_lock(&code_hash));
+        assert!(!is_stablepp_intent_lock(&code_hash, 1));
     }
 
     // --- is_stablepp_vault_lock tests ---
@@ -119,14 +123,14 @@ mod tests {
             "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
         );
         let old_pool = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_stablepp_vault_lock(&vault));
-        assert!(!is_stablepp_vault_lock(&old_pool));
+        assert!(is_stablepp_vault_lock(&vault, 1));
+        assert!(!is_stablepp_vault_lock(&old_pool, 1));
     }
 
     #[test]
     fn test_is_stablepp_vault_lock_rejects_intent() {
         let code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
-        assert!(!is_stablepp_vault_lock(&code_hash));
+        assert!(!is_stablepp_vault_lock(&code_hash, 1));
     }
 
     // --- is_stablepp_script tests ---
@@ -134,19 +138,19 @@ mod tests {
     #[test]
     fn test_is_stablepp_script_matches_asset() {
         let code_hash = parse_hex_to_bytes(ASSET_CODE_HASH_MAINNET);
-        assert!(is_stablepp_script(&code_hash));
+        assert!(is_stablepp_script(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_script_matches_pool() {
         let code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
-        assert!(is_stablepp_script(&code_hash));
+        assert!(is_stablepp_script(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_script_matches_intent() {
         let code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_stablepp_script(&code_hash));
+        assert!(is_stablepp_script(&code_hash, 1));
     }
 
     #[test]
@@ -155,7 +159,7 @@ mod tests {
         let code_hash = parse_hex_to_bytes(
             "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
         );
-        assert!(is_stablepp_script(&code_hash));
+        assert!(is_stablepp_script(&code_hash, 1));
     }
 
     // --- negative tests ---
@@ -163,13 +167,13 @@ mod tests {
     #[test]
     fn test_is_stablepp_script_rejects_zero() {
         let code_hash = vec![0u8; 32];
-        assert!(!is_stablepp_script(&code_hash));
+        assert!(!is_stablepp_script(&code_hash, 1));
     }
 
     #[test]
     fn test_is_stablepp_script_rejects_arbitrary() {
         let code_hash = vec![0xAA; 32];
-        assert!(!is_stablepp_script(&code_hash));
+        assert!(!is_stablepp_script(&code_hash, 1));
     }
 
     #[test]

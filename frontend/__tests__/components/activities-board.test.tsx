@@ -38,8 +38,7 @@ const activity = (
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [
       {
         address: seededAddress('wlng7r'),
@@ -50,6 +49,7 @@ const activity = (
         usedDelta: '0',
         itemDeltas: [],
         tags: 0,
+        sent: true,
       },
     ],
     ...extra,
@@ -124,7 +124,9 @@ describe('Activities board (TX-30, TX-32, TX-29)', () => {
   it('says the counts’ period in a sentence in the reading ink at 13 px', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
     render(<ActivitiesStreamExplorer summary={dailyActivities[0]} />);
-    const note = await screen.findByText(/^Yesterday’s counts \(UTC\+8\): kinds may overlap/);
+    // re-pinned on purpose at the merge into resync/final: the note's words are the one-kind
+    // counts' (resync/int: no kind overlaps), the ink and the size this brief's
+    const note = await screen.findByText(/^Yesterday’s counts \(UTC\+8\)\.$/);
     expect(note.className).not.toMatch(/text-text-dim|text-meta/);
     expect(note).toHaveClass('text-small', 'max-w-measure');
   });

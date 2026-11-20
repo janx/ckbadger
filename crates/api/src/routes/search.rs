@@ -416,7 +416,7 @@ async fn search(
                     None
                 };
                 let token = if check_token {
-                    store.get_token(&hash_c)?
+                    crate::token_identity::get_token(&store, &hash_c)?
                 } else {
                     None
                 };

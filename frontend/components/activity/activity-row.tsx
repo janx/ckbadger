@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import {
   useId,
   useLayoutEffect,
@@ -33,7 +34,7 @@ import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
 import type {
-  ActivityItemType,
+  RecognizedType,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
@@ -352,10 +353,15 @@ interface CallRef {
 }
 
 function typeCallRef(sc: ActivityTypeCall): CallRef {
-  const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row');
+  const base = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row');
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  const name = sc.scriptName ? withNameBy(base, sc.scriptNameBy) : base;
   return {
     name,
-    call: sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`,
+    call:
+      sc.typeArgs === '0x'
+        ? name
+        : withNameBy(`${base}(${sc.typeArgs})`, sc.scriptName ? sc.scriptNameBy : null),
     href: getScriptDetailHref({
       name: sc.scriptName,
       codeHash: sc.typeCodeHash,
@@ -367,12 +373,22 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
   // a lock's words and its page are the one decision's (lib/lock-words.ts), fed its code hash, hash
-  // type and the API's name together, as a list names locks: a lock on a registered code hash by
-  // another hash type is not that lock, so neither its words nor its link take the name (the lead's
-  // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
-  const words = namedLockWords(lockCallFacts(lc), 'column');
+  // type and the API's name together, as a list names locks: the name is the code the lock's pair
+  // runs (lane rd/api-lock-names; a lock on a registered code hash by another hash type runs none,
+  // and the API sends no name: the lead's final round, item 7), its hash type beside a name by
+  // another reference than the registry's; read through the decision's one reader of a called lock
+  // (`lockCallFacts`, the third read's T SHOULD-5)
+  const facts = lockCallFacts(lc);
+  const words = namedLockWords(facts, 'column');
   const name = lockNoun(words, 'row');
-  const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
+  const by = words.form === 'lock' && words.name !== null ? facts.nameBy : null;
+  const call =
+    lc.lockArgs === '0x'
+      ? name
+      : withNameBy(
+          `${lockNoun(namedLockWords({ ...facts, nameBy: null }, 'column'), 'row')}(${lc.lockArgs})`,
+          by
+        );
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
   return {
@@ -388,14 +404,16 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
 }
 
 /**
- * The code a run's items and its DAO step carry (`itemTypes`), as its folded row names it: each code
- * once, by the registry's name (else its short code hash), a link to its page.
+ * A recognised type script code that ran (`recognizedTypes`, C7), as a row's head and a folded run's
+ * name it: each code once, by the registry's name (else its short code hash), a link to its page.
  */
-function itemTypeRef(t: ActivityItemType): CallRef {
-  const name = formatScriptRef(
+function recognizedTypeRef(t: RecognizedType): CallRef {
+  const base = formatScriptRef(
     { codeHash: t.typeCodeHash, scriptName: t.scriptName ?? undefined },
     'row'
   );
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  const name = t.scriptName ? withNameBy(base, t.scriptNameBy) : base;
   return {
     name,
     call: name,
@@ -714,17 +732,21 @@ export function rowReadFails(activity: ActivityBody): boolean {
 
 /**
  * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
- * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
- * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
- * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
+ * (`actions`, drawn inline or as a list by `ActivityRow`), then the recognised type codes that ran
+ * (`recognizedTypes`, C7: "Script call · Simple UDT" for a wallet merging its own sUDT cells), the
+ * type calls and the lock calls by name ("lock …"), their args in each name's hover, a long call run
+ * folded behind "+N more" (`calls`): one rule for a row's head and a folded run's. A row names its
+ * recognised codes where it names its scripts (`showScriptDetails`: a plain asset feed names none,
+ * OB-12); a folded run's head names them always (`nameCodes`), the codes its rows were folded by,
+ * as it named their item types. A protocol action that cannot be read is an error line under the
+ * headline (`errors`).
  */
 function activityDetails(
-  activity: ActivityBody & { txHash: string },
+  activity: ActivityBody & { txHash: string; recognizedTypes: readonly RecognizedType[] },
   showScriptDetails: boolean,
   fold: HeadFold,
   args = true,
-  /** A folded run's head: the code its rows' items carry, named first (`itemTypes`). */
-  itemTypes: readonly ActivityItemType[] = []
+  nameCodes = showScriptDetails
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -758,7 +780,10 @@ function activityDetails(
     });
   });
   const runs: ScriptRun[] = [
-    { kind: 'type', parts: callNames(itemTypes.map(itemTypeRef), args) },
+    {
+      kind: 'type',
+      parts: nameCodes ? callNames(activity.recognizedTypes.map(recognizedTypeRef), args) : [],
+    },
     ...(showScriptDetails
       ? [
           { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
@@ -1464,7 +1489,7 @@ export function activityTitleText(
  * A run of rows that did the same thing, folded (readability lane B4; the rule is
  * `lib/activity-runs.ts`, the owner's of Gate B): one row that says what its rows did and called —
  * the title, the scripts by the code they share (no row's args: those differ from row to row) —
- * how many transactions it holds, how many participants they name and, on a run of token rows, how
+ * how many transactions it holds, how many parties of them sent and, on a run of token rows, how
  * many tokens they moved (ruling 6 of gate P: "2 tokens"), and the newest time (the
  * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
  * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
@@ -1473,7 +1498,7 @@ export function activityTitleText(
  */
 export function FoldedActivityRow({
   rows,
-  participants,
+  senders,
   tokens,
   title,
   showScriptDetails,
@@ -1487,8 +1512,12 @@ export function FoldedActivityRow({
 }: {
   /** The run, newest first: at least two committed rows. */
   rows: readonly ActivityRowData[];
-  /** How many parties its rows name, each once (`runParties`). */
-  participants: number;
+  /**
+   * How many parties of its rows sent, each once (`runSenders`, from the senders bit of every
+   * party's tags in the route's `partyIds`); null for a run of cellbases, which have no input and
+   * so no sender, and are folded with no count of senders.
+   */
+  senders: number | null;
   /** How many tokens its rows moved, each once, on a run of token rows; else null (`runTokens`). */
   tokens: number | null;
   /** The title its rows draw (`ActivityTitle`). */
@@ -1521,21 +1550,29 @@ export function FoldedActivityRow({
     throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
   if (first.timestamp === null || first.blockNumber === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
-  if (participants < 1)
-    throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
-  if (first.itemTypes === null)
-    throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
+  if (senders === null) {
+    const sending = rows.find((row) => !row.isCellbase);
+    if (sending)
+      throw new Error(
+        `transaction ${sending.txHash}: a folded run with no count of senders holds a transaction that is no cellbase`
+      );
+  } else {
+    if (rows.some((row) => row.isCellbase))
+      throw new Error(`transaction ${first.txHash}: a cellbase in a run that counts senders`);
+    // every committed transaction but a cellbase has an input: "0 senders" cannot be
+    if (senders < 1) throw new Error(`transaction ${first.txHash}: a folded run names no sender`);
+  }
   const [namesOpen, setNamesOpen] = useState(false);
   const namesId = useId();
-  // the script code is the same on every row of a run: the first row's item types and calls, by
-  // name, are the run's (with no row's count or args), by a row's head's one rule (`headScripts`):
-  // "Token transfer · Simple UDT"
+  // the script code is the same on every row of a run: the first row's recognised codes and calls,
+  // by name, are the run's (with no row's count or args), by a row's head's one rule
+  // (`headScripts`): "Token transfer · Simple UDT"
   const { calls: details } = activityDetails(
     first,
     showScriptDetails,
     { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
     false,
-    first.itemTypes
+    true
   );
   // a count of what is read, older rows unread, is not final, and says so (the lead's finding)
   const soFar = final ? '' : ' so far';
@@ -1572,16 +1609,16 @@ export function FoldedActivityRow({
       />
       {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
       <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
-        {/* "participants": every party its rows name, the count the stores can state today. The
-            owner's word is "senders" (a party one of whose cells the transaction consumed): it
-            becomes that count here once the indexer records, per participant, that its lock holds
-            an input (the per-participant input flag, a re-sync; the route then states it and
-            `runParties` counts the parties that sent). This is the one place that writes it. */}
+        {/* "senders": the owner's word, the parties one of whose cells the transaction consumed
+            (the indexer's per-participant input flag, the senders bit of every party's tags in the
+            route's `partyIds`; `runSenders` counts them, each once). A run of cellbases has none and says no count. This is the one
+            place that writes it. Like the transactions', its count says "so far" while older rows
+            are unread (the lead's finding). */}
         <Dotted
           parts={[
             toggle,
             open && transactions,
-            `${formatCount(participants, 'participant')}${soFar}`,
+            senders !== null && `${formatCount(senders, 'sender')}${soFar}`,
             // the tokens its rows moved, by their type script (ruling 6 of gate P), one too
             tokens !== null && `${formatCount(tokens, 'token')}${soFar}`,
           ]}

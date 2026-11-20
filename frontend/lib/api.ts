@@ -309,7 +309,7 @@ interface HardforkActivation {
 
 type TransactionActivityType =
   /** Every committed transaction but the cellbase (the Transactions page opens on them). */
-  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity';
+  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity' | 'protocol';
 
 interface Transaction {
   value: string;
@@ -849,6 +849,8 @@ interface DepGroupItem {
 
 interface CodeCellScript {
   name: string;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   codeHash: string;
   hashType: string;
   deploymentTypeHash?: string | null;
@@ -1122,7 +1124,11 @@ interface Cell {
   // group scripts (F2-5), contract R6: list rows of /cells and /cells/by-script name their
   // references from the script registry (null = unregistered); absent on the single-cell detail.
   lockScriptName?: string | null;
+  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
   typeScriptName?: string | null;
+  /** The type's hash type beside its name, as `lockScriptNameBy`. */
+  typeScriptNameBy?: string | null;
   // group scripts (F2-5), R2b-b: single-cell detail only.
   createdEpoch?: { number: number; index: number; length: number };
   /** CKB data hash of the cell data (32 zero bytes for empty data); null without the cell bytes. */
@@ -1168,6 +1174,8 @@ interface CellDep {
 interface LockScriptInfo {
   codeHash: string;
   name: string;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   scriptKind?: string;
   deprecated: boolean;
 }
@@ -1380,7 +1388,8 @@ export type RowItem = (
 /**
  * A party by its short id, as the route names every party of an activity (`partyIds`, lane feed):
  * the first 20 bytes of its lock hash as `0x` and 40 hex digits (for a party a protocol named by a
- * prefix, that prefix), and its participant tags.
+ * prefix, that prefix), and its participant tags, the senders bit (`TAG_INPUT`) among them where
+ * it sent: the fold counts a run's senders from them.
  */
 export type PartyId = [shortId: string, tags: number];
 
@@ -1406,17 +1415,22 @@ interface ActivityTypeCall {
   typeArgs: string;
   scriptHash: string;
   scriptName?: string;
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  scriptNameBy?: string | null;
 }
 
 /**
- * A type script a committed activity's items or its Nervos DAO step carry, by its code
- * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
- * and the registry's name.
+ * A type script code the indexer recognises that ran in an activity's transaction (C7,
+ * `recognizedTypes`): the code hash and hash type, never the args, and the name of the code that
+ * pair runs (lane rd/api-lock-names), with its hash type beside the name where the pair is not the
+ * registry's reference for that code.
  */
-interface ActivityItemType {
+interface RecognizedType {
   typeCodeHash: string;
   typeHashType: string;
   scriptName: string | null;
+  /** The hash type beside the name where the pair is not the registry's reference for its code (`· by data2`); null otherwise. */
+  scriptNameBy?: string | null;
 }
 
 interface ActivityLockCall {
@@ -1425,11 +1439,13 @@ interface ActivityLockCall {
   lockArgs: string;
   scriptHash: string;
   /**
-   * The registry's name for the lock's code hash, `lockScriptName` as on a party (the third read's
+   * The name of the code the lock's pair runs, `lockScriptName` as on a party (the third read's
    * T SHOULD-5; it was `scriptName`): read through the lock decision's `lockCallFacts`, which
    * refuses a call of an older API by this field's name.
    */
   lockScriptName: string | null;
+  /** The lock's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
   decoded?: LockArgsDecoded | null;
   /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */
@@ -1469,6 +1485,23 @@ interface ActivityProtocolAction {
 }
 
 /**
+ * Tag bits of a party the page reads (the indexer's `TAG_*`, crates/ckbadger-store/src/types.rs);
+ * its items' bits are not read: a row's items are the route's statement (lane feed, part 4).
+ *
+ * A party for whom a type script ran that moved none of its items: an unrecognised one (the
+ * transaction's `typeCalls`), or a recognised one with no item change and no DAO step (C7: a wallet
+ * merging its own token cells, its code in `recognizedTypes`). The indexer's TAG_TYPE_CALL
+ * (crates/ckbadger-store/src/types.rs, bit 6): the transaction is a script call.
+ */
+const TAG_TYPE_CALL = 64;
+/**
+ * The senders bit (the indexer's TAG_INPUT, bit 8): the party's lock is the lock of at least one
+ * input of the transaction. Every party's tags in a row's `partyIds` carry it, so a fold counts its
+ * senders from the id pairs, drawn or not (the API's `sent` says it of a drawn party).
+ */
+const TAG_INPUT = 256;
+
+/**
  * Address activity response (GET /addresses/{addr}/activities): this address's changes, and every
  * party of the transaction by its short id (`ActivityParties`); no other party in full.
  */
@@ -1491,15 +1524,17 @@ interface Activity extends ActivityParties {
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
   /**
-   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
-   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   * Every type script code the indexer recognises that ran in the transaction, each once (C7: the
+   * row's `recognized_type_codes`, on a committed row and a pool row alike). With `typeCalls` (the
+   * unrecognised ones, with their args) they are every type script code that ran.
    */
-  itemTypes: ActivityItemType[] | null;
-  itemTypesUnread: string | null;
+  recognizedTypes: RecognizedType[];
   protocolActions: ActivityProtocolAction[];
   /** Roles the protocol gave this participant, if any. */
   roles: string[];
   tags: number;
+  /** This participant sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 /** Per-participant data within a global activity response. */
@@ -1512,12 +1547,16 @@ interface Activity extends ActivityParties {
  * rendered as its prefix, never as a made-up address.
  */
 interface ParticipantRef {
-  /** Registered display name of the participant lock, if resolved. */
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind?: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
   address: string | null;
   lockHash: string | null;
   lockHashPrefix: string | null;
   roles: string[];
+  /** This party sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 interface ParticipantInfo extends ParticipantRef {
@@ -1543,11 +1582,11 @@ interface GlobalActivity extends ActivityParties {
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
   /**
-   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
-   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   * Every type script code the indexer recognises that ran in the transaction, each once (C7: the
+   * row's `recognized_type_codes`, on a committed row and a pool row alike). With `typeCalls` (the
+   * unrecognised ones, with their args) they are every type script code that ran.
    */
-  itemTypes: ActivityItemType[] | null;
-  itemTypesUnread: string | null;
+  recognizedTypes: RecognizedType[];
   /**
    * The parties the row draws, in full, in the transaction's order, each with its own item deltas:
    * every party of a row of at most six; beyond, the five largest CKB changes and the fee payer.
@@ -1568,60 +1607,45 @@ type GlobalActivityFilter =
 
 interface ScriptCountEntry {
   codeHash: string;
+  /** The script's hash type: a count is one script's, by its pair (code hash, hash type). */
+  hashType: string;
+  /** The name of the code the pair runs; null when it runs no registered family's code. */
   name: string | null;
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
   count: number;
 }
 
+/**
+ * Non-cellbase transactions by kind, each in exactly one: the kind the global activity filter lists
+ * it under, so each count is what that filter lists. Keys are the filter's values.
+ */
+type ActivityKindCounts = Record<Exclude<GlobalActivityFilter, 'all'>, number>;
+
 interface DailyActivityStats {
   date: string;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  /** The day's non-cellbase transactions: the sum of `kindCounts`, one number from the API. */
+  activityCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
-  /**
-   * The day's activity-kind occurrences, the API's sum of the eight kinds the charts read (lane
-   * D1): kinds overlap, so it is not a count of distinct activities.
-   */
-  kindOccurrences: number;
-  /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
-  daoCount: number;
-  /**
-   * The day's user transactions, the route's count: its committed transactions less its cellbases
-   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
-   */
-  userTransactionCount: number;
+  /** Protocol actions by `protocol:action`: actions, not transactions (the DAO split by action). */
+  protocolActionCounts: Record<string, number>;
 }
 
 interface ActivitySummary24h {
-  /** Non-cellbase transactions, counted once even when activity kinds overlap. */
+  /** The window's non-cellbase transactions: the sum of `kindCounts`. */
   activityCount: number;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /** Protocol actions by `protocol:action`: actions, not transactions. */
+  protocolActionCounts: Record<string, number>;
   hoursCovered: number;
-  /** The window's activity-kind occurrences, the API's count (kinds overlap). */
-  kindOccurrences: number;
-  /** The window's Nervos DAO actions, the API's count. */
-  daoCount: number;
   /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
   scriptCalls: number;
   /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
@@ -1755,8 +1779,12 @@ export interface TokenSupplyEvent {
   address: string | null;
   /** U-15: the party lock's code hash; null only when the lock script is not indexed. */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 export interface TokenDistribution {
   holdersCount: number;
@@ -1793,7 +1821,11 @@ export interface ItemCellVersion {
   anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };
   dataHash: string | null;
   lockName: string | null;
+  /** The lock's hash type beside its name: the pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockNameBy?: string | null;
   typeName: string | null;
+  /** The type's hash type beside its name, as `lockNameBy`. */
+  typeNameBy?: string | null;
 }
 export type ItemKind = 'spore' | 'mnft' | 'dotbit' | 'bit-cell' | 'did' | 'dotcell';
 export interface ItemCellVersions {
@@ -1888,8 +1920,12 @@ export interface GalleryObject extends SporeNft {
   chainTime: string;
   /** Round 3 (contracts R-A · R-2): the live cell's lock code hash (the owner in `ownerAddress`). */
   lockCodeHash: string;
-  /** Round 3 (contracts R-A · R-2): registry name for `lockCodeHash`; null = unnamed (show the hash). */
+  /** The lock's hash type beside its code hash (lane rd/api-lock-names). */
+  lockHashType?: string;
+  /** Round 3 (contracts R-A · R-2): The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 /** Who rewrote this item's cell as a ring neighbour, when the tx had no action of its own. */
 export interface ItemRingRelink {
@@ -2120,8 +2156,12 @@ interface Token {
     address: string | null;
     /** U-15: the issuer lock's code hash; null only when the lock script is not indexed. */
     lockCodeHash: string | null;
-    /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+    /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+    lockHashType?: string | null;
+    /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
     lockKind: string | null;
+    /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+    lockKindBy?: string | null;
   } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;
@@ -2133,8 +2173,12 @@ interface TokenHolder {
   balance: string;
   /** U-15: the holder lock's code hash; null only when the lock script is not indexed. */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 
 export interface TokenHoldersResponse extends RankedCursorPage<TokenHolder> {
@@ -2374,6 +2418,8 @@ interface DaoOwner {
   lockCodeHash: string;
   lockHashType: string;
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
   depositCount: number;
   capacity: string;
   sharePercent: string;
@@ -2710,8 +2756,12 @@ interface CollectionHolder {
    * not indexed (then `address` is null too; `.cell`: also when the prefix resolves to no lock).
    */
   lockCodeHash: string | null;
-  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  /** The lock's hash type beside its code hash: the pair names the lock (lane rd/api-lock-names). */
+  lockHashType?: string | null;
+  /** The name of the code the lock's pair runs (the API's one rule, lane rd/api-lock-names); null when it runs no registered family's code — show the code hash. */
   lockKind: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockKindBy?: string | null;
 }
 
 // ── `.cell` (DotCell) names ────────────────────────────────────────────────
@@ -2726,10 +2776,12 @@ interface DotCellPartyRef {
   lockHash: string | null;
   address: string | null;
   /**
-   * The registry's name for the party's lock code hash (lane P2's third round, item 12: the one
-   * name a lock's registry name has on the wire, `lockScriptName`; it was `scriptName`).
+   * The name of the code the party's lock pair runs (lane rd/api-lock-names; lane P2's third
+   * round, item 12: the one name a lock has on the wire, `lockScriptName`; it was `scriptName`).
    */
   lockScriptName: string | null;
+  /** The hash type beside the name where the pair is not the registry's reference for its code (`· by data2`); null otherwise. */
+  lockScriptNameBy?: string | null;
 }
 
 interface DotCellDecodedAddress {
@@ -3341,29 +3393,48 @@ interface CapacityChartRangeParams {
   to?: string;
 }
 
+/**
+ * A script asked of `POST /scripts/lookup`: CKB names a script by the pair (code hash, hash
+ * type), so a code hash alone asks for no script (lane rd/api-lock-names).
+ */
+interface ScriptPair {
+  codeHash: string;
+  hashType: string;
+}
+
+/** One pair's answer: the script (`referenceHash`, `hashType`) asked, its own name and figures. */
 interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
+  /** The name of the code the pair runs (the family of the binary it resolves to); "Unknown"
+   *  when it runs no registered family's code — never a name across hash kinds. */
   name: string;
-  /** The queried reference's own label description; null when it has none. */
+  /** The script's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  nameBy?: string | null;
+  /** The named family's (or pseudo deployment's) description; null when it has none. */
   description?: string | null;
   deprecated?: boolean;
   scriptKind: string | null;
   decoderType: string | null;
-  hashType: string | null;
+  /** The hash type asked: the pair's. */
+  hashType: string;
   deploymentTypeHash?: string | null;
   deploymentDataHash?: string | null;
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
+  /** The pair's own usage: cells ever, live cells, their capacity and occupied capacity. */
+  cellsCount: number;
   liveCellsCount: number;
   ownedCapacitySum: string;
   ownedKnowledgeSum: string;
   codeCellsLiveCount: number;
   codeCellsTotal: number;
-  resolutionState?: 'resolved' | 'ambiguous';
+  /** `unresolved`: no binary resolves the pair; its name and usage stand. */
+  resolutionState?: 'resolved' | 'ambiguous' | 'unresolved';
   ambiguity?: ScriptResolutionAmbiguity | null;
 }
 
+/** The lookup's answer, keyed by `scriptLookupKey(codeHash, hashType)` (`lib/script-pair.ts`). */
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;
 
 function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): KnownScript {
@@ -3775,6 +3846,7 @@ interface FiberChannel {
     lockScriptHash: string;
     address: string | null;
     lockScriptName: string | null;
+    lockScriptNameBy?: string | null;
   }[];
   observedLifetimeMs: string | null;
   lifetimeAnchorBlock: number | null;
@@ -3829,8 +3901,10 @@ interface FiberStats {
 interface FiberParty {
   lockScriptHash: string;
   address: string | null;
-  /** R2b-b: the script registry's name for the party's lock; null when unindexed or unregistered. */
+  /** R2b-b: the name of the code the party's lock runs; null when unindexed or unnamed. */
   lockScriptName: string | null;
+  /** The pair's hash type where its named pair is not the registry's reference for its code (the same code by another reference: written beside the name, `· by data2`); null otherwise (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
   channels: number;
   openChannels: number;
   cooperativelyClosedChannels: number;
@@ -4089,6 +4163,7 @@ export type {
   ScriptUsage,
   ScriptLookupInfo,
   ScriptLookupResponse,
+  ScriptPair,
   CyclesCalculationStatus,
   CyclesStatusResponse,
   TransactionLifecycle,
@@ -4112,7 +4187,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
-  ActivityItemType,
+  RecognizedType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,
@@ -4120,6 +4195,7 @@ export type {
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,
+  ActivityKindCounts,
   DailyActivityStats,
   ActivitySummary24h,
   TopTokenEntry,
@@ -4137,6 +4213,8 @@ export type {
   FiberChannelState,
   FiberChannelQueryParams,
 };
+
+export { TAG_TYPE_CALL, TAG_INPUT };
 
 export interface LabelCount {
   label: string;
@@ -4485,22 +4563,25 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
  * older than the page sends none, and the page refuses it by the field's name (lane D1's third
  * round, N7: it read `invalid decimal "undefined"`).
  */
-function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
+function routeCount(day: DailyActivityStats, field: 'activityCount'): string {
   return String(sentField(day[field], `daily activities on ${day.date}`, field));
 }
 
 /**
- * A day's user transactions, the route's count (the P3 follow-up's 2b), as every page reads it:
- * the activities lede, the transactions page's "all" chip and lede, the home daily figure. An API
- * older than the page sends none, refused by name (the third read's La N6: the lede and the chip
- * were drawn without it, silently, and the home figure threw a TypeError).
+ * A day's activities, the route's count (resync/int: every committed transaction of the day but
+ * its cellbases, each in exactly one kind), as every page reads it: the activities lede, the
+ * transactions page's "all" chip and lede, the home daily figure. An API older than the page sends
+ * none, refused by name (the third read's La N6: the lede and the chip were drawn without it,
+ * silently, and the home figure threw a TypeError).
  */
-export function dayUserTransactions(day: DailyActivityStats): number {
-  return sentField(
-    day.userTransactionCount,
-    `daily activities on ${day.date}`,
-    'userTransactionCount'
-  );
+export function dayActivityCount(day: DailyActivityStats): number {
+  return sentField(day.activityCount, `daily activities on ${day.date}`, 'activityCount');
+}
+
+/** The day's transactions by kind as the route states them; an API older than the page sends none. */
+function routeKindCounts(day: DailyActivityStats): ActivityKindCounts {
+  const kinds = sentField(day.kindCounts, `daily activities on ${day.date}`, 'kindCounts');
+  return kinds;
 }
 
 export const api = {
@@ -5546,9 +5627,9 @@ export const api = {
     return fetchApi(`/scripts/charts/capacity-history?${query}`);
   },
 
-  lookupScripts: async (codeHashes: string[], txHash?: string): Promise<ScriptLookupResponse> => {
-    if (codeHashes.length === 0) return {};
-    const body: Record<string, unknown> = { codeHashes };
+  lookupScripts: async (scripts: ScriptPair[], txHash?: string): Promise<ScriptLookupResponse> => {
+    if (scripts.length === 0) return {};
+    const body: Record<string, unknown> = { scripts };
     if (txHash) body.txHash = txHash;
     return fetchJson(`${activeApiBase()}/scripts/lookup`, {
       method: 'POST',
@@ -5589,8 +5670,8 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        // the day's kind occurrences, the route's sum of the eight kinds (lane D1)
-        value: routeCount(s, 'kindOccurrences'),
+        // the day's activities, the route's one number (the kinds partition it)
+        value: routeCount(s, 'activityCount'),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5601,20 +5682,20 @@ export const api = {
     const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => {
-        // the whole the page's shares divide by, the route's (lane D1)
-        const kindOccurrences = routeCount(s, 'kindOccurrences');
-        // the day's DAO actions, the route's sum of its three counts (lane D1's third round, M2)
-        const dao = routeCount(s, 'daoCount');
+        const kinds = routeKindCounts(s);
         return {
           date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+          // One kind per transaction: the stack is a partition of the day's activityCount, the
+          // whole the page's shares divide by.
           values: {
-            transfer: String(s.transferCount),
-            dao,
-            token: String(s.tokenCount),
-            object: String(s.objectCount),
-            identity: String(s.identityCount),
-            scriptCall: String(s.scriptCallCount),
-            kindOccurrences,
+            transfer: String(kinds.ckb),
+            dao: String(kinds.dao),
+            token: String(kinds.token),
+            object: String(kinds.object),
+            identity: String(kinds.identity),
+            scriptCall: String(kinds.script),
+            protocol: String(kinds.protocol),
+            activityCount: routeCount(s, 'activityCount'),
           },
         };
       }),
@@ -5625,6 +5706,7 @@ export const api = {
         { key: 'object', label: 'Object', color: color('object') },
         { key: 'identity', label: 'Identity', color: color('identity') },
         { key: 'scriptCall', label: 'Script Call', color: color('amber') },
+        { key: 'protocol', label: 'Protocol', color: color('ink-muted') },
       ],
       title: 'Activity Type Breakdown',
     };

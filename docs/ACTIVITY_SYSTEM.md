@@ -63,6 +63,7 @@ pub struct StoredTxActions {
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
     pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
+    pub recognized_type_codes: Vec<TypeCode>,   // Recognised type codes that ran (C7), each once
 }
 ```
 
@@ -87,8 +88,20 @@ pub struct TxActions {
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
     pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
+    pub recognized_type_codes: Vec<TypeCode>,   // Recognised type codes that ran (C7), each once
 }
 ```
+
+`recognized_type_codes` (resync/type-codes, C7) holds every type script code the classifier
+recognises by its pair (sUDT, xUDT, the Nervos DAO, Spore, Cluster, m-NFT, `.bit`, `.bit Cell`,
+did:ckb, `.cell`; the one registry a protocol's pair is read by, `ProtocolRegistry::protocol`, and
+the bundled xUDT-compatible pairs) that ran on an input or an output cell of the transaction, each
+`(code_hash, hash_type)` once, sorted. The activity builder fills it in the recognised arms of its classifier, the same pass
+that fills `type_calls` in the unrecognised arm, so together they are every type script code that
+ran. It is last in the stored row: a row of the layout before it does not decode. `TAG_TYPE_CALL`
+is set on a party when a type script ran for it that moved none of its items: an unrecognised one,
+or (C7) a recognised one with no item change and no DAO step (a wallet merging its own token cells,
+an identity cell rewritten in place), so such a transaction is a script call, never a CKB transfer.
 
 **Key design decisions:**
 
@@ -178,11 +191,14 @@ pub const TAG_IDENTITY: u16  = 1 << 2;  // 0x04 — has identity item_deltas
 pub const TAG_DAO: u16       = 1 << 3;  // 0x08 — involved in DAO operation
 pub const TAG_PROTOCOL: u16  = 1 << 4;  // 0x10 — TX has protocol_actions
 pub const TAG_CELLBASE: u16  = 1 << 5;  // 0x20 — cellbase transaction
-pub const TAG_TYPE_CALL: u16 = 1 << 6;  // 0x40 — TX has unrecognized type scripts
+pub const TAG_TYPE_CALL: u16 = 1 << 6;  // 0x40 — a type script ran for this party that moved none of its items
 pub const TAG_LOCK_CALL: u16 = 1 << 7;  // 0x80 — TX has non-standard lock scripts
+pub const TAG_INPUT: u16     = 1 << 8;  // 0x100 — this party's lock is an input's lock: it sent
 ```
 
 Tags are set during the build phase and stored on each `ParticipantDelta`. A single participant can have multiple tags set simultaneously (e.g., `TAG_TOKEN | TAG_PROTOCOL`).
+
+`TAG_INPUT` (resync/int) records who sent: the participant's lock is the lock of at least one input of the transaction, decided by the input being there, whatever its capacity. The one activity builder (`build_tx_actions_for_block_with_io`) sets it for live sync and bulk build alike, from the same field that gives the addr_txs row its side (`ParticipantIo.has_inputs`). A cellbase and a party a protocol names but whose lock holds no cell never carry it. It is no kind: no filter and no classification reads it. It reaches `AddrTxValue.tags` with the other bits.
 
 ### TypeCallEntry — Unrecognized Type Script
 
@@ -231,23 +247,25 @@ request if persisted metadata is invalid.
 
 ```rust
 // crates/ckbadger-store/src/types.rs
+pub struct ActivityKindCounts {           // one count per GlobalBucket, key-prefix order
+    pub dao: u32, pub token: u32, pub object: u32, pub identity: u32,
+    pub protocol: u32, pub script: u32, pub ckb: u32,
+}
+
 pub struct DailyActivityStats {
-    pub transfer_count: u32,              // Pure CKB transfers
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,                 // UDT transfers
-    pub object_count: u32,                // Spore/mNFT
-    pub identity_count: u32,              // .bit AccountCell/.bit Cell/did:ckb
-    pub script_call_count: u32,           // Unrecognized scripts
-    pub unknown_count: u32,               // Fallback (should be 0)
-    pub coinbase_count: u32,              // Mining rewards
+    pub kind_counts: ActivityKindCounts,  // Non-cellbase txs, each in exactly one kind
+    pub coinbase_count: u32,              // Cellbase txs (one a block), in no kind
     pub unique_address_count: u32,        // Distinct lock_hashes (Lock participants only)
-    pub total_ckb_moved: u128,            // Sum of |ckb_delta| across all participants
-    pub script_counts: HashMap<String, u32>,  // Per-code_hash counts
-    pub protocol_action_counts: HashMap<String, u32>,  // "protocol:action" counts
+    pub total_ckb_moved: u128,            // Sum of positive participant deltas, non-cellbase
+    pub script_counts: BTreeMap<String, u32>,  // Per-code_hash counts
+    pub protocol_action_counts: BTreeMap<String, u32>,  // "protocol:action" counts (actions)
 }
 ```
+
+The kinds are the global activity buckets (`classify_global_bucket`, the classification the
+`/activities` and `/transactions` filters list by), so `kind_counts.total()` is the bucket's
+non-cellbase transactions and `kind_counts.<kind>` is what that kind's filter lists. The DAO split by
+action (deposit / withdraw request / withdraw complete) is `protocol_action_counts["dao:<action>"]`.
 
 ### ObjectCollectionActivityEntry — Pre-Computed Collection Feed (read form)
 
@@ -482,15 +500,15 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 
 ### Column Families
 
-| CF                                  | Key Size  | Value                           | Purpose                                                          |
-| ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
-| `CF_TX_ACTIONS`                     | 12 bytes  | `StoredTxActions` (bincode)     | Per-tx actions record                                            |
-| `CF_ADDR_TXS`                       | 44 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
-| `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
-| `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
-| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 44 bytes  | `Vec<AssetAction>` (bincode)    | Spore/mNFT collection feeds                                      |
-| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 44 bytes  | `Vec<AssetAction>` (bincode)    | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
-| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
+| CF                                  | Key Size | Value                          | Purpose                                                          |
+| ----------------------------------- | -------- | ------------------------------ | ---------------------------------------------------------------- |
+| `CF_TX_ACTIONS`                     | 12 bytes | `StoredTxActions` (bincode)    | Per-tx actions record                                            |
+| `CF_ADDR_TXS`                       | 44 bytes | `AddrTxValue` (bincode)        | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes | `AddrTxValue` (bincode)        | Same index for a party NAMED by its 20-byte lock-hash prefix     |
+| `CF_ADDR_PREFIX_STATS`              | 20 bytes | `AddrPrefixStats` (bincode)    | Per-prefix count of named participations without a cell          |
+| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 44 bytes | `Vec<AssetAction>` (bincode)   | Spore/mNFT collection feeds                                      |
+| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 44 bytes | `Vec<AssetAction>` (bincode)   | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
+| `CF_STATS_CHAIN` (prefixed)         | variable | `DailyActivityStats` (bincode) | Hourly/daily aggregation                                         |
 
 **Note**: `CF_TX_ACTIONS` uses the RocksDB string `"activities"` (same physical column family name as the old `CF_ACTIVITIES`). The Rust constant was renamed for clarity.
 
@@ -792,17 +810,17 @@ kind) leave the decoded value `null` and state why — `decodeError` on a lock c
 subType(2) + pubkeyHash(20) expects 22"`. The response is still a 200. A lock with no registry layout
 has neither a value nor a reason.
 
-| Lock Script         | Layout                                            | Decoder Output                                                     |
-| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| Default Lock        | codec `secp256k1_blake160`                        | `{"lock": "secp256k1_blake160", "pubkeyHash": "0x…"}`              |
-| Default Multisig    | codec `multisig`                                  | `{"lock": "multisig", "multisigScriptHash": "0x…", "since"?}`      |
-| Anyone-Can-Pay      | codec `anyone_can_pay`                            | `{"lock": "anyone_can_pay", "pubkeyHash", minimum exponents?}`     |
-| Omnilock            | codec `omnilock`                                  | `{"lock": "omnilock", "authFlag", "authKind", …}`                  |
-| RGB++ Lock          | codec `rgbpp`                                     | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
-| BTC Time Lock       | codec `btc_time_lock`                             | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
-| Fiber locks         | codecs `fiber_funding`, `fiber_commitment`        | `{"protocol": "fiber", "action": …}`                               |
-| UTXOSwap Intent     | codec `utxoswap_intent`                           | `{"protocol": "utxoswap", …}`                                      |
-| JoyID               | fields `subType(2) + pubkeyHash(20)`              | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
+| Lock Script         | Layout                                             | Decoder Output                                                     |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
+| Default Lock        | codec `secp256k1_blake160`                         | `{"lock": "secp256k1_blake160", "pubkeyHash": "0x…"}`              |
+| Default Multisig    | codec `multisig`                                   | `{"lock": "multisig", "multisigScriptHash": "0x…", "since"?}`      |
+| Anyone-Can-Pay      | codec `anyone_can_pay`                             | `{"lock": "anyone_can_pay", "pubkeyHash", minimum exponents?}`     |
+| Omnilock            | codec `omnilock`                                   | `{"lock": "omnilock", "authFlag", "authKind", …}`                  |
+| RGB++ Lock          | codec `rgbpp`                                      | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
+| BTC Time Lock       | codec `btc_time_lock`                              | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
+| Fiber locks         | codecs `fiber_funding`, `fiber_commitment`         | `{"protocol": "fiber", "action": …}`                               |
+| UTXOSwap Intent     | codec `utxoswap_intent`                            | `{"protocol": "utxoswap", …}`                                      |
+| JoyID               | fields `subType(2) + pubkeyHash(20)`               | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
 | Nervape Shadow Lock | fields `prefix(1) + hash(32)` (raw, uninterpreted) | `{"lock": "shadow-lock", "prefix": "0x07", "hash": "0x…"}`         |
 
 **RGB++ decoder**: args[0..4] = out_index (u32 LE), args[4..36] = btc_txid (32 bytes LE, reversed for display). Minimum 36 bytes.
@@ -830,13 +848,16 @@ out.
 
 ### Script Info Resolution
 
-Script names are resolved via `ScriptInfo` lookup and cached per-request:
+Script names are the registry's labels of each script's pair (code hash, hash type), read from
+`script_info` by the pair and cached per request:
 
 ```rust
-fn resolve_script_info_cached(store, cache, code_hash) -> Option<&ScriptInfo>
+fn cached_script_name(store, cache, code_hash, hash_type) -> anyhow::Result<Option<String>>
 ```
 
-The cache avoids repeated DB lookups for the same code_hash within a single API request. Used for both type call and lock call name resolution.
+The cache avoids repeated DB lookups for the same pair within a single API request. Used for both
+type call and lock call name resolution. A pair the registry does not name has no name, whatever
+the code hash is named by another hash type.
 
 ---
 
@@ -1073,27 +1094,33 @@ Activity stats are accumulated per-transaction from `TxActions` and aggregated a
 ### Classification for Stats
 
 ```rust
-// statistics.rs
-fn accumulate_tx_actions_stats(tx_actions: &TxActions, stats: &mut DailyActivityStats)
+// crates/ckbadger-store/src/types.rs (statistics.rs wraps it for the sync paths)
+pub fn accumulate_from_tx_actions(&mut self, tx: ClassifiedTxActions<&TxActions>)
 ```
 
-Stats classification iterates over each participant's tags bitmask and item_deltas, and the TX-level protocol_actions:
+Each transaction is classified once, by `ClassifiedTxActions::classify` (`classify_global_bucket`),
+where its sync path writes it: live sync per transaction of a block, bulk build in
+`build_history_rows_for_block`. The same value writes its `CF_TX_ACTIONS_BY_BUCKET` row and is
+accumulated here; the API's rolling 24 h window classifies each transaction it reads the same way.
 
-1. **Coinbase** — counted separately, excluded from all other metrics
-2. **DAO** — if `TAG_DAO` is set (from protocol_actions with `protocol == "dao"`)
-3. **Token** — if `TAG_TOKEN` is set
-4. **Object** — if `TAG_OBJECT` is set
-5. **Identity** — if `TAG_IDENTITY` is set
-6. **Script call** — if `TAG_TYPE_CALL` is set
-7. **Transfer** — if no tags besides possible TAG_LOCK_CALL (pure CKB)
-8. **Unknown** — fallback (should be 0)
+1. **Cellbase** (no bucket) — `coinbase_count += 1`, and nothing else
+2. **Every other transaction** — `kind_counts[bucket] += 1`, the one kind the global filter lists it
+   under. Precedence (`docs/STORE_SCHEMA.md` → `tx_actions_by_bucket`): a `dao` action → DAO; a
+   `dotbit` / `dotcell` action → Identity; any other protocol action → Protocol; then the
+   participants' tags DAO, token, object, identity; then type / lock script calls → Script; else CKB.
 
-**Note**: Token, object, identity, and script-call flags are transaction-level booleans. A
-transaction with three token changes is counted once in `token_count`.
+The classifier is total, so there is no fallback kind: the kinds of a bucket sum to its
+non-cellbase transactions. Beside the kinds, every non-cellbase transaction adds its
+`total_ckb_moved`, one `script_counts` entry per type and lock call, and one
+`protocol_action_counts` entry per protocol action.
+
+The address feed's filter (below) is a different question and keeps its own rule: it asks what this
+transaction did **for one participant** (that participant's tags), so one transaction can match
+several of an address's filters, while the global kinds partition transactions.
 
 ### Additional Metrics
 
-- **`total_ckb_moved`**: Sum of `|ckb_delta|` across all non-cellbase participants (u128)
+- **`total_ckb_moved`**: Sum of the positive participant `ckb_delta`s of non-cellbase transactions (u128)
 - **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`).
   **`Lock` participants only.** One address can appear in the same bucket under both identities,
   so counting the prefix form too would double-count it; and being named by a protocol is not that
@@ -1107,6 +1134,9 @@ transaction with three token changes is counted once in `token_count`.
 
 - **Daily**: Key prefix `0x1D` + `YYYYMMDD` in `CF_STATS_CHAIN`
 - **Hourly**: Key prefix `0x1E` + `YYYYMMDDHH` in `CF_STATS_CHAIN`
+- **Value**: `DailyActivityStats::encode` — the layout tag `ACTIVITY_STATS_LAYOUT` (u32
+  `0xAC710002`) then the row (bincode); `DailyActivityStats::decode` (strict) refuses any other
+  layout with "written by an older layout, re-sync from genesis"
 - **Unique addresses**: one empty row per address of a bucket (`0x26` daily / `0x27` hourly +
   bucket + lock hash), kept only while a block can still reach the bucket. Live sync writes the row
   of each address new to a bucket in its block's scope, raising the bucket's
@@ -1124,8 +1154,15 @@ buckets at its running-maximum chain-time watermark and writes each sealed aggre
 
 ### API Endpoints
 
-- **`GET /stats/daily-activities`** — Returns daily activity stats for charting (list of day-level breakdowns)
-- **`GET /stats/activity-summary-24h`** — Aggregates all hourly buckets within a 24h rolling window for the summary card
+- **`GET /stats/daily-activities`** — Each complete day's `activityCount` (its non-cellbase
+  transactions, the sum of `kindCounts`), `kindCounts` (keys = the global filter's values),
+  `coinbaseCount`, `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts` and `protocolActionCounts`
+- **`GET /stats/activity-summary-24h`** — The same counts over the exact rolling 24 h chain-time
+  window, accumulated from the window's `activities` rows through the same classification. A
+  cellbase has no `activities` row, so the window's `coinbaseCount` is its canonical blocks, one
+  cellbase each, read at each block's `tx_index` position 0 (a block without that row, or whose
+  position 0 is no cellbase, is an error); a block leaving the window takes its cellbase with it,
+  and a reorg rebuilds the window
 
 ---
 
@@ -1190,8 +1227,8 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 
 ### API
 
-| File                                  | Content                                                                |
-| ------------------------------------- | ---------------------------------------------------------------------- |
+| File                                  | Content                                                                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `crates/api/src/routes/activities.rs` | Endpoints, response types, page completion, `decode_lock_args` (registry `[lock_args]` layouts) |
 
 ### Statistics

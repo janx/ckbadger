@@ -49,15 +49,20 @@ impl DotbitDetector {
 fn account_ids(tx: &TxView<'_>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut consumed: Vec<Vec<u8>> = Vec::new();
     for input in &tx.inputs {
-        let Some(type_code_hash) = input.type_code_hash else {
+        let (Some(type_code_hash), Some(type_hash_type)) =
+            (input.type_code_hash, input.type_hash_type)
+        else {
             continue;
         };
         // `data` is the id the consumed cell was indexed under (empty for a
         // cell creation did not index), or the real data in the tx-pool
         // mirror — the same resolution the activity builder's item deltas use.
-        if let Some(id) =
-            DotbitParser::resolve_account_id(type_code_hash, input.type_args, input.data)
-        {
+        if let Some(id) = DotbitParser::resolve_account_id(
+            type_code_hash,
+            type_hash_type,
+            input.type_args,
+            input.data,
+        ) {
             if !consumed.contains(&id) {
                 consumed.push(id);
             }
@@ -65,12 +70,17 @@ fn account_ids(tx: &TxView<'_>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     }
     let mut created: Vec<Vec<u8>> = Vec::new();
     for output in &tx.outputs {
-        let Some(type_code_hash) = output.type_code_hash else {
+        let (Some(type_code_hash), Some(type_hash_type)) =
+            (output.type_code_hash, output.type_hash_type)
+        else {
             continue;
         };
-        if let Some(id) =
-            DotbitParser::parse_account_id_from_data(type_code_hash, output.type_args, output.data)
-        {
+        if let Some(id) = DotbitParser::parse_account_id_from_data(
+            type_code_hash,
+            type_hash_type,
+            output.type_args,
+            output.data,
+        ) {
             if !created.contains(&id) {
                 created.push(id);
             }

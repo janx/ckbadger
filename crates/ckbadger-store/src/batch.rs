@@ -269,6 +269,21 @@ impl<'a> StoreBatch<'a> {
         };
         let journaled =
             cf_spec(name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        // A never-journaled whole column family admits only the writer its
+        // entry names (`script_info`: label import, L N1), never a block's
+        // batch: the write is refused at commit, the column family named.
+        if let Some(entry) = crate::store::outside_journal_entry(name, key)
+            .filter(|entry| entry.never_journaled && entry.writer.is_some())
+        {
+            journal.error.get_or_insert(anyhow::anyhow!(
+                "a block's batch wrote {name} key=0x{}, which no batch journals: OUTSIDE_JOURNAL \
+                 admits only {:?} ({}) to write it",
+                bytes_to_hex(key),
+                entry.writer,
+                entry.owner
+            ));
+            return true;
+        }
         // A key that is never journaled goes straight into the commit.
         if !journaled || crate::block_overlay::is_outside_journal(name, key) {
             return false;
@@ -1018,6 +1033,27 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_cell_by_data_hash(), key);
     }
 
+    /// Index a live code cell under its type script (`live_code_cells_by_type`,
+    /// resync fix round S3): `binary` is its data hash. Written by the live
+    /// rollup step in the creating block's scope.
+    pub fn put_live_code_cell(
+        &mut self,
+        type_hash: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        binary: &[u8],
+    ) {
+        let key = keys::encode_live_code_cell_key(type_hash, tx_hash, output_index);
+        self.put_cf(self.store.cf_live_code_cells_by_type(), key, binary);
+    }
+
+    /// Drop a consumed code cell from `live_code_cells_by_type`, in the
+    /// consuming block's scope.
+    pub fn delete_live_code_cell(&mut self, type_hash: &[u8], tx_hash: &[u8], output_index: i16) {
+        let key = keys::encode_live_code_cell_key(type_hash, tx_hash, output_index);
+        self.delete_cf(self.store.cf_live_code_cells_by_type(), key);
+    }
+
     // ---- Cell index (raw pre-computed key) ----
 
     pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {
@@ -1678,11 +1714,19 @@ impl<'a> StoreBatch<'a> {
     /// its `CF_TX_ACTIONS_BY_BUCKET` row — always together, in this batch, so
     /// the index can never be durable without the row it points at.
     /// The `activities` row of `actions` (keyed by its position, valued by
-    /// what it did: `TxActions::encode_stored`) and its global bucket row.
-    pub fn put_tx_actions(&mut self, actions: &TxActions) {
+    /// what it did: `TxActions::encode_stored`) and its global bucket row,
+    /// from the bucket the transaction was classified into
+    /// ([`crate::ClassifiedTxActions`]): live sync passes the classification
+    /// it already made; a bare `&TxActions` is classified here.
+    pub fn put_tx_actions<'t>(
+        &mut self,
+        actions: impl Into<crate::ClassifiedTxActions<&'t TxActions>>,
+    ) {
+        let classified = actions.into();
+        let actions = classified.actions();
         let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
         self.put_cf(self.store.cf_tx_actions(), key, actions.encode_stored());
-        if let Some(bucket_key) = crate::global_bucket::tx_actions_bucket_key(actions) {
+        if let Some(bucket_key) = classified.bucket_key() {
             self.put_cf(self.store.cf_tx_actions_by_bucket(), bucket_key, b"");
         }
     }
@@ -1766,11 +1810,6 @@ impl<'a> StoreBatch<'a> {
             )
         });
         self.delete_cf(cf, key);
-    }
-
-    pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
-        let value = bincode::serialize(info).expect("serialize ScriptInfo");
-        self.put_cf(self.store.cf_script_info(), code_hash, &value);
     }
 
     pub fn put_script_version(&mut self, version_hash: &[u8], info: &ScriptVersionInfo) {

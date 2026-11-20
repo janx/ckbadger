@@ -167,7 +167,7 @@ ckbadger run (orchestrator supervisor)
 | **Visualization** | react-force-graph-2d, D3.js                                         | Cell relationship graphs         |
 | **API**           | Rust (Axum)                                                         | High-performance REST/WebSocket  |
 | **Indexer**       | Rust (3-stage pipeline)                                             | Block parsing, cell tracking     |
-| **Storage**       | RocksDB (74 domain + 1 append-only + 3 network CFs, ckbadger-store) | Embedded three-store data engine |
+| **Storage**       | RocksDB (76 domain + 1 append-only + 3 network CFs, ckbadger-store) | Embedded three-store data engine |
 | **Cache**         | In-memory LRU                                                       | API response cache               |
 | **IPC**           | Unix domain sockets                                                 | Inter-process communication      |
 
@@ -180,8 +180,8 @@ These facts do not prove NAT/firewall status, hosting environment, â€œhome nodeâ
 reachability. The configured RPC node's genesis hash must match the selected network before its
 session observations are accepted.
 
-All of this remains inside the existing 3-CF network store; ckbadger-store still has 78 CFs total
-(74 domain + 1 append-only + 3 network). The crawler is its sole writer and the API opens it only
+All of this remains inside the existing 3-CF network store; ckbadger-store still has 80 CFs total
+(76 domain + 1 append-only + 3 network). The crawler is its sole writer and the API opens it only
 as a read-only secondary.
 
 ### Deployment
@@ -249,7 +249,8 @@ exits, and purge preserves the lock files.
 Three testing systems: data integrity verification, per-endpoint benchmarking, and concurrent load stress testing. See [docs/TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
-ckbadger verify --depth fast                       # Data integrity (8 checks, seconds)
+ckbadger verify --depth fast                       # Data integrity (10 checks, seconds)
+ckbadger verify --depth sampling                   # All 79: Fast 10, Sampling 43, Explorer 26
 make bench                                         # Per-endpoint latency baseline
 make stress STRESS_ARGS="--scenario api --auto-ramp"  # Find API breaking point
 ```

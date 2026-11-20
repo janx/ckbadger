@@ -33,10 +33,11 @@ pub(crate) fn put_addr_tx_by_prefix(
 pub(crate) fn put_tx_actions(
     batch: &mut StoreBatch<'_>,
     block_num: i64,
-    actions: &ckbadger_store::types::TxActions,
+    actions: ckbadger_store::ClassifiedTxActions<&ckbadger_store::types::TxActions>,
 ) {
     assert_eq!(
-        actions.block_number, block_num,
+        actions.actions().block_number,
+        block_num,
         "tx actions block number mismatch"
     );
     // The `activities` row is RangeByBlock (rollback deletes it by block);
@@ -65,6 +66,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ckbadger_store::types::ParticipantId::Lock([0x44; 32]),
                 ckb_delta: 0,
@@ -76,7 +78,11 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
-        put_tx_actions(&mut domain_batch, 42, &actions);
+        put_tx_actions(
+            &mut domain_batch,
+            42,
+            ckbadger_store::ClassifiedTxActions::classify(&actions),
+        );
         domain_batch.commit().unwrap();
 
         let iter = domain_store.iterator_cf(

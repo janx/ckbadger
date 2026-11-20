@@ -28,21 +28,10 @@ use crate::utils::stats_bucket::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
-    historical_family_member_candidate, observed_type_id_references_from_versions,
-    protocol_circulating, reference_form_member_version_with_lineage, script_to_address,
+    protocol_circulating, script_to_address,
 };
-use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 use tracing::instrument;
-
-fn load_script_infos_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>, ApiRouteError> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
-}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -155,6 +144,11 @@ pub struct NetworkStats {
     pub dao_locked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
+    /// The layout the domain store was built with (`sync_meta` `store_layout`,
+    /// stamped by the indexer); `null` on a store not stamped yet. The verify
+    /// check `store_layout_matches_build` holds it to the build's layout, so a
+    /// skipped re-sync is seen (lane rd/api-lock-names, fix round M1).
+    pub store_layout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -867,11 +861,6 @@ struct AssetEntity {
     final_used_capacity: i128,
 }
 
-fn is_known_script_name(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("unknown")
-}
-
 fn format_asset_label(name: &str, asset_type: &str) -> String {
     format!("{name} ({asset_type})")
 }
@@ -1210,30 +1199,12 @@ async fn get_most_utilized_scripts_chart(
     }
 
     // Family provenance survives code retirement. Membership and exact totals
-    // share the writer's operators, matching /scripts/{name}/usage. Loose
-    // references without a family keep their own identity and label.
-    let script_infos_by_code_hash: HashMap<Vec<u8>, ckbadger_store::ScriptInfo> =
-        load_script_infos_cached(&state)?.into_iter().collect();
-    let versions = state
-        .store
-        .list_script_versions()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let membership =
-        ckbadger_store::ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-    let family_versions: std::collections::HashSet<Vec<u8>> = versions
-        .iter()
-        .filter(|(_, info)| info.family_id.is_some())
-        .map(|(hash, _)| hash.clone())
-        .collect();
-    let observed_type_ids = observed_type_id_references_from_versions(&versions);
-    let family_names: HashMap<String, String> = state
-        .store
-        .list_script_families()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .into_iter()
-        .map(|(family_id, info)| (family_id, info.name))
-        .collect();
+    // share the writer's operators, matching /scripts/{name}/usage. Every
+    // form is named by the one rule (`utils::ScriptRegistry::name`, the
+    // family of the code it runs, which is the family it is counted in);
+    // loose forms without a family keep their own identity and label.
+    let registry = crate::utils::ScriptRegistry::load(&state.store)
+        .map_err(|e| ApiError::internal(format!("script registry for the chart: {e:#}")))?;
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut entity_key_by_form: HashMap<(Vec<u8>, u8), String> = HashMap::new();
@@ -1244,45 +1215,30 @@ async fn get_most_utilized_scripts_chart(
         .list_script_reference_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
-        let member_version = reference_form_member_version_with_lineage(
-            &state.store,
-            &state.append_only_store,
-            hash_type,
-            &reference_hash,
-            &|hash: &[u8]| family_versions.contains(hash),
-            Some(observed_type_ids.contains(&reference_hash)),
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let family_candidate = historical_family_member_candidate(
-            &state.store,
-            hash_type,
-            &reference_hash,
-            member_version,
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let family_id = membership
-            .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let name = registry
+            .name(
+                &state.store,
+                &state.append_only_store,
+                &reference_hash,
+                hash_type,
+            )
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
 
         // Aggregation keys are identities, never display names: a family bucket
         // is keyed by its family_id, a loose reference form by (code_hash,
-        // hash_type). Buckets that merely share a label stay separate -- the
-        // junk secp data form inherits the type form's ScriptInfo label
-        // (ScriptInfo is keyed by code_hash alone) and two unrelated
-        // deployments may carry the same name, yet none of them are the same
-        // script. Labels ride along for display only, and loose forms carry
-        // their form so same-named identities stay distinguishable.
-        let (key, label) = match family_id {
-            Some(family_id) => {
-                let name = family_names.get(family_id).ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "script version points to missing family in most-utilized chart: family_id={}",
-                        family_id
-                    ))
-                })?;
-                (format!("family:{family_id}"), name.clone())
-            }
-            None => {
+        // hash_type). Buckets that merely share a label stay separate -- two
+        // unrelated deployments may carry the same name, yet they are not the
+        // same script. A loose form is a pseudo deployment named by its own
+        // label, or its code hash (the junk secp data form runs no code: lane
+        // rd/api-lock-names), and carries its form so same-named identities
+        // stay distinguishable.
+        let (key, label) = match name {
+            Some(crate::utils::ScriptName {
+                family_id: Some(family_id),
+                name,
+                ..
+            }) => (format!("family:{family_id}"), name),
+            loose => {
                 let code_hash_hex = format!("0x{}", hex::encode(&reference_hash));
                 let hash_type_name = hash_type_to_string(hash_type).ok_or_else(|| {
                     ApiError::internal(format!(
@@ -1290,16 +1246,9 @@ async fn get_most_utilized_scripts_chart(
                         code_hash_hex, hash_type
                     ))
                 })?;
-                let script_name = script_infos_by_code_hash
-                    .get(&reference_hash)
-                    .and_then(|info| info.name.as_deref())
-                    .unwrap_or("Unknown")
-                    .trim()
-                    .to_string();
-                let display = if is_known_script_name(&script_name) {
-                    script_name
-                } else {
-                    code_hash_hex.clone()
+                let display = match loose {
+                    Some(pseudo) => pseudo.name,
+                    None => code_hash_hex.clone(),
                 };
                 (
                     format!("ref:{code_hash_hex}:{hash_type_name}"),
@@ -1920,10 +1869,10 @@ enum KnowledgeBucket {
     OtherTyped,
 }
 
-fn classify_knowledge_bucket(code_hash: &[u8]) -> KnowledgeBucket {
+fn classify_knowledge_bucket(code_hash: &[u8], hash_type: u8) -> KnowledgeBucket {
     // Single registry lookup; precedence Dao -> Udt -> NftSpore -> OtherTyped is preserved
     // by match-arm order (registry variants are mutually exclusive, so no overlap anyway).
-    match PROTOCOL_REGISTRY.get(code_hash) {
+    match PROTOCOL_REGISTRY.protocol(code_hash, i16::from(hash_type)) {
         Some(ProtocolScript::Dao) => KnowledgeBucket::Dao,
         Some(ProtocolScript::Sudt | ProtocolScript::Xudt) => KnowledgeBucket::Udt,
         Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid | ProtocolScript::Cluster) => {
@@ -2037,11 +1986,18 @@ async fn get_common_knowledge_composition_chart(
         });
     }
 
-    let script_infos = load_script_infos_cached(&state)?;
-    let type_code_hashes: HashSet<Vec<u8>> = script_infos
-        .into_iter()
-        .map(|(code_hash, _)| code_hash)
-        .collect();
+    // Every code hash a script reference form has used (its pair's usage row):
+    // the daily deltas below are read per code hash, every hash type of it.
+    // A scan of the whole CF, so it runs off the async worker (L N7).
+    let store = state.store.clone();
+    let type_code_hashes: HashSet<Vec<u8>> =
+        tokio::task::spawn_blocking(move || store.list_script_reference_infos())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(format!("script usage rows: {e}")))?
+            .into_iter()
+            .map(|((code_hash, _hash_type), _)| code_hash)
+            .collect();
 
     let mut type_daily_delta: HashMap<u32, i128> = HashMap::new();
     let mut dao_daily_delta: HashMap<u32, i128> = HashMap::new();
@@ -2057,14 +2013,14 @@ async fn get_common_knowledge_composition_chart(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        for ((_hash_type, is_type, date), delta) in deltas {
+        for ((hash_type, is_type, date), delta) in deltas {
             if !is_type {
                 continue;
             }
             let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
-            match classify_knowledge_bucket(&code_hash) {
+            match classify_knowledge_bucket(&code_hash, hash_type) {
                 KnowledgeBucket::Dao => *dao_daily_delta.entry(date).or_insert(0) += used_delta,
                 KnowledgeBucket::Udt => *udt_daily_delta.entry(date).or_insert(0) += used_delta,
                 KnowledgeBucket::NftSpore => {
@@ -3296,6 +3252,10 @@ async fn fetch_network_stats_from_db(
         circulating_supply,
         dao_locked,
         api_background_tasks: None,
+        store_layout: state
+            .store
+            .get_store_layout()
+            .map_err(|e| ApiError::internal(format!("store layout: {e:#}")))?,
     })
 }
 
@@ -4837,72 +4797,94 @@ async fn get_hodl_wave_chart(
 // Daily Activity Stats
 // ============================================
 
+/// One complete UTC+8 day's activity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyActivityStatsResponse {
     pub date: String,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The day's non-cellbase transactions: the sum of `kind_counts`.
+    pub activity_count: u64,
+    /// The day's non-cellbase transactions by kind, each in exactly one: the
+    /// kind the global activity filter (`/activities?filter=<kind>`) lists it
+    /// under. Keys are the filter's values.
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
-    /// The day's activity-kind occurrences: the eight kinds the charts read (transfers, the three
-    /// DAO actions, tokens, objects, identities, script calls), summed here. Kinds overlap — an
-    /// action counts in each kind it is — so this is not a count of distinct activities.
-    pub kind_occurrences: u64,
-    /// The day's Nervos DAO actions, the chart's one DAO band: deposits, withdraw requests and
-    /// completed withdraws summed here, never in the page (lane D1's third round, M2).
-    pub dao_count: u64,
-    /// The day's user transactions: its committed transactions (its chain row) less its cellbases,
-    /// counted here, never in a page (the P3 follow-up's 2b). The activity stream holds exactly
-    /// these, so the Transactions page's "all" and the Activities page's lede state this figure.
-    pub user_transaction_count: u64,
+    /// Protocol actions by `protocol:action` — actions, not transactions (a
+    /// transaction can carry several): the DAO split by action is
+    /// `dao:deposit`, `dao:withdraw_request`, `dao:withdraw_complete`.
+    pub protocol_action_counts: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptCountEntry {
     pub code_hash: String,
+    /// The script's hash type: a count is one script's, by its pair (code
+    /// hash, hash type) (lane rd/api-lock-names).
+    pub hash_type: String,
+    /// The name of the code the pair runs (`utils::ScriptRegistry::name`);
+    /// `None` when it runs no registered family's code.
     pub name: Option<String>,
+    /// The pair's hash type where the named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub name_by: Option<String>,
     pub count: u32,
+}
+
+/// A day's (or the 24-hour window's) script counts as rows, each script by its
+/// pair (`ckbadger_store::script_count_key`), named by the one rule (the code
+/// it runs, `utils::ScriptNamer`, each pair named once), the largest count
+/// first.
+fn script_count_entries(
+    namer: &mut crate::utils::ScriptNamer<'_>,
+    counts: &std::collections::BTreeMap<String, u32>,
+) -> Result<Vec<ScriptCountEntry>, ApiRouteError> {
+    let mut entries = Vec::with_capacity(counts.len());
+    for (key, &count) in counts {
+        let (code_hash, hash_type) = ckbadger_store::decode_script_count_key(key)
+            .map_err(|e| ApiError::internal(format!("activity script count: {e:#}")))?;
+        let name = namer
+            .name(&code_hash, hash_type)
+            .map_err(|e| ApiError::internal(format!("activity script count {key}: {e:#}")))?;
+        let hash_type = hash_type_to_string(hash_type).ok_or_else(|| {
+            ApiError::internal(format!("activity script count {key}: not a CKB hash type"))
+        })?;
+        entries.push(ScriptCountEntry {
+            code_hash: format!("0x{}", hex::encode(&code_hash)),
+            hash_type: hash_type.to_string(),
+            name_by: name.as_ref().and_then(|name| name.by()),
+            name: name.map(|name| name.name),
+            count,
+        });
+    }
+    entries.sort_by_key(|item| std::cmp::Reverse(item.count));
+    Ok(entries)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivitySummary24hResponse {
-    /// Canonical non-cellbase transactions, counted once regardless of category overlap.
+    /// Canonical non-cellbase transactions of the window: the sum of
+    /// `kind_counts`.
     pub activity_count: u64,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The window's non-cellbase transactions by kind, each in exactly one
+    /// (the kind the global activity filter lists it under).
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     /// Exact distinct Lock participants in the rolling chain-time window.
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// Protocol actions by `protocol:action` (actions, not transactions).
+    pub protocol_action_counts: BTreeMap<String, u32>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
-    /// The window's activity-kind occurrences, as the daily rows count them (`kind_occurrences`).
-    pub kind_occurrences: u64,
-    /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
-    pub dao_count: u64,
     /// Every script call `script_counts` counts, summed here (the P3 follow-up, SHOULD 5): what the
     /// home card's script shares are shares of. One transaction calling two scripts counts twice,
-    /// so this is not `script_call_count` (transactions with a script call).
+    /// so this is not the Script kind's count (`kind_counts.script`, transactions).
     pub script_calls: u64,
     /// The scripts after the [`SCRIPT_TOP`] largest of `script_counts` (ranked by calls, ties by
     /// code hash) and their calls, the home card's "others" row; `None` when there are none.
@@ -4918,61 +4900,6 @@ pub const SCRIPT_TOP: usize = 5;
 pub struct ScriptRest {
     pub scripts: u64,
     pub calls: u64,
-}
-
-/// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
-fn kind_occurrences(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
-    [
-        s.transfer_count,
-        s.dao_deposit_count,
-        s.dao_withdraw_request_count,
-        s.dao_withdraw_complete_count,
-        s.token_count,
-        s.object_count,
-        s.identity_count,
-        s.script_call_count,
-    ]
-    .into_iter()
-    .map(u64::from)
-    .sum()
-}
-
-/// The three Nervos DAO actions, summed: the DAO kind's one count.
-fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
-    [
-        s.dao_deposit_count,
-        s.dao_withdraw_request_count,
-        s.dao_withdraw_complete_count,
-    ]
-    .into_iter()
-    .map(u64::from)
-    .sum()
-}
-
-/// A day's user transactions: its committed transactions less its cellbases. A day without its
-/// chain row, or with more cellbases than transactions, is an indexer fault named by its date.
-fn user_transaction_count(
-    date: &str,
-    chain: Option<&ckbadger_store::types::DailyStats>,
-    activity: &ckbadger_store::types::DailyActivityStats,
-) -> anyhow::Result<u64> {
-    let chain = chain.ok_or_else(|| {
-        anyhow::anyhow!("day {date} has daily activity stats but no daily chain stats")
-    })?;
-    let transactions = u64::try_from(chain.transactions_count).map_err(|_| {
-        anyhow::anyhow!(
-            "day {date} has a negative transaction count {}",
-            chain.transactions_count
-        )
-    })?;
-    transactions
-        .checked_sub(u64::from(activity.coinbase_count))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "day {date} has {} cellbases but only {transactions} transactions",
-                activity.coinbase_count
-            )
-        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -4993,7 +4920,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v4:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v6:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -5004,18 +4931,10 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let (all_stats, chain_days) = tokio::task::spawn_blocking(move || {
-        Ok::<_, anyhow::Error>((
-            store.list_daily_activity_stats()?,
-            store
-                .list_daily_stats_with_dates()?
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
-        ))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
@@ -5040,67 +4959,23 @@ async fn get_daily_activity_stats(
             .collect()
     };
 
-    // Collect all unique code_hashes across selected days and resolve names
-    let mut unique_code_hashes: HashSet<String> = HashSet::new();
-    for (_date, s) in &selected {
-        for code_hash in s.script_counts.keys() {
-            unique_code_hashes.insert(code_hash.clone());
-        }
-    }
-
-    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
-    for code_hash_hex in &unique_code_hashes {
-        let bytes = hex::decode(code_hash_hex).map_err(|e| {
-            ApiError::internal(format!(
-                "invalid daily activity script code hash {code_hash_hex}: {e}"
-            ))
-        })?;
-        let name = state
-            .store
-            .get_script_info(&bytes)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read script info for code hash {code_hash_hex}: {e}"
-                ))
-            })?
-            .and_then(|info| info.name);
-        name_cache.insert(code_hash_hex.clone(), name);
-    }
+    // Each script by its pair, named once per pair across the selected days.
+    let mut namer = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
 
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
-            let user_transaction_count = user_transaction_count(&date, chain_days.get(&date), &s)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            let mut script_counts: Vec<ScriptCountEntry> = s
-                .script_counts
-                .iter()
-                .map(|(code_hash_hex, &count)| ScriptCountEntry {
-                    code_hash: format!("0x{}", code_hash_hex),
-                    name: name_cache.get(code_hash_hex).cloned().flatten(),
-                    count,
-                })
-                .collect();
-            script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
+            let script_counts = script_count_entries(&mut namer, &s.script_counts)?;
 
             Ok(DailyActivityStatsResponse {
                 date,
-                transfer_count: s.transfer_count,
-                dao_deposit_count: s.dao_deposit_count,
-                dao_withdraw_request_count: s.dao_withdraw_request_count,
-                dao_withdraw_complete_count: s.dao_withdraw_complete_count,
-                token_count: s.token_count,
-                object_count: s.object_count,
-                identity_count: s.identity_count,
-                script_call_count: s.script_call_count,
-                unknown_count: s.unknown_count,
+                activity_count: s.kind_counts.total(),
+                kind_counts: s.kind_counts,
                 coinbase_count: s.coinbase_count,
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
-                kind_occurrences: kind_occurrences(&s),
-                dao_count: dao_count(&s),
-                user_transaction_count,
+                protocol_action_counts: s.protocol_action_counts,
             })
         })
         .collect::<Result<_, ApiRouteError>>()?;
@@ -5132,7 +5007,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:v3:tip:{}",
+            "stats:activity-summary-24h:v4:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -5144,47 +5019,18 @@ async fn get_activity_summary_24h(
 
     let store = state.store.clone();
     let activity_window = state.activity_window.clone();
-    let (agg, hours_covered, activity_count) =
+    let (agg, hours_covered) =
         tokio::task::spawn_blocking(move || activity_window.summary(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg_script_counts = &agg.script_counts;
-
-    // Resolve script names
-    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
-    for code_hash_hex in agg_script_counts.keys() {
-        let bytes = hex::decode(code_hash_hex).map_err(|e| {
-            ApiError::internal(format!(
-                "invalid 24h activity script code hash {code_hash_hex}: {e}"
-            ))
-        })?;
-        let name = state
-            .store
-            .get_script_info(&bytes)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read script info for code hash {code_hash_hex}: {e}"
-                ))
-            })?
-            .and_then(|info| info.name);
-        name_cache.insert(code_hash_hex.clone(), name);
-    }
-
-    let mut script_counts: Vec<ScriptCountEntry> = agg_script_counts
-        .iter()
-        .map(|(ch, &count)| ScriptCountEntry {
-            code_hash: format!("0x{}", ch),
-            name: name_cache.get(ch).cloned().flatten(),
-            count,
-        })
-        .collect();
-    // ranked by calls, ties by code hash, so the five named and the rest are one partition
-    script_counts.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
-            .then_with(|| a.code_hash.cmp(&b.code_hash))
-    });
+    // Each script by its pair (lane rd/api-lock-names), ranked by calls, ties
+    // by the pair (code hash, then hash type: `script_count_entries`), so the
+    // five named and the rest are one partition.
+    let script_counts = script_count_entries(
+        &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
+        &agg.script_counts,
+    )?;
     let script_calls = script_counts.iter().map(|e| u64::from(e.count)).sum();
     let rest = script_counts.get(SCRIPT_TOP..).unwrap_or_default();
     let script_rest = (!rest.is_empty()).then(|| ScriptRest {
@@ -5193,23 +5039,14 @@ async fn get_activity_summary_24h(
     });
 
     let result = ActivitySummary24hResponse {
-        activity_count,
-        transfer_count: agg.transfer_count,
-        dao_deposit_count: agg.dao_deposit_count,
-        dao_withdraw_request_count: agg.dao_withdraw_request_count,
-        dao_withdraw_complete_count: agg.dao_withdraw_complete_count,
-        token_count: agg.token_count,
-        object_count: agg.object_count,
-        identity_count: agg.identity_count,
-        script_call_count: agg.script_call_count,
-        unknown_count: agg.unknown_count,
+        activity_count: agg.kind_counts.total(),
+        kind_counts: agg.kind_counts,
         coinbase_count: agg.coinbase_count,
         unique_address_count: agg.unique_address_count,
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
+        protocol_action_counts: agg.protocol_action_counts,
         hours_covered,
-        kind_occurrences: kind_occurrences(&agg),
-        dao_count: dao_count(&agg),
         script_calls,
         script_rest,
     };
@@ -5823,14 +5660,26 @@ mod tests {
         hex::decode(hex_str.trim_start_matches("0x")).expect("valid 32-byte hex")
     }
 
+    /// The bucket of a type script under its code hash's registered pair (the
+    /// registry's first pair with that code hash; `type` for an unknown one):
+    /// a bucket is the pair's (resync/protocol-pairs).
+    fn bucket(hex_str: &str) -> KnowledgeBucket {
+        let code_hash = code_hash_bytes(hex_str);
+        let hash_type = PROTOCOL_REGISTRY
+            .protocol_pairs()
+            .filter(|((hash, _), _)| *hash == code_hash.as_slice())
+            .map(|((_, hash_type), _)| hash_type)
+            .min()
+            .unwrap_or(1);
+        classify_knowledge_bucket(&code_hash, hash_type)
+    }
+
     #[test]
     fn test_knowledge_bucket_classifies_testnet_udt_as_udt() {
         // Testnet sUDT (simple-udt.toml `[testnet]`). The mainnet-only const set could
         // not reach this hash, so testnet UDT knowledge was undercounted before.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
-            )),
+            bucket("0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"),
             KnowledgeBucket::Udt
         );
     }
@@ -5839,9 +5688,7 @@ mod tests {
     fn test_knowledge_bucket_classifies_testnet_spore_as_nft_spore() {
         // Testnet Spore NFT (spore.toml `[testnet]`).
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
-            )),
+            bucket("0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"),
             KnowledgeBucket::NftSpore
         );
     }
@@ -5851,9 +5698,7 @@ mod tests {
         // `.bit Cell` uses a SporeData envelope in its current layout, but its
         // protocol semantics are DotBit identity rather than a Spore NFT.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
-            )),
+            bucket("0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"),
             KnowledgeBucket::OtherTyped
         );
     }
@@ -5871,7 +5716,7 @@ mod tests {
             "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb",
         ] {
             assert_eq!(
-                classify_knowledge_bucket(&code_hash_bytes(udt)),
+                bucket(udt),
                 KnowledgeBucket::Udt,
                 "old UDT hash {udt} must still bucket as UDT"
             );
@@ -5888,24 +5733,20 @@ mod tests {
             "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
         ] {
             assert_eq!(
-                classify_knowledge_bucket(&code_hash_bytes(nft)),
+                bucket(nft),
                 KnowledgeBucket::NftSpore,
                 "old NFT/Spore hash {nft} must still bucket as NftSpore"
             );
         }
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"
-            )),
+            bucket("0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"),
             KnowledgeBucket::OtherTyped,
             ".bit Cell must not be counted as a Spore NFT"
         );
 
         // DAO hash still classifies as Dao (checked first in the chain).
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
-            )),
+            bucket("0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"),
             KnowledgeBucket::Dao
         );
     }
@@ -5916,9 +5757,7 @@ mod tests {
         // binary, so it remains OtherTyped. This asserts the metadata contract;
         // it does not claim a fresh testnet-node verification.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"
-            )),
+            bucket("0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"),
             KnowledgeBucket::OtherTyped
         );
     }
@@ -5928,9 +5767,7 @@ mod tests {
         // Mainnet node evidence proves this TypeID deploys the standard xUDT
         // binary. Its former compatible-only fixture premise was incorrect.
         assert_eq!(
-            classify_knowledge_bucket(&code_hash_bytes(
-                "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
-            )),
+            bucket("0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"),
             KnowledgeBucket::Udt
         );
     }

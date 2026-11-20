@@ -5,7 +5,8 @@ import type {
   ActivityTypeCall,
   GlobalActivity,
 } from '@/lib/api';
-import { rowItems } from '@/lib/activity-parties';
+import { TAG_TYPE_CALL, type PartyId } from '@/lib/api';
+import { partyIds, rowItems } from '@/lib/activity-parties';
 
 /**
  * Interpretation needs only transaction contents, including before a block is known: its items as
@@ -17,7 +18,13 @@ export type ActivityBody = Readonly<
     GlobalActivity,
     'participants' | 'protocolActions' | 'typeCalls' | 'lockCalls' | 'isCellbase'
   >
-> & { readonly txHash?: string; readonly items: readonly ClassifiedItem[] };
+> & {
+  readonly txHash?: string;
+  readonly items: readonly ClassifiedItem[];
+  /** Every party, by its short id and tags (the route's; C7 reads a party's TAG_TYPE_CALL here). */
+  readonly participantCount: number;
+  readonly partyIds: readonly PartyId[];
+};
 
 export type ActivityType =
   | 'daoDeposit'
@@ -148,6 +155,26 @@ export function classifyActivity<T extends ActivityBody>(activity: T): Classifie
       activity,
       primaryItemDelta: null,
       primaryTypeCall: activity.typeCalls[0],
+      primaryLockCall,
+      primaryProtocolAction: null,
+    };
+  }
+
+  // Layer 2 (C7): a recognised type script ran and moved no item and no DAO step (a wallet merging
+  // its own token cells): the indexer sets the party's TAG_TYPE_CALL, as for an unrecognised call,
+  // and the code is in the row's `recognizedTypes`. A script call, with no unrecognised call. Read
+  // from every party's tags as the route names them (`partyIds`): a row draws only some parties.
+  const named = partyIds({
+    txHash: activity.txHash ?? 'uncommitted',
+    participantCount: activity.participantCount,
+    partyIds: activity.partyIds,
+  });
+  if (named.some(([, tags]) => (tags & TAG_TYPE_CALL) !== 0)) {
+    return {
+      displayType: 'typeCall',
+      activity,
+      primaryItemDelta: null,
+      primaryTypeCall: null,
       primaryLockCall,
       primaryProtocolAction: null,
     };

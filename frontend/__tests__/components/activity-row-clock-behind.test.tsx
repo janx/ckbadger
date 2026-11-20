@@ -54,8 +54,7 @@ function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [
       {
         address: seededAddress('q3q7ue'),
@@ -67,6 +66,7 @@ function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
         ckbDelta: '-30000',
         usedDelta: '0',
         itemDeltas: [],
+        sent: true,
       },
     ],
     ...over,
@@ -78,7 +78,7 @@ const pool = (): ActivityRowData =>
     blockNumber: null,
     timestamp: null,
     // a pool row states no item types, null and null, as the route sends it (the third read's T SHOULD-1)
-    itemTypes: null,
+    recognizedTypes: [],
     poolStatus: 'committed_awaiting_index',
     timeAddedToPool: new Date(Date.now() + 2 * 60_000).toISOString(),
   });

@@ -138,6 +138,107 @@ impl CkbadgerStore {
         self.put_cf(self.cf_tokens(), type_hash, &value)
     }
 
+    /// The curated label of the token `type_hash`, if label import stored one.
+    pub fn get_token_label(
+        &self,
+        type_hash: &[u8],
+    ) -> anyhow::Result<Option<crate::types::TokenLabel>> {
+        match self.get_cf(self.cf_token_labels(), type_hash)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "corrupt token label row: type_hash=0x{}, error={}",
+                    bytes_to_hex(type_hash),
+                    e
+                )
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The curated labels of `type_hashes`, in their order, in one
+    /// `multi_get`.
+    pub fn get_token_labels_batch(
+        &self,
+        type_hashes: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<Option<crate::types::TokenLabel>>> {
+        if type_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cf = self.cf_token_labels();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            type_hashes.iter().map(|h| (cf, h.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+        type_hashes
+            .iter()
+            .zip(values)
+            .map(|(hash, value)| match value {
+                Ok(Some(value)) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "corrupt token label row: type_hash=0x{}, error={}",
+                        bytes_to_hex(hash),
+                        e
+                    )
+                })?)),
+                Ok(None) => Ok(None),
+                Err(e) => Err(anyhow::anyhow!(
+                    "rocksdb multi_get failed reading token labels: type_hash=0x{}, error={}",
+                    bytes_to_hex(hash),
+                    e
+                )),
+            })
+            .collect()
+    }
+
+    /// Every stored token label by type script hash, in key order: one scan of
+    /// the few curated labels (the API joins them to a list of token rows,
+    /// resync fix round 2, B).
+    pub fn list_token_labels(&self) -> anyhow::Result<Vec<(Vec<u8>, crate::types::TokenLabel)>> {
+        self.iterator_cf(self.cf_token_labels(), rocksdb::IteratorMode::Start)
+            .map(|item| {
+                let (key, value) =
+                    item.map_err(|e| anyhow::anyhow!("failed to iterate token labels: {e}"))?;
+                let label = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "corrupt token label row: type_hash=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+                Ok((key.to_vec(), label))
+            })
+            .collect()
+    }
+
+    /// Every stored token label's type script hash (label import's preflight).
+    pub fn list_token_label_hashes(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        self.iterator_cf(self.cf_token_labels(), rocksdb::IteratorMode::Start)
+            .map(|item| {
+                item.map(|(key, _)| key.to_vec())
+                    .map_err(|e| anyhow::anyhow!("failed to iterate token labels: {e}"))
+            })
+            .collect()
+    }
+
+    /// Label import's write of one token label (`CF_TOKEN_LABELS`, domain
+    /// store, outside the journal: label import is its only writer).
+    pub fn put_token_label_direct(
+        &self,
+        type_hash: &[u8],
+        label: &crate::types::TokenLabel,
+    ) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_token_labels(),
+            type_hash,
+            &bincode::serialize(label)?,
+        )
+    }
+
+    /// Label import's delete of a token label no metadata entry carries any
+    /// more.
+    pub fn delete_token_label_direct(&self, type_hash: &[u8]) -> anyhow::Result<()> {
+        self.delete_cf(self.cf_token_labels(), type_hash)
+    }
+
     /// List all tokens.
     pub fn list_tokens(&self) -> anyhow::Result<Vec<(Vec<u8>, TokenInfo)>> {
         let iter = self.iterator_cf(self.cf_tokens(), rocksdb::IteratorMode::Start);

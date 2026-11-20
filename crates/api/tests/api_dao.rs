@@ -154,6 +154,12 @@ fn derive(store: &CkbadgerStore) {
 /// The producer fixture covers exact phase boundaries, changed epoch lengths,
 /// a raw timestamp rollback, both readiness states, owner denominator and AR.
 fn dao_evidence_fixture_underived() -> Arc<CkbadgerStore> {
+    dao_evidence_fixture_underived_with(|_| 1)
+}
+
+/// [`dao_evidence_fixture_underived`] with each depositor's lock on the
+/// default lock's code hash by the hash type `hash_type_of(lock byte)`.
+fn dao_evidence_fixture_underived_with(hash_type_of: fn(u8) -> u8) -> Arc<CkbadgerStore> {
     use ckbadger_store::LockScriptEntry;
 
     let store = test_store();
@@ -204,13 +210,14 @@ fn dao_evidence_fixture_underived() -> Arc<CkbadgerStore> {
         entry.deposit_timestamp = times[deposit_block as usize];
         entry.deposit_chain_time_ms = times[deposit_block as usize];
         let args = vec![lock; 20];
-        let lock_hash = compute_script_hash(&code_hash, 1, &args);
+        let hash_type = hash_type_of(lock);
+        let lock_hash = compute_script_hash(&code_hash, hash_type, &args);
         entry.lock_script_hash = lock_hash.clone();
         batch.put_lock_script(
             &lock_hash,
             &LockScriptEntry {
                 code_hash: code_hash.clone(),
-                hash_type: 1,
+                hash_type: hash_type.into(),
                 args,
             },
         );
@@ -2261,6 +2268,32 @@ async fn dao_calculator_states_the_free_capacity_it_assumed() {
     assert_eq!(json["freeCapacity"], "989800000000", "{json}");
     // compensation = free × (AR_w / AR_d − 1) = 989_800_000_000 × 1%.
     assert_eq!(json["estimatedCompensation"], "9898000000", "{json}");
+}
+
+/// Lane rd/api-lock-names: a depositor's lock is named by its pair (code
+/// hash, hash type). The fixture's depositor 0x11 locks by the default lock's
+/// code hash by `data`, another script than the default lock: the default
+/// lock's name does not reach it in the evidence's owners.
+#[tokio::test]
+async fn by_pair_dao_depositors_name_a_lock_by_its_pair() {
+    let store = dao_evidence_fixture_underived_with(|lock| if lock == 0x11 { 0 } else { 1 });
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
+    derive(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, evidence) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{evidence}");
+    let owners = evidence["concentration"]["owners"].as_array().unwrap();
+    assert_eq!(owners.len(), 2, "{evidence}");
+    assert_eq!(owners[0]["lockHashType"], "type", "{evidence}");
+    assert_eq!(owners[0]["lockKind"], "Default Lock", "{evidence}");
+    assert_eq!(owners[1]["lockHashType"], "data", "{evidence}");
+    assert!(
+        owners[1]["lockKind"].is_null(),
+        "the default lock's name does not reach the lock by data: {evidence}"
+    );
 }
 
 /// lane exactness, part A2 (S2): `/dao/statistics` states the live DAO cells once. The singleton's legacy

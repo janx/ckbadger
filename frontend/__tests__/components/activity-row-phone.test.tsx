@@ -27,6 +27,7 @@ function party(seed: string, ckbDelta: string, usedDelta = '0'): ParticipantInfo
     ckbDelta,
     usedDelta,
     itemDeltas: [],
+    sent: false,
   };
 }
 
@@ -42,8 +43,7 @@ function row(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
     ...over,
   });

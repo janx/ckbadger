@@ -30,7 +30,7 @@ use crate::db::writer::LiveDaoBatch;
 use crate::db::BatchWriter;
 use crate::parser::{
     BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser,
-    MnftParser, ScriptParser, SporeParser, TransactionParser, UdtParser,
+    MnftParser, SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -157,8 +157,8 @@ fn resolve_live_dotbit_account_id_for_consume(
         Some(info) => info
             .type_code_hash
             .as_ref()
-            .map(|hash| hash.as_slice())
-            .filter(|tc| DotbitParser::is_account_cell_type_script(tc))
+            .zip(info.type_hash_type)
+            .filter(|(tc, hash_type)| DotbitParser::is_account_cell_type_script(*tc, *hash_type))
             .and_then(|_| dotbit_map.get(key).cloned()),
         None => dotbit_map.get(key).cloned(),
     }
@@ -207,7 +207,8 @@ fn parsed_cell_summary_projection(
     let is_dao = cell
         .type_code_hash
         .as_deref()
-        .is_some_and(DaoParser::is_dao_code_hash);
+        .zip(cell.type_hash_type)
+        .is_some_and(|(hash, hash_type)| DaoParser::is_dao_code_hash(hash, hash_type));
     LiveCellSummaryProjection::from_parts(
         has_type_script,
         has_type_code_hash,
@@ -229,8 +230,8 @@ fn positioned_cell_summary_projection(
     let is_dao = cell
         .type_code_hash
         .as_ref()
-        .map(|hash| hash.as_slice())
-        .is_some_and(DaoParser::is_dao_code_hash);
+        .zip(cell.type_hash_type)
+        .is_some_and(|(hash, hash_type)| DaoParser::is_dao_code_hash(hash.as_slice(), hash_type));
     LiveCellSummaryProjection::from_parts(
         has_type_script,
         has_type_code_hash,
@@ -592,8 +593,9 @@ fn build_activity_input_views<'a>(
             // is a lost index row and stops the batch.
             let consumed_is_account_cell = info
                 .type_code_hash
-                .as_ref().map(|hash| hash.as_slice())
-                .is_some_and(DotbitParser::is_account_cell_type_script);
+                .as_ref()
+                .zip(info.type_hash_type)
+                .is_some_and(|(hash, hash_type)| DotbitParser::is_account_cell_type_script(hash.as_slice(), hash_type));
             let data: &[u8] = match (consumed_is_account_cell, indexes.dotbit_ids.get(&key)) {
                 (true, Some(account_id)) => account_id.as_slice(),
                 (true, None) if indexes.dotbit_unindexed.contains(&key) => &[],
@@ -793,24 +795,24 @@ fn should_consume_grouped_mnft_token(
     }
 }
 
-fn parse_udt_cells_with_store_fallback_inner<F>(
+/// A transaction's UDT outputs with their output indexes: an output is a
+/// UDT by its type pair alone (`UdtParser::parse_udt_cell`, THE pair rule).
+/// The store fallback that read a token row's standard as a hint is gone
+/// (resync fix round 2, B: a token row exists only for a UDT pair, so the
+/// hint could never change the answer, and a label's standard is no
+/// indexer decision's input).
+fn parse_udt_outputs(
     tx: &crate::rpc::TransactionView,
-    mut standard_lookup: F,
-) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>>
-where
-    F: FnMut(&[u8]) -> Result<Option<String>>,
-{
+) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>> {
     if tx.outputs.len() != tx.outputs_data.len() {
         bail!(
-            "transaction outputs mismatch while parsing UDT outputs with store fallback: tx_hash={}, outputs={}, outputs_data={}",
+            "transaction outputs mismatch while parsing UDT outputs: tx_hash={}, outputs={}, outputs_data={}",
             tx.hash,
             tx.outputs.len(),
             tx.outputs_data.len()
         );
     }
     let mut parsed = Vec::new();
-    let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
-
     for (output_index, (output, data_hex)) in
         tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
     {
@@ -819,38 +821,8 @@ where
                 checked_usize_to_i16(output_index, "UDT output index while parsing outputs")
                     .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
             parsed.push((output_index_i16, cell));
-            continue;
-        }
-
-        let Some(type_script) = output.type_.as_ref() else {
-            continue;
-        };
-
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
-            cached.clone()
-        } else {
-            let looked_up = standard_lookup(&type_script_hash)?;
-            standard_cache.insert(type_script_hash.clone(), looked_up.clone());
-            looked_up
-        };
-
-        let Some(standard_hint) = standard_hint else {
-            continue;
-        };
-
-        if let Some(cell) =
-            UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
-        {
-            let output_index_i16 = checked_usize_to_i16(
-                output_index,
-                "UDT output index while parsing hinted outputs",
-            )
-            .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
-            parsed.push((output_index_i16, cell));
         }
     }
-
     Ok(parsed)
 }
 
@@ -1346,7 +1318,7 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     collected
 }
 
-pub(super) use super::types::{ScriptReferenceUsageChanges, ScriptUsageChanges};
+pub(super) use super::types::ScriptReferenceUsageChanges;
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1496,20 +1468,6 @@ pub(super) fn parse_blocks_parallel(
 }
 
 impl Indexer {
-    /// Parse UDT outputs from a transaction, with a fallback for label-known
-    /// token standards such as `xudt_compatible`.
-    fn parse_udt_cells_with_store_fallback(
-        &self,
-        tx: &crate::rpc::TransactionView,
-    ) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>> {
-        parse_udt_cells_with_store_fallback_inner(tx, |type_script_hash| {
-            self.writer
-                .store()
-                .get_token(type_script_hash)
-                .map(|info| info.map(|token| token.standard))
-        })
-    }
-
     pub(crate) async fn maybe_invalidate_chart_caches(&self, current_block: u64) {
         if !self.cache_invalidator.is_enabled() {
             return;
@@ -1593,7 +1551,6 @@ impl Indexer {
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         input_script_hashes: InputScriptHashes,
         address_balance_changes: super::types::AddressBalanceChanges,
-        script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
         token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
@@ -1962,24 +1919,8 @@ impl Indexer {
             )?;
         }
 
-        // Parallel DB reads for address balances and script usage
+        // Parallel DB reads for address balances and script reference usage
         let lock_hash_keys: Vec<&Vec<u8>> = address_balance_changes.keys();
-        let unique_code_hashes: Vec<Vec<u8>> = if !script_usage_changes.is_empty() {
-            let mut seen = std::collections::HashSet::new();
-            script_usage_changes
-                .keys()
-                .into_iter()
-                .filter_map(|(code_hash, _)| {
-                    if seen.insert(code_hash.clone()) {
-                        Some(code_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            vec![]
-        };
         let reference_keys: Vec<(Vec<u8>, u8)> = if !script_reference_usage_changes.is_empty() {
             let mut seen = std::collections::HashSet::new();
             script_reference_usage_changes
@@ -1993,10 +1934,7 @@ impl Indexer {
         } else {
             vec![]
         };
-        let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
-
         let need_balances = !lock_hash_keys.is_empty();
-        let need_scripts = !code_hash_refs.is_empty();
         let need_script_references = !reference_keys.is_empty();
         let mut updated_script_references: Vec<(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)> =
             Vec::new();
@@ -2005,31 +1943,24 @@ impl Indexer {
         let mut append_history_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 2);
 
-        if need_balances || need_scripts || need_script_references {
+        if need_balances || need_script_references {
             let writer = &self.writer;
-            let (existing_balances, existing_scripts, existing_script_references) =
-                std::thread::scope(|s| {
-                    let bal = if need_balances {
-                        Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
-                    } else {
-                        None
-                    };
-                    let scr = if need_scripts {
-                        Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
-                    } else {
-                        None
-                    };
-                    let refs = if need_script_references {
-                        Some(s.spawn(|| writer.read_script_reference_info(&reference_keys)))
-                    } else {
-                        None
-                    };
-                    (
-                        bal.map(|h| h.join().unwrap()),
-                        scr.map(|h| h.join().unwrap()),
-                        refs.map(|h| h.join().unwrap()),
-                    )
-                });
+            let (existing_balances, existing_script_references) = std::thread::scope(|s| {
+                let bal = if need_balances {
+                    Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
+                } else {
+                    None
+                };
+                let refs = if need_script_references {
+                    Some(s.spawn(|| writer.read_script_reference_info(&reference_keys)))
+                } else {
+                    None
+                };
+                (
+                    bal.map(|h| h.join().unwrap()),
+                    refs.map(|h| h.join().unwrap()),
+                )
+            });
             if let Some(existing) = existing_balances {
                 let existing = existing?;
                 batch_new_addresses = count_new_addresses(&address_balance_changes, &existing)?;
@@ -2037,13 +1968,6 @@ impl Indexer {
                     existing,
                     &address_balance_changes,
                     &mut data_batch,
-                )?;
-            }
-            if let Some(existing) = existing_scripts {
-                self.writer.apply_script_usage_changes(
-                    existing?,
-                    &script_usage_changes,
-                    &mut domain_analytics_batch,
                 )?;
             }
             if let Some(existing) = existing_script_references {
@@ -2150,7 +2074,7 @@ impl Indexer {
                     }
                     let tx = &block_response.block.transactions[tx_idx];
                     let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                    for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)? {
+                    for (output_index, udt_cell) in parse_udt_outputs(tx)? {
                         batch_udt_cells
                             .insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                         self.udt_cell_cache.insert(
@@ -2222,8 +2146,14 @@ impl Indexer {
                 }
             }
 
-            if !udt_tx_contexts.is_empty() {
-                let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+            // A max-supply claim (an Omnilock supply-info cell, a Unique
+            // Cell an xUDT extension binds, an xUDT extension's own cap) is a
+            // chain fact of the block that makes it, whether or not the batch
+            // moves a UDT: read in every batch, as bulk build reads it in
+            // every transaction. (It was read inside the UDT stage only, so a
+            // claim in a batch with no UDT movement was dropped.)
+            let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+            if !udt_tx_contexts.is_empty() || !max_supply_observations.is_empty() {
                 // Types carried by inputs created before this batch, projected
                 // from the prefetched input view this write already resolved —
                 // no second resolution path. Every input of every non-cellbase
@@ -2329,7 +2259,10 @@ impl Indexer {
                         })?;
                 }
 
-                if !all_transfers.is_empty() {
+                // The token rows: those the batch's transfers move, and those
+                // its claims name (`process_udt_transfers_batch_with_state`
+                // writes a claimed row in the claim's block's scope).
+                if !all_transfers.is_empty() || !max_supply_observations.is_empty() {
                     let transfer_refs: Vec<_> = all_transfers
                         .iter()
                         .map(|(t, h, b)| (t, h.as_slice(), *b))
@@ -2614,11 +2547,12 @@ impl Indexer {
                                 let consumed_type_code_hash = input_cell_info
                                     .get(&key)
                                     .or_else(|| batch_cell_infos.get(&key))
-                                    .and_then(|info| info.type_code_hash);
+                                    .and_then(|info| info.type_code_hash.zip(info.type_hash_type));
                                 let consumed_is_dotcell = consumed_type_code_hash
                                     .as_ref()
-                                    .map(|hash| hash.as_slice())
-                                    .is_some_and(DotCellParser::is_account_type_script);
+                                    .is_some_and(|(hash, hash_type)| {
+                                        DotCellParser::is_account_type_script(hash, *hash_type)
+                                    });
 
                                 // `.cell` consumption. It shares the outpoint
                                 // reverse index with spores but NOT the spore
@@ -2658,11 +2592,16 @@ impl Indexer {
                                 else if let Some(spore_id) = spore_map.get(&key) {
                                     let identity_collection_id = consumed_type_code_hash
                                         .as_ref()
-                                        .map(|hash| hash.as_slice())
-                                        .and_then(|type_code_hash| {
-                                            if BitCellParser::is_type_script(type_code_hash) {
+                                        .and_then(|(type_code_hash, hash_type)| {
+                                            if BitCellParser::is_type_script(
+                                                type_code_hash,
+                                                *hash_type,
+                                            ) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
-                                            } else if DidCkbParser::is_type_script(type_code_hash) {
+                                            } else if DidCkbParser::is_type_script(
+                                                type_code_hash,
+                                                *hash_type,
+                                            ) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.as_slice())
                                             } else {
                                                 None
@@ -2702,12 +2641,10 @@ impl Indexer {
                                             false,
                                         );
                                     }
-                                } else if let Some(tch) =
-                                    consumed_type_code_hash.as_ref().map(|hash| hash.as_slice())
-                                {
-                                    if SporeParser::is_spore_nft_type_script(tch)
-                                        || DidCkbParser::is_type_script(tch)
-                                        || BitCellParser::is_type_script(tch)
+                                } else if let Some((tch, tht)) = consumed_type_code_hash.as_ref() {
+                                    if SporeParser::is_spore_nft_type_script(tch, *tht)
+                                        || DidCkbParser::is_type_script(tch, *tht)
+                                        || BitCellParser::is_type_script(tch, *tht)
                                     {
                                         bail!(
                                             "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
@@ -2751,8 +2688,10 @@ impl Indexer {
                                     .get(&key)
                                     .or_else(|| batch_cell_infos.get(&key))
                                 {
-                                    if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if MnftParser::is_token_type_script(tch) {
+                                    if let Some((tch, tht)) =
+                                        info.type_code_hash.as_ref().zip(info.type_hash_type)
+                                    {
+                                        if MnftParser::is_token_type_script(tch, tht) {
                                             bail!(
                                                 "mNFT outpoint-id mapping missing for consumed mNFT cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
                                                 parsed.number,
@@ -2778,9 +2717,11 @@ impl Indexer {
                                 .get(&key)
                                 .or_else(|| batch_cell_infos.get(&key))
                                 .and_then(|info| {
-                                    info.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                                    info.type_code_hash.as_ref().zip(info.type_hash_type)
                                 })
-                                .is_some_and(DotbitParser::is_account_cell_type_script)
+                                .is_some_and(|(hash, hash_type)| {
+                                    DotbitParser::is_account_cell_type_script(hash, hash_type)
+                                })
                             {
                                 // An AccountCell without an indexed id must have been
                                 // recorded as never an account when it was created.
@@ -3246,7 +3187,10 @@ impl Indexer {
                 )?;
 
                 for built in &built_list {
-                    let tx_actions = &built.actions;
+                    // The transaction's one classification: its bucket row
+                    // and its activity kind both take this value.
+                    let classified = ckbadger_store::ClassifiedTxActions::classify(&built.actions);
+                    let tx_actions = classified.actions();
                     // addr_txs rows follow the participants — the ONE derivation,
                     // shared with bulk build and the tx-pool mirror. Cellbase is
                     // included: it has participants (its output locks) even though
@@ -3329,7 +3273,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity);
+                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity)?;
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -3350,7 +3294,7 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(&mut activity_batch, tx_actions.block_number, tx_actions);
+                    put_tx_actions(&mut activity_batch, tx_actions.block_number, classified);
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -3506,8 +3450,6 @@ impl Indexer {
             })?;
 
         // The daily DAO deltas read the batch's one lifecycle resolution.
-        let dao_code_hash_for_stats =
-            crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let consumed_dao_for_stats = live_dao.consumed();
         let mut same_batch_dao_for_stats = DaoSameBatchMap::new();
         let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -3519,7 +3461,10 @@ impl Indexer {
                     if cell
                         .type_code_hash
                         .as_deref()
-                        .is_some_and(DaoParser::is_dao_code_hash)
+                        .zip(cell.type_hash_type)
+                        .is_some_and(|(hash, hash_type)| {
+                            DaoParser::is_dao_code_hash(hash, hash_type)
+                        })
                     {
                         touched_lock_hashes.insert(cell.lock_script_hash.clone());
                     }
@@ -3541,8 +3486,10 @@ impl Indexer {
                         .is_some_and(|info| {
                             info.type_code_hash
                                 .as_ref()
-                                .map(|hash| hash.as_slice())
-                                .is_some_and(DaoParser::is_dao_code_hash)
+                                .zip(info.type_hash_type)
+                                .is_some_and(|(hash, hash_type)| {
+                                    DaoParser::is_dao_code_hash(hash.as_slice(), hash_type)
+                                })
                         })
                     {
                         let (lock_script_hash, _) =
@@ -3841,7 +3788,6 @@ impl Indexer {
             accumulate_dao_snapshot_deltas_for_txs(
                 tx_slice,
                 block_date,
-                &dao_code_hash_for_stats,
                 consumed_dao_for_stats,
                 &mut same_batch_dao_for_stats,
                 &input_cell_info,
@@ -4783,8 +4729,9 @@ mod tests {
             lock_args: vec![],
             lock_script_hash: vec![0x11; 32],
             type_script_hash: type_code_hash.as_ref().map(|_| vec![0x12; 32]),
+            // a type script is a pair: by type, as the DAO's is registered
+            type_hash_type: type_code_hash.as_ref().map(|_| 1),
             type_code_hash,
-            type_hash_type: None,
             type_args: None,
             data_hash: [0x13; 32],
             data_size,
@@ -5832,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_preserves_output_index() {
+    fn test_parse_udt_outputs_preserves_output_index() {
         let lock = crate::rpc::Script {
             code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
                 .to_string(),
@@ -5869,14 +5816,18 @@ mod tests {
             witnesses: vec![],
         };
 
-        let parsed = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap();
+        let parsed = parse_udt_outputs(&tx).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].0, 1);
         assert_eq!(parsed[0].1.amount, 1);
     }
 
+    /// resync fix round 2, B: an output whose type pair is no UDT is no UDT
+    /// output, and nothing is looked up to say otherwise. (It replaces the
+    /// test that the store fallback's lookup error propagated: the lookup is
+    /// gone with the fallback.)
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_propagates_lookup_error() {
+    fn test_parse_udt_outputs_reads_no_store_for_a_non_udt_pair() {
         let lock = crate::rpc::Script {
             code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
                 .to_string(),
@@ -5903,17 +5854,11 @@ mod tests {
             witnesses: vec![],
         };
 
-        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| {
-            Err(anyhow!("synthetic token metadata lookup failure"))
-        })
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("synthetic token metadata lookup failure"));
+        assert!(parse_udt_outputs(&tx).unwrap().is_empty());
     }
 
     #[test]
-    fn test_parse_udt_cells_with_store_fallback_errors_on_outputs_data_length_mismatch() {
+    fn test_parse_udt_outputs_errors_on_outputs_data_length_mismatch() {
         let tx = crate::rpc::TransactionView {
             hash: format!("0x{}", "bb".repeat(32)),
             version: "0x0".to_string(),
@@ -5934,10 +5879,10 @@ mod tests {
             witnesses: vec![],
         };
 
-        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap_err();
-        assert!(err.to_string().contains(
-            "transaction outputs mismatch while parsing UDT outputs with store fallback"
-        ));
+        let err = parse_udt_outputs(&tx).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("transaction outputs mismatch while parsing UDT outputs"));
     }
 
     #[test]
@@ -6045,7 +5990,8 @@ mod tests {
             .expect("expected live UDT input to be resolved");
         assert_eq!(entry.0, type_hash);
         assert_eq!(entry.5, 145_203);
-        assert_eq!(entry.6, "xudt");
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own, read from the row
+        assert_eq!(entry.6, "xudt_compatible");
         assert!(cache.get(&([0x33; 32], output_index)).is_some());
     }
 
@@ -6645,33 +6591,6 @@ mod tests {
             batch.commit().unwrap();
         }
 
-        /// Stage 9b of the rollback adjusts the lock's `script_info` from the
-        /// cells it deletes; the fixture write path is handed empty script
-        /// deltas, so seed the row it will subtract from.
-        pub(super) fn seed_secp_script_info(store: &CkbadgerStore) {
-            seed_script_info(store, SECP_CODE_HASH);
-        }
-
-        pub(super) fn seed_script_info(store: &CkbadgerStore, code_hash_hex: &str) {
-            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
-            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
-            batch.put_script_info(
-                &code_hash,
-                &ckbadger_store::types::ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    hash_type: 1,
-                    lock_live_cells_count: 1_000,
-                    lock_owned_capacity_sum: 1_000_000_000_000_000,
-                    lock_owned_knowledge_sum: 1_000_000_000_000_000,
-                    type_live_cells_count: 1_000,
-                    type_owned_capacity_sum: 1_000_000_000_000_000,
-                    type_owned_knowledge_sum: 1_000_000_000_000_000,
-                    ..Default::default()
-                },
-            );
-            batch.commit().unwrap();
-        }
-
         pub(super) fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
             // Live-path writers derive knowledge_size from DAO `U` minus the
             // genesis baseline; seed a baseline with zero virtual occupied
@@ -7062,7 +6981,9 @@ mod tests {
                         cell.type_args.as_ref(),
                     ) {
                         if let Some(collection_id) =
-                            crate::sync::dao_helpers::classify_object_collection_id(code_hash, args)
+                            crate::sync::dao_helpers::classify_object_collection_id(
+                                code_hash, 1, args,
+                            )
                         {
                             indexes.entry(tx.block_number).or_default().insert(
                                 type_hash.clone(),
@@ -7109,6 +7030,7 @@ mod tests {
                         if let Some(collection_id) =
                             crate::sync::dao_helpers::classify_object_collection_id(
                                 code_hash,
+                                1,
                                 info.type_args.as_deref().unwrap_or(&[]),
                             )
                         {
@@ -7130,11 +7052,9 @@ mod tests {
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         ) -> Result<(
-            ScriptUsageChanges,
             ScriptReferenceUsageChanges,
             EntityDailyChanges<UndatedScriptKey>,
         )> {
-            let mut usage = ScriptUsageChanges::new();
             let mut references = ScriptReferenceUsageChanges::new();
             let mut daily = EntityDailyChanges::new();
             for tx in all_tx_data {
@@ -7151,26 +7071,16 @@ mod tests {
                         tx.block_number, hex::encode(tx.hash)
                     )
                     })?;
-                    let value = usage
-                        .block_mut(tx.block_number)?
-                        .entry((code_hash.to_vec(), is_type))
-                        .or_default();
                     let reference = references
                         .block_mut(tx.block_number)?
                         .entry((code_hash.to_vec(), hash_type, is_type))
                         .or_default();
                     let sign = if created { 1 } else { -1 };
                     if created {
-                        value.0 += 1;
-                        value.2 += i128::from(capacity);
-                        value.4 += i128::from(occupied);
                         reference.0 += 1;
                         reference.2 += i128::from(capacity);
                         reference.4 += i128::from(occupied);
                     }
-                    value.1 += sign;
-                    value.3 += i128::from(sign) * i128::from(capacity);
-                    value.5 += i128::from(sign) * i128::from(occupied);
                     reference.1 += sign;
                     reference.3 += i128::from(sign) * i128::from(capacity);
                     reference.5 += i128::from(sign) * i128::from(occupied);
@@ -7235,7 +7145,7 @@ mod tests {
                     }
                 }
             }
-            Ok((usage, references, daily))
+            Ok((references, daily))
         }
 
         async fn write_live_blocks_inner(
@@ -7255,7 +7165,7 @@ mod tests {
                     // carry their parsed amount into `batch_cell_infos`, which
                     // is what the write path persists as live cell state.
                     let udt_amount =
-                        parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index_i16, None)?;
+                        parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index_i16)?;
                     batch_cell_infos.insert(
                         (tx_data.hash.to_vec(), output_index_i16),
                         PositionedCellInfo::new(
@@ -7290,7 +7200,7 @@ mod tests {
                     token_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?
                 }
             };
-            let (script_usage_changes, script_reference_usage_changes, script_daily_changes) =
+            let (script_reference_usage_changes, script_daily_changes) =
                 fixture_script_deltas_from_cells(
                     &all_tx_data,
                     &input_cell_info,
@@ -7315,7 +7225,6 @@ mod tests {
                     batch_cell_infos,
                     input_script_hashes,
                     address_balance_changes,
-                    script_usage_changes,
                     script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
@@ -7727,6 +7636,64 @@ mod tests {
             vec![block_100, block_101, block_102]
         }
 
+        /// The lead's ruling (resync/protocol-pairs): the Nervos DAO is its
+        /// consensus reference alone, by `type`. A cell under the DAO binary's
+        /// data hash by data1 runs the DAO's code but earns no compensation and
+        /// is no deposit: live and bulk write no deposit row and no DAO action
+        /// for it, while the same deposit under the DAO reference does.
+        #[tokio::test]
+        async fn a_cell_under_the_dao_binary_by_data1_is_no_deposit() {
+            let dao_binary = Script {
+                code_hash: "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923"
+                    .to_string(),
+                hash_type: "data1".to_string(),
+                args: "0x".to_string(),
+            };
+            for (type_script, deposit) in [(dao_type_script(), true), (dao_binary, false)] {
+                let mut blocks = phase_setup_blocks()[..2].to_vec();
+                let deposit_tx = &mut blocks[1].block.transactions[1];
+                deposit_tx.outputs[0].type_ = Some(type_script.clone());
+                let deposit_outpoint = ckbadger_store::keys::encode_outpoint(&[0xd1; 32], 0);
+
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(store.clone());
+                for block in blocks.clone() {
+                    write_live_block(&indexer, block).await.unwrap();
+                }
+                assert_eq!(
+                    store.get_dao_deposit(&deposit_outpoint).unwrap().is_some(),
+                    deposit,
+                    "live deposit row under {}",
+                    type_script.hash_type
+                );
+                let actions = store.get_tx_actions(101, 1, &[0xd1; 32]).unwrap().unwrap();
+                assert_eq!(
+                    actions
+                        .protocol_actions
+                        .iter()
+                        .any(|a| a.protocol == "dao" && a.action == "deposit"),
+                    deposit,
+                    "live DAO action under {}: {:?}",
+                    type_script.hash_type,
+                    actions.protocol_actions
+                );
+
+                let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).unwrap();
+                assert_eq!(
+                    bulk.stats_dao_rows
+                        .iter()
+                        .any(|(cf, key, _)| *cf == ckbadger_store::CF_DAO_DEPOSITS
+                            && *key == deposit_outpoint),
+                    deposit,
+                    "bulk deposit row under {}",
+                    type_script.hash_type
+                );
+            }
+        }
+
         fn stored_fee(store: &CkbadgerStore, tx_hash: [u8; 32]) -> i64 {
             let (_, _, entry) = store
                 .get_tx_by_hash(&tx_hash)
@@ -7991,8 +7958,6 @@ mod tests {
             blocks.push(completion_block(527));
 
             let (unbatched, unbatched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(unbatched.as_ref());
-            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(unbatched.as_ref()).unwrap();
             assert!(dao_live_agg_meta(&unbatched)
                 .is_complete(&ckbadger_store::derive_ops::DAO_LIVE_AGG));
@@ -8048,8 +8013,6 @@ mod tests {
 
             // One batch over the same blocks writes the same rows.
             let (batched, batched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batched.as_ref());
-            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(batched.as_ref()).unwrap();
             write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks[..3].to_vec())
                 .await
@@ -8079,8 +8042,6 @@ mod tests {
 
             // Live-maintained rows equal a from-scratch derivation at the tip.
             let (rebuilt, rebuilt_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(rebuilt.as_ref());
-            seed_script_info(rebuilt.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(rebuilt.as_ref()).unwrap();
             write_live_blocks_with_parser_script_deltas(&rebuilt_indexer, blocks[..2].to_vec())
                 .await
@@ -8103,8 +8064,6 @@ mod tests {
             let _detectors =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
             let (store, indexer) = live_dao_fixture_store();
-            seed_secp_script_info(store.as_ref());
-            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             write_live_blocks_with_parser_script_deltas(
                 &indexer,
                 phase_setup_blocks()[..2].to_vec(),
@@ -8332,16 +8291,12 @@ mod tests {
             }
 
             let (unbatched, unbatched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(unbatched.as_ref());
-            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             for single in blocks.clone() {
                 write_live_blocks_with_parser_script_deltas(&unbatched_indexer, vec![single])
                     .await
                     .unwrap();
             }
             let (batched, batched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batched.as_ref());
-            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks.clone())
                 .await
                 .unwrap();
@@ -8409,9 +8364,15 @@ mod tests {
                 .expect("roll back request and backward-time completion");
             let dao_code =
                 hex::decode(crate::parser::dao::DAO_CODE_HASH.trim_start_matches("0x")).unwrap();
-            let script_after_rollback = batched.get_script_info(&dao_code).unwrap().unwrap();
+            // The DAO type script's usage is its pair's reference row (lane
+            // rd/api-lock-names: the lumped `script_info` counters, seeded here
+            // with 1,000 cells, are gone).
+            let script_after_rollback = batched
+                .get_script_reference_info(1, &dao_code)
+                .unwrap()
+                .unwrap();
             assert_eq!(
-                script_after_rollback.type_live_cells_count, 1001,
+                script_after_rollback.type_live_cells_count, 1,
                 "deposit is the sole surviving DAO type cell after rollback"
             );
             assert_eq!(cell_payloads(&batched), immutable_cells_before);
@@ -8461,8 +8422,6 @@ mod tests {
                 block.block.header.timestamp = format!("0x{raw_ms:x}");
             }
             let (store, indexer) = live_dao_fixture_store();
-            seed_secp_script_info(store.as_ref());
-            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             let day_key =
                 |day: &[u8]| keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, day);
             let stats_dao = store.cf(ckbadger_store::CF_STATS_DAO);
@@ -8631,8 +8590,6 @@ mod tests {
                 write_live_block(&single_indexer, block).await.unwrap();
             }
             let (batch_store, batch_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batch_store.as_ref());
-            seed_script_info(batch_store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             // The rollback DAO boundary search spans genesis..tip. This live
             // fixture normally starts at block 99, so fill its earlier
             // canonical headers before exercising rollback/replay.
@@ -9013,7 +8970,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
 
             // Address history the cleanup has no business reading: 300 rows of
             // unrelated locks, all below the cleanup range.
@@ -9075,6 +9031,66 @@ mod tests {
             );
         }
 
+        /// Lane rd/api-lock-names (domain store): CKB names a script by the pair
+        /// (code hash, hash type). A live batch used to sum every cell of a code
+        /// hash into one `script_info` row, whatever its hash type, so a cell
+        /// locked by the default lock's code hash by `data` was counted as the
+        /// default lock's. Live sync writes no `script_info` row now (the row is
+        /// the registry's label of one pair, label import's alone), and each
+        /// pair's usage is its own `script_reference_info` row.
+        #[tokio::test]
+        async fn live_batch_writes_no_script_info_row_and_counts_each_pair_apart() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            let by_data = Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "data".to_string(),
+                args: format!("0x{}", "04".repeat(20)),
+            };
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, FUNDING_CAPACITY),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, by_data),
+                    ],
+                ),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+
+            let rows = store
+                .iterator_cf(store.cf_script_info(), rocksdb::IteratorMode::Start)
+                .count();
+            assert_eq!(rows, 0, "live sync writes no script_info row");
+            let secp = hex::decode(SECP_CODE_HASH.trim_start_matches("0x")).unwrap();
+            let by_type = store.get_script_reference_info(1, &secp).unwrap().unwrap();
+            assert_eq!(
+                (by_type.lock_cells_count, by_type.lock_live_cells_count),
+                (2, 1),
+                "the default lock: two cellbase outputs, one spent"
+            );
+            let by_data = store.get_script_reference_info(0, &secp).unwrap().unwrap();
+            assert_eq!(
+                (by_data.lock_cells_count, by_data.lock_live_cells_count),
+                (1, 1),
+                "the code hash by data: its one output, counted as itself"
+            );
+            assert_eq!(
+                by_data.lock_owned_capacity_sum,
+                i128::from(FUNDING_CAPACITY - 100_000_000)
+            );
+        }
+
         /// A lock the injected detector names by its FULL hash. Deliberately a
         /// lock no fixture cell uses.
         fn lock_named_hash() -> [u8; 32] {
@@ -9115,7 +9131,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
             write_live_block(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
@@ -9358,7 +9373,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
 
             // Funding batch: cellbase only, so no participant is named yet.
             write_live_block(
@@ -9674,13 +9688,6 @@ mod tests {
             // affected day's first block; date it a day earlier so block 99
             // stays that first block.
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET,
-                fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET,
-            ] {
-                super::live_dao_fee::seed_script_info(store.as_ref(), code_hash);
-            }
             for block in dotcell_rollback_blocks() {
                 super::live_dao_fee::write_live_block(&indexer, block)
                     .await
@@ -10579,6 +10586,132 @@ mod tests {
             ]
         }
 
+        /// resync fix round 2, B (logic SHOULD-2, tests SHOULD-1): a token row
+        /// holds what the chain says, whatever labels exist. With the label
+        /// imported before the first block or not at all, bulk and live write
+        /// the same `tokens` bytes, the chain's (the Unique Cell's name by
+        /// co-occurrence, `Chain`, no icon); label import run again (it runs
+        /// at every indexer start) changes nothing. The label is joined when
+        /// the row is read (the API).
+        #[tokio::test]
+        async fn a_label_changes_no_stored_token_row_on_either_path() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            fn no_label(_: &CkbadgerStore) -> Result<()> {
+                Ok(())
+            }
+            let bulk = |seed: fn(&CkbadgerStore) -> Result<()>| {
+                crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                    &blocks, seed,
+                )
+                .expect("bulk")
+                .token_rows
+                .tokens
+                .get(&type_hash)
+                .expect("bulk writes the token row")
+                .clone()
+            };
+            let bulk_with_label = bulk(import_label);
+            let bulk_without_label = bulk(no_label);
+
+            let mut live = Vec::new();
+            for labelled in [true, false] {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                let indexer = indexer_for_live_write_test(store.clone());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                if labelled {
+                    import_label(store.as_ref()).unwrap();
+                }
+                write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                    .await
+                    .unwrap();
+                let bytes = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap()
+                    .clone();
+                live.push((dir, store, bytes));
+            }
+            let (live_with_label, live_without_label) = (live[0].2.clone(), live[1].2.clone());
+
+            assert_eq!(
+                bulk_with_label, bulk_without_label,
+                "bulk: a label changes no row"
+            );
+            assert_eq!(
+                live_with_label, live_without_label,
+                "live: a label changes no row"
+            );
+            assert_eq!(live_with_label, bulk_with_label, "bulk and live");
+
+            let labelled_store = live[0].1.clone();
+            import_label(labelled_store.as_ref()).unwrap();
+            assert_eq!(
+                crate::sync::bulk_build::collect_token_raw_rows(labelled_store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap(),
+                &live_with_label,
+                "label import again changes no row"
+            );
+            // resync fix round 3, tests NOTE-10: a CHANGED label (another
+            // name, symbol, decimals, standard, icon and description) changes
+            // no row either
+            let mut changed = rgbpp_jump_label();
+            changed.name = "Renamed".to_string();
+            changed.symbol = "RNM".to_string();
+            changed.decimals = 6;
+            changed.standard = "sudt".to_string();
+            changed.icon = Some("https://example.invalid/icon.png".to_string());
+            changed.description = Some("another description".to_string());
+            let result = crate::label_import::import_all(
+                labelled_store.as_ref(),
+                "mainnet",
+                std::slice::from_ref(&changed),
+                &[],
+            )
+            .unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            assert_eq!(
+                crate::sync::bulk_build::collect_token_raw_rows(labelled_store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .unwrap(),
+                &live_with_label,
+                "a changed label changes no row"
+            );
+
+            let row: TokenInfo = bincode::deserialize(&live_with_label).unwrap();
+            assert_eq!(
+                (
+                    row.name.as_deref(),
+                    row.symbol.as_deref(),
+                    row.decimals,
+                    row.metadata_source,
+                    row.icon_url.as_deref(),
+                    row.standard.as_str()
+                ),
+                (
+                    Some("RGB++ Protocol"),
+                    Some("RGB++"),
+                    Some(18),
+                    Some(TokenMetadataSource::Chain),
+                    None,
+                    "xudt"
+                ),
+                "the chain's row"
+            );
+        }
+
         #[tokio::test]
         async fn label_and_chain_metadata_persist_identically_on_both_paths() {
             let _guard =
@@ -10605,7 +10738,10 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             import_label(store.as_ref()).unwrap();
-            let labelled = store.get_token(&type_hash).unwrap().unwrap();
+            // resync fix round M1: label import stores the label and writes
+            // no token row for a token the chain does not hold yet.
+            assert_eq!(store.get_token(&type_hash).unwrap(), None);
+            let label = store.get_token_label(&type_hash).unwrap().unwrap();
             write_live_block(&indexer, blocks[0].clone()).await.unwrap();
             write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
                 .await
@@ -10620,34 +10756,40 @@ mod tests {
                 decimals: 18,
                 binding: OnchainInfoBinding::IssuanceCooccurrence,
             };
+            // Re-pinned in resync fix round 2, B: the stored row is the
+            // chain's on both paths (the Unique Cell's own name, `Chain`);
+            // the label stays in `token_labels` and the API joins it when it
+            // reads the token. It was the label's fields, `Label`, conflict.
             for (path, bytes) in [("bulk", &bulk_bytes), ("live", &live_bytes)] {
                 let row: TokenInfo = bincode::deserialize(bytes).unwrap();
                 assert_eq!(
                     (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
-                    (Some("RGB++_Jump"), Some("RGB++_Jump"), Some(18)),
-                    "{path}: the label keeps the stored fields"
+                    (Some("RGB++ Protocol"), Some("RGB++"), Some(18)),
+                    "{path}: the chain's fields"
                 );
                 assert_eq!(
                     row.metadata_source,
-                    Some(TokenMetadataSource::Label),
+                    Some(TokenMetadataSource::Chain),
                     "{path}"
                 );
                 assert_eq!(row.chain_metadata.as_ref(), Some(&chain), "{path}");
-                assert!(row.chain_metadata_conflict(), "{path}");
+                assert!(!row.chain_metadata_conflict(), "{path}");
             }
-            let mut live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
+            let live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
             let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
-            // Pre-existing, outside IV-26: the live writer keeps the label
-            // placeholder's first_seen_block (0) while bulk records the issuance
-            // block; see the INT result file, "Found, not fixed".
-            assert_eq!((live.first_seen_block, bulk_row.first_seen_block), (0, 101));
-            live.first_seen_block = bulk_row.first_seen_block;
-            assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
-            // Label import alone wrote the label and nothing about the chain.
+            // resync fix round M1: one first block on both paths, the block
+            // of the token's first cell (the issuance), whether or not label
+            // import named the token first (it pinned live's label
+            // placeholder 0 against bulk's 101 as a known divergence).
             assert_eq!(
-                (labelled.metadata_source, labelled.chain_metadata),
-                (Some(TokenMetadataSource::Label), None)
+                (live.first_seen_block, bulk_row.first_seen_block),
+                (101, 101)
             );
+            assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
+            assert_eq!(live_bytes, bulk_bytes, "live and bulk CF_TOKENS rows, raw");
+            // The label import stored stays in `token_labels`, beside the row.
+            assert_eq!(store.get_token_label(&type_hash).unwrap(), Some(label));
+            assert_eq!(live.icon_url, None);
         }
     }
 
@@ -10761,6 +10903,74 @@ mod tests {
         /// token cells) and the transfer (two in, two out) are one each —
         /// identically on the live writer and in bulk build, and a shallow
         /// rollback of the transfer's block takes its count back out.
+        /// resync fix round 4, item 1 (the lead's ruling): a token's standard
+        /// is a chain fact, the deployment its type script's pair runs, by
+        /// the registry: `xudt` under the canonical xUDT pair,
+        /// `xudt_compatible` under a pair of the registry's compatible list.
+        /// The stored row says it, on bulk and on live, byte-equal.
+        #[tokio::test]
+        async fn a_tokens_standard_is_the_deployment_its_pair_runs_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let (code, hash_type) = crate::parser::registry::a_compatible_pair_for_test();
+            let compatible = Script {
+                code_hash: format!("0x{}", hex::encode(code)),
+                hash_type: ckbadger_common::hash_type_label(hash_type)
+                    .expect("a CKB hash type")
+                    .to_string(),
+                args: xudt_type().args,
+            };
+            for (script, standard) in [(xudt_type(), "xudt"), (compatible, "xudt_compatible")] {
+                let mut blocks = blocks();
+                for block in &mut blocks {
+                    for tx in &mut block.block.transactions {
+                        for output in &mut tx.outputs {
+                            if output.type_ == Some(xudt_type()) {
+                                output.type_ = Some(script.clone());
+                            }
+                        }
+                    }
+                }
+                let type_hash = crate::parser::ScriptParser::compute_script_hash(&script);
+
+                let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+                let bulk_bytes = bulk
+                    .token_rows
+                    .tokens
+                    .get(&type_hash)
+                    .expect("bulk writes the token row")
+                    .clone();
+
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                let indexer = indexer_for_live_write_test(store.clone());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                    .await
+                    .unwrap();
+                write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[2].clone()])
+                    .await
+                    .unwrap();
+                let live_bytes = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref())
+                    .unwrap()
+                    .tokens
+                    .get(&type_hash)
+                    .expect("live writes the token row")
+                    .clone();
+
+                let row: ckbadger_store::types::TokenInfo =
+                    bincode::deserialize(&bulk_bytes).unwrap();
+                assert_eq!(row.standard, standard, "bulk");
+                assert_eq!(
+                    live_bytes, bulk_bytes,
+                    "{standard}: live and bulk, byte-equal"
+                );
+            }
+        }
+
         #[tokio::test]
         async fn token_daily_counts_each_transaction_once_on_both_paths() {
             let _guard =
@@ -11569,8 +11779,7 @@ mod tests {
     mod mnft_live {
         use super::live_dao_fee::{
             block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
-            seed_pre_parent_header, seed_script_info, seed_secp_script_info, write_live_block,
-            AR_DEPOSIT, FUNDING_CAPACITY,
+            seed_pre_parent_header, write_live_block, AR_DEPOSIT, FUNDING_CAPACITY,
         };
         use super::*;
         use crate::parser::mnft::{
@@ -11759,14 +11968,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                MNFT_ISSUER_CODE_HASH,
-                MNFT_CLASS_CODE_HASH,
-                MNFT_TOKEN_CODE_HASH,
-            ] {
-                seed_script_info(store.as_ref(), code_hash);
-            }
             for b in [
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
                 mint_block(),
@@ -11845,14 +12046,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                MNFT_ISSUER_CODE_HASH,
-                MNFT_CLASS_CODE_HASH,
-                MNFT_TOKEN_CODE_HASH,
-            ] {
-                seed_script_info(store.as_ref(), code_hash);
-            }
             crate::derive::derive_to_completion(store.as_ref()).unwrap();
             let mut counts = Vec::new();
             for b in [
@@ -11945,14 +12138,6 @@ mod tests {
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
                 seed_pre_parent_header(store.as_ref());
-                seed_secp_script_info(store.as_ref());
-                for code_hash in [
-                    MNFT_ISSUER_CODE_HASH,
-                    MNFT_CLASS_CODE_HASH,
-                    MNFT_TOKEN_CODE_HASH,
-                ] {
-                    seed_script_info(store.as_ref(), code_hash);
-                }
                 (store, indexer)
             };
             let (single, single_indexer) = open();
@@ -12180,6 +12365,84 @@ mod tests {
                     .txs_count,
                 3,
                 "addr_balance still counts only cell participations"
+            );
+        }
+
+        /// The senders bit through both write paths: lock A spends block 100's
+        /// cellbase output in block 101, lock B is only paid. Live sync and bulk
+        /// build mark A and only A as a sender of that transaction, in its
+        /// `TxActions` row and in its addr_txs row, and write the same rows; no
+        /// party of a cellbase sends.
+        #[tokio::test]
+        async fn live_and_bulk_write_the_same_senders() {
+            use ckbadger_store::types::TAG_INPUT;
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = parity_blocks();
+            let snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+
+            let (live, _) = live_rows(&store);
+            assert_eq!(snapshot.addr_txs, live, "bulk and live addr_txs rows");
+            let lock_a: [u8; 32] = crate::parser::ScriptParser::compute_script_hash(&lock_script())
+                .try_into()
+                .unwrap();
+            let lock_b: [u8; 32] =
+                crate::parser::ScriptParser::compute_script_hash(&lock_script_b())
+                    .try_into()
+                    .unwrap();
+            let sent = |lock: [u8; 32], block: i64, tx: i32| {
+                live.get(&(lock, block, tx))
+                    .unwrap_or_else(|| panic!("no addr_txs row {block}:{tx}"))
+                    .tags
+                    & TAG_INPUT
+                    != 0
+            };
+            assert!(sent(lock_a, 101, 1), "A spent its cell in block 101");
+            assert!(!sent(lock_b, 101, 1), "B was only paid");
+            assert!(!sent(lock_a, 100, 0), "no party of a cellbase sends");
+            assert!(!sent(lock_a, 101, 0), "no party of a cellbase sends");
+
+            let transfer = &blocks[1].block.transactions[1];
+            let tx_hash = crate::rpc::parse_hex_to_bytes(&transfer.hash);
+            let live_actions = store
+                .get_tx_actions(101, 1, &tx_hash)
+                .unwrap()
+                .expect("live TxActions row");
+            let bulk_actions = snapshot
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == tx_hash)
+                .expect("bulk TxActions row");
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap(),
+                "the two sync paths must write the same tx_actions row"
+            );
+            let senders = |actions: &ckbadger_store::types::TxActions| {
+                actions
+                    .participants
+                    .iter()
+                    .map(|p| (p.id, p.sent(), p.tags))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(senders(bulk_actions), senders(&live_actions));
+            assert_eq!(
+                senders(&live_actions)
+                    .iter()
+                    .filter(|(_, sent, _)| *sent)
+                    .map(|(id, _, _)| *id)
+                    .collect::<Vec<_>>(),
+                vec![ckbadger_store::types::ParticipantId::Lock(lock_a)]
             );
         }
 
@@ -12845,7 +13108,8 @@ mod tests {
             // The fixture exercises what it claims: one day, three hours,
             // the `.bit` counters and the hours' address sets.
             let day = ckbadger_common::stats_bucket::stats_date_key(1_700_002_790_000).unwrap();
-            let daily: ckbadger_store::types::DailyActivityStats = bincode::deserialize(
+            let daily = ckbadger_store::types::DailyActivityStats::decode(
+                &day,
                 &bulk
                     .iter()
                     .find(|(key, _)| {
@@ -13169,6 +13433,125 @@ mod tests {
                 "live and bulk append-only cell payload counts must agree"
             );
         }
+
+        /// The lead's ruling, both sync paths (lane rd/api-lock-names): a
+        /// generic (non Type ID) type reference is counted in a family by the
+        /// binaries its live code cells hold. Block 101 deploys a registered
+        /// family's binary under a generic type script and locks a cell by
+        /// that reference; block 102, in the second chain only, consumes the
+        /// code cell. Bulk finalize and the live per-block rollup write the
+        /// same script rows, the user cell counted in the family while the
+        /// code is live and in none once it is gone.
+        #[tokio::test]
+        async fn bulk_and_live_count_a_generic_type_reference_by_its_live_code_cells() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let family_id = "family/parity-generic";
+            let binary = ScriptParser::compute_data_hash(b"\x7fELF\x05");
+            let version = ckbadger_store::ScriptVersionInfo {
+                version_hash: binary.to_vec(),
+                family_id: Some(family_id.to_string()),
+                name: Some("Parity Generic".to_string()),
+                registered_references: vec![(binary.to_vec(), 2)],
+                ..Default::default()
+            };
+            let family = ckbadger_store::ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: "Parity Generic".to_string(),
+                ..Default::default()
+            };
+            let deployment = typed_script(format!("0x{}", hex::encode([0x43; 32])), 0xe1);
+            let reference = ScriptParser::compute_script_hash(&deployment);
+            let user_lock = Script {
+                code_hash: format!("0x{}", hex::encode(&reference)),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            };
+            let deploy = tx(
+                0xb1,
+                vec![input(0x90, 0)],
+                vec![
+                    output(800_00000000, lock_script(), Some(deployment)),
+                    output(700_00000000, user_lock, None),
+                    output(3000_00000000, lock_script(), None),
+                ],
+                vec![
+                    "0x7f454c4605".to_string(),
+                    "0x".to_string(),
+                    "0x".to_string(),
+                ],
+            );
+            let retire = tx(
+                0xb2,
+                vec![input(0xb1, 0)],
+                vec![output(790_00000000, lock_script(), None)],
+                vec!["0x".to_string()],
+            );
+            let mut chain = vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0x90, 5000_00000000)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0x91, 100_00000000), deploy],
+                ),
+            ];
+            let mut retired = chain.clone();
+            retired.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000), retire],
+            ));
+            chain.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000)],
+            ));
+
+            for (blocks, counted, case) in [
+                (chain, 1, "the code live: the user cell in the family"),
+                (retired, 0, "the code consumed: in no family"),
+            ] {
+                let bulk =
+                    crate::sync::bulk_build::materialize_bulk_artifacts_with_script_label_for_test(
+                        &blocks, &binary, &version, family_id, &family,
+                    )
+                    .unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let live = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                live.set_secondary_epoch_reward(61_369_863_013_698).unwrap();
+                live.put_script_version(&binary, &version).unwrap();
+                live.put_script_family_direct(family_id, &family).unwrap();
+                live.put_script_version_by_family_direct(family_id, &binary)
+                    .unwrap();
+                live.insert_script_version_by_label("Parity Generic", &binary)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(live.clone());
+                for block in blocks {
+                    super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                        &indexer,
+                        vec![block],
+                    )
+                    .await
+                    .unwrap();
+                }
+                let live_rows =
+                    crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
+                        .unwrap();
+                assert_eq!(live_rows, bulk.script_binding_rows, "{case}");
+                let family_key = (
+                    ckbadger_store::CF_SCRIPT_FAMILIES,
+                    family_id.as_bytes().to_vec(),
+                );
+                for (rows, path) in [(&live_rows, "live"), (&bulk.script_binding_rows, "bulk")] {
+                    let row: ckbadger_store::ScriptFamilyInfo = bincode::deserialize(
+                        rows.get(&family_key)
+                            .unwrap_or_else(|| panic!("{path}: no family row ({case})")),
+                    )
+                    .unwrap();
+                    assert_eq!(row.live_cells_count, counted, "{path}: {case}");
+                }
+            }
+        }
     }
 
     mod live_token_binding {
@@ -13208,10 +13591,13 @@ mod tests {
             }
         }
 
+        /// The Unique Cell by its registered pair (the mainnet binary by
+        /// data1; resync fix round S1, re-pinned from `type`, which runs no
+        /// Unique Cell).
         fn unique_type_script() -> Script {
             Script {
                 code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
-                hash_type: "type".to_string(),
+                hash_type: "data1".to_string(),
                 args: format!("0x{}", "9a".repeat(20)),
             }
         }
@@ -13600,6 +13986,111 @@ mod tests {
             block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), tx])
         }
 
+        /// The curated label of the extension token, as a metadata entry.
+        fn ext_label() -> crate::label_import::TokenMetadata {
+            let script = xudt_ext_type_script();
+            crate::label_import::TokenMetadata {
+                name: "Label X".to_string(),
+                symbol: "LBX".to_string(),
+                decimals: 6,
+                standard: "xudt".to_string(),
+                icon: Some("https://example.invalid/lbx.png".to_string()),
+                description: None,
+                disabled: false,
+                mainnet: Some(crate::label_import::TokenDeployment {
+                    code_hash: script.code_hash,
+                    hash_type: script.hash_type,
+                    args: script.args,
+                }),
+                testnet: None,
+            }
+        }
+
+        /// Write each inner vec as ONE live batch on a store where label
+        /// import ran first when `labelled` (the order every indexer start
+        /// takes).
+        async fn write_batches_live_after_label_import(
+            batches: &[Vec<BlockResponseWithCycles>],
+            labelled: bool,
+        ) -> Arc<CkbadgerStore> {
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            if labelled {
+                import_ext_label(store.as_ref());
+            }
+            let indexer = indexer_for_live_write_test(store.clone());
+            for batch in batches {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    batch.clone(),
+                )
+                .await
+                .unwrap();
+            }
+            store
+        }
+
+        fn import_ext_label(store: &CkbadgerStore) {
+            let result = crate::label_import::import_all(
+                store,
+                "mainnet",
+                std::slice::from_ref(&ext_label()),
+                &[],
+            )
+            .unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+
+        /// resync fix round 2, B (logic SHOULD-2, the tests reader's smallest
+        /// test): a labelled token bound by its xUDT extension. Its row is the
+        /// chain's whether the label exists or not; label import run again
+        /// (every indexer start) changes no byte of it; a rollback of the
+        /// naming block leaves the row a store synced to that block holds.
+        /// It used to flip at every restart (creation: label, then the chain
+        /// over it; import: the label over the merged row).
+        #[tokio::test]
+        async fn a_label_re_import_and_a_rollback_leave_an_extension_bound_row_as_the_chain_made_it(
+        ) {
+            let blocks = [
+                vec![funding_block()],
+                vec![ext_issuance_block()],
+                vec![ext_naming_block()],
+            ];
+            let tokens = |store: &CkbadgerStore| {
+                crate::sync::bulk_build::collect_token_raw_rows(store)
+                    .unwrap()
+                    .tokens
+                    .get(&ext_type_hash())
+                    .cloned()
+            };
+            let labelled = write_batches_live_after_label_import(&blocks, true).await;
+            let unlabelled = write_batches_live_after_label_import(&blocks, false).await;
+            let made = tokens(&labelled).expect("the row");
+            assert_eq!(
+                Some(&made),
+                tokens(&unlabelled).as_ref(),
+                "the label is no part of it"
+            );
+
+            import_ext_label(&labelled);
+            assert_eq!(
+                tokens(&labelled),
+                Some(made),
+                "label import again changes nothing"
+            );
+
+            labelled.rollback_to_block(101).unwrap();
+            let reference = write_batches_live_after_label_import(&blocks[..2], true).await;
+            assert_eq!(
+                tokens(&labelled),
+                tokens(&reference),
+                "the row of block 101"
+            );
+        }
+
         /// What label import writes for the extension token before the
         /// first block is indexed.
         fn labelled_ext_row() -> TokenInfo {
@@ -13636,12 +14127,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
-            super::live_dao_fee::seed_script_info(store.as_ref(), XUDT_CODE_HASH_TYPE);
-            super::live_dao_fee::seed_script_info(
-                store.as_ref(),
-                crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET,
-            );
             if let Some((type_hash, row)) = label_row {
                 store.put_token_direct(&type_hash, &row).unwrap();
             }
@@ -13696,10 +14181,9 @@ mod tests {
         #[tokio::test]
         async fn live_and_bulk_agree_on_extension_bound_metadata_and_max_supply() {
             let blocks = vec![funding_block(), ext_issuance_block(), ext_naming_block()];
-            let batches: Vec<Vec<BlockResponseWithCycles>> =
-                blocks.iter().cloned().map(|b| vec![b]).collect();
-            let store = write_batches_live(&batches, None).await;
-            let live = store.get_token(&ext_type_hash()).unwrap().unwrap();
+            // the row on every path and batching, byte-equal (resync/final: it read live a block
+            // per batch alone, then compared bulk field by field below)
+            let live = token_row_on_every_path(&blocks, &ext_type_hash()).await;
             assert_eq!(live.name.as_deref(), Some("RGB++ Protocol"));
             assert_eq!(live.max_supply, Some(TOKEN_MAX_SUPPLY));
             assert_eq!(
@@ -14008,6 +14492,1131 @@ mod tests {
             assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
         }
 
+        // ── resync fix round S1: the extension claimant is bound by its
+        // script — the Unique Cell by its registered pair — not by 20 bytes
+        // of args ──
+
+        /// The Unique Cell (mainnet, its registered pair: the binary by
+        /// data1) with the args the extension token names.
+        fn registered_unique_type_script() -> Script {
+            Script {
+                code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
+                hash_type: "data1".to_string(),
+                args: format!("0x{}", "9a".repeat(20)),
+            }
+        }
+
+        /// A type script that is not the Unique Cell, with the same args:
+        /// anyone can create a cell under it carrying token-info data.
+        fn forged_unique_type_script() -> Script {
+            Script {
+                code_hash: format!("0x{}", "77".repeat(32)),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "9a".repeat(20)),
+            }
+        }
+
+        /// A transaction moving the extension token's cell `token_in` to
+        /// `to`, with `cells` (each a type script and a total supply) before
+        /// it and the change after: `available` shannons come in.
+        fn s1_tx(
+            hash: u8,
+            token_in: CellInput,
+            change_in: CellInput,
+            available: u64,
+            cells: &[(Script, u128)],
+            to: Script,
+        ) -> TransactionView {
+            let mut outputs: Vec<(CellOutput, String)> = cells
+                .iter()
+                .map(|(type_script, supply)| {
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(type_script.clone())),
+                        unique_data_with(*supply),
+                    )
+                })
+                .collect();
+            outputs.push((
+                output(EXT_CELL_CAPACITY, to, Some(xudt_ext_type_script())),
+                amount_data(TOKEN_AMOUNT),
+            ));
+            let spent = u64::try_from(cells.len()).unwrap() * CELL_CAPACITY + EXT_CELL_CAPACITY;
+            outputs.push((
+                output(available - spent - EXT_CELL_CAPACITY, lock_script(), None),
+                "0x".to_string(),
+            ));
+            d3_tx(
+                hash,
+                vec![token_in, change_in],
+                outputs,
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// The reader's case on a chain: block 102 moves the token beside a
+        /// forged Unique Cell (another code, the extension's args, total
+        /// supply 1111); block 103 moves it beside the genuine one (2222).
+        /// The genuine claim is the token's, on every path and batching.
+        #[tokio::test]
+        async fn a_forged_unique_cell_before_the_genuine_one_claims_nothing() {
+            let at_102 = FUNDING_CAPACITY;
+            let forged = s1_tx(
+                0xe2,
+                input(0xe1, 0),
+                input(0xe1, 1),
+                at_102,
+                &[(forged_unique_type_script(), 1111)],
+                lock_script_b(),
+            );
+            let at_103 = at_102 - CELL_CAPACITY - 2 * EXT_CELL_CAPACITY + EXT_CELL_CAPACITY;
+            let genuine = s1_tx(
+                0xe3,
+                input(0xe2, 1),
+                input(0xe2, 2),
+                at_103,
+                &[(registered_unique_type_script(), 2222)],
+                lock_script(),
+            );
+            let blocks = vec![
+                funding_block(),
+                ext_issuance_block(),
+                d3_block(102, forged),
+                d3_block(103, genuine),
+            ];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, Some(2222), "the genuine claim stands");
+        }
+
+        /// One transaction, the genuine Unique Cell then a forged cell with
+        /// the same args: the claim is the genuine one's.
+        #[tokio::test]
+        async fn a_forged_cell_after_the_genuine_unique_cell_in_one_transaction_claims_nothing() {
+            let tx = s1_tx(
+                0xe2,
+                input(0xe1, 0),
+                input(0xe1, 1),
+                FUNDING_CAPACITY,
+                &[
+                    (registered_unique_type_script(), 2222),
+                    (forged_unique_type_script(), 1111),
+                ],
+                lock_script_b(),
+            );
+            let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, tx)];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, Some(2222));
+        }
+
+        /// One transaction, two Unique Cells by the registered pair with the
+        /// same args, the first carrying a total supply and the last none:
+        /// one rule on both paths — the last such output gives the binding
+        /// and the claim (it carries none, so no max supply).
+        #[tokio::test]
+        async fn two_unique_cells_with_the_same_args_in_one_transaction_are_read_by_one_rule() {
+            let tx = d3_tx(
+                0xe2,
+                vec![input(0xe1, 0), input(0xe1, 1)],
+                vec![
+                    (
+                        output(
+                            CELL_CAPACITY,
+                            lock_script(),
+                            Some(registered_unique_type_script()),
+                        ),
+                        unique_data_with(2222),
+                    ),
+                    (
+                        output(
+                            CELL_CAPACITY,
+                            lock_script(),
+                            Some(registered_unique_type_script()),
+                        ),
+                        format!("0x{RGBPP_UNIQUE_CELL_DATA_HEX}"),
+                    ),
+                    (
+                        output(
+                            EXT_CELL_CAPACITY,
+                            lock_script_b(),
+                            Some(xudt_ext_type_script()),
+                        ),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(
+                            FUNDING_CAPACITY - 2 * CELL_CAPACITY - 2 * EXT_CELL_CAPACITY,
+                            lock_script(),
+                            None,
+                        ),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, tx)];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, None, "the last Unique Cell carries none");
+            assert_eq!(row.name.as_deref(), Some("RGB++ Protocol"));
+        }
+
+        /// The type script of supply token `seed`'s supply-info cell.
+        fn supply_info_type(seed: u8) -> Script {
+            Script {
+                code_hash: format!("0x{}", hex::encode([0x55; 32])),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode([seed; 32])),
+            }
+        }
+
+        /// The supply-mode Omnilock of supply token `seed`, Omnilock's code
+        /// hash by `lock_by`: its args name the info cell's type script
+        /// (RFC 0042: auth, flags 0x08, the type script hash for supply).
+        fn supply_omnilock_by(seed: u8, lock_by: &str) -> Script {
+            let mut args = vec![0u8; 21];
+            args.push(0b0000_1000);
+            args.extend_from_slice(&crate::parser::ScriptParser::compute_script_hash(
+                &supply_info_type(seed),
+            ));
+            Script {
+                code_hash: crate::sync::token_helpers::OMNILOCK_CODE_HASH_MAINNET_V2.to_string(),
+                hash_type: lock_by.to_string(),
+                args: format!("0x{}", hex::encode(&args)),
+            }
+        }
+
+        /// Supply token `seed`: an xUDT whose owner lock IS
+        /// `supply_omnilock_by(seed, "type")` (its args are that lock's script hash), so
+        /// it is minted only under that lock and its info cell's claims are
+        /// its own.
+        fn supply_token_type(seed: u8) -> Script {
+            supply_token_type_by(seed, "type")
+        }
+
+        /// Supply token `seed` owned by `supply_omnilock_by(seed, lock_by)`.
+        fn supply_token_type_by(seed: u8, lock_by: &str) -> Script {
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!(
+                    "0x{}",
+                    hex::encode(crate::parser::ScriptParser::compute_script_hash(
+                        &supply_omnilock_by(seed, lock_by)
+                    ))
+                ),
+            }
+        }
+
+        fn supply_token_hash(seed: u8) -> Vec<u8> {
+            supply_token_hash_by(seed, "type")
+        }
+
+        fn supply_token_hash_by(seed: u8, lock_by: &str) -> Vec<u8> {
+            ScriptParser::compute_script_hash(&supply_token_type_by(seed, lock_by))
+        }
+
+        /// A supply-info cell under `supply_omnilock_by(lock_seed, "type")` naming the
+        /// token `names` with `max_supply`, and its data.
+        fn supply_info_cell(lock_seed: u8, names: &[u8], max_supply: u128) -> (CellOutput, String) {
+            supply_info_cell_by(lock_seed, "type", names, max_supply)
+        }
+
+        /// `supply_info_cell` under `supply_omnilock_by(lock_seed, lock_by)`.
+        fn supply_info_cell_by(
+            lock_seed: u8,
+            lock_by: &str,
+            names: &[u8],
+            max_supply: u128,
+        ) -> (CellOutput, String) {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u128.to_le_bytes());
+            data.extend_from_slice(&max_supply.to_le_bytes());
+            data.extend_from_slice(names);
+            // above the info cell's occupied capacity (225 CKB)
+            (
+                output(
+                    300_00000000,
+                    supply_omnilock_by(lock_seed, lock_by),
+                    Some(supply_info_type(lock_seed)),
+                ),
+                format!("0x{}", hex::encode(&data)),
+            )
+        }
+
+        /// Supply token 1's issuance in block 101 (its owner Omnilock's code
+        /// hash by `lock_by`): its cell at 0xe1:0, the change at 0xe1:1.
+        fn supply_issuance_block(lock_by: &str) -> BlockResponseWithCycles {
+            claim_rule_block(
+                101,
+                vec![issue_tx(
+                    0xe1,
+                    input(0xc0, 0),
+                    FUNDING_CAPACITY,
+                    supply_token_type_by(1, lock_by),
+                )],
+            )
+        }
+
+        /// Supply token 1's own claim (`TOKEN_MAX_SUPPLY`) in block 102, the
+        /// info cell under its owner Omnilock, the code hash by `lock_by`.
+        /// Spends the issuance's change (0xe1:1); with `with_transfer` it also
+        /// moves the token (0xe1:0) to lock B in the same transaction.
+        fn omnilock_claim_block(with_transfer: bool, lock_by: &str) -> BlockResponseWithCycles {
+            const INFO_CAPACITY: u64 = 300_00000000;
+            let mut inputs = vec![input(0xe1, 1)];
+            let mut outputs = vec![supply_info_cell_by(
+                1,
+                lock_by,
+                &supply_token_hash_by(1, lock_by),
+                TOKEN_MAX_SUPPLY,
+            )];
+            if with_transfer {
+                inputs.insert(0, input(0xe1, 0));
+                outputs.push((
+                    output(
+                        EXT_CELL_CAPACITY,
+                        lock_script_b(),
+                        Some(supply_token_type_by(1, lock_by)),
+                    ),
+                    amount_data(TOKEN_AMOUNT),
+                ));
+            }
+            outputs.push((
+                output(
+                    FUNDING_CAPACITY - EXT_CELL_CAPACITY - INFO_CAPACITY,
+                    lock_script(),
+                    None,
+                ),
+                "0x".to_string(),
+            ));
+            d3_block(102, d3_tx(0xe3, inputs, outputs, vec!["0x".to_string()]))
+        }
+
+        /// resync/all: a max-supply claim is a chain fact of the block that
+        /// makes it, whether or not that block moves a UDT. Live sync read a
+        /// batch's claims only when the batch moved one (the claim collection
+        /// sat inside the UDT stage), bulk build in every batch, so a store's
+        /// token row depended on which path wrote the block. Live and bulk
+        /// now write the same row: the claim alone in its block (each batch
+        /// shape) and the claim beside a transfer.
+        #[tokio::test]
+        async fn a_max_supply_claim_counts_with_or_without_a_udt_movement_like_bulk() {
+            for with_transfer in [false, true] {
+                let blocks = vec![
+                    funding_block(),
+                    supply_issuance_block("type"),
+                    omnilock_claim_block(with_transfer, "type"),
+                ];
+                for plan in [
+                    per_block(&blocks),
+                    vec![vec![funding_block()], blocks[1..].to_vec()],
+                ] {
+                    let row =
+                        assert_bulk_row_equals_live(&blocks, &plan, &supply_token_hash(1)).await;
+                    assert_eq!(
+                        row.max_supply,
+                        Some(TOKEN_MAX_SUPPLY),
+                        "with_transfer={with_transfer}"
+                    );
+                }
+            }
+        }
+
+        /// resync/protocol-pairs: an Omnilock supply-info cell claims the
+        /// token's max supply by Omnilock's registered pair only. Live and
+        /// bulk agree, the claim alone in its block and beside a transfer:
+        /// the info cell under Omnilock's code hash by `type` claims it, the
+        /// same cell by `data` (a pair anyone can lock a cell with; no such
+        /// binary runs) claims nothing. The token's owner is that very lock
+        /// in both, so the owner rule passes and the pair alone decides. On
+        /// every path and batching (resync/final: bulk, live a block per
+        /// batch, and live in one batch after the funding block, byte-equal;
+        /// it compared bulk with live a block per batch).
+        #[tokio::test]
+        async fn omnilock_claims_a_max_supply_only_by_its_registered_pair() {
+            for (lock_by, claimed) in [("type", Some(TOKEN_MAX_SUPPLY)), ("data", None)] {
+                for with_transfer in [false, true] {
+                    let blocks = vec![
+                        funding_block(),
+                        supply_issuance_block(lock_by),
+                        omnilock_claim_block(with_transfer, lock_by),
+                    ];
+                    let row =
+                        token_row_on_every_path(&blocks, &supply_token_hash_by(1, lock_by)).await;
+                    assert_eq!(
+                        row.max_supply, claimed,
+                        "Omnilock by {lock_by}, with_transfer={with_transfer}"
+                    );
+                }
+            }
+        }
+
+        /// The claim's block rolled back takes the claim with it: the token
+        /// row is the one its issuance left.
+        #[tokio::test]
+        async fn rolling_back_the_claims_block_removes_the_claim() {
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![supply_issuance_block("type")],
+                    vec![omnilock_claim_block(false, "type")],
+                ],
+                None,
+            )
+            .await;
+            assert_eq!(
+                store
+                    .get_token(&supply_token_hash(1))
+                    .unwrap()
+                    .unwrap()
+                    .max_supply,
+                Some(TOKEN_MAX_SUPPLY),
+                "the claim alone in its block is the token's max supply"
+            );
+
+            rollback_to(&store, 101);
+
+            let reference = write_batches_live(
+                &[vec![funding_block()], vec![supply_issuance_block("type")]],
+                None,
+            )
+            .await;
+            let expected = token_state(&reference, &supply_token_hash(1));
+            assert_eq!(expected.0.as_ref().unwrap().max_supply, None, "reference");
+            assert_eq!(token_state(&store, &supply_token_hash(1)), expected);
+        }
+
+        // ── The one claim rule: the first claim at or after the token's first
+        // block, in chain order, whatever path and batching wrote the blocks ──
+
+        /// A transaction claiming `max_supply` for the token `names` with a
+        /// supply-info cell under `supply_omnilock_by(lock_seed, "type")`, spending
+        /// `spent` (`available` shannons): output 0 the info cell, output 1
+        /// the change.
+        fn claim_tx(
+            hash: u8,
+            spent: CellInput,
+            available: u64,
+            max_supply: u128,
+            lock_seed: u8,
+            names: &[u8],
+        ) -> TransactionView {
+            d3_tx(
+                hash,
+                vec![spent],
+                vec![
+                    supply_info_cell(lock_seed, names, max_supply),
+                    (
+                        output(available - 300_00000000, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// Supply token 1's own claim (its owner's info cell).
+        fn genuine_claim_tx(
+            hash: u8,
+            spent: CellInput,
+            available: u64,
+            max_supply: u128,
+        ) -> TransactionView {
+            claim_tx(hash, spent, available, max_supply, 1, &supply_token_hash(1))
+        }
+
+        /// The issuance of the token `token`, spending `spent` (`available`
+        /// shannons): output 0 the token cell, output 1 the change.
+        fn issue_tx(hash: u8, spent: CellInput, available: u64, token: Script) -> TransactionView {
+            d3_tx(
+                hash,
+                vec![spent],
+                vec![
+                    (
+                        output(EXT_CELL_CAPACITY, lock_script(), Some(token)),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(available - EXT_CELL_CAPACITY, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// Block `number` with its cellbase and `txs`.
+        fn claim_rule_block(number: u64, txs: Vec<TransactionView>) -> BlockResponseWithCycles {
+            let mut transactions = vec![cellbase_tx(
+                0xc0 + u8::try_from(number - 100).unwrap(),
+                500_00000000,
+            )];
+            transactions.extend(txs);
+            block(number, AR, transactions)
+        }
+
+        /// The token row of `blocks` written by bulk build, by live sync one
+        /// block a batch, and by live sync in one batch after the funding
+        /// block: byte-equal rows, the one returned.
+        async fn token_row_on_every_path(
+            blocks: &[BlockResponseWithCycles],
+            type_hash: &[u8],
+        ) -> TokenInfo {
+            let per_block_row =
+                assert_bulk_row_equals_live(blocks, &per_block(blocks), type_hash).await;
+            let one_batch_row = assert_bulk_row_equals_live(
+                blocks,
+                &[blocks[..1].to_vec(), blocks[1..].to_vec()],
+                type_hash,
+            )
+            .await;
+            assert_eq!(per_block_row, one_batch_row);
+            per_block_row
+        }
+
+        /// Supply token 1's curated label, as `docs/metadata/tokens/` would
+        /// carry it.
+        fn supply_token_label() -> crate::label_import::TokenMetadata {
+            let token = supply_token_type(1);
+            crate::label_import::TokenMetadata {
+                name: "Supply One".to_string(),
+                symbol: "SUP1".to_string(),
+                decimals: 8,
+                standard: "xudt".to_string(),
+                icon: Some("https://example.invalid/sup1.png".to_string()),
+                description: Some("the claim rule's labelled token".to_string()),
+                disabled: false,
+                mainnet: Some(crate::label_import::TokenDeployment {
+                    code_hash: token.code_hash,
+                    hash_type: token.hash_type,
+                    args: token.args,
+                }),
+                testnet: None,
+            }
+        }
+
+        /// Label import of supply token 1 on `store` (what the indexer runs
+        /// before its first block).
+        fn import_supply_token_label(store: &CkbadgerStore) -> Result<()> {
+            let result = crate::label_import::import_all(
+                store,
+                "mainnet",
+                std::slice::from_ref(&supply_token_label()),
+                &[],
+            )?;
+            anyhow::ensure!(result.errors.is_empty(), "{:?}", result.errors);
+            Ok(())
+        }
+
+        /// The STORED `CF_TOKENS` row of `type_hash` after label import and
+        /// `batches` written live, raw.
+        async fn labelled_live_row(
+            batches: &[Vec<BlockResponseWithCycles>],
+            type_hash: &[u8],
+        ) -> (Arc<CkbadgerStore>, Option<Vec<u8>>) {
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            import_supply_token_label(store.as_ref()).unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for batch in batches {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    batch.clone(),
+                )
+                .await
+                .unwrap();
+            }
+            let row = store.get_cf(store.cf_tokens(), type_hash).unwrap();
+            (store, row)
+        }
+
+        /// resync fix round M1 (logic M1): a token's first block is the block
+        /// of its first cell on both paths, whether or not label import named
+        /// the token first, and a claim made before that block is not the
+        /// token's. Label import names supply token 1 (owner: its supply-mode
+        /// Omnilock); block 101 holds that Omnilock's claim 7700 while the
+        /// chain holds no cell of the token; block 102 issues the token and
+        /// claims 8800. Bulk, live a block per batch and live in one batch
+        /// store the same `CF_TOKENS` row, byte for byte: first block 102, max
+        /// supply 8800, the chain's (re-pinned in resync fix round 2, B: it
+        /// was "the label attached"; the label is joined when the row is
+        /// read).
+        #[tokio::test]
+        async fn a_labelled_tokens_first_block_and_max_supply_are_the_chains_on_every_path() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![genuine_claim_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        7700,
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - 300_00000000,
+                            supply_token_type(1),
+                        ),
+                        genuine_claim_tx(
+                            0xa3,
+                            input(0xa2, 1),
+                            FUNDING_CAPACITY - 300_00000000 - EXT_CELL_CAPACITY,
+                            8800,
+                        ),
+                    ],
+                ),
+            ];
+            let type_hash = supply_token_hash(1);
+            let bulk = crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                &blocks,
+                import_supply_token_label,
+            )
+            .expect("bulk");
+            let bulk_bytes = bulk
+                .token_rows
+                .tokens
+                .get(&type_hash)
+                .expect("bulk writes the token row")
+                .clone();
+            let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
+            for (plan, shape) in [
+                (per_block(&blocks), "live, a block per batch"),
+                (
+                    vec![blocks[..1].to_vec(), blocks[1..].to_vec()],
+                    "live, one batch",
+                ),
+            ] {
+                let (_, live_bytes) = labelled_live_row(&plan, &type_hash).await;
+                let live_row: TokenInfo =
+                    bincode::deserialize(live_bytes.as_ref().expect("live writes the row"))
+                        .unwrap();
+                assert_eq!(
+                    (live_row.first_seen_block, live_row.max_supply),
+                    (bulk_row.first_seen_block, bulk_row.max_supply),
+                    "{shape}: (first block, max supply), live vs bulk"
+                );
+                assert_eq!(live_bytes.as_ref(), Some(&bulk_bytes), "{shape}: the row");
+            }
+            assert_eq!(
+                (bulk_row.first_seen_block, bulk_row.max_supply),
+                (102, Some(8800))
+            );
+            fn no_label(_: &CkbadgerStore) -> Result<()> {
+                Ok(())
+            }
+            let unlabelled =
+                crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                    &blocks, no_label,
+                )
+                .expect("bulk");
+            assert_eq!(
+                unlabelled.token_rows.tokens.get(&type_hash),
+                Some(&bulk_bytes),
+                "the label is no part of the row"
+            );
+            assert_eq!(bulk_row.icon_url, None, "the label is not attached");
+
+            // While the chain holds no cell of the token, nothing writes its
+            // row: not label import, not the claim's block (in its scope).
+            let (store, row) = labelled_live_row(&per_block(&blocks[..2]), &type_hash).await;
+            assert_eq!(row, None, "no row for a token the chain does not hold");
+            assert!(
+                token_journal_entries(store.as_ref(), 101).is_empty(),
+                "the claim's block journals no token row"
+            );
+        }
+
+        /// The lead's rule: a claim made before the token's first block is
+        /// not the token's (it names an id nothing carries yet). Claim in
+        /// block 101, issuance in 102, no claim again: no max supply, on every
+        /// path and batching.
+        #[tokio::test]
+        async fn a_claim_before_the_token_exists_is_not_the_tokens() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![genuine_claim_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        7700,
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![issue_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - 300_00000000,
+                        supply_token_type(1),
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                None
+            );
+        }
+
+        /// A claim in the token's first block counts, before or after the
+        /// issuance's transaction in that block.
+        #[tokio::test]
+        async fn a_claim_in_the_tokens_first_block_counts_in_either_order() {
+            let claim_first = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        genuine_claim_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, 7700),
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - 300_00000000,
+                            supply_token_type(1),
+                        ),
+                    ],
+                ),
+            ];
+            let issue_first = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        issue_tx(0xa2, input(0xc0, 0), FUNDING_CAPACITY, supply_token_type(1)),
+                        genuine_claim_tx(
+                            0xa1,
+                            input(0xa2, 1),
+                            FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                            7700,
+                        ),
+                    ],
+                ),
+            ];
+            for blocks in [claim_first, issue_first] {
+                assert_eq!(
+                    token_row_on_every_path(&blocks, &supply_token_hash(1))
+                        .await
+                        .max_supply,
+                    Some(7700)
+                );
+            }
+        }
+
+        /// Two claims after the issuance, different values: the first
+        /// stands, on every path and batching.
+        #[tokio::test]
+        async fn the_first_claim_after_the_issuance_stands() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+            // a claim before the token, then two after: still the first after
+            let mut with_early_claim = vec![
+                funding_block(),
+                claim_rule_block(
+                    100 + 1,
+                    vec![genuine_claim_tx(
+                        0xa0,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        6600,
+                    )],
+                ),
+            ];
+            let left = FUNDING_CAPACITY - 300_00000000;
+            with_early_claim.push(claim_rule_block(
+                102,
+                vec![issue_tx(0xa1, input(0xa0, 1), left, supply_token_type(1))],
+            ));
+            with_early_claim.push(claim_rule_block(
+                103,
+                vec![genuine_claim_tx(
+                    0xa2,
+                    input(0xa1, 1),
+                    left - EXT_CELL_CAPACITY,
+                    7700,
+                )],
+            ));
+            assert_eq!(
+                token_row_on_every_path(&with_early_claim, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+        }
+
+        /// The rollback of the claim's block takes the claim with it; the
+        /// rollback of the issuance's block takes the token row.
+        #[tokio::test]
+        async fn rolling_back_the_claim_or_the_issuance_restores_the_rule() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            for keep in [101usize, 102] {
+                let store = write_batches_live(&per_block(&blocks), None).await;
+                rollback_to(&store, keep as i64);
+                let reference = write_batches_live(&per_block(&blocks[..=keep - 100]), None).await;
+                assert_eq!(
+                    token_state(&store, &supply_token_hash(1)),
+                    token_state(&reference, &supply_token_hash(1)),
+                    "rolled back to {keep}"
+                );
+            }
+            // the issuance's block rolled back: no token
+            let store = write_batches_live(&per_block(&blocks), None).await;
+            rollback_to(&store, 100);
+            assert_eq!(token_state(&store, &supply_token_hash(1)), (None, None));
+        }
+
+        /// resync fix round, tests report NOTE-2: a rollback INSIDE a
+        /// multi-block live batch that carries the claims. Issuance (101),
+        /// claim 7700 (102) and claim 8800 (103) written as ONE live batch,
+        /// rolled back to each block of it: the token row and its counter are
+        /// the ones a store synced to that block holds.
+        #[tokio::test]
+        async fn a_rollback_inside_one_live_batch_restores_the_claim_rule_at_each_block() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = [
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(0xa2, input(0xa1, 1), after_issue, 7700)],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        8800,
+                    )],
+                ),
+            ];
+            let one_batch = [blocks[..1].to_vec(), blocks[1..].to_vec()];
+            for (keep, max_supply) in [(102usize, Some(7700)), (101, None), (100, None)] {
+                let store = write_batches_live(&one_batch, None).await;
+                rollback_to(&store, keep as i64);
+                let reference = write_batches_live(&per_block(&blocks[..=keep - 100]), None).await;
+                let expected = token_state(&reference, &supply_token_hash(1));
+                assert_eq!(
+                    token_state(&store, &supply_token_hash(1)),
+                    expected,
+                    "rolled back to {keep} inside the batch"
+                );
+                assert_eq!(
+                    expected.0.and_then(|row| row.max_supply),
+                    max_supply,
+                    "fixture at {keep}"
+                );
+            }
+        }
+
+        /// NOTE-2: two claims in ONE block, in two transactions (7700 then
+        /// 8800), after the issuance: the first in chain order (transaction,
+        /// then output) stands, on every path and batching; and two claims in
+        /// ONE transaction (outputs 0 and 1): the first output's stands.
+        #[tokio::test]
+        async fn two_claims_in_one_block_or_one_transaction_keep_chain_order() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let issue = claim_rule_block(
+                101,
+                vec![issue_tx(
+                    0xa1,
+                    input(0xc0, 0),
+                    FUNDING_CAPACITY,
+                    supply_token_type(1),
+                )],
+            );
+            // Tests report NOTE-7: the first transaction's claim sits at a
+            // HIGHER output index (1) than the second's (0), so an order of
+            // (block, output, transaction) would take 8800; chain order
+            // (block, transaction, output) takes the first transaction's.
+            let first_claim_at_output_1 = d3_tx(
+                0xa2,
+                vec![input(0xa1, 1)],
+                vec![
+                    (
+                        output(after_issue - 300_00000000, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                    supply_info_cell(1, &supply_token_hash(1), 7700),
+                ],
+                vec!["0x".to_string()],
+            );
+            let two_txs = vec![
+                funding_block(),
+                issue.clone(),
+                claim_rule_block(
+                    102,
+                    vec![
+                        first_claim_at_output_1,
+                        genuine_claim_tx(0xa3, input(0xa2, 0), after_issue - 300_00000000, 8800),
+                    ],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&two_txs, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700),
+                "two transactions in one block: the first"
+            );
+
+            let two_outputs = d3_tx(
+                0xa2,
+                vec![input(0xa1, 1)],
+                vec![
+                    supply_info_cell(1, &supply_token_hash(1), 7700),
+                    supply_info_cell(1, &supply_token_hash(1), 8800),
+                    (
+                        output(after_issue - 600_00000000, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let one_tx = vec![
+                funding_block(),
+                issue,
+                claim_rule_block(102, vec![two_outputs]),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&one_tx, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700),
+                "two outputs in one transaction: the first"
+            );
+        }
+
+        // ── The owner rule: an Omnilock claim is the token's only when the
+        // token's owner lock IS the claiming supply-mode Omnilock ──
+
+        /// A forged claim: a supply-info cell anyone can write, naming a token
+        /// whose owner is another lock (the RGB++-style token, owner
+        /// `EXT_OWNER`). No max supply, on every path and batching.
+        #[tokio::test]
+        async fn a_claim_on_a_token_another_lock_owns_is_not_its() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        xudt_ext_type_script(),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                        7700,
+                        1,
+                        &ext_type_hash(),
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &ext_type_hash())
+                    .await
+                    .max_supply,
+                None
+            );
+        }
+
+        /// A forged claim after the issuance (another Omnilock names supply
+        /// token 1), then the token's own: the genuine one stands.
+        #[tokio::test]
+        async fn a_forged_claim_before_the_genuine_one_does_not_stand() {
+            let after_issue = FUNDING_CAPACITY - EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        after_issue,
+                        6600,
+                        2,
+                        &supply_token_hash(1),
+                    )],
+                ),
+                claim_rule_block(
+                    103,
+                    vec![genuine_claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_issue - 300_00000000,
+                        7700,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+        }
+
+        /// The token's own claim alone counts, as before.
+        #[tokio::test]
+        async fn the_tokens_own_claim_alone_counts() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![issue_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        supply_token_type(1),
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![genuine_claim_tx(
+                        0xa2,
+                        input(0xa1, 1),
+                        FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                        7700,
+                    )],
+                ),
+            ];
+            assert_eq!(
+                token_row_on_every_path(&blocks, &supply_token_hash(1))
+                    .await
+                    .max_supply,
+                Some(7700)
+            );
+        }
+
+        /// Supply token 1's owner Omnilock writes an info cell naming supply
+        /// token 2: it is not token 1's (it names another), nor token 2's
+        /// (another lock owns token 2). Nothing for either.
+        #[tokio::test]
+        async fn an_owners_claim_naming_another_token_counts_for_neither() {
+            let after_two = FUNDING_CAPACITY - 2 * EXT_CELL_CAPACITY;
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![
+                        issue_tx(0xa1, input(0xc0, 0), FUNDING_CAPACITY, supply_token_type(1)),
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - EXT_CELL_CAPACITY,
+                            supply_token_type(2),
+                        ),
+                    ],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![claim_tx(
+                        0xa3,
+                        input(0xa2, 1),
+                        after_two,
+                        7700,
+                        1,
+                        &supply_token_hash(2),
+                    )],
+                ),
+            ];
+            for token in [supply_token_hash(1), supply_token_hash(2)] {
+                assert_eq!(
+                    token_row_on_every_path(&blocks, &token).await.max_supply,
+                    None,
+                    "token 0x{}",
+                    hex::encode(&token)
+                );
+            }
+        }
+
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback
         /// restores every metadata field, `metadata_source` and
         /// `chain_metadata` included, and the transfer count.
@@ -14290,7 +15899,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
             let indexer = indexer_for_live_write_test(store.clone());
             for block in blocks {
                 super::live_dao_fee::write_live_blocks_with_parser_token_daily(
@@ -14666,6 +16274,351 @@ mod tests {
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 
+        /// The continuous chain with one more block: a wallet merging its own
+        /// two token cells (a recognised type code that moved no item: the
+        /// party's `TAG_TYPE_CALL`, a Script transaction), beside the chain's
+        /// DAO deposit, request and completion (a sender whose CKB rose), its
+        /// token mint and transfer and its `.cell` registrations.
+        fn continuous_chain_with_a_token_merge() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = continuous_chain_with_dao_token_and_name();
+            let tokens = super::token_daily_parity::blocks();
+            // The token transfer of block 2 left the token cells it made; a
+            // merge spends two of them under one lock and recreates one.
+            let transfer = blocks[2]
+                .block
+                .transactions
+                .iter()
+                .find(|tx| tx.hash == tokens[2].block.transactions[1].hash)
+                .expect("the chain's token transfer")
+                .clone();
+            let (merged_lock, token_cells): (crate::rpc::Script, Vec<usize>) = {
+                let mut by_lock: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+                for (index, output) in transfer.outputs.iter().enumerate() {
+                    if output.type_.is_some() {
+                        by_lock
+                            .entry(format!("{}{}", output.lock.code_hash, output.lock.args))
+                            .or_default()
+                            .push(index);
+                    }
+                }
+                let (_, indexes) = by_lock
+                    .into_iter()
+                    .find(|(_, indexes)| indexes.len() >= 2)
+                    .expect("the transfer leaves two token cells under one lock");
+                (transfer.outputs[indexes[0]].lock.clone(), indexes)
+            };
+            let token_type = transfer.outputs[token_cells[0]].type_.clone();
+            // The amounts the merged cells carry (an owner-mode cell carries
+            // none): the merge keeps their sum, so no item moves.
+            let total: u128 = token_cells
+                .iter()
+                .filter_map(|&index| {
+                    let data = crate::rpc::parse_hex_to_bytes(&transfer.outputs_data[index]);
+                    crate::parser::UdtParser::parse_amount(&data)
+                })
+                .sum();
+            let capacity: u64 = token_cells
+                .iter()
+                .map(|&index| {
+                    u64::from_str_radix(
+                        transfer.outputs[index].capacity.trim_start_matches("0x"),
+                        16,
+                    )
+                    .unwrap()
+                })
+                .sum();
+            let merge = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: token_cells
+                    .iter()
+                    .map(|&index| crate::rpc::CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: crate::rpc::OutPoint {
+                            tx_hash: transfer.hash.clone(),
+                            index: format!("0x{index:x}"),
+                        },
+                    })
+                    .collect(),
+                outputs: vec![crate::rpc::CellOutput {
+                    capacity: format!("0x{:x}", capacity - 1_000),
+                    lock: merged_lock,
+                    type_: token_type,
+                }],
+                outputs_data: vec![format!("0x{}", hex::encode(total.to_le_bytes()))],
+                witnesses: vec!["0x".to_string()],
+            };
+            let template = blocks[3].clone();
+            let next_block = |number: u64, txs: Vec<crate::rpc::TransactionView>| {
+                let mut next = template.clone();
+                next.block.transactions = txs;
+                let header = &mut next.block.header;
+                header.number = format!("0x{number:x}");
+                header.hash = format!("0x{}", hex::encode(super::live_dao_fee::block_hash(number)));
+                header.parent_hash = format!(
+                    "0x{}",
+                    hex::encode(super::live_dao_fee::block_hash(number - 1))
+                );
+                header.epoch = format!("0x{:x}", (1800_u64 << 40) | (number << 24));
+                header.timestamp = format!("0x{:x}", 1_700_063_998_000_u64 + number * 1_000);
+                next
+            };
+            const FUNDS: u64 = 1_000_000_000_000;
+            blocks.push(next_block(
+                4,
+                vec![super::live_dao_fee::cellbase_tx(0xc4, FUNDS), merge],
+            ));
+            // resync fix round S3: two code cells under a type script that is
+            // not Type ID (block 5), one of them consumed (block 6), so the
+            // live code cell index has rows to compare.
+            let code_type = crate::rpc::Script {
+                code_hash: format!("0x{}", "5c".repeat(32)),
+                hash_type: "type".to_string(),
+                args: "0x01".to_string(),
+            };
+            let elf = |tag: u8| format!("0x{}{tag:02x}", hex::encode(b"\x7fELF\x02\x01\x01"));
+            let output =
+                |capacity: u64, type_: Option<crate::rpc::Script>| crate::rpc::CellOutput {
+                    capacity: format!("0x{capacity:x}"),
+                    lock: super::live_dao_fee::lock_script(),
+                    type_,
+                };
+            let input = |tx_hash: [u8; 32], index: u32| crate::rpc::CellInput {
+                since: "0x0".to_string(),
+                previous_output: crate::rpc::OutPoint {
+                    tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                    index: format!("0x{index:x}"),
+                },
+            };
+            let deploy = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xc4; 32], 0)],
+                outputs: vec![
+                    output(500_00000000, Some(code_type.clone())),
+                    output(500_00000000, Some(code_type)),
+                    output(FUNDS - 100_000_000_000 - 1_000, None),
+                ],
+                outputs_data: vec![elf(1), elf(2), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                5,
+                vec![super::live_dao_fee::cellbase_tx(0xc5, 100_000_000), deploy],
+            ));
+            let consume = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xe9; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xe8; 32], 0)],
+                outputs: vec![output(500_00000000 - 1_000, None)],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                6,
+                vec![super::live_dao_fee::cellbase_tx(0xc6, 100_000_000), consume],
+            ));
+            // Tests report NOTE-3: a code cell created and consumed in one
+            // block (block 7: one transaction deploys it, the next spends it).
+            let deploy_and_spend = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xea; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xe8; 32], 2)],
+                outputs: vec![
+                    output(
+                        500_00000000,
+                        Some(crate::rpc::Script {
+                            code_hash: format!("0x{}", "5c".repeat(32)),
+                            hash_type: "type".to_string(),
+                            args: "0x01".to_string(),
+                        }),
+                    ),
+                    output(FUNDS - 100_000_000_000 - 500_00000000 - 2_000, None),
+                ],
+                outputs_data: vec![elf(3), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let spent_in_its_block = crate::rpc::TransactionView {
+                hash: format!("0x{}", hex::encode([0xeb; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input([0xea; 32], 0)],
+                outputs: vec![output(500_00000000 - 1_000, None)],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            blocks.push(next_block(
+                7,
+                vec![
+                    super::live_dao_fee::cellbase_tx(0xc7, 100_000_000),
+                    deploy_and_spend,
+                    spent_in_its_block,
+                ],
+            ));
+            blocks
+        }
+
+        /// resync fix round, tests report NOTE-1: a STORE-level comparison of
+        /// bulk against live, whole column families, of the rows the re-sync
+        /// set's parts 1, 3 and 6 write: `tx_actions` (participants' tags with
+        /// the senders bit and `TAG_TYPE_CALL`, the recognised type codes),
+        /// `tx_actions_by_bucket` (each transaction's one kind), `addr_txs`
+        /// and `addr_txs_by_prefix` (the tags per address), and every
+        /// statistics row (the day and hour kind counts), byte for byte, from
+        /// bulk build, a block-at-a-time live sync and one live batch, on a
+        /// chain with a DAO completion (a sender whose CKB rose), a token
+        /// mint, transfer and merge (a recognised code that moved no item)
+        /// and `.cell` registrations; and `live_code_cells_by_type` (resync
+        /// fix round S3), on two code cells deployed and one consumed, and one
+        /// code cell created and consumed in one block, with a rollback of
+        /// the last two blocks compared row by row with a store synced to
+        /// block 5, and their replay. (A labelled token and a claim before a
+        /// token's first cell are held whole on the three shapes elsewhere:
+        /// `token_metadata_provenance_parity::a_label_changes_no_stored_token_row_on_either_path`
+        /// and `live_token_binding::a_claim_before_the_token_exists_is_not_the_tokens`;
+        /// this chain's bulk build takes no label seed.)
+        #[tokio::test]
+        async fn bulk_and_live_write_the_same_activity_rows_whole() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_a_token_merge();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+            let merge = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xe7u8; 32])
+                .expect("the merge's activity row");
+            assert!(
+                !merge.recognized_type_codes.is_empty()
+                    && merge
+                        .participants
+                        .iter()
+                        .any(|party| party.tags & ckbadger_store::types::TAG_TYPE_CALL != 0),
+                "fixture: the merge is a recognised code that moved no item: {merge:?}"
+            );
+            assert!(
+                bulk.tx_actions_map.values().any(|actions| actions
+                    .participants
+                    .iter()
+                    .any(|party| party.sent() && party.ckb_delta > 0)),
+                "fixture: a sender whose CKB rose"
+            );
+
+            let open_live = || {
+                let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+
+            let tip_chain_time_ms = blocks
+                .iter()
+                .map(|block| i64::from_str_radix(&block.block.header.timestamp[2..], 16).unwrap())
+                .max()
+                .unwrap();
+            for (live, shape) in [(&single, "a block per batch"), (&multi, "one batch")] {
+                let rows = crate::sync::bulk_build::collect_activity_rows_for_test(live).unwrap();
+                assert_eq!(rows.len(), bulk.activity_rows.len(), "{shape}: row count");
+                for (row, expected) in rows.iter().zip(&bulk.activity_rows) {
+                    assert_eq!(
+                        row,
+                        expected,
+                        "{shape}: first differing activity row ({}:0x{})",
+                        expected.0,
+                        hex::encode(&expected.1)
+                    );
+                }
+                assert_stats_dao_rows_eq(
+                    stats_dao_rows(live),
+                    &bulk.stats_dao_rows,
+                    tip_chain_time_ms,
+                    shape,
+                );
+            }
+
+            // resync fix round S3: the live code cells by type script, the
+            // second code cell deployed at block 5 left after block 6 consumed
+            // the first; a rollback of block 6 restores the first exactly, and
+            // the replay leaves the rows bulk writes.
+            let code_cells = |store: &CkbadgerStore| {
+                crate::sync::bulk_build::collect_activity_rows_for_test(store)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|(cf, _, _)| *cf == ckbadger_store::CF_LIVE_CODE_CELLS_BY_TYPE)
+                    .collect::<Vec<_>>()
+            };
+            let at_tip = code_cells(&multi);
+            assert_eq!(
+                at_tip.len(),
+                1,
+                "fixture: one live code cell at the tip (block 7's was created and spent in it)"
+            );
+            assert_eq!(&at_tip[0].1[32..64], &[0xe8; 32], "the deploy's cell");
+            multi_indexer.writer.cleanup_batch_range(6, 7).unwrap();
+            multi_indexer.reconcile_hodl_tracker_with_tip(5).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(5)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            // Tests report NOTE-3: the rolled-back rows themselves, against a
+            // store synced a block at a time through block 5 (not their count).
+            let (through_5, through_5_indexer) = open_live();
+            for block in blocks[..6].iter().cloned() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &through_5_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live through block 5");
+            }
+            assert_eq!(
+                code_cells(&multi),
+                code_cells(&through_5),
+                "the rollback of blocks 6 and 7 restores the rows of block 5"
+            );
+            assert_eq!(code_cells(&multi).len(), 2, "both deployed code cells");
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[6..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(
+                crate::sync::bulk_build::collect_activity_rows_for_test(&multi).unwrap(),
+                bulk.activity_rows,
+                "bulk vs rollback/replay"
+            );
+        }
+
         fn bucket_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {
             store
                 .iterator_cf(
@@ -14700,7 +16653,9 @@ mod tests {
                 .tx_actions_map
                 .values()
                 .filter_map(|actions| {
-                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                    ckbadger_store::ClassifiedTxActions::classify(actions)
+                        .bucket_key()
+                        .map(|k| k.to_vec())
                 })
                 .collect();
             expected.sort();
@@ -15212,8 +17167,8 @@ mod tests {
     mod orphan_tip_reorg {
         use super::live_dao_fee::{
             block, block_hash, cellbase_tx, indexer_for_live_write_test, lock_script_b,
-            lock_script_c, seed_pre_parent_header, seed_secp_script_info, transfer_tx,
-            write_live_block, AR_DEPOSIT, FUNDING_CAPACITY,
+            lock_script_c, seed_pre_parent_header, transfer_tx, write_live_block, AR_DEPOSIT,
+            FUNDING_CAPACITY,
         };
         use super::*;
         use crate::rpc::TransactionView;
@@ -15497,7 +17452,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
             assert_floor_header_seeded(store.as_ref());
 
             // A is canonical when it is written.

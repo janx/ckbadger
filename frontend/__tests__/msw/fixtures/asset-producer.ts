@@ -8,7 +8,11 @@
  * over real_token_router_producer_contract and the inventory contract): the feeds' rows name the
  * token's type script (`itemTypes`, the code 0x72…, where they said []), the holders' `firstRank`,
  * the token's `transfersCount` (4, it said 0), the transactions' `pays` (null), the inventory
- * page's `hMultiplier` cut to two places ("1.66", it said "1.67") and its `anchor` (null). */
+ * page's `hMultiplier` cut to two places ("1.66", it said "1.67") and its `anchor` (null).
+ * Checked again at the merge into resync/type-codes (C7) over the same contract, its seed now as
+ * the indexer writes it (the row's recognised codes, the sender's input bit): the feeds' and the
+ * transactions' rows state `recognizedTypes` (the token's code 0x72… by type, with `scriptNameBy`
+ * null) where they said `itemTypes`, and the sender's `sent` is true as written here. */
 import type {
   Token,
   TokenHistory,
@@ -30,14 +34,14 @@ export const tokenProducer = {
         blockNumber: 2,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [
+        recognizedTypes: [
           {
             scriptName: null,
+            scriptNameBy: null,
             typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
             typeHashType: 'type',
           },
         ],
-        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -45,6 +49,7 @@ export const tokenProducer = {
             itemDeltas: [],
             lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
             lockHashPrefix: null,
+            sent: true,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -65,6 +70,7 @@ export const tokenProducer = {
             ],
             lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
             lockHashPrefix: null,
+            sent: false,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -81,14 +87,14 @@ export const tokenProducer = {
         blockNumber: 1,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [
+        recognizedTypes: [
           {
             scriptName: null,
+            scriptNameBy: null,
             typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
             typeHashType: 'type',
           },
         ],
-        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -96,6 +102,7 @@ export const tokenProducer = {
             itemDeltas: [],
             lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
             lockHashPrefix: null,
+            sent: true,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -116,6 +123,7 @@ export const tokenProducer = {
             ],
             lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
             lockHashPrefix: null,
+            sent: false,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -132,14 +140,14 @@ export const tokenProducer = {
         blockNumber: 0,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [
+        recognizedTypes: [
           {
             scriptName: null,
+            scriptNameBy: null,
             typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
             typeHashType: 'type',
           },
         ],
-        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -147,6 +155,7 @@ export const tokenProducer = {
             itemDeltas: [],
             lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
             lockHashPrefix: null,
+            sent: true,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -167,6 +176,7 @@ export const tokenProducer = {
             ],
             lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
             lockHashPrefix: null,
+            sent: false,
             lockKind: null,
             roles: [],
             tags: 0,
@@ -448,14 +458,14 @@ export const tokenProducer = {
           blockNumber: 2,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [
+          recognizedTypes: [
             {
               scriptName: null,
+              scriptNameBy: null,
               typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
               typeHashType: 'type',
             },
           ],
-          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -463,6 +473,7 @@ export const tokenProducer = {
               itemDeltas: [],
               lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
               lockHashPrefix: null,
+              sent: true,
               lockKind: null,
               roles: [],
               tags: 0,
@@ -483,6 +494,7 @@ export const tokenProducer = {
               ],
               lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
               lockHashPrefix: null,
+              sent: false,
               lockKind: null,
               roles: [],
               tags: 0,
@@ -516,14 +528,14 @@ export const tokenProducer = {
           blockNumber: 1,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [
+          recognizedTypes: [
             {
               scriptName: null,
+              scriptNameBy: null,
               typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
               typeHashType: 'type',
             },
           ],
-          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -531,6 +543,7 @@ export const tokenProducer = {
               itemDeltas: [],
               lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
               lockHashPrefix: null,
+              sent: true,
               lockKind: null,
               roles: [],
               tags: 0,
@@ -551,6 +564,7 @@ export const tokenProducer = {
               ],
               lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
               lockHashPrefix: null,
+              sent: false,
               lockKind: null,
               roles: [],
               tags: 0,
@@ -584,14 +598,14 @@ export const tokenProducer = {
           blockNumber: 0,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [
+          recognizedTypes: [
             {
               scriptName: null,
+              scriptNameBy: null,
               typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
               typeHashType: 'type',
             },
           ],
-          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -599,6 +613,7 @@ export const tokenProducer = {
               itemDeltas: [],
               lockHash: '0x3131313131313131313131313131313131313131313131313131313131313131',
               lockHashPrefix: null,
+              sent: true,
               lockKind: null,
               roles: [],
               tags: 0,
@@ -619,6 +634,7 @@ export const tokenProducer = {
               ],
               lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
               lockHashPrefix: null,
+              sent: false,
               lockKind: null,
               roles: [],
               tags: 0,

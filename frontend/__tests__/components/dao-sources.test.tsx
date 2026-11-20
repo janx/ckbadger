@@ -8,12 +8,16 @@ import { api } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 import { activityRead } from '@/__tests__/utils/activity-read';
 
-vi.mock('@/lib/api', () => ({
+// the module's own constants and error class (the fold reads the senders bit, TAG_INPUT, at the
+// merge of lane feed into resync/int), its two reads mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: { getGlobalActivities: vi.fn(), getTransactions: vi.fn() },
 }));
 
 const tx = '0x' + 'a'.repeat(64);
-const party = (n: number, ckbDelta: string, usedDelta: string) => ({
+/** A party; `sent` says whether its lock is an input's (the API's `sent`). */
+const party = (n: number, ckbDelta: string, usedDelta: string, sent: boolean) => ({
   address: seededAddress(`party${n}`),
   lockHash: '0x' + String(n).repeat(64),
   lockHashPrefix: null,
@@ -23,8 +27,12 @@ const party = (n: number, ckbDelta: string, usedDelta: string) => ({
   usedDelta,
   itemDeltas: [],
   tags: 16,
+  sent,
 });
-/** A withdrawal request as the board draws it: the request, the fee payer, and a zero-delta party. */
+/**
+ * A withdrawal request as the board draws it: the request (the depositor spends its deposit cell
+ * into the request cell, so it sent), the fee payer (sent), and a zero-delta party (did not).
+ */
 const activity = activityRead({
   txHash: tx,
   txIndex: 2,
@@ -33,21 +41,20 @@ const activity = activityRead({
   timestamp: '1793268770452',
   isCellbase: false,
   participants: [
-    party(1, '65296000000', '6100000000'),
-    party(2, '-65296000000', '-6100000000'),
-    party(3, '0', '0'),
+    party(1, '65296000000', '6100000000', true),
+    party(2, '-65296000000', '-6100000000', true),
+    party(3, '0', '0', false),
   ],
   typeCalls: [],
   lockCalls: [],
-  // the Nervos DAO's type script, the code a DAO step carries (the P3 follow-up's itemTypes)
-  itemTypes: [
+  // the Nervos DAO's type script, the recognised code that ran in a DAO step (C7)
+  recognizedTypes: [
     {
       typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
       typeHashType: 'type',
       scriptName: 'Nervos DAO',
     },
   ],
-  itemTypesUnread: null,
   protocolActions: [
     {
       protocol: 'dao',
@@ -66,7 +73,10 @@ const request = (i: number) =>
     ...activity,
     txHash: '0x' + String(i + 1).repeat(64),
     blockNumber: 123 - i,
-    participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
+    participants: [
+      party(4 + i, '65296000000', '6100000000', true),
+      ...activity.participants.slice(1),
+    ],
   });
 const deposit = (i: number) =>
   activityRead({
@@ -152,11 +162,12 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
         '3'
       )
     );
-    // three depositors, and the two parties every request shares; re-pinned on purpose (the
-    // lead's finding, the exactness lane's B9): the three newest, older DAO activity unread (the
-    // route has more), so the run's counts are so far (it said "all 3 … · 5 participants")
+    // three depositors, and the fee payer every request shares; the zero-delta party did not send
+    // (re-pinned on purpose, resync/int: the run counts its senders, it counted 5 participants);
+    // re-pinned on purpose (the lead's finding, the exactness lane's B9): the three newest, older
+    // DAO activity unread (the route has more), so the run's counts are so far
     expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^3 transactions so far ↓ · 5 participants so far$/
+      /^3 transactions so far ↓ · 4 senders so far$/
     );
     expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });

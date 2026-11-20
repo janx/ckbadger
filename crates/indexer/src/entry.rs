@@ -192,10 +192,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         "Startup sync decision"
     );
 
-    // This is the first domain-store mutation on startup, and it happens on the
-    // FINAL handle (the probe handle only reads). Existing tagged DBs must
-    // match; old untagged DBs must prove their chain through persisted block 0
-    // before the canonical identity is written.
+    // The store's layout is this build's: `open_chain_stores_for_startup`
+    // refused any other store before handing it out (a fresh store is stamped
+    // there), so nothing below can write into a store of another layout.
+    // This is the first domain-store mutation on startup after the layout
+    // stamp, and it happens on the FINAL handle (the probe handle only reads).
+    // Existing tagged DBs must match; old untagged DBs must prove their chain
+    // through persisted block 0 before the canonical identity is written.
     establish_db_network_identity(&store, &config.network, &node_genesis)?;
     store.log_config();
 
@@ -921,6 +924,12 @@ pub(crate) fn open_chain_stores_for_startup(
     let mut probe_config = runtime_config;
     probe_config.vector_memtable = false;
 
+    // A store this build must not use is refused before the probe open,
+    // which would create the column families it lacks (resync fix round 2,
+    // A): nothing is created in it. A store this build's creating open left
+    // half made is made whole by this open (resync fix round 3, M).
+    crate::store_layout::refuse_before_open(std::path::Path::new(domain_data_path))?;
+
     info!(
         path = domain_data_path,
         "Probe-opening ckbadger domain store for the startup decision"
@@ -961,6 +970,14 @@ pub(crate) fn open_chain_stores_for_startup(
         Arc::new(probe_store)
     };
 
+    // The store is handed out only with this build's layout (resync fix
+    // round T3): a fresh store is stamped with it, any other store is
+    // refused here, before the first write and before the append-only store
+    // is created, nothing written, with both layouts named
+    // (`store_layout`). The only earlier work reads (the bulk session probe,
+    // the sync tip).
+    crate::store_layout::ensure_store_layout(&store)?;
+
     info!(
         path = append_only_data_path,
         memtable = decision.memtable.as_str(),
@@ -989,6 +1006,24 @@ fn store_location_from_config(config: &Config) -> StoreLocation {
 
 /// Run label import from a service config.
 pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
+    let location = StoreLocation::new(
+        config.network.as_str(),
+        config.domain_data_path.as_str(),
+        config.append_only_data_path.as_str(),
+    );
+    // Before the open, which would create the column families an earlier
+    // build's store lacks (resync fix round 2, A). A store still being
+    // created is the indexer's to make whole: said, and left to it (resync
+    // fix round 3, M).
+    let inspected =
+        crate::store_layout::refuse_before_open(std::path::Path::new(&config.domain_data_path))
+            .map_err(|error| annotate_rebuild_required(error, &location))?;
+    if inspected == Some(ckbadger_store::StoreLayoutState::NotReady) {
+        anyhow::bail!(
+            "the domain store {} is still being created: try again once the indexer has made it",
+            config.domain_data_path
+        );
+    }
     info!(
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
@@ -997,6 +1032,10 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         &config.domain_data_path,
         config.store_runtime_config,
     )?);
+    // Before the import writes a label: the store's layout must be this
+    // build's (`store_layout`), a fresh store stamped with it.
+    crate::store_layout::ensure_store_layout(core_store.as_ref())
+        .map_err(|error| annotate_rebuild_required(error, &location))?;
 
     let label_config = LabelImportConfig {
         metadata_path: config.metadata_path,
@@ -2187,6 +2226,11 @@ mod tests {
 
         let store =
             CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
+        // A store this build wrote carries its layout stamp (resync fix
+        // round T3: the startup open refuses any other).
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
         let header = CachedBlockHeader {
             hash: vec![0x7f; 32],
             timestamp: 1_704_067_200_000,
@@ -2281,6 +2325,12 @@ mod tests {
             let store =
                 CkbadgerStore::open_domain_with_runtime(domain.path(), startup_runtime_config())
                     .unwrap();
+            // A store this build wrote carries its layout stamp, its first
+            // write (re-pinned in resync fix round 2, A: an unstamped store
+            // with rows is refused before the bulk session is read).
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
             store
                 .set_bulk_build_session_marker(Some(
                     &ckbadger_store::types::BulkBuildSessionMarker {
@@ -2305,5 +2355,331 @@ mod tests {
 
         assert!(is_rebuild_required(&err), "{err:#}");
         assert!(err.to_string().contains("incomplete bulk build session"));
+    }
+
+    /// resync fix round T3 (tests report SHOULD-3): the indexer cannot hold
+    /// its stores without the layout check. A store from before layouts were
+    /// stamped, and a store stamped 7, are refused when they are opened for
+    /// startup (`open_chain_stores_for_startup`, the only way
+    /// `run_indexer_sync` gets its stores), rebuild-required with both
+    /// layouts named, before anything is written and before the append-only
+    /// store is created.
+    #[test]
+    fn startup_open_refuses_a_store_of_another_layout_writing_nothing() {
+        use crate::store_layout::tests::{domain_rows, seed_pre_layout_store};
+        for stamp in [None, Some(7)] {
+            let domain = tempfile::tempdir().unwrap();
+            let append_only = tempfile::tempdir().unwrap();
+            let append_only_path = append_only.path().join("append-only");
+            let before = {
+                let store = CkbadgerStore::open_domain(domain.path()).unwrap();
+                seed_pre_layout_store(&store);
+                if let Some(stamp) = stamp {
+                    store.set_store_layout(stamp).unwrap();
+                }
+                domain_rows(&store)
+            };
+
+            let err = match open_chain_stores_for_startup(
+                domain.path().to_str().unwrap(),
+                append_only_path.to_str().unwrap(),
+                startup_runtime_config(),
+                10_000,
+                1_000,
+            ) {
+                Ok(_) => panic!("a store stamped {stamp:?} must be refused at open"),
+                Err(err) => err,
+            };
+
+            assert!(is_rebuild_required(&err), "{err:#}");
+            let words = err.to_string();
+            assert!(
+                words.contains(&format!("store layout {}", ckbadger_store::STORE_LAYOUT))
+                    && words.contains("delete RocksDB and re-sync from genesis"),
+                "{words}"
+            );
+            let store = CkbadgerStore::open_domain(domain.path()).unwrap();
+            assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+            assert!(
+                !append_only_path.exists(),
+                "the append-only store is not created for a refused store"
+            );
+        }
+    }
+
+    /// resync fix round 2, A: a store an earlier build left (without the
+    /// column families this build added; one row and no stamp, or stamped 7)
+    /// is refused at startup, rebuild-required, and NOTHING is created in it:
+    /// its files and column families are as they were, so the earlier build
+    /// still opens it. (The T3 test above meets stores built with this
+    /// build's column families.)
+    /// And an earlier build's EMPTY store (its column families, no row, no
+    /// stamp), refused by its column families alone (resync fix round 3,
+    /// tests SHOULD-1).
+    #[test]
+    fn startup_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_domain_store_by_hand, create_earlier_layout_domain_store,
+            earlier_layout_column_families, store_files_and_column_families,
+        };
+        for (row, stamp) in [(true, None), (true, Some(7)), (false, None)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            let append_only = dir.path().join("append-only");
+            if row {
+                create_earlier_layout_domain_store(&domain, stamp);
+            } else {
+                create_domain_store_by_hand(
+                    &domain,
+                    &earlier_layout_column_families(),
+                    false,
+                    stamp,
+                );
+            }
+            let before = store_files_and_column_families(&domain);
+
+            let err = match open_chain_stores_for_startup(
+                domain.to_str().unwrap(),
+                append_only.to_str().unwrap(),
+                startup_runtime_config(),
+                10_000,
+                1_000,
+            ) {
+                Ok(_) => panic!("a store stamped {stamp:?} must be refused at open"),
+                Err(err) => err,
+            };
+            assert!(is_rebuild_required(&err), "{err:#}");
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: nothing is created in a refused store"
+            );
+            assert!(!append_only.exists());
+            let words = err.to_string();
+            assert!(
+                words.contains("live_code_cells_by_type")
+                    && words.contains(&format!("store layout {}", ckbadger_store::STORE_LAYOUT))
+                    && words.contains("delete RocksDB and re-sync from genesis"),
+                "{words}"
+            );
+        }
+    }
+
+    /// resync fix round 2, A: `ckbadger label-import` refuses a store an
+    /// earlier build left the same way, creating nothing in it.
+    #[tokio::test]
+    async fn label_import_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+
+            let error = run_label_import(label_import_config(dir.path()))
+                .await
+                .unwrap_err();
+            assert!(is_rebuild_required(&error), "{error:#}");
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: nothing is created in a refused store"
+            );
+            assert!(
+                error.to_string().contains("live_code_cells_by_type"),
+                "{error:#}"
+            );
+        }
+    }
+
+    /// resync fix round 3, M: a store this build's creating open left half
+    /// made (RocksDB wrote `CURRENT`, the open stopped before it made every
+    /// column family; no row, no stamp) is no earlier build's: the indexer,
+    /// its creator, makes the rest at its open and stamps it.
+    #[test]
+    fn startup_completes_a_store_its_creating_open_left_half_made() {
+        use ckbadger_store::earlier_layout_for_test::create_store_in_creation;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append_only = dir.path().join("append-only");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+
+        let opened = open_chain_stores_for_startup(
+            domain.to_str().unwrap(),
+            append_only.to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap_or_else(|err| panic!("a store still being created is made whole: {err:#}"));
+        assert!(opened.decision.fresh);
+        assert_eq!(
+            opened.store.get_store_layout().unwrap(),
+            Some(ckbadger_store::STORE_LAYOUT)
+        );
+        drop(opened);
+        let made = rocksdb::DB::list_cf(&rocksdb::Options::default(), &domain).unwrap();
+        for name in ckbadger_store::store::DOMAIN_CFS {
+            assert!(made.iter().any(|have| have == name), "{name} made");
+        }
+    }
+
+    /// resync fix round 3, M: `ckbadger label-import` run by hand on a store
+    /// still being created says so, and to try again; it refuses nothing and
+    /// writes nothing in it.
+    #[tokio::test]
+    async fn label_import_says_a_store_still_being_created_is_being_created() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_store_in_creation, store_files_and_column_families,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let before = store_files_and_column_families(&domain);
+
+        let error = run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(!is_rebuild_required(&error), "{error:#}");
+        let words = format!("{error:#}");
+        assert!(
+            words.contains("is still being created")
+                && words.contains("try again")
+                && !words.contains("delete RocksDB"),
+            "{words}"
+        );
+        assert_eq!(store_files_and_column_families(&domain), before);
+    }
+
+    fn label_import_config(dir: &std::path::Path) -> LabelImportServiceConfig {
+        LabelImportServiceConfig {
+            domain_data_path: dir.join("domain").to_string_lossy().into_owned(),
+            append_only_data_path: dir.join("append-only").to_string_lossy().into_owned(),
+            metadata_path: None,
+            network: "mainnet".to_string(),
+            store_runtime_config: StoreRuntimeConfig::default(),
+        }
+    }
+
+    /// `ckbadger label-import` writes the label CF: on a store an older
+    /// build wrote (no layout stamp) it is refused before it writes a label,
+    /// the store left as it was (lane rd/api-lock-names, fix round M1).
+    #[tokio::test]
+    async fn label_import_refuses_a_store_from_before_layouts_writing_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let before = {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            crate::store_layout::tests::seed_pre_layout_store(&store);
+            crate::store_layout::tests::domain_rows(&store)
+        };
+
+        let error = run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(is_rebuild_required(&error), "{error:#}");
+        assert!(
+            error.to_string().contains("no store layout stamp"),
+            "{error:#}"
+        );
+
+        let store = CkbadgerStore::open_domain(&domain).unwrap();
+        assert_eq!(crate::store_layout::tests::domain_rows(&store), before);
+    }
+
+    /// resync fix round N7 (a fresh start is never read as an old store):
+    /// the indexer leaves no moment at which the stores the API waits for
+    /// hold rows and no stamp. On a fresh start the stamp is the domain
+    /// store's first write, made before the append-only store is created (so
+    /// when both `CURRENT` files exist the stamp is written), and a secondary
+    /// (the API's view) reads it from the WAL while the primary holds it
+    /// unflushed, even when another column family's rows are already flushed
+    /// to a table file, as bulk build's are.
+    #[test]
+    fn a_fresh_start_is_stamped_before_the_api_can_read_its_stores() {
+        use ckbadger_store::{types::CachedBlockHeader, StoreBatch, StoreLayoutState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let append_only = dir.path().join("append-only");
+        let opened = open_chain_stores_for_startup(
+            domain.to_str().unwrap(),
+            append_only.to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap();
+        assert!(opened.decision.fresh);
+        assert!(append_only.join("CURRENT").is_file());
+
+        let header = CachedBlockHeader {
+            hash: vec![0x7f; 32],
+            timestamp: 1_704_067_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_704_067_200_000,
+        };
+        let mut batch = StoreBatch::new(&opened.store);
+        batch.put_block_header(0, &header);
+        batch.commit().unwrap();
+        opened
+            .store
+            .flush_column_families(&[ckbadger_store::CF_BLOCK_HEADERS])
+            .unwrap();
+
+        let secondary = dir.path().join("domain-api");
+        let view = CkbadgerStore::open_domain_secondary_with_runtime(
+            &domain,
+            &secondary,
+            startup_runtime_config(),
+        )
+        .unwrap();
+        assert!(
+            !view.holds_no_domain_rows().unwrap(),
+            "the secondary sees the flushed rows"
+        );
+        assert_eq!(
+            view.check_store_layout().unwrap(),
+            Ok(StoreLayoutState::Current),
+            "and the stamp with them"
+        );
+        // resync fix round 3, tests NOTE-2: what `verify` and `label-import`
+        // meet during a bulk build: the inspection, with options of its own,
+        // reads the stamp from the WAL while the primary holds it unflushed.
+        assert_eq!(
+            ckbadger_store::inspect_domain_store(&domain, &dir.path().join("domain-inspect"))
+                .unwrap(),
+            Some(Ok(StoreLayoutState::Current)),
+            "the inspection passes the store its indexer is writing"
+        );
+        drop(opened);
+    }
+
+    /// On a fresh store the import stamps the layout first, then writes.
+    #[tokio::test]
+    async fn label_import_stamps_a_fresh_store_then_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().join("domain")).unwrap();
+        assert_eq!(
+            store.get_store_layout().unwrap(),
+            Some(ckbadger_store::STORE_LAYOUT)
+        );
+        assert!(store.get_script_family("default-lock").unwrap().is_some());
     }
 }

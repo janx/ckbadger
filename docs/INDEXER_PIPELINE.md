@@ -494,7 +494,7 @@ to the runtime-status part alone: sync progress and memory stats are still stage
 id cannot make the indexer look dead to every reader.
 
 The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across every column family of
-**both** chain stores — `ckbadger_store::ALL_CFS`, the 74 domain CFs plus the append-only `cells`
+**both** chain stores — `ckbadger_store::ALL_CFS`, the 76 domain CFs plus the append-only `cells`
 (the 3 network-store CFs belong to the crawler's store and are not swept). Live sync resamples it
 every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while `SYNC_PROGRESS` — what the TUI and API
 read — keeps the 3-second cadence. Bulk sync still samples every tick: its perf heartbeat and
@@ -655,7 +655,7 @@ truth for bulk-sync behavior, constraints, and failure handling.
   `block_headers`, `tx_index`, `addr_txs`, `token_transfers`, `activities`, collection activity feeds
 - **Class B** (final snapshot): held in reducer memory, written once after all batches —
   `live_cells`, `cell_by_*`, `addr_balance`, `tokens`, `token_holders*`, `dao_*`,
-  `script_info`, object/identity/fiber state
+  `script_reference_info` (each script's usage, by its pair), object/identity/fiber state
 - **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
   `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_mnft`
 - **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals`, `dob_decoded` — not

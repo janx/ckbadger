@@ -24,6 +24,7 @@ import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 import { inkOf, READING } from '@/__tests__/utils/ink-role';
@@ -228,9 +229,10 @@ function objectActivity(): GlobalActivity {
   });
 }
 
+// the registry's names, each by its script's pair (lane rd/api-lock-names)
 const lookup = {
-  [LOCK_CODE_HASH]: { codeHash: LOCK_CODE_HASH, name: 'Default Lock' },
-  [TYPE_CODE_HASH]: { codeHash: TYPE_CODE_HASH, name: 'Spore' },
+  [scriptLookupKey(LOCK_CODE_HASH, 'type')]: { codeHash: LOCK_CODE_HASH, name: 'Default Lock' },
+  [scriptLookupKey(TYPE_CODE_HASH, 'type')]: { codeHash: TYPE_CODE_HASH, name: 'Spore' },
 } as unknown as Awaited<ReturnType<typeof api.lookupScripts>>;
 
 /**
@@ -1743,7 +1745,7 @@ describe('Transaction board, R2b-a fields', () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue(
       activityRead({
         ...feedSamples.objectTransfer,
-        itemTypes: [],
+        recognizedTypes: [],
         txHash: TX_HASH,
         typeCalls: [
           {
@@ -1797,7 +1799,7 @@ describe('Transaction board, R2b-a fields', () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue(
       activityRead({
         ...feedSamples.objectTransfer,
-        itemTypes: [],
+        recognizedTypes: [],
         txHash: TX_HASH,
         typeCalls: [],
         lockCalls: [],
@@ -1919,7 +1921,7 @@ describe('Transaction board, R2b-a fields', () => {
       activityRead({
         ...feedSamples.tokenTransfer,
         txHash: TX_HASH,
-        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -1949,7 +1951,7 @@ describe('Transaction board, R2b-a fields', () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue(
       activityRead({
         ...feedSamples.objectTransfer,
-        itemTypes: [],
+        recognizedTypes: [],
         txHash: TX_HASH,
         typeCalls: [],
         lockCalls: [],
@@ -1978,7 +1980,7 @@ describe('Transaction board, R2b-a fields', () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue(
       activityRead({
         ...feedSamples.objectTransfer,
-        itemTypes: [],
+        recognizedTypes: [],
         txHash: TX_HASH,
         typeCalls: [],
         lockCalls: [],

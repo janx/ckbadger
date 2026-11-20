@@ -1,11 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 
-use anyhow::{anyhow, Result};
-use tracing::warn;
-
-use ckbadger_store::types::PositionedCellInfo;
-use ckbadger_store::CkbadgerStore;
+use anyhow::Result;
 
 use super::helpers::*;
 use super::types::{TxData, XudtExtensionScript};
@@ -14,14 +9,11 @@ use super::types::{TxData, XudtExtensionScript};
 // Omnilock constants
 // ---------------------------------------------------------------------------
 
+/// Omnilock's mainnet reference (by `type`), for tests: the pairs Omnilock
+/// runs are the registry's (`is_omnilock`).
+#[cfg(test)]
 pub(crate) const OMNILOCK_CODE_HASH_MAINNET_V2: &str =
     "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26";
-pub(crate) const OMNILOCK_CODE_HASH_MAINNET_V1: &str =
-    "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d";
-pub(crate) const OMNILOCK_CODE_HASH_TESTNET_V2: &str =
-    "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb";
-pub(crate) const OMNILOCK_CODE_HASH_TESTNET_V1: &str =
-    "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e";
 const OMNILOCK_AUTH_LEN: usize = 21;
 const OMNILOCK_SUPPLY_MODE_FLAG: u8 = 0b0000_1000;
 const OMNILOCK_ADMIN_MODE_FLAG: u8 = 0b0000_0001;
@@ -45,55 +37,86 @@ pub(crate) const UNIQUE_TYPE_ARGS_LEN: usize = 20;
 const TOKEN_INFO_TAG_TOTAL_SUPPLY: u32 = 1;
 const TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN: usize = 16;
 
-/// Unique Cell type script code hashes (one per network deployment; detection
-/// keys on code_hash alone, same as the protocol registry). Values mirror the
-/// bundled `docs/metadata/scripts/unique-cell.toml` and were verified against
-/// live chain data: mainnet via the RGB++ Protocol issuance
-/// (tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a,
-/// block 12,654,045, out[0]), testnet via live unique cells carrying the same
-/// token-info layout.
+/// The Unique Cell's mainnet binary, for tests (registered by data1 in
+/// `docs/metadata/scripts/unique-cell.toml`; verified against the RGB++
+/// Protocol issuance, tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a,
+/// block 12,654,045, out[0]). The pairs the Unique Cell runs are the
+/// registry's ([`is_unique_cell`]).
+#[cfg(test)]
 pub(crate) const UNIQUE_CELL_CODE_HASH_MAINNET: &str =
-    "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628"; // data1
-pub(crate) const UNIQUE_CELL_CODE_HASH_TESTNET: &str =
-    "0x8e341bcfec6393dcd41e635733ff2dca00a6af546949f70c57a706c0f344df8b"; // type
+    "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628";
 
-static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-static UNIQUE_CELL_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+/// Whether a type script's pair runs the Unique Cell: the registry's Unique
+/// Cell pairs (`ProtocolRegistry::is_unique_cell`: its registered reference
+/// and its binary by every data hash type), the one recognition on both sync
+/// paths (resync fix round S1). The Unique Cell's code hash by another hash
+/// type runs no Unique Cell.
+pub(crate) fn is_unique_cell(code_hash: &[u8], hash_type: i16) -> bool {
+    crate::parser::registry::PROTOCOL_REGISTRY.is_unique_cell(code_hash, hash_type)
+}
 
-pub(crate) fn is_unique_cell_code_hash(code_hash: &[u8]) -> bool {
-    UNIQUE_CELL_CODE_HASHES
-        .get_or_init(|| {
-            [UNIQUE_CELL_CODE_HASH_MAINNET, UNIQUE_CELL_CODE_HASH_TESTNET]
-                .iter()
-                .map(|h| crate::rpc::parse_hex_to_bytes(h))
-                .collect()
-        })
-        .iter()
-        .any(|known| known.as_slice() == code_hash)
+/// A transaction output that can be the Unique Cell an xUDT extension names:
+/// type args of the extension's length (20 bytes) and data that parses as
+/// token info. Whether its type script IS the Unique Cell is its pair's to
+/// say ([`bound_unique_cell`] asks). The one definition for both sync paths.
+pub(crate) fn unique_cell_candidate(type_args: &[u8], data: &[u8]) -> Option<UniqueTokenInfo> {
+    if type_args.len() != UNIQUE_TYPE_ARGS_LEN {
+        return None;
+    }
+    parse_unique_cell_token_info(data)
+}
+
+/// THE extension rule, both sync paths (resync fix round S1): of one
+/// transaction's candidate outputs ([`unique_cell_candidate`], in output
+/// order), the cell an xUDT extension naming `args` binds is the LAST whose
+/// type args are `args` and whose type script is the Unique Cell by its
+/// registered pair ([`is_unique_cell`]). Its info is the token's bound
+/// metadata; its total supply, where it carries one, is the token's
+/// `TokenExtension` max-supply claim. A cell under any other type script
+/// with those args (anyone can create one) binds and claims nothing.
+///
+/// The last, not the first: both paths already bound the token's info from
+/// the last output with those args, so the binding and the claim now come
+/// from one cell (live took the claim from the first output with a total,
+/// bulk from the last). Two Unique Cells with one args cannot both be valid
+/// on chain (its args are a Type ID, unique by construction), so the choice
+/// only has to be one.
+///
+/// `args_of` and `pair_of` read a candidate's type args and its type script
+/// pair; the pair is read only for a candidate whose args match.
+///
+/// Of the pair, the code hash decides on chain today; the hash type cannot
+/// (tests report NOTE-1): a cell typed by the Unique Cell's code hash under a
+/// hash type the registry does not list would have to run that pair's code,
+/// and by `type` no cell has the Unique Cell's code hash as its type hash, so
+/// no such cell exists. The hash type is read because the registry's pair is
+/// the one rule, not because a cell on chain needs it.
+pub(crate) fn bound_unique_cell<'c, T>(
+    candidates: impl DoubleEndedIterator<Item = T>,
+    args: &[u8],
+    args_of: impl Fn(&T) -> &'c [u8],
+    pair_of: impl Fn(&T) -> (&'c [u8], i16),
+) -> Option<T> {
+    candidates.rev().find(|candidate| {
+        args_of(candidate) == args && {
+            let (code_hash, hash_type) = pair_of(candidate);
+            is_unique_cell(code_hash, hash_type)
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Omnilock functions
 // ---------------------------------------------------------------------------
 
-pub(crate) fn omnilock_code_hashes() -> &'static Vec<Vec<u8>> {
-    OMNILOCK_CODE_HASHES.get_or_init(|| {
-        [
-            OMNILOCK_CODE_HASH_MAINNET_V2,
-            OMNILOCK_CODE_HASH_MAINNET_V1,
-            OMNILOCK_CODE_HASH_TESTNET_V2,
-            OMNILOCK_CODE_HASH_TESTNET_V1,
-        ]
-        .iter()
-        .map(|h| crate::rpc::parse_hex_to_bytes(h))
-        .collect()
-    })
-}
-
-pub(crate) fn is_omnilock_code_hash(code_hash: &[u8]) -> bool {
-    omnilock_code_hashes()
-        .iter()
-        .any(|known| known.as_slice() == code_hash)
+/// Whether a lock script's pair runs Omnilock: the registry's Omnilock pairs
+/// (`PROTOCOL_REGISTRY.script`), each registered reference and each version's
+/// binary by the data hash types. Omnilock's code hash by another hash type
+/// runs no Omnilock and claims nothing.
+pub(crate) fn is_omnilock(code_hash: &[u8], hash_type: i16) -> bool {
+    use crate::parser::registry::{RegisteredScript, StandardLock, PROTOCOL_REGISTRY};
+    PROTOCOL_REGISTRY.script(code_hash, hash_type)
+        == Some(RegisteredScript::StandardLock(StandardLock::Omnilock))
 }
 
 pub(crate) fn extract_omnilock_supply_info_type_hash(lock_args: &[u8]) -> Option<[u8; 32]> {
@@ -347,49 +370,48 @@ pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInf
     })
 }
 
-pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<u128> {
-    parse_unique_cell_token_info(data)?.total_supply
+/// One live transaction's candidate outputs ([`unique_cell_candidate`]), in
+/// output order: the info, the type script's code hash and hash type, the
+/// type args. A typed `ParsedCell` carries its code hash, hash type and args
+/// together (the parser fills the three from one RPC script).
+struct LiveUniqueCandidate<'c> {
+    info: UniqueTokenInfo,
+    code_hash: &'c [u8],
+    hash_type: i16,
+    args: &'c [u8],
 }
 
-pub(crate) fn collect_unique_cell_total_supply_by_type_args(
+fn live_unique_cell_candidates(
     cells: &[crate::parser::cell::ParsedCell],
-) -> HashMap<Vec<u8>, u128> {
-    let mut totals = HashMap::new();
-    for cell in cells {
-        let Some(type_args) = cell.type_args.as_ref() else {
-            continue;
-        };
-        if type_args.len() != UNIQUE_TYPE_ARGS_LEN {
-            continue;
-        }
-        let Some(total_supply) = parse_token_info_total_supply(&cell.data) else {
-            continue;
-        };
-        totals.insert(type_args.clone(), total_supply);
-    }
-    totals
+) -> Vec<LiveUniqueCandidate<'_>> {
+    cells
+        .iter()
+        .filter_map(|cell| {
+            let args = cell.type_args.as_deref()?;
+            let info = unique_cell_candidate(args, &cell.data)?;
+            let (code_hash, hash_type) = cell.type_code_hash.as_deref().zip(cell.type_hash_type)?;
+            Some(LiveUniqueCandidate {
+                info,
+                code_hash,
+                hash_type,
+                args,
+            })
+        })
+        .collect()
 }
 
-/// Collect full token info from all Unique Cell outputs in the given cells.
-/// Returns a map from Unique Cell type_args (20 bytes) to parsed token info.
-#[allow(dead_code)]
-pub(crate) fn collect_unique_cell_token_info(
-    cells: &[crate::parser::cell::ParsedCell],
-) -> HashMap<Vec<u8>, UniqueTokenInfo> {
-    let mut infos = HashMap::new();
-    for cell in cells {
-        let Some(type_args) = cell.type_args.as_ref() else {
-            continue;
-        };
-        if type_args.len() != UNIQUE_TYPE_ARGS_LEN {
-            continue;
-        }
-        let Some(info) = parse_unique_cell_token_info(&cell.data) else {
-            continue;
-        };
-        infos.insert(type_args.clone(), info);
-    }
-    infos
+/// [`bound_unique_cell`] over a live transaction's candidates.
+fn live_bound_unique_cell<'a>(
+    candidates: &'a [LiveUniqueCandidate<'_>],
+    args: &[u8],
+) -> Option<&'a UniqueTokenInfo> {
+    bound_unique_cell(
+        candidates.iter(),
+        args,
+        |candidate| candidate.args,
+        |candidate| (candidate.code_hash, candidate.hash_type),
+    )
+    .map(|candidate| &candidate.info)
 }
 
 /// How an on-chain token-info observation was bound to a token type (one
@@ -466,13 +488,98 @@ impl OnchainTokenInfoTimeline {
     }
 }
 
-/// The first max-supply observation of one live batch for a token, with the
-/// block of the transaction that carried it: a shallow rollback below that
-/// block must undo it.
+/// Who made a max-supply claim: what binds it to the token it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaxSupplyClaimant {
+    /// An Omnilock supply-info cell held under its own supply-mode Omnilock
+    /// (the lock args name the cell's type script): the hash of that lock
+    /// script. Anyone can write such a cell naming any token; it is the
+    /// token's only when the token's owner lock IS this lock (RFC 0042: the
+    /// token is then minted only with this lock in the inputs).
+    SupplyOmnilock([u8; 32]),
+    /// A Unique Cell that the token's own xUDT output names in its extension
+    /// scripts, created by the same transaction: bound by construction (the
+    /// token's own output carries the reference, and the named cell is the
+    /// Unique Cell by its registered pair, [`bound_unique_cell`]).
+    TokenExtension,
+}
+
+/// One max-supply claim (an Omnilock supply-info cell, or a Unique Cell an
+/// xUDT extension binds), who made it, and its place in chain order: the
+/// block, the transaction and the output that carry it. A shallow rollback
+/// below its block must undo it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MaxSupplyObservation {
     pub max_supply: u128,
     pub block_number: i64,
+    pub tx_index: i32,
+    pub output_index: u32,
+    pub claimant: MaxSupplyClaimant,
+}
+
+impl MaxSupplyObservation {
+    pub(crate) fn place(&self) -> (i64, i32, u32) {
+        (self.block_number, self.tx_index, self.output_index)
+    }
+}
+
+/// Every claim on one token, in chain order (block, transaction, output).
+pub(crate) type MaxSupplyClaims = Vec<MaxSupplyObservation>;
+
+/// Add `claim` to a token's claims at its place in chain order.
+pub(crate) fn insert_max_supply_claim(claims: &mut MaxSupplyClaims, claim: MaxSupplyObservation) {
+    let at = claims.partition_point(|existing| existing.place() <= claim.place());
+    claims.insert(at, claim);
+}
+
+/// THE max-supply rule, both sync paths: a token's max supply is the first
+/// claim in chain order at or after the token's first BLOCK (the block of its
+/// first cell). `type_args` and `first_block` are the token row's; a token
+/// row exists only once the chain holds the token, so its first block is
+/// always that block (label import writes no row for a token the chain does
+/// not hold: resync fix round M1).
+///
+/// - The rule is by block, so that it cannot depend on batch cuts or on the
+///   order of transactions inside a block: a claim made in a block before the
+///   token's first block is not the token's (it names an id nothing carries
+///   yet), and a claim earlier in the token's own first block, in a
+///   transaction before the one that creates its first cell, counts (the
+///   lead's ruling: a counted Omnilock claim comes only from the token's
+///   owner lock, the one lock the token is minted under, so only the owner's
+///   own claim can be that early).
+/// - An Omnilock supply-info claim is the token's only when the token's owner
+///   lock hash (the first 32 bytes of its type args, sUDT and xUDT alike) is
+///   the hash of the claiming supply-mode Omnilock: one comparison. A claim
+///   that fails it is ignored and the next one counts. A token whose type
+///   args are shorter than 32 bytes names no owner lock: no Omnilock claim
+///   is its.
+/// - An xUDT extension claim is bound by construction: the token's own output
+///   names the Unique Cell in its extension scripts, and only the Unique Cell
+///   by its registered pair makes the claim ([`bound_unique_cell`]), so no
+///   owner check applies.
+///
+/// `through_block` is the last block the row is being computed for
+/// (`i64::MAX` for the row after all of them). `claims` is in chain order.
+pub(crate) fn token_max_supply_claim(
+    claims: &[MaxSupplyObservation],
+    type_args: &[u8],
+    first_block: i64,
+    through_block: i64,
+) -> Option<MaxSupplyObservation> {
+    let owner_lock_hash = type_args.get(..32);
+    claims
+        .iter()
+        .find(|claim| {
+            claim.block_number >= first_block
+                && claim.block_number <= through_block
+                && match &claim.claimant {
+                    MaxSupplyClaimant::SupplyOmnilock(lock_hash) => {
+                        owner_lock_hash == Some(lock_hash.as_slice())
+                    }
+                    MaxSupplyClaimant::TokenExtension => true,
+                }
+        })
+        .copied()
 }
 
 /// Type script hash by outpoint — a borrowed view over cells the caller has
@@ -525,8 +632,8 @@ pub(crate) fn collect_token_onchain_info(
 
     for tx_data in all_tx_data {
         // -- 1. extension-script binding (cryptographic) --------------------
-        let unique_infos = collect_unique_cell_token_info(&tx_data.cells);
-        if !unique_infos.is_empty() {
+        let unique_candidates = live_unique_cell_candidates(&tx_data.cells);
+        if !unique_candidates.is_empty() {
             for cell in &tx_data.cells {
                 let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
                     continue;
@@ -534,13 +641,9 @@ pub(crate) fn collect_token_onchain_info(
                 let Some(type_hash_type) = cell.type_hash_type else {
                     continue;
                 };
-                if !matches!(
-                    crate::parser::UdtParser::is_udt_code_hash_bytes(
-                        type_code_hash,
-                        type_hash_type
-                    ),
-                    Some(crate::parser::udt::UdtStandard::Xudt)
-                ) {
+                if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+                    .is_some_and(|standard| standard.is_xudt())
+                {
                     continue;
                 }
 
@@ -561,7 +664,8 @@ pub(crate) fn collect_token_onchain_info(
                     if extension.args.len() != UNIQUE_TYPE_ARGS_LEN {
                         continue;
                     }
-                    if let Some(info) = unique_infos.get(&extension.args) {
+                    if let Some(info) = live_bound_unique_cell(&unique_candidates, &extension.args)
+                    {
                         // Unconditional: an extension binding displaces any
                         // earlier co-occurrence binding for the same token.
                         let bound = OnchainTokenInfo {
@@ -628,10 +732,12 @@ fn collect_issuance_cooccurrence_binding(
     // Exactly one distinct parsed info among Unique-Cell-typed outputs.
     let mut unique_info: Option<UniqueTokenInfo> = None;
     for cell in &tx_data.cells {
-        let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
+        let (Some(type_code_hash), Some(type_hash_type)) =
+            (cell.type_code_hash.as_ref(), cell.type_hash_type)
+        else {
             continue;
         };
-        if !is_unique_cell_code_hash(type_code_hash) {
+        if !is_unique_cell(type_code_hash, type_hash_type) {
             continue;
         }
         let Some(info) = parse_unique_cell_token_info(&cell.data) else {
@@ -669,10 +775,9 @@ fn collect_issuance_cooccurrence_binding(
         else {
             continue;
         };
-        if !matches!(
-            crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-            Some(crate::parser::udt::UdtStandard::Xudt)
-        ) {
+        if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+            .is_some_and(|standard| standard.is_xudt())
+        {
             continue;
         }
         if crate::parser::UdtParser::parse_amount(&cell.data).is_none() {
@@ -694,47 +799,53 @@ fn collect_issuance_cooccurrence_binding(
     minted.map(|token_type_hash| (token_type_hash.clone(), unique_info))
 }
 
+/// Record one claim by `claimant` of `tx`'s output `output_index` on
+/// `token_type_hash`. Every claim is kept, in chain order: which one is the
+/// token's is the rule's to say ([`token_max_supply_claim`]), once the
+/// token's row is known.
 pub(crate) fn observe_max_supply(
-    observations: &mut HashMap<Vec<u8>, MaxSupplyObservation>,
+    observations: &mut HashMap<Vec<u8>, MaxSupplyClaims>,
     tx: &TxData,
+    output_index: usize,
     token_type_hash: Vec<u8>,
     max_supply: u128,
-    source: &str,
+    claimant: MaxSupplyClaimant,
 ) {
-    if let Some(existing) = observations.get(&token_type_hash) {
-        if existing.max_supply != max_supply {
-            warn!(
-                tx_hash = %hex::encode(tx.hash),
-                token_type_hash = %hex::encode(&token_type_hash),
-                existing_max_supply = existing.max_supply,
-                observed_max_supply = max_supply,
-                source = source,
-                "conflicting max supply observations in the same batch; keeping first value"
-            );
-        }
-        return;
-    }
-
-    observations.insert(
-        token_type_hash,
+    let output_index = u32::try_from(output_index)
+        .expect("a transaction's output index fits u32 (CKB caps outputs)");
+    insert_max_supply_claim(
+        observations.entry(token_type_hash).or_default(),
         MaxSupplyObservation {
             max_supply,
             block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            output_index,
+            claimant,
         },
     );
 }
 
+/// The claimant of a supply-info cell under its own supply-mode Omnilock:
+/// that lock script's hash.
+pub(crate) fn supply_omnilock_claimant(lock_script_hash: &[u8]) -> MaxSupplyClaimant {
+    MaxSupplyClaimant::SupplyOmnilock(
+        lock_script_hash
+            .try_into()
+            .expect("a lock script hash is 32 bytes"),
+    )
+}
+
+/// Every max-supply claim of a batch, per token, in chain order.
 pub(crate) fn collect_token_max_supply_observations(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, MaxSupplyObservation> {
+) -> HashMap<Vec<u8>, MaxSupplyClaims> {
     let mut observations = HashMap::new();
 
     for tx_data in all_tx_data {
-        let unique_cell_total_supply_by_type_args =
-            collect_unique_cell_total_supply_by_type_args(&tx_data.cells);
+        let unique_candidates = live_unique_cell_candidates(&tx_data.cells);
 
-        for cell in &tx_data.cells {
-            if !is_omnilock_code_hash(&cell.lock_code_hash) {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            if !is_omnilock(&cell.lock_code_hash, cell.lock_hash_type) {
                 continue;
             }
 
@@ -758,27 +869,27 @@ pub(crate) fn collect_token_max_supply_observations(
             observe_max_supply(
                 &mut observations,
                 tx_data,
+                output_index,
                 token_type_hash.to_vec(),
                 max_supply,
-                "omnilock_supply_info_cell",
+                supply_omnilock_claimant(&cell.lock_script_hash),
             );
         }
 
-        if unique_cell_total_supply_by_type_args.is_empty() {
+        if unique_candidates.is_empty() {
             continue;
         }
 
-        for cell in &tx_data.cells {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
             let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
                 continue;
             };
             let Some(type_hash_type) = cell.type_hash_type else {
                 continue;
             };
-            if !matches!(
-                crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-                Some(crate::parser::udt::UdtStandard::Xudt)
-            ) {
+            if !crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type)
+                .is_some_and(|standard| standard.is_xudt())
+            {
                 continue;
             }
 
@@ -799,18 +910,20 @@ pub(crate) fn collect_token_max_supply_observations(
                 if extension.args.len() != UNIQUE_TYPE_ARGS_LEN {
                     continue;
                 }
-                let Some(max_supply) = unique_cell_total_supply_by_type_args
-                    .get(&extension.args)
-                    .copied()
+                // The extension rule: the Unique Cell it binds, by its pair,
+                // and that cell's total supply.
+                let Some(max_supply) = live_bound_unique_cell(&unique_candidates, &extension.args)
+                    .and_then(|info| info.total_supply)
                 else {
                     continue;
                 };
                 observe_max_supply(
                     &mut observations,
                     tx_data,
+                    output_index,
                     token_type_hash.clone(),
                     max_supply,
-                    "xudt_extension_script_unique_cell",
+                    MaxSupplyClaimant::TokenExtension,
                 );
             }
         }
@@ -819,70 +932,15 @@ pub(crate) fn collect_token_max_supply_observations(
     observations
 }
 
-#[allow(clippy::type_complexity, dead_code)]
-pub(crate) fn load_activity_token_info_cache(
-    store: &CkbadgerStore,
-    tx_data: &[TxData],
-    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
-    let mut type_hashes = HashSet::<Vec<u8>>::new();
-
-    for tx in tx_data {
-        for cell in &tx.cells {
-            if let Some(type_script_hash) = &cell.type_script_hash {
-                type_hashes.insert(type_script_hash.clone());
-            }
-        }
-
-        if tx.is_cellbase {
-            continue;
-        }
-
-        for input in &tx.inputs {
-            let key = (
-                input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
-            );
-            let cell_info = input_cell_info
-                .get(&key)
-                .or_else(|| batch_cell_infos.get(&key));
-            if let Some(info) = cell_info {
-                if let Some(type_script_hash) = info.type_script_hash() {
-                    type_hashes.insert(type_script_hash.to_vec());
-                }
-            }
-        }
-    }
-
-    let type_hash_vec: Vec<Vec<u8>> = type_hashes.into_iter().collect();
-    let mut token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> = HashMap::new();
-    for (type_hash, info) in store.get_tokens_batch(&type_hash_vec)? {
-        let Some(info) = info else {
-            continue;
-        };
-        let decimals = match info.decimals {
-            Some(value) => Some(u8::try_from(value).map_err(|_| {
-                anyhow!(
-                    "token decimals out of u8 range while building activity cache: type_hash=0x{}, decimals={}",
-                    hex::encode(&type_hash),
-                    value
-                )
-            })?),
-            None => None,
-        };
-        let symbol = info.symbol.clone().or(info.name.clone());
-        token_info_cache.insert(type_hash, (symbol, decimals));
-    }
-
-    Ok(token_info_cache)
-}
-
+/// A cell's UDT amount, when its type pair is a UDT (THE pair rule,
+/// `UdtParser::is_udt_code_hash_bytes`). Nothing else makes a cell a UDT: the
+/// standard a token row or a label states is no hint (resync fix round 2, B:
+/// a token row exists only for a UDT pair, so a hint could never change the
+/// answer).
 pub(crate) fn parse_parsed_cell_udt_amount(
     cell: &crate::parser::cell::ParsedCell,
     tx_hash: &[u8],
     output_index: i16,
-    standard_hint: Option<&str>,
 ) -> Result<Option<u128>> {
     let standard = if let (Some(type_code_hash), Some(hash_type)) =
         (cell.type_code_hash.as_deref(), cell.type_hash_type)
@@ -891,12 +949,8 @@ pub(crate) fn parse_parsed_cell_udt_amount(
     } else {
         None
     };
-    let standard = match standard {
-        Some(standard) => standard,
-        None => match standard_hint.and_then(crate::parser::UdtStandard::from_standard_hint) {
-            Some(crate::parser::UdtStandard::Xudt) => crate::parser::UdtStandard::Xudt,
-            _ => return Ok(None),
-        },
+    let Some(standard) = standard else {
+        return Ok(None);
     };
     let type_code_hash = cell.type_code_hash.as_deref().unwrap_or(&[]);
 
@@ -904,7 +958,7 @@ pub(crate) fn parse_parsed_cell_udt_amount(
         // xUDT-compatible cells can carry non-amount payloads (for example owner-mode
         // cells). They should not be indexed as fungible UDT balances/transfers —
         // common and expected, tolerated silently.
-        if matches!(standard, crate::parser::UdtStandard::Xudt) {
+        if standard.is_xudt() {
             return Ok(None);
         }
         // A cell using the sUDT type script but with data too short for a u128 amount is
@@ -930,7 +984,6 @@ pub(crate) fn parse_parsed_cell_udt_amount(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ckbadger_store::batch::StoreBatch;
 
     // -- molecule encoding helpers (test-only) --------------------------------
 
@@ -1083,6 +1136,9 @@ mod tests {
         data
     }
 
+    /// A Unique Cell by its registered pair (the mainnet binary by data1:
+    /// resync fix round S1, re-pinned from code hash 0x40.. by type, which is
+    /// no Unique Cell) carrying token info with `total_supply`.
     fn dummy_unique_token_info_cell(
         unique_type_args: Vec<u8>,
         total_supply: u128,
@@ -1094,8 +1150,10 @@ mod tests {
             lock_hash_type: 1,
             lock_args: vec![0x20; 20],
             lock_script_hash: vec![0x30; 32],
-            type_code_hash: Some(vec![0x40; 32]),
-            type_hash_type: Some(1),
+            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                UNIQUE_CELL_CODE_HASH_MAINNET,
+            )),
+            type_hash_type: Some(2),
             type_args: Some(unique_type_args),
             type_script_hash: Some(vec![0x50; 32]),
             data_hash: [0x60; 32],
@@ -1179,28 +1237,6 @@ mod tests {
         }
     }
 
-    fn make_token_info(
-        decimals: Option<i32>,
-        symbol: Option<&str>,
-    ) -> ckbadger_store::types::TokenInfo {
-        ckbadger_store::types::TokenInfo {
-            type_code_hash: vec![0x77; 32],
-            hash_type: 1,
-            type_args: vec![0x88; 32],
-            standard: "xudt".to_string(),
-            name: Some("FallbackName".to_string()),
-            symbol: symbol.map(|s| s.to_string()),
-            decimals,
-            max_supply: None,
-            first_seen_block: 0,
-            icon_url: None,
-            description: None,
-            transfers_count: 0,
-            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-            chain_metadata: None,
-        }
-    }
-
     // -- parse_parsed_cell_udt_amount tests ------------------------------------
 
     #[test]
@@ -1210,7 +1246,7 @@ mod tests {
         cell.data_size = 0;
 
         let tx_hash = [0x81; 32];
-        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3, None).unwrap();
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3).unwrap();
         assert_eq!(amount, None);
     }
 
@@ -1237,12 +1273,15 @@ mod tests {
         };
 
         let tx_hash = [0x82; 32];
-        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap();
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7).unwrap();
         assert_eq!(amount, None);
     }
 
+    /// Re-pinned in resync fix round 2, B: a cell whose type pair is no UDT
+    /// carries no amount; the `xudt_compatible` standard hint a token row
+    /// gave (the half that read it is gone with the hint) never made it one.
     #[test]
-    fn test_parse_parsed_cell_udt_amount_supports_xudt_compatible_hint() {
+    fn test_parse_parsed_cell_udt_amount_of_a_non_udt_pair_is_none() {
         let amount = 15_778_600u128;
         let mut data = vec![0u8; 16];
         data.copy_from_slice(&amount.to_le_bytes());
@@ -1262,12 +1301,12 @@ mod tests {
         };
 
         let tx_hash = [0x83; 32];
-        let parsed =
-            parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, Some("xudt_compatible")).unwrap();
-        assert_eq!(parsed, Some(amount));
-
-        let no_hint = parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, None).unwrap();
-        assert_eq!(no_hint, None);
+        let parsed = parse_parsed_cell_udt_amount(&cell, &tx_hash, 0).unwrap();
+        assert_eq!(
+            parsed, None,
+            "an amount-shaped payload under a non-UDT pair"
+        );
+        let _ = amount;
     }
 
     // -- omnilock tests --------------------------------------------------------
@@ -1338,13 +1377,68 @@ mod tests {
             data: info_cell_data,
         };
 
-        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell], vec![]);
+        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell.clone()], vec![]);
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
-            Some(1_000)
+                .map(|claims| (claims[0].max_supply, claims[0].claimant)),
+            // the claimant is the info cell's own lock, by its script hash
+            Some((1_000, MaxSupplyClaimant::SupplyOmnilock([0x44; 32])))
+        );
+
+        // resync/protocol-pairs: the claim is Omnilock's by its registered
+        // pair only. The same info cell under Omnilock's code hash by `data`
+        // (a pair anyone can lock a cell with; no such binary runs) claims no
+        // max supply.
+        let by_data = crate::parser::cell::ParsedCell {
+            lock_hash_type: 0,
+            ..info_cell
+        };
+        let tx = dummy_tx_data([0x89; 32], false, vec![], vec![by_data], vec![]);
+        assert!(
+            collect_token_max_supply_observations(&[tx]).is_empty(),
+            "Omnilock's code hash by data claims nothing"
+        );
+    }
+
+    /// The rule, alone: an Omnilock claim is the token's only when the
+    /// token's owner lock (its first 32 type-args bytes) is the claiming
+    /// lock; an extension claim is bound by construction; a token with no
+    /// 32-byte owner takes no Omnilock claim.
+    #[test]
+    fn test_token_max_supply_claim_binds_an_omnilock_claim_to_the_tokens_owner() {
+        let claim = |block_number, claimant| MaxSupplyObservation {
+            max_supply: u128::try_from(block_number).unwrap(),
+            block_number,
+            tx_index: 0,
+            output_index: 0,
+            claimant,
+        };
+        let owner = [0x44; 32];
+        let mut xudt_args = owner.to_vec();
+        xudt_args.extend_from_slice(&[0, 0, 0, 0]);
+        let forged = claim(10, MaxSupplyClaimant::SupplyOmnilock([0x45; 32]));
+        let genuine = claim(11, MaxSupplyClaimant::SupplyOmnilock(owner));
+        let extension = claim(12, MaxSupplyClaimant::TokenExtension);
+
+        for args in [owner.as_slice(), xudt_args.as_slice()] {
+            assert_eq!(
+                token_max_supply_claim(&[forged, genuine], args, 0, i64::MAX),
+                Some(genuine),
+                "the forged claim is skipped, the owner's counts"
+            );
+            assert_eq!(token_max_supply_claim(&[forged], args, 0, i64::MAX), None);
+        }
+        assert_eq!(
+            token_max_supply_claim(&[forged, extension], &[0x99; 32], 0, i64::MAX),
+            Some(extension),
+            "an extension claim needs no owner check"
+        );
+        assert_eq!(
+            token_max_supply_claim(&[genuine], &owner[..20], 0, i64::MAX),
+            None,
+            "type args shorter than 32 bytes name no owner lock"
         );
     }
 
@@ -1370,8 +1464,66 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
+                .map(|claims| claims[0].max_supply),
             Some(total_supply)
+        );
+    }
+
+    /// A cell with token-info data under 20-byte type args whose type script is
+    /// NOT the Unique Cell (code hash 0x40.., by type): anyone can create one,
+    /// naming any args (resync fix round S1).
+    fn forged_token_info_cell(
+        args: Vec<u8>,
+        total_supply: u128,
+    ) -> crate::parser::cell::ParsedCell {
+        let data = build_token_info_data(total_supply);
+        crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0x10; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x20; 20],
+            lock_script_hash: vec![0x30; 32],
+            type_code_hash: Some(vec![0x40; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(args),
+            type_script_hash: Some(vec![0x51; 32]),
+            data_hash: [0x61; 32],
+            data_size: data.len() as i32,
+            data,
+        }
+    }
+
+    /// resync fix round S1 (logic S1): the xUDT extension claimant is bound by
+    /// its script, not by 20 bytes of args. A transaction that outputs the
+    /// token (its extension names args A) and a cell typed by another code
+    /// with args A and token-info data records no claim and binds no
+    /// metadata.
+    #[test]
+    fn a_forged_unique_cell_beside_the_tokens_output_claims_and_binds_nothing() {
+        let args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let token_type_hash = [0x93; 32];
+        let script_vec = encode_script_vec_with_unique_args(&args);
+        let type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+        let tx = dummy_tx_data(
+            [0xEF; 32],
+            false,
+            vec![],
+            vec![
+                forged_token_info_cell(args, 1111),
+                dummy_xudt_cell(token_type_hash, type_args),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            collect_token_max_supply_observations(std::slice::from_ref(&tx)),
+            HashMap::new(),
+            "a forged Unique Cell makes no claim"
+        );
+        assert_eq!(
+            collect_token_onchain_info(std::slice::from_ref(&tx), &HashMap::new()),
+            HashMap::new(),
+            "a forged Unique Cell binds no metadata"
         );
     }
 
@@ -1402,7 +1554,7 @@ mod tests {
         assert_eq!(
             observations
                 .get(token_type_hash.as_slice())
-                .map(|observed| observed.max_supply),
+                .map(|claims| claims[0].max_supply),
             Some(total_supply)
         );
     }
@@ -1448,65 +1600,6 @@ mod tests {
 
         let missing_observations = collect_token_max_supply_observations(&[tx_without_witness]);
         assert!(!missing_observations.contains_key(token_type_hash.as_slice()));
-    }
-
-    // -- load_activity_token_info_cache tests ----------------------------------
-
-    #[test]
-    fn test_load_activity_token_info_cache_prefers_symbol_and_converts_decimals() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
-
-        let type_hash = vec![0xAA; 32];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_token(&type_hash, &make_token_info(Some(8), Some("OTTER")));
-        batch.commit().unwrap();
-
-        let tx = dummy_tx_data(
-            [0x11; 32],
-            false,
-            vec![],
-            vec![dummy_xudt_cell(
-                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
-                vec![0x99; 32],
-            )],
-            vec![],
-        );
-
-        let cache = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
-            .unwrap();
-
-        assert_eq!(
-            cache.get(&type_hash),
-            Some(&(Some("OTTER".to_string()), Some(8)))
-        );
-    }
-
-    #[test]
-    fn test_load_activity_token_info_cache_errors_on_invalid_decimals() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
-
-        let type_hash = vec![0xAB; 32];
-        let mut batch = StoreBatch::new(&store);
-        batch.put_token(&type_hash, &make_token_info(Some(300), None));
-        batch.commit().unwrap();
-
-        let tx = dummy_tx_data(
-            [0x12; 32],
-            false,
-            vec![],
-            vec![dummy_xudt_cell(
-                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
-                vec![0x98; 32],
-            )],
-            vec![],
-        );
-
-        let err = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
-            .unwrap_err();
-
-        assert!(err.to_string().contains("out of u8 range"));
     }
 
     // -- parse_unique_cell_token_info tests ------------------------------------
@@ -1680,6 +1773,31 @@ mod tests {
         assert_eq!(bound.info.name, "RGB++ Protocol");
         assert_eq!(bound.info.symbol, "RGB++");
         assert_eq!(bound.info.decimal, 8);
+    }
+
+    /// resync fix round S1: the co-occurrence rule recognises the Unique Cell
+    /// by its pair too. The mainnet Unique Cell's code hash by `type` (no
+    /// registered pair: no Unique Cell runs there) binds nothing.
+    #[test]
+    fn test_collect_token_onchain_info_cooccurrence_reads_the_unique_cell_by_its_pair() {
+        let token_type_hash = [0x91; 32];
+        let mut by_type = dummy_unique_info_cell_with_code_hash(
+            mainnet_unique_code_hash(),
+            vec![0x98; UNIQUE_TYPE_ARGS_LEN],
+            rgbpp_unique_cell_data(),
+        );
+        by_type.type_hash_type = Some(1);
+        let tx = dummy_tx_data(
+            [0xD0; 32],
+            false,
+            vec![],
+            vec![by_type, dummy_xudt_cell(token_type_hash, vec![0x08; 32])],
+            vec![],
+        );
+        assert_eq!(
+            collect_token_onchain_info(&[tx], &HashMap::new()),
+            HashMap::new()
+        );
     }
 
     #[test]
@@ -1924,12 +2042,30 @@ mod tests {
             observing_tx(0xE1, 11, 42_000),
             observing_tx(0xE2, 12, 43_000),
         ]);
+        // every claim, in chain order; the token's is the rule's to pick
         assert_eq!(
-            observations.get(token_type_hash.as_slice()),
-            Some(&MaxSupplyObservation {
-                max_supply: 42_000,
-                block_number: 11,
-            })
+            observations
+                .get(token_type_hash.as_slice())
+                .map(Vec::as_slice),
+            Some(
+                [
+                    MaxSupplyObservation {
+                        max_supply: 42_000,
+                        block_number: 11,
+                        tx_index: 0,
+                        output_index: 1,
+                        claimant: MaxSupplyClaimant::TokenExtension,
+                    },
+                    MaxSupplyObservation {
+                        max_supply: 43_000,
+                        block_number: 12,
+                        tx_index: 0,
+                        output_index: 1,
+                        claimant: MaxSupplyClaimant::TokenExtension,
+                    },
+                ]
+                .as_slice()
+            )
         );
     }
 }

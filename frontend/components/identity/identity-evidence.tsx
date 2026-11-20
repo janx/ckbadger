@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import { HeadId } from '@/components/ui/head-id';
 import { cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
@@ -454,7 +455,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
         <Rows
           rows={[
             [
-              `Type · ${v.cell.typeName ?? 'not named'}`,
+              `Type · ${v.cell.typeName ? withNameBy(v.cell.typeName, v.cell.typeNameBy) : 'not named'}`,
               <>
                 {item.namespaceArgs} <Dim>· the namespace, the same for every name</Dim>
               </>,

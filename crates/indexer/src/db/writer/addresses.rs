@@ -17,68 +17,6 @@ use super::BatchWriter;
 // takes below zero is rebuild-required (the stored aggregate no longer
 // matches the chain, D-4c); an overflow stays a plain error, as in finding 13.
 
-fn checked_next_script_metric_i64(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i64,
-    delta: i64,
-) -> Result<i64> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow::anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta
-        )
-    })?;
-    if next < 0 {
-        return Err(super::aggregate_underflow(format!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next
-        )));
-    }
-    Ok(next)
-}
-
-fn checked_next_script_metric_i128(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i128,
-    delta: i128,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow::anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta
-        )
-    })?;
-    if next < 0 {
-        return Err(super::aggregate_underflow(format!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next
-        )));
-    }
-    Ok(next)
-}
-
 fn checked_next_script_reference_metric_i64(
     reference_hash: &[u8],
     hash_type: u8,
@@ -139,22 +77,6 @@ fn checked_next_script_reference_metric_i128(
         )));
     }
     Ok(next)
-}
-
-fn overlay_script_metadata(
-    mut base: ckbadger_store::types::ScriptInfo,
-    fresh: &ckbadger_store::types::ScriptInfo,
-) -> ckbadger_store::types::ScriptInfo {
-    base.hash_type = fresh.hash_type;
-    base.name = fresh.name.clone();
-    base.deprecated = fresh.deprecated;
-    base.category = fresh.category.clone();
-    base.website = fresh.website.clone();
-    base.description = fresh.description.clone();
-    // Note: dep_type_hash, dep_data_hash, code_cell_tx_hash, code_cell_output_index
-    // are no longer overlaid here. Label import no longer writes these correctness
-    // fields; code cell resolution uses script_references/script_versions CFs instead.
-    base
 }
 
 fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
@@ -362,9 +284,29 @@ pub(crate) struct ScriptReferenceRollupState {
     pub(crate) changed_families: Vec<String>,
 }
 
+/// What each generic (non Type ID) type reference runs: the lead's ruling's
+/// `ReferenceCode` from the binaries its live code cells hold. Its own input
+/// to the rollup, beside the bindings (a generic reference has no binding:
+/// the indexer binds a type reference only through Type ID lineage).
+pub(crate) type GenericTypeCodes = HashMap<Vec<u8>, ckbadger_store::ReferenceCode>;
+
+/// What a generic type reference runs, from `live` (binary -> its live code
+/// cells): THE reading bulk finalize and the live rollup share.
+pub(crate) fn apply_generic_type_code(
+    generic: &mut GenericTypeCodes,
+    reference: &[u8],
+    live: &std::collections::BTreeMap<Vec<u8>, u32>,
+) {
+    generic.insert(
+        reference.to_vec(),
+        ckbadger_store::ReferenceCode::of_live_binaries(live.keys().cloned().collect()),
+    );
+}
+
 pub(crate) fn build_script_reference_rollup_state_with_lineage(
     store: &ckbadger_store::CkbadgerStore,
     reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    generic: &GenericTypeCodes,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
@@ -378,6 +320,7 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         versions,
         families,
         &mappings,
+        generic,
         &reference_info_map,
         lineage,
     )
@@ -521,6 +464,7 @@ pub(crate) fn build_script_reference_rollup_state_over(
     mut version_map: HashMap<Vec<u8>, ScriptVersionInfo>,
     mut family_map: HashMap<String, ScriptFamilyInfo>,
     mappings: &HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+    generic: &GenericTypeCodes,
     reference_info_map: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
@@ -548,6 +492,17 @@ pub(crate) fn build_script_reference_rollup_state_over(
                 hash_type
             );
         };
+        // A generic type reference runs what its live code cells hold (one
+        // binary is its version); every other form its binding.
+        if let Some(code) = generic.get(reference_hash).filter(|_| *hash_type == 1) {
+            if let Some(version_hash) = code.current() {
+                usage
+                    .entry(version_hash)
+                    .or_default()
+                    .add(version_hash, reference_info)?;
+            }
+            continue;
+        }
         let Some(version_hash) = resolved else {
             continue;
         };
@@ -666,9 +621,16 @@ pub(crate) fn build_script_reference_rollup_state_over(
                 hash_type
             )
         })?;
-        if let Some(family) =
-            membership.resolve_family(reference, *hash_type, current.as_deref())?
-        {
+        // THE family of the form, from what it runs (the one rule the API
+        // names it by: `ScriptFamilyMembershipIndex::family_of_form`).
+        let code = match (generic.get(reference.as_slice()), *hash_type) {
+            (Some(code), 1) => code.clone(),
+            _ => match current {
+                Some(binary) => ckbadger_store::ReferenceCode::One(binary.clone()),
+                None => ckbadger_store::ReferenceCode::None,
+            },
+        };
+        if let Some(family) = membership.family_of_form(reference, *hash_type, &code, None)? {
             family_usage
                 .entry(family.to_owned())
                 .or_default()
@@ -702,8 +664,50 @@ struct RollupSteps {
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     versions: HashMap<Vec<u8>, ScriptVersionInfo>,
     families: HashMap<String, ScriptFamilyInfo>,
-    /// Reference -> binary, read once per batch and moved by Type ID lineage.
+    /// Reference -> binary, read once per batch and moved by Type ID lineage
+    /// (and, for a generic type reference, by its live code cells).
     mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+    /// The type references with no Type ID binding: what they run is what
+    /// their live code cells hold (`generic_live`).
+    generic_refs: std::collections::BTreeSet<Vec<u8>>,
+    /// Type hash -> binary -> its live code cells under that type script (not
+    /// Type ID), read from the store the first time the batch needs it and
+    /// moved by the batch's code cells block by block.
+    generic_live: HashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
+    /// What each generic type reference runs now.
+    generic: GenericTypeCodes,
+}
+
+/// A cell under a type script that is not Type ID, created (+1) or consumed
+/// (-1) in a block, which can move what that generic type reference runs.
+///
+/// THE definition (resync fix round S3): a CODE cell is a cell whose data is
+/// code (`keys::is_code_cell`: it starts with the ELF magic). A cell's data
+/// and its type script are fixed when it is created and never change while it
+/// lives (a CKB cell is immutable: "updating" one consumes it and creates
+/// another), so a cell is or is not a code cell, under one type script, for
+/// its whole life. What a generic type reference T runs is the set of
+/// distinct binaries of the live code cells whose type script hash is T, and
+/// that set changes on exactly two events: a code cell under T is created, or
+/// a code cell under T is consumed (a rollback undoes either through the
+/// block journal). Both are a change here: every created output under a
+/// non-Type-ID type whose data is code, and every consumed input under one
+/// (it is a code cell exactly when its binary is among T's live code
+/// binaries: an equal data hash is equal data). Nothing else moves the set: a
+/// Type ID binding decides whether the reference is generic at all (every
+/// cell under one type hash carries the one script, so a Type ID reference
+/// has no generic cells), never what its code cells hold. The rollup step
+/// keeps `live_code_cells_by_type` (domain store, the block's scope) from
+/// these changes and reads a reference's answer from it.
+#[derive(Debug, Clone)]
+pub(crate) struct GenericTypeCodeChange {
+    pub reference_hash: Vec<u8>,
+    pub binary: Vec<u8>,
+    pub created: bool,
+    pub block_number: i64,
+    /// The cell: the output created, or the input's previous output consumed.
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
 }
 
 /// Whether a script reference names its binary by data hash (`data` /
@@ -979,271 +983,6 @@ impl BatchWriter {
         }
 
         Ok(written)
-    }
-
-    pub fn read_script_info(
-        &self,
-        code_hashes: &[&Vec<u8>],
-    ) -> Result<HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>> {
-        if code_hashes.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let cf_keys: Vec<_> = code_hashes
-            .iter()
-            .map(|k| (self.store.cf_script_info(), k.as_slice()))
-            .collect();
-        let results = self.store.multi_get_cf(cf_keys);
-
-        let mut map = HashMap::with_capacity(code_hashes.len());
-        for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
-            let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => Some(super::decode_script_info_row(code_hash, &value)?),
-                Ok(None) => None,
-                Err(e) => {
-                    bail!(
-                        "failed to read script info: code_hash=0x{}, error={}",
-                        hex::encode(code_hash),
-                        e
-                    );
-                }
-            };
-            map.insert((*code_hash).clone(), existing);
-        }
-
-        Ok(map)
-    }
-
-    /// Apply a live batch's script usage block by block (see
-    /// [`Self::apply_address_balance_changes`]).
-    pub(crate) fn apply_script_usage_changes(
-        &self,
-        mut current: HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &crate::sync::types::ScriptUsageChanges,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        for (block, block_changes) in changes.by_block() {
-            let updated =
-                self.apply_script_usage_deltas(&current, block_changes, &mut batch.at(*block))?;
-            for (code_hash, info) in updated {
-                current.insert(code_hash, Some(info));
-            }
-        }
-        Ok(())
-    }
-
-    /// Apply ONE block's script usage on top of `existing`; returns the rows
-    /// written.
-    pub fn apply_script_usage_deltas(
-        &self,
-        existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
-        batch: &mut StoreBatch,
-    ) -> Result<HashMap<Vec<u8>, ckbadger_store::types::ScriptInfo>> {
-        if changes.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
-            HashMap::with_capacity(existing.len());
-
-        for (
-            (code_hash, is_type),
-            (
-                cells_delta,
-                live_delta,
-                cap_delta,
-                owned_cap_delta,
-                used_delta,
-                owned_knowledge_delta,
-            ),
-        ) in changes
-        {
-            let existing_info = existing.get(code_hash).and_then(|o| o.clone());
-            if existing_info.is_none()
-                && (*cells_delta < 0
-                    || *live_delta < 0
-                    || *cap_delta < 0
-                    || *owned_cap_delta < 0
-                    || *used_delta < 0
-                    || *owned_knowledge_delta < 0)
-            {
-                return Err(super::aggregate_underflow(format!(
-                    "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, owned_capacity_delta={}, used_delta={}, owned_knowledge_delta={}",
-                    hex::encode(code_hash),
-                    is_type,
-                    cells_delta,
-                    live_delta,
-                    cap_delta,
-                    owned_cap_delta,
-                    used_delta,
-                    owned_knowledge_delta
-                )));
-            }
-
-            let info = match updated_map.entry(code_hash) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let mut info =
-                        existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                            code_hash: code_hash.clone(),
-                            ..Default::default()
-                        });
-                    // The label fields as stored now; a row that cannot be
-                    // read fails the batch (the error names the code hash),
-                    // and a corrupt one is rebuild-required (finding 12).
-                    if let Some(fresh) = super::read_script_info_row(&self.store, code_hash)? {
-                        info = overlay_script_metadata(info, &fresh);
-                    }
-                    entry.insert(info)
-                }
-            };
-
-            if *is_type {
-                let next_type_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "type",
-                    "cells_count",
-                    info.type_cells_count,
-                    *cells_delta,
-                )?;
-                let next_type_live_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "type",
-                    "live_cells_count",
-                    info.type_live_cells_count,
-                    *live_delta,
-                )?;
-                let next_type_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "capacity_sum",
-                    info.type_capacity_sum,
-                    *cap_delta,
-                )?;
-                let next_type_owned_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "owned_capacity_sum",
-                    info.type_owned_capacity_sum,
-                    *owned_cap_delta,
-                )?;
-                let next_type_used_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "used_capacity_sum",
-                    info.type_used_capacity_sum,
-                    *used_delta,
-                )?;
-                let next_type_owned_knowledge_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "owned_knowledge_sum",
-                    info.type_owned_knowledge_sum,
-                    *owned_knowledge_delta,
-                )?;
-
-                if next_type_used_capacity_sum > next_type_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script type used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_type_used_capacity_sum,
-                        next_type_capacity_sum
-                    )));
-                }
-                if next_type_owned_knowledge_sum > next_type_owned_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script type owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_type_owned_knowledge_sum,
-                        next_type_owned_capacity_sum
-                    )));
-                }
-
-                info.type_cells_count = next_type_cells_count;
-                info.type_live_cells_count = next_type_live_cells_count;
-                info.type_capacity_sum = next_type_capacity_sum;
-                info.type_owned_capacity_sum = next_type_owned_capacity_sum;
-                info.type_used_capacity_sum = next_type_used_capacity_sum;
-                info.type_owned_knowledge_sum = next_type_owned_knowledge_sum;
-            } else {
-                let next_lock_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "lock",
-                    "cells_count",
-                    info.lock_cells_count,
-                    *cells_delta,
-                )?;
-                let next_lock_live_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "lock",
-                    "live_cells_count",
-                    info.lock_live_cells_count,
-                    *live_delta,
-                )?;
-                let next_lock_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "capacity_sum",
-                    info.lock_capacity_sum,
-                    *cap_delta,
-                )?;
-                let next_lock_owned_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "owned_capacity_sum",
-                    info.lock_owned_capacity_sum,
-                    *owned_cap_delta,
-                )?;
-                let next_lock_used_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "used_capacity_sum",
-                    info.lock_used_capacity_sum,
-                    *used_delta,
-                )?;
-                let next_lock_owned_knowledge_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "owned_knowledge_sum",
-                    info.lock_owned_knowledge_sum,
-                    *owned_knowledge_delta,
-                )?;
-
-                if next_lock_used_capacity_sum > next_lock_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script lock used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_lock_used_capacity_sum,
-                        next_lock_capacity_sum
-                    )));
-                }
-                if next_lock_owned_knowledge_sum > next_lock_owned_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script lock owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_lock_owned_knowledge_sum,
-                        next_lock_owned_capacity_sum
-                    )));
-                }
-
-                info.lock_cells_count = next_lock_cells_count;
-                info.lock_live_cells_count = next_lock_live_cells_count;
-                info.lock_capacity_sum = next_lock_capacity_sum;
-                info.lock_owned_capacity_sum = next_lock_owned_capacity_sum;
-                info.lock_used_capacity_sum = next_lock_used_capacity_sum;
-                info.lock_owned_knowledge_sum = next_lock_owned_knowledge_sum;
-            }
-        }
-
-        for (code_hash, info) in &updated_map {
-            batch.put_script_info(code_hash, info);
-        }
-
-        Ok(updated_map
-            .into_iter()
-            .map(|(code_hash, info)| (code_hash.clone(), info))
-            .collect())
     }
 
     pub fn read_script_reference_info(
@@ -1527,35 +1266,6 @@ impl BatchWriter {
         Ok(updated_map)
     }
 
-    pub fn update_script_usage_batch(
-        &self,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-
-        let unique_code_hashes: Vec<Vec<u8>> = {
-            let mut seen = std::collections::HashSet::new();
-            changes
-                .keys()
-                .filter_map(|(code_hash, _)| {
-                    if seen.insert(code_hash.clone()) {
-                        Some(code_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
-        let existing = self.read_script_info(&refs)?;
-        self.apply_script_usage_deltas(&existing, changes, batch)
-            .map(|_| ())
-    }
-
     pub fn update_script_reference_usage_batch(
         &self,
         changes: &HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>,
@@ -1595,8 +1305,10 @@ impl BatchWriter {
         input_script_hashes: &crate::sync::types::InputScriptHashes,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // Type ID bindings this batch observes, in chain order.
+        // Type ID bindings this batch observes, in chain order, and the code
+        // cells it creates or consumes under any other type script.
         let mut lineage = Vec::new();
+        let mut generic_changes: Vec<GenericTypeCodeChange> = Vec::new();
         let mut chain_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
         for tx in txs {
             if !tx.is_cellbase {
@@ -1619,6 +1331,21 @@ impl BatchWriter {
                         .is_some_and(|(hash, kind)| {
                             kind == 1 && crate::parser::script::is_type_id(hash, 1)
                         });
+                    // A consumed cell under another type script: a code cell
+                    // there (its binary among the reference's live ones, which
+                    // only code enters) leaves what the reference runs.
+                    if let (Some(reference), Some(data_hash), false) =
+                        (type_script_hash, cell.data_hash, is_type_id_input)
+                    {
+                        generic_changes.push(GenericTypeCodeChange {
+                            reference_hash: reference.to_vec(),
+                            binary: data_hash.to_vec(),
+                            created: false,
+                            block_number: tx.block_number,
+                            tx_hash: input.previous_tx_hash.to_vec(),
+                            output_index: index,
+                        });
+                    }
                     // A type-id input's reference is its type script hash.
                     let Some(reference) = type_script_hash.filter(|_| is_type_id_input) else {
                         continue;
@@ -1647,7 +1374,33 @@ impl BatchWriter {
                     }
                 }
             }
-            for cell in &tx.cells {
+            for (output_index, cell) in tx.cells.iter().enumerate() {
+                // A code cell under a type script that is not Type ID moves
+                // what that generic type reference runs.
+                if let Some(reference) = cell.type_script_hash.as_ref().filter(|_| {
+                    !cell
+                        .type_code_hash
+                        .as_deref()
+                        .zip(cell.type_hash_type)
+                        .is_some_and(|(hash, kind)| crate::parser::script::is_type_id(hash, kind))
+                        && ckbadger_store::keys::is_code_cell(&cell.data)
+                }) {
+                    generic_changes.push(GenericTypeCodeChange {
+                        reference_hash: reference.clone(),
+                        binary: cell.data_hash.to_vec(),
+                        created: true,
+                        block_number: tx.block_number,
+                        tx_hash: tx.hash.to_vec(),
+                        output_index: i16::try_from(output_index).map_err(|_| {
+                            anyhow::anyhow!(
+                                "code cell output index exceeds storage range: block={} tx=0x{} output={}",
+                                tx.block_number,
+                                hex::encode(tx.hash),
+                                output_index
+                            )
+                        })?,
+                    });
+                }
                 if !cell
                     .type_code_hash
                     .as_deref()
@@ -1676,6 +1429,7 @@ impl BatchWriter {
         let mut blocks: std::collections::BTreeSet<i64> =
             updated_references.iter().map(|(block, _)| *block).collect();
         blocks.extend(lineage.iter().map(|change| change.block_number));
+        blocks.extend(generic_changes.iter().map(|change| change.block_number));
 
         // The committed state, then advanced block by block.
         let mut state = RollupSteps {
@@ -1687,6 +1441,9 @@ impl BatchWriter {
             versions: self.store.list_script_versions()?.into_iter().collect(),
             families: self.store.list_script_families()?.into_iter().collect(),
             mappings: HashMap::new(),
+            generic_refs: std::collections::BTreeSet::new(),
+            generic_live: HashMap::new(),
+            generic: HashMap::new(),
         };
         let updated_by_block: HashMap<i64, &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> =
             updated_references
@@ -1697,7 +1454,7 @@ impl BatchWriter {
             // Nothing moved: the rollup of the committed state must equal the
             // committed rows, so this stages nothing (a difference is drift,
             // and a journaled batch refuses an unscoped write).
-            return self.rollup_step(&mut state, &[], &[], batch);
+            return self.rollup_step(&mut state, &[], &[], &[], batch);
         }
         for block in blocks {
             // References this block observes for the first time.
@@ -1719,9 +1476,15 @@ impl BatchWriter {
                 .filter(|change| change.block_number == block)
                 .cloned()
                 .collect();
+            let block_generic: Vec<GenericTypeCodeChange> = generic_changes
+                .iter()
+                .filter(|change| change.block_number == block)
+                .cloned()
+                .collect();
             self.rollup_step(
                 &mut state,
                 &block_lineage,
+                &block_generic,
                 &first_seen,
                 &mut batch.at(block),
             )?;
@@ -1754,19 +1517,109 @@ impl BatchWriter {
     /// over the references as `state` holds them (each resolved by
     /// [`reference_binary`]), write the rows that changed and advance `state`
     /// to them.
+    /// The live code cells under the type script whose hash is `reference`
+    /// (not Type ID), by binary, as the committed store holds them: one
+    /// prefix seek over `live_code_cells_by_type`, that type's code cells and
+    /// nothing else (resync fix round S3; it read every live cell of the
+    /// type, with its payload).
+    fn generic_live_from_store(
+        &self,
+        reference: &[u8],
+    ) -> Result<std::collections::BTreeMap<Vec<u8>, u32>> {
+        let mut live = std::collections::BTreeMap::new();
+        for (_, _, binary) in self.store.list_live_code_cells_by_type(reference)? {
+            let count: &mut u32 = live.entry(binary.to_vec()).or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "generic type reference live code count overflow: reference=0x{}",
+                    hex::encode(reference)
+                )
+            })?;
+        }
+        Ok(live)
+    }
+
+    /// The live code binaries of `reference` the batch holds now: read from
+    /// the store the first time the batch needs them.
+    fn generic_live<'s>(
+        &self,
+        generic_live: &'s mut HashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
+        reference: &[u8],
+    ) -> Result<&'s mut std::collections::BTreeMap<Vec<u8>, u32>> {
+        if !generic_live.contains_key(reference) {
+            let live = self.generic_live_from_store(reference)?;
+            generic_live.insert(reference.to_vec(), live);
+        }
+        generic_live.get_mut(reference).ok_or_else(|| {
+            anyhow::anyhow!(
+                "generic type reference live code cells were not read: reference=0x{}",
+                hex::encode(reference)
+            )
+        })
+    }
+
     fn rollup_step(
         &self,
         state: &mut RollupSteps,
         lineage: &[TypeIdCodeChange],
+        generic: &[GenericTypeCodeChange],
         first_seen: &[(Vec<u8>, u8)],
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        // This block's code cells under type scripts that are not Type ID,
+        // into the reference's live code binaries and into
+        // `live_code_cells_by_type` (this block's scope: the journal restores
+        // it), the one place both are moved.
+        for change in generic {
+            let live = self.generic_live(&mut state.generic_live, &change.reference_hash)?;
+            let binary: [u8; 32] = change.binary.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "code cell binary is {} bytes, not a 32-byte data hash: reference=0x{} block={}",
+                    change.binary.len(),
+                    hex::encode(&change.reference_hash),
+                    change.block_number
+                )
+            })?;
+            if change.created {
+                let count = live.entry(change.binary.clone()).or_insert(0);
+                *count = count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "generic type reference live code count overflow: reference=0x{} block={}",
+                        hex::encode(&change.reference_hash),
+                        change.block_number
+                    )
+                })?;
+                batch.put_live_code_cell(
+                    &change.reference_hash,
+                    &change.tx_hash,
+                    change.output_index,
+                    &binary,
+                );
+            } else if let Some(count) = live.get_mut(&change.binary) {
+                // Only a code cell entered the set; a consumed state cell
+                // under the same type script is no binary (its binary is not
+                // among the type's live code binaries: equal data hashes are
+                // equal data).
+                *count -= 1;
+                if *count == 0 {
+                    live.remove(&change.binary);
+                }
+                batch.delete_live_code_cell(
+                    &change.reference_hash,
+                    &change.tx_hash,
+                    change.output_index,
+                );
+            }
+        }
         for (reference_hash, hash_type) in first_seen {
             if is_data_hash_reference(reference_hash, *hash_type)? {
                 batch.put_script_reference_to_version(*hash_type, reference_hash, reference_hash);
             }
         }
         for change in lineage {
+            // A Type ID binding: the reference runs what lineage binds.
+            state.generic_refs.remove(&change.reference_hash);
+            state.generic.remove(&change.reference_hash);
             state.mappings.insert(
                 (change.reference_hash.clone(), 1),
                 change.version_hash.clone(),
@@ -1783,6 +1636,9 @@ impl BatchWriter {
         let RollupSteps {
             reference_info_map,
             mappings,
+            generic_refs,
+            generic_live,
+            generic,
             ..
         } = &mut *state;
         for key in reference_info_map.keys() {
@@ -1790,14 +1646,24 @@ impl BatchWriter {
                 let version_hash = reference_binary(&key.0, key.1, || {
                     self.store.get_script_reference_version_hash(key.1, &key.0)
                 })?;
+                // A type reference with no Type ID binding runs what its live
+                // code cells hold (the lead's ruling).
+                if key.1 == 1 && version_hash.is_none() {
+                    generic_refs.insert(key.0.clone());
+                }
                 mappings.insert(key.clone(), version_hash);
             }
+        }
+        for reference in generic_refs.iter() {
+            let live = self.generic_live(generic_live, reference)?;
+            apply_generic_type_code(generic, reference, live);
         }
 
         let rollups = build_script_reference_rollup_state_over(
             std::mem::take(&mut state.versions),
             std::mem::take(&mut state.families),
             &state.mappings,
+            &state.generic,
             &state.reference_info_map,
             lineage,
         )?;
@@ -2023,15 +1889,19 @@ mod tests {
         assert_eq!(data_form.owned_knowledge_delta, 98);
     }
 
+    /// Lane rd/api-lock-names: the per-pair usage writer is the one script
+    /// usage path (the lumped `script_info` writer is gone); an owned capacity
+    /// its stored row cannot explain fails, rebuild-required.
     #[test]
-    fn test_apply_script_usage_deltas_rejects_owned_capacity_underflow() {
+    fn script_reference_usage_rejects_owned_capacity_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xAA; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xAA; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
             lock_capacity_sum: 100,
@@ -2040,33 +1910,30 @@ mod tests {
             lock_owned_knowledge_sum: 60,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, -1, 0, -200, 0, -120));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes = HashMap::from([((reference.clone(), 1u8, false), (0, -1, 0, -200, 0, -120))]);
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("script lock owned_capacity_sum underflow"));
+            .contains("script reference lock owned_capacity_sum underflow"));
         // D-4c: the stored aggregate cannot explain the delta.
         assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     #[test]
-    fn test_apply_script_usage_deltas_rejects_owned_knowledge_over_capacity() {
+    fn script_reference_usage_rejects_owned_knowledge_over_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xBB; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xBB; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             type_cells_count: 1,
             type_live_cells_count: 1,
             type_capacity_sum: 200,
@@ -2075,70 +1942,30 @@ mod tests {
             type_owned_knowledge_sum: 100,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), true), (0, 0, 0, 10, 0, 200));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes = HashMap::from([((reference.clone(), 1u8, true), (0, 0, 0, 10, 0, 200))]);
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("script type owned knowledge exceeds owned capacity"));
+            .contains("script reference type owned knowledge exceeds owned capacity"));
         // D-4c: an aggregate outside the range the chain can produce.
         assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
-    /// Ruling 6: the label overlay's read of the stored row propagates its
-    /// error — a corrupt `script_info` row fails the batch naming the code
-    /// hash instead of being skipped.
     #[test]
-    fn a_corrupt_script_info_row_fails_the_usage_update_with_its_code_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0x6c; 32];
-        store
-            .put_cf(store.cf_script_info(), &code_hash, b"garbage")
-            .unwrap();
-        let mut existing = HashMap::new();
-        existing.insert(
-            code_hash.clone(),
-            Some(ScriptInfo {
-                code_hash: code_hash.clone(),
-                lock_cells_count: 1,
-                lock_live_cells_count: 1,
-                ..Default::default()
-            }),
-        );
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
-        let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
-            .unwrap_err();
-        let text = format!("{err:#}");
-        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
-        assert!(text.contains("script info"), "{text}");
-        assert!(
-            crate::lifecycle::is_rebuild_required(&err),
-            "a corrupt script_info row is rebuild-required (finding 12): {text}"
-        );
-    }
-
-    #[test]
-    fn test_apply_script_usage_deltas_allows_capacity_sum_above_i64_max() {
+    fn script_reference_usage_allows_capacity_sum_above_i64_max() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xCC; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xCC; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
             lock_capacity_sum: i64::MAX as i128,
@@ -2147,20 +1974,20 @@ mod tests {
             lock_owned_knowledge_sum: i64::MAX as i128 - 100,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, 0, 500, 500, 400, 400));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes =
+            HashMap::from([((reference.clone(), 1u8, false), (0, 0, 500, 500, 400, 400))]);
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        let updated = store
+            .get_script_reference_info(1, &reference)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.lock_capacity_sum, i64::MAX as i128 + 500);
         assert_eq!(updated.lock_owned_capacity_sum, i64::MAX as i128 + 500);
         assert_eq!(updated.lock_used_capacity_sum, i64::MAX as i128 + 300);
@@ -2168,87 +1995,88 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_script_usage_deltas_accepts_capacity_delta_exceeding_i64() {
+    fn script_reference_usage_accepts_capacity_delta_exceeding_i64() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xDD; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xDD; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
-            lock_capacity_sum: 0,
-            lock_owned_capacity_sum: 0,
-            lock_used_capacity_sum: 0,
-            lock_owned_knowledge_sum: 0,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
         let huge_delta = i128::from(i64::MAX) + 42;
-        let mut changes = HashMap::new();
-        changes.insert(
-            (code_hash.clone(), false),
+        let changes = HashMap::from([(
+            (reference.clone(), 1u8, false),
             (0, 0, huge_delta, huge_delta, 0, 0),
-        );
+        )]);
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        let updated = store
+            .get_script_reference_info(1, &reference)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.lock_capacity_sum, huge_delta);
         assert_eq!(updated.lock_owned_capacity_sum, huge_delta);
     }
 
+    /// Lane rd/api-lock-names: the per-pair usage writer
+    /// (`apply_script_reference_usage_deltas`) writes the pair's reference row
+    /// only; the registry's label row (label import's alone) is left exactly
+    /// as it was, and no other label row appears. A pin of this writer, not of
+    /// the live path: it never wrote `script_info` at the base either. The
+    /// live path's pin is `sync/batch.rs`
+    /// `live_batch_writes_no_script_info_row_and_counts_each_pair_apart`, and
+    /// a block's batch that wrote a label row is refused at commit (store.rs
+    /// `label_import_is_the_only_writer_of_script_info`).
     #[test]
-    fn test_apply_script_usage_deltas_preserves_fresh_script_metadata_when_snapshot_is_stale() {
+    fn script_usage_update_leaves_the_label_row_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0x9b; 32];
-        let latest = ScriptInfo {
-            code_hash: code_hash.clone(),
-            hash_type: 1,
-            name: Some("Default Lock".to_string()),
+        let label = ScriptInfo {
+            name: "Default Lock".to_string(),
             deprecated: true,
             description: Some("mainnet default lock".to_string()),
             ..Default::default()
         };
-        store.put_script_info_direct(&code_hash, &latest).unwrap();
+        store.put_script_info_direct(&code_hash, 1, &label).unwrap();
 
-        let existing = HashMap::new();
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
-
+        let existing = HashMap::from([((code_hash.clone(), 1u8), None)]);
+        let changes = HashMap::from([((code_hash.clone(), 1u8, false), (1, 1, 100, 100, 61, 61))]);
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
-        assert_eq!(updated.hash_type, 1);
-        assert_eq!(updated.name.as_deref(), Some("Default Lock"));
-        assert!(updated.deprecated);
-        assert_eq!(updated.description.as_deref(), Some("mainnet default lock"));
-        // Correctness fields (dep_type_hash, dep_data_hash, code_cell_tx_hash,
-        // code_cell_output_index) are NOT overlaid from existing records. Label import
-        // no longer writes these; code cell resolution uses script_references/versions CFs.
-        assert_eq!(updated.dep_type_hash, None);
-        assert_eq!(updated.dep_data_hash, None);
-        assert_eq!(updated.lock_cells_count, 1);
-        assert_eq!(updated.lock_live_cells_count, 1);
-        assert_eq!(updated.lock_capacity_sum, 100);
-        assert_eq!(updated.lock_owned_capacity_sum, 100);
-        assert_eq!(updated.lock_used_capacity_sum, 61);
-        assert_eq!(updated.lock_owned_knowledge_sum, 61);
+        assert_eq!(
+            store.list_script_infos().unwrap(),
+            vec![((code_hash.clone(), 1), label)]
+        );
+        let usage = store
+            .get_script_reference_info(1, &code_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                usage.lock_cells_count,
+                usage.lock_live_cells_count,
+                usage.lock_owned_capacity_sum
+            ),
+            (1, 1, 100)
+        );
     }
 
     #[test]
@@ -2462,6 +2290,7 @@ mod tests {
             let rollup = build_script_reference_rollup_state_with_lineage(
                 &store,
                 vec![((reference.clone(), 1), Some(current_binary.clone()))],
+                &GenericTypeCodes::new(),
                 infos,
                 &observations,
             )
@@ -2628,6 +2457,7 @@ mod tests {
         let rollup = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![],
+            &GenericTypeCodes::new(),
             HashMap::new(),
             &observations,
         )
@@ -3133,6 +2963,405 @@ mod tests {
                 .contains(&binary),
             "new by-family index must be removed on reorg"
         );
+    }
+
+    /// The lead's ruling on the live path (lane rd/api-lock-names): the code
+    /// cells a batch creates and consumes under a type script that is not
+    /// Type ID move what that generic type reference runs, block by block, and
+    /// its family count follows. Block 20 deploys two versions of one family:
+    /// the reference is counted in it. Block 21 consumes one and stands a
+    /// binary outside the registry beside the other: counted in none.
+    #[test]
+    fn live_code_cells_move_a_generic_type_references_family_block_by_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
+        let code = vec![0x13u8; 32];
+        let args = vec![0x5eu8; 4];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+        let elf = |tag: u8| {
+            let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+            data.push(tag);
+            data
+        };
+        let (data_one, data_two, data_foreign) = (elf(1), elf(2), elf(9));
+        let hash = |data: &[u8]| crate::parser::ScriptParser::compute_data_hash(data);
+        store
+            .put_script_family_direct(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for data in [&data_one, &data_two] {
+            let version = hash(data).to_vec();
+            store
+                .put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.clone(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.clone(), 0)],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 4,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+        let code_cell = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: Some(code.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(args.clone()),
+            type_script_hash: Some(reference.clone()),
+            data_hash: hash(data),
+            data_size: data.len() as i32,
+            data: data.to_vec(),
+        };
+        let tx = |hash_byte: u8,
+                  block: i64,
+                  inputs: Vec<crate::parser::transaction::ParsedInput>,
+                  cells: Vec<crate::parser::cell::ParsedCell>| {
+            crate::sync::types::TxData {
+                hash: [hash_byte; 32],
+                block_number: block,
+                tx_index: 1,
+                inputs_count: inputs.len() as i16,
+                outputs_count: cells.len() as i16,
+                is_cellbase: false,
+                inputs,
+                cells,
+                witnesses: vec![],
+                total_input_capacity: 0,
+                total_output_capacity: 0,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                semantic_tags: 0,
+            }
+        };
+        let run = |txs: &[crate::sync::types::TxData],
+                   input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>| {
+            ckbadger_store::commit_journaled(&store, |batch| {
+                writer
+                    .materialize_script_versions_and_families_with_chain(
+                        &[],
+                        txs,
+                        input_cells,
+                        &HashMap::new(),
+                        &crate::sync::types::derive_input_script_hashes(
+                            txs,
+                            input_cells,
+                            &HashMap::new(),
+                        ),
+                        batch,
+                    )
+                    .unwrap();
+            })
+            .unwrap();
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+
+        let deploy = tx(
+            0x44,
+            20,
+            vec![],
+            vec![code_cell(&data_one), code_cell(&data_two)],
+        );
+        assert_eq!(
+            run(std::slice::from_ref(&deploy), &HashMap::new()),
+            3,
+            "two versions of one family deployed: counted in it"
+        );
+
+        // The deployed cells as the batch writer leaves them indexed.
+        let positioned = |data: &[u8]| {
+            ckbadger_store::PositionedCellInfo::new(
+                ckbadger_store::LiveCellInfo {
+                    capacity: 10000,
+                    lock_code_hash: [0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some(code.clone().try_into().unwrap()),
+                    type_hash_type: Some(1),
+                    type_args: Some(args.clone()),
+                    data_size: data.len() as i32,
+                    udt_amount: None,
+                    data_hash: Some(hash(data)),
+                },
+                20,
+            )
+        };
+        let mut cells = StoreBatch::new(&store);
+        let mut payloads = StoreBatch::new(&append);
+        for (index, data) in [&data_one, &data_two].into_iter().enumerate() {
+            let outpoint = keys::encode_outpoint(&deploy.hash, index as i16);
+            payloads
+                .put_cell_payload(&outpoint, &positioned(data).cell)
+                .unwrap();
+            cells.put_live_cell_marker(&outpoint, 20);
+            cells.put_cell_by_type(&reference, 20, &deploy.hash, index as i16);
+            cells.put_cell_by_data_hash(&hash(data), 20, &deploy.hash, index as i16);
+        }
+        payloads.commit().unwrap();
+        cells.commit().unwrap();
+
+        let replace = tx(
+            0x45,
+            21,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: deploy.hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![code_cell(&data_foreign)],
+        );
+        let consumed = HashMap::from([((deploy.hash.to_vec(), 0), positioned(&data_one))]);
+        assert_eq!(
+            run(std::slice::from_ref(&replace), &consumed),
+            0,
+            "one version left beside a binary outside the registry: counted in none"
+        );
+    }
+
+    /// resync fix round S3 (the lead's option B): the live rollup settles a
+    /// generic type reference from its live CODE cells only. The reference's
+    /// type holds two live code cells (deployed through the step at block 20)
+    /// and fifty live cells that are not code, each a trap: its append-only
+    /// payload is withheld, so any read of it fails. A batch that moves
+    /// nothing (block 21: a plain transfer) settles the reference without
+    /// touching a trap, and changes no row the rollup owns.
+    #[test]
+    fn the_rollup_reads_a_generic_references_code_cells_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
+        let code = vec![0x13u8; 32];
+        let args = vec![0x5eu8; 4];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+        let elf = |tag: u8| {
+            let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+            data.push(tag);
+            data
+        };
+        let (data_one, data_two) = (elf(1), elf(2));
+        let hash = |data: &[u8]| crate::parser::ScriptParser::compute_data_hash(data);
+        store
+            .put_script_family_direct(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for data in [&data_one, &data_two] {
+            let version = hash(data).to_vec();
+            store
+                .put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.clone(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.clone(), 0)],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 4,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+        let code_cell = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: Some(code.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(args.clone()),
+            type_script_hash: Some(reference.clone()),
+            data_hash: hash(data),
+            data_size: data.len() as i32,
+            data: data.to_vec(),
+        };
+        let plain_cell = crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            type_script_hash: None,
+            data_hash: hash(&[]),
+            data_size: 0,
+            data: vec![],
+        };
+        let tx = |hash_byte: u8, block: i64, cells: Vec<crate::parser::cell::ParsedCell>| {
+            crate::sync::types::TxData {
+                hash: [hash_byte; 32],
+                block_number: block,
+                tx_index: 1,
+                inputs_count: 0,
+                outputs_count: cells.len() as i16,
+                is_cellbase: false,
+                inputs: vec![],
+                cells,
+                witnesses: vec![],
+                total_input_capacity: 0,
+                total_output_capacity: 0,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                semantic_tags: 0,
+            }
+        };
+        let run = |txs: &[crate::sync::types::TxData]| {
+            ckbadger_store::commit_journaled(&store, |batch| {
+                writer
+                    .materialize_script_versions_and_families_with_chain(
+                        &[],
+                        txs,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &crate::sync::types::derive_input_script_hashes(
+                            txs,
+                            &HashMap::new(),
+                            &HashMap::new(),
+                        ),
+                        batch,
+                    )
+                    .unwrap();
+            })
+        };
+
+        let deploy = tx(0x44, 20, vec![code_cell(&data_one), code_cell(&data_two)]);
+        run(std::slice::from_ref(&deploy)).unwrap();
+        // The two code cells as the cell writer indexes them, and fifty live
+        // cells of the same type that are not code, each a trap: its payload
+        // is withheld from the append-only store, so a read of it fails.
+        let positioned = |data: &[u8]| {
+            ckbadger_store::PositionedCellInfo::new(
+                ckbadger_store::LiveCellInfo {
+                    capacity: 10000,
+                    lock_code_hash: [0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some(code.clone().try_into().unwrap()),
+                    type_hash_type: Some(1),
+                    type_args: Some(args.clone()),
+                    data_size: data.len() as i32,
+                    udt_amount: None,
+                    data_hash: Some(hash(data)),
+                },
+                20,
+            )
+        };
+        let mut cells = StoreBatch::new(&store);
+        let mut payloads = StoreBatch::new(&append);
+        for (index, data) in [&data_one, &data_two].into_iter().enumerate() {
+            let outpoint = keys::encode_outpoint(&deploy.hash, index as i16);
+            payloads
+                .put_cell_payload(&outpoint, &positioned(data).cell)
+                .unwrap();
+            cells.put_live_cell_marker(&outpoint, 20);
+            cells.put_cell_by_type(&reference, 20, &deploy.hash, index as i16);
+            cells.put_cell_by_data_hash(&hash(data), 20, &deploy.hash, index as i16);
+        }
+        for trap in 0..50u8 {
+            let tx_hash = [0xa0u8.wrapping_add(trap); 32];
+            cells.put_live_cell_marker(&keys::encode_outpoint(&tx_hash, 0), 20);
+            cells.put_cell_by_type(&reference, 20, &tx_hash, 0);
+        }
+        payloads.commit().unwrap();
+        cells.commit().unwrap();
+        let family_live_cells = || {
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+        assert_eq!(family_live_cells(), 3, "fixture: counted in its family");
+        // Tests report NOTE-4: the rows the rollup owns include
+        // `live_code_cells_by_type`; the step wrote the two code cells' rows
+        // at block 20 (deploy outputs 0 and 1, each by its binary).
+        let code_cell_rows = || store.list_live_code_cells_by_type(&reference).unwrap();
+        assert_eq!(
+            code_cell_rows(),
+            vec![
+                (deploy.hash.to_vec(), 0, hash(&data_one)),
+                (deploy.hash.to_vec(), 1, hash(&data_two)),
+            ],
+            "the step's rows at block 20"
+        );
+        let rollup_rows = || {
+            (
+                crate::sync::bulk_build::collect_script_binding_rows_for_test(&store).unwrap(),
+                code_cell_rows(),
+            )
+        };
+        let before = rollup_rows();
+
+        // Block 21 moves nothing the reference depends on: a plain output.
+        let plain = tx(0x46, 21, vec![plain_cell]);
+        let settled = run(std::slice::from_ref(&plain));
+        assert!(
+            settled.is_ok(),
+            "the step settles the reference from its code cells, touching no other cell: {:?}",
+            settled.err()
+        );
+        assert_eq!(
+            rollup_rows(),
+            before,
+            "a batch that moves nothing changes no row"
+        );
+        assert_eq!(family_live_cells(), 3);
     }
 
     #[test]
@@ -3799,6 +4028,7 @@ mod tests {
         let result = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![((reference.clone(), 1), Some(vec![0x91; 32]))],
+            &GenericTypeCodes::new(),
             HashMap::from([((reference, 1), info)]),
             &[],
         );
@@ -3971,34 +4201,6 @@ mod tests {
         store
             .put_script_reference_to_version_direct(1, &unlabeled_ref, &unlabeled)
             .unwrap();
-        store
-            .put_script_info_direct(
-                &labeled_ref,
-                &ScriptInfo {
-                    code_hash: labeled_ref.clone(),
-                    hash_type: 1,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    lock_capacity_sum: 100,
-                    lock_owned_capacity_sum: 100,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
-            .put_script_info_direct(
-                &unlabeled_ref,
-                &ScriptInfo {
-                    code_hash: unlabeled_ref.clone(),
-                    hash_type: 1,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    lock_capacity_sum: 50,
-                    lock_owned_capacity_sum: 50,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
 
         // Discover `unlabeled` via Type ID lineage from `labeled_ref`, which
         // copies `name: Some("PW Lock")` and `family_id: Some("pw-lock")` while
@@ -4024,6 +4226,7 @@ mod tests {
         let rollup = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![((labeled_ref.clone(), 1), Some(labeled.clone()))],
+            &GenericTypeCodes::new(),
             ref_info_map,
             &observed,
         )
@@ -4226,6 +4429,109 @@ mod tests {
         assert_eq!(family.owned_knowledge_sum, 205);
     }
 
+    /// The lead's ruling (lane rd/api-lock-names): the indexer counts a
+    /// generic (non Type ID) type reference in a family by the binaries its
+    /// live code cells hold, by the one rule the API names it by
+    /// (`ScriptFamilyMembershipIndex::family_of_form`): one binary or several
+    /// versions of one family, counted in that family; a binary outside the
+    /// registry beside a registered one, or no live code cell, in none. It
+    /// counted a generic type reference in no family at all (it binds type
+    /// references only through Type ID lineage), while the API counted one
+    /// with a single live binary.
+    #[test]
+    fn rollup_counts_a_generic_type_reference_by_the_binaries_its_live_code_cells_hold() {
+        let family_live_cells = |binaries: &[[u8; 32]]| -> i64 {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let writer = BatchWriter::new(store.clone(), store.clone());
+            let code = [0x13u8; 32];
+            let args = vec![0x5eu8; 4];
+            let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+            let mut batch = StoreBatch::new(&store);
+            batch.put_script_family(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            );
+            for version in [[0x61u8; 32], [0x62; 32]] {
+                batch.put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.to_vec(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.to_vec(), 0)],
+                        ..Default::default()
+                    },
+                );
+                batch.put_script_version_by_family("pair", &version);
+            }
+            for (index, binary) in binaries.iter().enumerate() {
+                let tx = [0xd0 + index as u8; 32];
+                batch.put_cell(
+                    &tx,
+                    0,
+                    &ckbadger_store::LiveCellInfo {
+                        capacity: 100,
+                        lock_code_hash: [0x12; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                        type_code_hash: Some(code),
+                        type_hash_type: Some(1),
+                        type_args: Some(args.clone()),
+                        data_size: 64,
+                        udt_amount: None,
+                        data_hash: Some(*binary),
+                    },
+                    11,
+                );
+                batch.put_cell_by_type(&reference, 11, &tx, 0);
+                // the code-cell index files code only
+                batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+                // and the live code cell by its type script, which the rollup
+                // reads (resync fix round S3)
+                batch.put_live_code_cell(&reference, &tx, 0, binary);
+            }
+            batch.put_script_reference_info(
+                1,
+                &reference,
+                &ScriptReferenceInfo {
+                    reference_hash: reference.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 4,
+                    lock_live_cells_count: 3,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
+            writer.commit_rollup_of_committed_state_for_test().unwrap();
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x62; 32]]),
+            3,
+            "two versions of one family: counted in it"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32]]),
+            3,
+            "one binary: its family"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x6f; 32]]),
+            0,
+            "a binary outside the registry beside a registered one: no family"
+        );
+        assert_eq!(family_live_cells(&[]), 0, "no live code cell: no family");
+    }
+
     #[test]
     fn rollup_uses_canonical_mapping_without_scanning_typed_payloads() {
         let dir = tempfile::tempdir().unwrap();
@@ -4323,31 +4629,6 @@ mod tests {
     }
 
     #[test]
-    fn test_read_script_info_errors_on_deserialize_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0xEE; 32];
-
-        store
-            .put_cf(store.cf_script_info(), &code_hash, &[0xFF, 0x00])
-            .unwrap();
-
-        let refs = vec![&code_hash];
-        let err = writer.read_script_info(&refs).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize script info"));
-        // Finding 12: the batch prefetch types a corrupt row as
-        // rebuild-required, naming the code hash.
-        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
-        assert!(
-            err.to_string().contains(&hex::encode(&code_hash)),
-            "{err:#}"
-        );
-    }
-
-    #[test]
     fn test_read_address_balances_errors_on_deserialize_failure() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
@@ -4372,28 +4653,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_apply_script_usage_deltas_rejects_negative_delta_for_unseen_script() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-
-        let code_hash = vec![0xAB; 32];
-        let existing = HashMap::new();
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, -1, 0, -1, 0, -1));
-
-        let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("script delta underflow for unseen code_hash"));
-        // D-4c: no stored row can explain a negative delta.
-        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
-    }
-
     fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
         assert!(
             crate::lifecycle::is_rebuild_required(err),
@@ -4416,14 +4675,6 @@ mod tests {
     fn script_metric_underflows_are_rebuild_required() {
         let hash = [0x5c; 32];
         assert_rebuild_required(
-            &checked_next_script_metric_i64(&hash, "lock", "cells_count", 0, -1).unwrap_err(),
-            "script lock cells_count underflow",
-        );
-        assert_rebuild_required(
-            &checked_next_script_metric_i128(&hash, "type", "capacity_sum", 0, -1).unwrap_err(),
-            "script type capacity_sum underflow",
-        );
-        assert_rebuild_required(
             &checked_next_script_reference_metric_i64(&hash, 1, "lock cells_count", 0, -1)
                 .unwrap_err(),
             "script reference lock cells_count underflow",
@@ -4434,7 +4685,8 @@ mod tests {
             "script reference type capacity_sum underflow",
         );
         assert_plain(
-            &checked_next_script_metric_i64(&hash, "lock", "cells_count", i64::MAX, 1).unwrap_err(),
+            &checked_next_script_reference_metric_i64(&hash, 1, "lock cells_count", i64::MAX, 1)
+                .unwrap_err(),
             "overflow",
         );
         assert_plain(
@@ -4538,50 +4790,6 @@ mod tests {
             &apply(Some(full), address_delta(1, 0, 0, 0, 0, 0)),
             "address balance overflow",
         );
-    }
-
-    /// D-4c: a script usage aggregate outside the range the chain can
-    /// produce (used capacity above capacity, owned knowledge above owned
-    /// capacity) is rebuild-required, for lock and type usage alike.
-    #[test]
-    fn script_usage_out_of_range_is_rebuild_required() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0x5d; 32];
-        let row = ScriptInfo {
-            code_hash: code_hash.clone(),
-            lock_capacity_sum: 100,
-            lock_owned_capacity_sum: 100,
-            type_capacity_sum: 100,
-            type_owned_capacity_sum: 100,
-            ..Default::default()
-        };
-        let existing = HashMap::from([(code_hash.clone(), Some(row))]);
-        for (is_type, delta, what) in [
-            (
-                false,
-                (0, 0, 0, 0, 101, 0),
-                "script lock used capacity exceeds total",
-            ),
-            (
-                false,
-                (0, 0, 0, 0, 0, 101),
-                "script lock owned knowledge exceeds owned capacity",
-            ),
-            (
-                true,
-                (0, 0, 0, 0, 101, 0),
-                "script type used capacity exceeds total",
-            ),
-        ] {
-            let changes = HashMap::from([((code_hash.clone(), is_type), delta)]);
-            let mut batch = StoreBatch::new(&store);
-            let err = writer
-                .apply_script_usage_deltas(&existing, &changes, &mut batch)
-                .unwrap_err();
-            assert_rebuild_required(&err, what);
-        }
     }
 
     /// D-4c: a script reference usage delta its stored row cannot explain (a

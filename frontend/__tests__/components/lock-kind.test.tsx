@@ -5,12 +5,20 @@ import {
   cellLockSentence,
   cellOwnerLock,
   LockKind,
+  lockWordsText,
   lockWords,
   LockWordsView,
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
-import { lockCallFacts, lockPhrase, partyLockSentence, partyLockWordsText } from '@/lib/lock-words';
+import {
+  lockCallFacts,
+  lockPhrase,
+  partyLockSentence,
+  partyLockWordsText,
+  withNameBy,
+} from '@/lib/lock-words';
+import { addressLockName } from '@/components/address/address-holdings';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
@@ -175,6 +183,9 @@ describe('cellLockFacts: an address that spells another lock is refused, clause 
       name: 'Default Lock',
       codeHash: DEFAULT_LOCK_CODE_HASH,
       hashType: 'type',
+      // re-pinned (lane rd/api-lock-names): the facts carry the hash type the API writes beside a
+      // name; none here, the registered reference
+      nameBy: null,
     });
   });
 
@@ -237,7 +248,9 @@ describe('rowLock: a row’s own hash type', () => {
     expect(
       decide(
         {
-          lockKind: 'SECP256K1/blake160',
+          // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+          // runs, and the default lock's code hash by data runs none, so it sends no name
+          lockKind: null,
           lockCodeHash: DEFAULT_LOCK_CODE_HASH,
           lockHashType: 'data',
           address: null,
@@ -323,10 +336,38 @@ describe('the decision’s sentence form', () => {
 
   it('writes a lock the registry does not name by its code hash, a by-data lock with its hash type', () => {
     expect(cellLockSentence(cell(CODE, 'type', null), 'row')).toBe('a lock 0x9b9b9b9b…9b9b9b');
-    // the registry's name is the default lock's, not this lock's (B4 fix round)
-    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'data', 'Default Lock'), 'row')).toBe(
+    // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API sends no name for the default
+    // lock's code hash by data (it runs no code), and the lock is written by its code hash and type
+    expect(cellLockSentence(cell(DEFAULT_LOCK_CODE_HASH, 'data', null), 'row')).toBe(
       'a lock 0x9bd7e06f…a3cce8 by data'
     );
+  });
+
+  // Lane rd/api-lock-names, the fix round's ruling: a name the API gives a pair that runs a
+  // family's code by another reference than the registry's carries that hash type beside it.
+  it('writes a name by another reference with its hash type beside it', () => {
+    const facts = {
+      name: 'xUDT',
+      codeHash: CODE,
+      hashType: 'data2' as const,
+      nameBy: 'data2' as const,
+    };
+    const words = namedLockWords(facts, 'sentence');
+    expect(lockWordsText(words, 'row')).toBe('xUDT · by data2');
+    expect(lockPhrase({ ...words, name: 'JoyID' } as typeof words, 'row')).toBe(
+      'a JoyID lock · by data2'
+    );
+    expect(lockWordsText(namedLockWords({ ...facts, nameBy: null }, 'column'), 'row')).toBe('xUDT');
+    // an unnamed lock by a data hash type is its code hash and its hash type; by type, its code hash
+    expect(
+      lockWordsText(namedLockWords({ ...facts, name: null, nameBy: null }, 'column'), 'row')
+    ).toBe('lock 0x9b9b9b9b…9b9b9b by data2');
+    expect(
+      lockWordsText(
+        namedLockWords({ ...facts, name: null, nameBy: null, hashType: 'type' }, 'column'),
+        'row'
+      )
+    ).toBe('lock 0x9b9b9b9b…9b9b9b');
   });
 
   it('says a lock that is not indexed in words, never silent', () => {
@@ -484,6 +525,86 @@ describe('the article follows the name’s first sound', () => {
   });
 });
 
+// Lane rd/api-lock-names, at the merge of fix/readability: every place that writes a name writes the
+// hash type the API sends beside it, through the decision: a row's column (LockKind, the holders'
+// tables), a cell version's owner lock, a named party (.cell owner, Fiber party), and the one text
+// rule for a script's name (withNameBy).
+describe('a name by another reference carries its hash type wherever it is written', () => {
+  it('in a row’s column (LockKind with lockKindBy)', () => {
+    render(
+      <LockKind
+        lockKind="Default Lock"
+        lockKindBy="data1"
+        lockCodeHash={`0x${'70'.repeat(32)}`}
+        address={null}
+        size="row"
+        place="column"
+      />
+    );
+    expect(document.body).toHaveTextContent(/^Default Lock · by data1$/);
+  });
+
+  it('beside a cell version’s owner and a named party', () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const code = `0x${'70'.repeat(32)}`;
+    const address = ckbAddress({ codeHash: code, hashType: 'data1', args });
+    expect(
+      cellLockSentence(
+        {
+          lock: { codeHash: code, hashType: 'data1', args },
+          lockName: 'Default Lock',
+          lockNameBy: 'data1',
+          ownerAddress: address,
+          txHash: `0x${'11'.repeat(32)}`,
+          outputIndex: 0,
+        },
+        'row'
+      )
+    ).toBe('a Default Lock · by data1');
+    expect(
+      partyLockWordsText(
+        { lockScriptName: 'Default Lock', lockScriptNameBy: 'data1', address },
+        'row'
+      )
+    ).toBe('Default Lock · by data1');
+  });
+
+  it('as an address’s lock name (its lockScriptInfo.nameBy)', () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    const code = `0x${'70'.repeat(32)}`;
+    const lockScript = { codeHash: code, hashType: 'data1', args };
+    expect(
+      addressLockName({
+        lockScriptHash: `0x${'33'.repeat(32)}`,
+        address: ckbAddress({ codeHash: code, hashType: 'data1', args }),
+        lockScript,
+        lockScriptInfo: {
+          codeHash: code,
+          name: 'Default Lock',
+          nameBy: 'data1',
+          scriptKind: 'lock',
+          deprecated: false,
+        },
+      } as never)
+    ).toBe('Default Lock · by data1');
+  });
+
+  it('as a script’s name in text (the one rule)', () => {
+    expect(withNameBy('xUDT', 'data2')).toBe('xUDT · by data2');
+    expect(withNameBy('xUDT', null)).toBe('xUDT');
+    expect(withNameBy('xUDT', undefined)).toBe('xUDT');
+  });
+
+  it('refuses a hash type beside a name that the chain does not have', () => {
+    expect(() =>
+      partyLockWordsText(
+        { lockScriptName: 'JoyID', lockScriptNameBy: 'data3', address: null },
+        'row'
+      )
+    ).toThrow(/not a CKB hash type/);
+  });
+});
+
 // The third read's T SHOULD-5: a called lock is decided from its code hash, its hash type and its
 // `lockScriptName` (the wire's name for a lock's registry name, as on a party). A lock call from
 // an API one version older carries `scriptName` instead: refused by name, never decided on
@@ -501,7 +622,23 @@ describe('lockCallFacts: a called lock as the decision reads it', () => {
       name: 'Default Lock',
       codeHash: DEFAULT_LOCK_CODE_HASH,
       hashType: 'data',
+      nameBy: null,
     });
+  });
+
+  // at the merge with resync/all (lane rd/api-lock-names): the API names the code a called lock's
+  // pair runs and writes its hash type beside a name by another reference (`lockScriptNameBy`), as
+  // on a party; the decision reads it here, and a word the chain does not have is refused
+  it('hands the decision the hash type the API writes beside the name', () => {
+    expect(lockCallFacts({ ...call, lockHashType: 'data1', lockScriptNameBy: 'data1' })).toEqual({
+      name: 'Default Lock',
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'data1',
+      nameBy: 'data1',
+    });
+    expect(() => lockCallFacts({ ...call, lockScriptNameBy: 'data3' })).toThrow(
+      /not a CKB hash type/
+    );
   });
 
   it('refuses a lock call of an older API by the field it does not send', () => {

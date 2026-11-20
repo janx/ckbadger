@@ -28,6 +28,7 @@ const activity: GlobalActivity = activityRead({
       ckbDelta: '-100000001',
       usedDelta: '0',
       itemDeltas: [{ kind: 'token', typeScriptHash: token, delta: '-13' }],
+      sent: true,
     },
     {
       lockHash: '0x' + '02'.repeat(32),
@@ -41,12 +42,12 @@ const activity: GlobalActivity = activityRead({
         { kind: 'token', typeScriptHash: token, delta: '13' },
         { kind: 'token', typeScriptHash: '0x' + 'ef'.repeat(32), delta: '77' },
       ],
+      sent: false,
     },
   ],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [ITEM_TYPE.xudt],
-  itemTypesUnread: null,
+  recognizedTypes: [ITEM_TYPE.xudt],
   protocolActions: [],
 });
 const transaction: Transaction = {
@@ -74,7 +75,7 @@ describe('Shared asset feeds', () => {
       ...activity,
       participants: [{ ...activity.participants[0], itemDeltas: [] }],
       // no item moved, so no item's code (the third read's T SHOULD-1)
-      itemTypes: [],
+      recognizedTypes: [],
       ...extra,
       itemContext: {
         itemId: aptId,

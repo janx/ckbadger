@@ -219,65 +219,77 @@ export const daoStatistics: DaoStatistics = {
 const SCRIPT_COUNTS = [
   {
     codeHash: '0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43',
+    hashType: 'type',
     name: '.bit Time Index State',
     count: 5480,
   },
   {
     codeHash: '0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79',
+    hashType: 'type',
     name: '.bit Time Info',
     count: 5480,
   },
   {
     codeHash: '0xd483925160e4232b2cb29f012e8380b7b612d71cf4e79991476b6bcf610735f6',
+    hashType: 'type',
     name: 'Bitcoin SPV Type Lock',
     count: 294,
   },
   {
     codeHash: '0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1',
+    hashType: 'type',
     name: '.bit Lock',
     count: 23,
   },
   {
     codeHash: '0x7a2a3e8d6e5c4a2b4f2d5c0b3b8a1e2f1c9d4e7f6a5b4c3d2e1f0a9b8c7d6e5f',
+    hashType: 'type',
     name: '.bit Income Cell',
     count: 12,
   },
   {
     codeHash: '0x0b36e9860000000000000000000000000000000000000000000000000000beef',
+    hashType: 'type',
     name: null,
     count: 6,
   },
   {
     codeHash: '0xe2b842a50000000000000000000000000000000000000000000000000000cafe',
+    hashType: 'type',
     name: null,
     count: 3,
   },
   {
     codeHash: '0x5dd229e20000000000000000000000000000000000000000000000000000f00d',
+    hashType: 'type',
     name: null,
     count: 2,
   },
 ];
 
+/** One kind per transaction: the kinds sum to activityCount (7,115). */
 export const activitySummary24h: ActivitySummary24h = {
   activityCount: 7115,
-  transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
-  tokenCount: 0,
-  objectCount: 0,
-  identityCount: 10,
-  scriptCallCount: 5795,
-  unknownCount: 0,
+  kindCounts: {
+    dao: 7,
+    token: 0,
+    object: 0,
+    identity: 10,
+    protocol: 1,
+    script: 5795,
+    ckb: 1302,
+  },
   coinbaseCount: 9800,
   uniqueAddressCount: 1497,
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
+  protocolActionCounts: {
+    'dao:deposit': 4,
+    'dao:withdraw_complete': 1,
+    'dao:withdraw_request': 3,
+    'fiber:channel_open': 1,
+  },
   hoursCovered: 24,
-  // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
-  kindOccurrences: 7115,
-  daoCount: 8,
   // the route's script calls (5,480 + 5,480 + 294 + 23 + 12 + 6 + 3 + 2) and its rest after five
   scriptCalls: 11300,
   scriptRest: { scripts: 3, calls: 11 },
@@ -288,24 +300,21 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
   const total = i === 28 ? 6691 : 6200 + ((i * 397) % 1500);
   return {
     date: iso.replace(/-/g, ''),
-    transferCount: total - 5000,
-    daoDepositCount: 0,
-    daoWithdrawRequestCount: 0,
-    daoWithdrawCompleteCount: 0,
-    tokenCount: 0,
-    objectCount: 0,
-    identityCount: 0,
-    scriptCallCount: 5000,
-    unknownCount: 3,
+    activityCount: total,
+    kindCounts: {
+      dao: 0,
+      token: 0,
+      object: 0,
+      identity: 0,
+      protocol: 0,
+      script: 5000,
+      ckb: total - 5000,
+    },
     coinbaseCount: 9800,
     uniqueAddressCount: 500,
     totalCkbMoved: '0',
     scriptCounts: [],
-    kindOccurrences: total,
-    daoCount: 0,
-    // the route's count of the day's user transactions (its transactions less its 9,800
-    // cellbases: the transaction-count chart's 9,800 + total)
-    userTransactionCount: total,
+    protocolActionCounts: {},
   };
 });
 
@@ -345,8 +354,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
       },
     ],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [
       {
         address: ADDRS[i % 2],
@@ -357,6 +365,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         usedDelta: '0',
         itemDeltas: [],
         tags: 0,
+        sent: true,
       },
     ],
   });
@@ -366,7 +375,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
       typeCalls: [],
       // the route names the DAO's code on a DAO step (the third read's T SHOULD-1: the deposit kept
       // the .bit oracle's [], a key the API cannot send)
-      itemTypes: [ITEM_TYPE.dao],
+      recognizedTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',
@@ -406,6 +415,7 @@ function party(
     usedDelta,
     itemDeltas,
     tags: itemDeltas.length > 0 ? 2 : 0,
+    sent: false,
   };
 }
 
@@ -424,8 +434,7 @@ function sample(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     ...overrides,
   });
 }
@@ -433,7 +442,7 @@ function sample(
 /** Real shapes from the FE-7 mockup: DAO, Fiber, object, token, and an 8-party transaction. */
 export const feedSamples = {
   daoWithdrawRequest: sample(1, {
-    itemTypes: [ITEM_TYPE.dao],
+    recognizedTypes: [ITEM_TYPE.dao],
     protocolActions: [
       {
         protocol: 'dao',
@@ -467,7 +476,7 @@ export const feedSamples = {
     ],
   }),
   objectTransfer: sample(3, {
-    itemTypes: [ITEM_TYPE.spore],
+    recognizedTypes: [ITEM_TYPE.spore],
     typeCalls: [
       {
         typeCodeHash: '0xckbfs',
@@ -500,7 +509,7 @@ export const feedSamples = {
     ],
   }),
   tokenTransfer: sample(4, {
-    itemTypes: [ITEM_TYPE.xudt],
+    recognizedTypes: [ITEM_TYPE.xudt],
     lockCalls: [
       {
         lockScriptName: null,

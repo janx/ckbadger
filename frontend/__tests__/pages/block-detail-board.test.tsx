@@ -143,8 +143,7 @@ const activity = (txIndex: number): GlobalActivity =>
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [],
   });
 const tx = (index: number): Transaction =>
@@ -818,6 +817,7 @@ describe('Block board · R2b-a fields', () => {
                     address: payee,
                     lockHash: h('9a'),
                     lockHashPrefix: null,
+                    sent: false,
                     roles: [],
                     ckbDelta: '55951224916',
                     usedDelta: '6100000000',
@@ -864,6 +864,8 @@ describe('Block board · R2b-a fields', () => {
       usedDelta: '6100000000',
       itemDeltas: [],
       tags: 0,
+      // a cellbase has no input: its party did not send (resync/int)
+      sent: false,
     };
     const cellbase = activityRead({
       ...activity(0),

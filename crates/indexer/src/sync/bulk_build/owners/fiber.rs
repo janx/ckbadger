@@ -538,8 +538,9 @@ impl<'a> FiberTxSummary<'a> {
         ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(input.lock_code_hash_id);
+        let lock_hash_type = input.lock_hash_type;
         let lock_args = ctx.resolve_identity(input.lock_args_id);
-        if is_funding_lock(lock_code_hash) {
+        if is_funding_lock(lock_code_hash, lock_hash_type) {
             let data_len = fiber_cell_data_len(input.data_size, tx, &input.outpoint)?;
             if parse_funding_cell(lock_args, input.type_code_hash_id.is_some(), data_len).is_some()
             {
@@ -549,7 +550,7 @@ impl<'a> FiberTxSummary<'a> {
                 }
                 return Ok(());
             }
-        } else if is_commitment_lock(lock_code_hash)
+        } else if is_commitment_lock(lock_code_hash, lock_hash_type)
             && parse_commitment_lock_args(lock_args).is_some()
         {
             self.has_commitment_input = true;
@@ -572,8 +573,9 @@ impl<'a> FiberTxSummary<'a> {
         ctx: &ReducerContext<'a>,
     ) -> Result<()> {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
+        let lock_hash_type = cell.lock_hash_type;
         let lock_args = ctx.resolve_identity(cell.lock_args_id);
-        if is_funding_lock(lock_code_hash) {
+        if is_funding_lock(lock_code_hash, lock_hash_type) {
             let data_len = fiber_cell_data_len(cell.data_size, tx, &cell.outpoint)?;
             let typed = cell.type_code_hash_id.is_some();
             if let Some(parsed) = parse_funding_cell(lock_args, typed, data_len) {
@@ -583,7 +585,7 @@ impl<'a> FiberTxSummary<'a> {
                 }
                 return Ok(());
             }
-        } else if is_commitment_lock(lock_code_hash) {
+        } else if is_commitment_lock(lock_code_hash, lock_hash_type) {
             if let Some(parsed) = parse_commitment_lock_args(lock_args) {
                 self.has_commitment_output = true;
                 if self.commitment_output_args.is_none() {

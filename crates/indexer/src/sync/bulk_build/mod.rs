@@ -31,7 +31,7 @@ use ckbadger_store::types::{
     DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, BATCH_LOOP_ONLY_CFS, CF_ADDR_TXS,
+    AddressBalance, CkbadgerStore, ClassifiedTxActions, BATCH_LOOP_ONLY_CFS, CF_ADDR_TXS,
     CF_ADDR_TXS_BY_PREFIX, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH,
     CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE,
     CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
@@ -183,7 +183,6 @@ impl BulkBuildEngine {
             std::time::Duration::from_millis(200),
             disk_device,
         );
-        let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let mem_profile = indexer.writer.store().memory_profile();
         let memory_guard = memory_guard::BulkMemoryGuard::new(
             indexer.config.bulk_memory_budget_gb,
@@ -349,11 +348,8 @@ impl BulkBuildEngine {
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
-            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
-                &raw_blocks,
-                indexer.config.is_mainnet(),
-                &token_info_cache,
-            )?;
+            let (batch_stats, build_timings, pending_flush) =
+                runtime.apply_blocks(&raw_blocks, indexer.config.is_mainnet())?;
             let build_elapsed = build_started.elapsed();
             if indexer.is_shutdown_requested() {
                 break 'bulk_loop Some("after_batch_build");
@@ -1589,7 +1585,8 @@ fn materialize_finalize_phases(
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        owners.materialize_all(&mut materializer)?;
+        let identities = interner.snapshot_for_reads();
+        owners.materialize_all(&mut materializer, &sequencer, &identities)?;
     }
 
     // Step 11: metadata (the HODL + cell distribution tracker rows and
@@ -1670,7 +1667,16 @@ impl CoreOwners {
         Ok(address_deltas)
     }
 
-    fn materialize_all(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+    /// Every owner's sealed and final rows. `sequencer` and `identities` are
+    /// the run's live set and interned identities at finalize: the script
+    /// owner settles what each generic type reference runs against them
+    /// (`ScriptOwner::settle_generic_type_codes`) before its final rows.
+    fn materialize_all(
+        self,
+        materializer: &mut materialize::Materializer<'_>,
+        sequencer: &sequencer::BulkSequencer,
+        identities: &interner::FrozenIdentityView,
+    ) -> Result<()> {
         let Self {
             mut address,
             mut script,
@@ -1684,6 +1690,12 @@ impl CoreOwners {
         address.materialize_final(materializer)?;
         drop(address);
 
+        let ctx = owners::ReducerContext::new(identities);
+        script.settle_generic_type_codes(materializer.domain_store(), |outpoint| {
+            sequencer
+                .live_slot(outpoint)
+                .and_then(|slot| owners::script::generic_type_reference_of_slot(ctx, slot))
+        })?;
         script.flush_sealed(materializer)?;
         script.materialize_final(materializer)?;
         drop(script);
@@ -1779,7 +1791,7 @@ impl ActivityStatsAccumulator {
     fn apply_batch(
         &mut self,
         blocks: &[facts::BlockFacts],
-        tx_actions_list: &[TxActions],
+        tx_actions_list: &[ClassifiedTxActions],
     ) -> Result<Vec<materialize::MaterializedRow>> {
         if blocks.is_empty() {
             if tx_actions_list.is_empty() {
@@ -1940,7 +1952,7 @@ impl ActivityStatsAccumulator {
     /// addresses.
     fn accumulate_tx_actions(
         &mut self,
-        tx_actions_list: &[TxActions],
+        tx_actions_list: &[ClassifiedTxActions],
         chain_time_of: impl Fn(i64) -> Option<i64>,
     ) -> Result<()> {
         let mut cached_block = None;
@@ -1994,7 +2006,10 @@ impl ActivityStatsAccumulator {
                     tx_actions.tx_index
                 )
             })?;
-            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut open.stats);
+            crate::db::BatchWriter::accumulate_tx_activity_stats(
+                tx_actions.view(),
+                &mut open.stats,
+            )?;
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
@@ -2054,6 +2069,14 @@ impl ActivityStatsAccumulator {
 
     #[cfg(test)]
     fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+        self.apply_classified_tx_actions(&classified_for_test(tx_actions_list))
+    }
+
+    #[cfg(test)]
+    fn apply_classified_tx_actions(
+        &mut self,
+        tx_actions_list: &[ClassifiedTxActions],
+    ) -> Result<()> {
         let times: FxHashMap<i64, i64> = tx_actions_list
             .iter()
             .map(|action| (action.block_number, action.timestamp))
@@ -2157,7 +2180,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.daily_addrs.get(&date) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Daily, &date, addrs)?;
@@ -2178,7 +2201,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.hourly_addrs.get(&hour) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Hourly, &hour, addrs)?;
@@ -2257,7 +2280,7 @@ fn drain_activity_bucket_rows(
         rows.push(materialize::MaterializedRow::new(
             CF_STATS_CHAIN,
             keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
-            bincode::serialize(&stats)?,
+            stats.encode(),
         ));
     }
     Ok(rows)
@@ -2904,7 +2927,6 @@ impl BulkBuildRuntimeState {
         &mut self,
         blocks: &[binary_facts::RawCkbBlock],
         is_mainnet: bool,
-        token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
@@ -3007,7 +3029,6 @@ impl BulkBuildRuntimeState {
                     &frozen,
                     interner,
                     is_mainnet,
-                    token_info_cache,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
@@ -3266,7 +3287,6 @@ impl BulkBuildRuntimeState {
         &mut self,
         blocks: &[BlockResponseWithCycles],
         is_mainnet: bool,
-        token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
@@ -3358,7 +3378,6 @@ impl BulkBuildRuntimeState {
                     &frozen,
                     interner,
                     is_mainnet,
-                    token_info_cache,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
@@ -3523,7 +3542,7 @@ impl BulkBuildRuntimeState {
             emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
         })?;
 
-        owners.materialize_all(materializer)?;
+        owners.materialize_all(materializer, &sequencer, &frozen)?;
 
         stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
         Ok(live_cell_summary)
@@ -3726,7 +3745,7 @@ struct HistoryBuildResult {
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
-    tx_actions_list: Vec<ckbadger_store::types::TxActions>,
+    tx_actions_list: Vec<ckbadger_store::ClassifiedTxActions>,
 }
 
 /// Pure-data payload sent to the flush channel. Contains materialized rows
@@ -3910,14 +3929,15 @@ struct BlockHistoryRows {
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     /// Standalone protocol-named participations per 20-byte lock-hash prefix.
     prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
-    tx_actions_list: Vec<ckbadger_store::types::TxActions>,
+    tx_actions_list: Vec<ckbadger_store::ClassifiedTxActions>,
 }
 
 #[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct CoreOwnerStateSnapshot {
     pub address_balances: HashMap<Vec<u8>, AddressBalance>,
-    pub script_infos: HashMap<Vec<u8>, ScriptInfo>,
+    /// Script usage by its pair (code hash, hash type).
+    pub script_reference_infos: HashMap<(Vec<u8>, u8), ckbadger_store::ScriptReferenceInfo>,
     pub token_state: owners::token::TokenStateSnapshot,
     pub dao_state: owners::dao::DaoStateSnapshot,
     pub object_state: owners::object::ObjectStateSnapshot,
@@ -4060,6 +4080,12 @@ pub struct BulkArtifactSnapshot {
     pub token_rows: TokenRawRows,
     /// Exact persisted bytes of every statistics and DAO domain CF.
     pub stats_dao_rows: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+    /// Exact persisted bytes of the activity CFs the re-sync set writes:
+    /// `CF_TX_ACTIONS` (participants' tags, the recognised type codes),
+    /// `CF_TX_ACTIONS_BY_BUCKET` (each transaction's one kind), `CF_ADDR_TXS`
+    /// and `CF_ADDR_TXS_BY_PREFIX` (the tags per address), and
+    /// `CF_LIVE_CODE_CELLS_BY_TYPE` (resync fix round S3), whole.
+    pub activity_rows: RawCfRows,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -4322,7 +4348,7 @@ fn run_bulk_stage_on_stores(
         }
 
         let (batch_stats, _timings, pending) =
-            runtime.apply_blocks_hex(std::slice::from_ref(block), true, &FxHashMap::default())?;
+            runtime.apply_blocks_hex(std::slice::from_ref(block), true)?;
         let history_count = pending.history_row_count();
         let sealed_count = pending.sealed_rows.len();
         let prepared = materialize::prepare_flush(
@@ -4523,8 +4549,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let (batch_stats, _timings, pending) =
-                runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
+            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(batch, true)?;
             let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
@@ -4567,6 +4592,29 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     Ok(snapshot)
 }
 
+/// Raw rows of named column families: `(cf, key, value)`.
+pub(crate) type RawCfRows = Vec<(&'static str, Vec<u8>, Vec<u8>)>;
+
+/// [`BulkArtifactSnapshot::activity_rows`] of `store`, raw, in CF then key
+/// order: the same reading of a live store compares with it.
+#[doc(hidden)]
+pub(crate) fn collect_activity_rows_for_test(store: &CkbadgerStore) -> Result<RawCfRows> {
+    let mut rows = Vec::new();
+    for name in [
+        ckbadger_store::CF_TX_ACTIONS,
+        ckbadger_store::CF_TX_ACTIONS_BY_BUCKET,
+        ckbadger_store::CF_ADDR_TXS,
+        ckbadger_store::CF_ADDR_TXS_BY_PREFIX,
+        ckbadger_store::CF_LIVE_CODE_CELLS_BY_TYPE,
+    ] {
+        for row in store.iterator_cf(store.cf(name), IteratorMode::Start) {
+            let (key, value) = row?;
+            rows.push((name, key.to_vec(), value.to_vec()));
+        }
+    }
+    Ok(rows)
+}
+
 fn collect_bulk_artifact_snapshot(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
@@ -4587,6 +4635,7 @@ fn collect_bulk_artifact_snapshot(
             }
         }
     }
+    let activity_rows = collect_activity_rows_for_test(domain_store)?;
     let core = collect_core_owner_state_snapshot(domain_store)?;
     let (block_headers, block_numbers_by_hash, txs_by_hash, tx_actions_map) =
         collect_history_snapshot(domain_store)?;
@@ -4663,6 +4712,7 @@ fn collect_bulk_artifact_snapshot(
         dotcell,
         token_rows,
         stats_dao_rows,
+        activity_rows,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,
@@ -4833,7 +4883,6 @@ fn build_history_batches(
     interner: &interner::FrozenIdentityView,
     identity_interner: &interner::IdentityInterner,
     is_mainnet: bool,
-    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -4859,7 +4908,6 @@ fn build_history_batches(
                 &arena.cells,
                 interner,
                 &detectors,
-                token_info_cache,
             )
         })
         .collect();
@@ -4870,7 +4918,7 @@ fn build_history_batches(
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_prefix_deltas: FxHashMap<[u8; 20], i64> = FxHashMap::default();
-    let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
+    let mut all_tx_actions: Vec<ckbadger_store::ClassifiedTxActions> = Vec::new();
     let mut collection_activity_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
     for result in block_results {
         let mut block_rows = result?;
@@ -5154,7 +5202,6 @@ fn build_history_rows_for_block(
     arena_cells: &[facts::CellFacts],
     interner: &interner::FrozenIdentityView,
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
-    _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<BlockHistoryRows> {
     let row_capacity = block_txs.len().checked_mul(6).ok_or_else(|| {
         anyhow!(
@@ -5365,8 +5412,14 @@ fn build_history_rows_for_block(
     // of this function. Cellbase txs are excluded from CF_TX_ACTIONS — the API
     // filters them at read time (activities.rs:795) and they are never displayed.
     // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
-    for built in &built_list {
-        let tx_actions = &built.actions;
+    // Each transaction is classified here, once: its bucket row below and the
+    // activity stats stage take the classification from the returned list.
+    let classified_list: Vec<ckbadger_store::ClassifiedTxActions> = built_list
+        .into_iter()
+        .map(|built| ckbadger_store::ClassifiedTxActions::classify(built.actions))
+        .collect();
+    for classified in &classified_list {
+        let tx_actions = classified.actions();
         if !tx_actions.is_cellbase {
             // Keyed by its position; the value is what the transaction did
             // (`TxActions::stored_ref`, serialized straight into the chunk —
@@ -5375,17 +5428,16 @@ fn build_history_rows_for_block(
             let tx_actions_key =
                 keys::encode_tx_actions_key(tx_actions.block_number, tx_actions.tx_index);
             rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, &tx_actions.stored_ref())?;
-            // Its global bucket row, derived by the same function the live
-            // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
-            let bucket_key =
-                ckbadger_store::tx_actions_bucket_key(tx_actions).ok_or_else(|| {
-                    anyhow!(
-                        "non-cellbase tx has no global bucket: block={} tx_index={} tx=0x{}",
-                        tx_actions.block_number,
-                        tx_actions.tx_index,
-                        hex::encode(&tx_actions.tx_hash)
-                    )
-                })?;
+            // Its global bucket row, from the same classification the live
+            // writer's `StoreBatch::put_tx_actions` writes, into the same rows.
+            let bucket_key = classified.bucket_key().ok_or_else(|| {
+                anyhow!(
+                    "non-cellbase tx has no global bucket: block={} tx_index={} tx=0x{}",
+                    tx_actions.block_number,
+                    tx_actions.tx_index,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            })?;
             rows.push_raw(CF_TX_ACTIONS_BY_BUCKET, &bucket_key, &[])?;
         }
 
@@ -5733,7 +5785,7 @@ fn build_history_rows_for_block(
         object_activity_count_deltas,
         identity_activity_count_deltas,
         prefix_tx_count_deltas,
-        tx_actions_list: built_list.into_iter().map(|b| b.actions).collect(),
+        tx_actions_list: classified_list,
     })
 }
 
@@ -5959,53 +6011,23 @@ fn build_object_collection_activity_rows(
     Ok(rows)
 }
 
-#[allow(clippy::type_complexity)]
-/// Pre-load token display info (symbol, decimals) from the store.
-/// On a fresh DB this contains only label-imported data which is
-/// immutable for the duration of bulk sync. Loading once eliminates
-/// the per-batch store read that forced flush ordering.
-fn preload_token_info_cache(
-    store: &CkbadgerStore,
-) -> Result<FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
-    let mut cache = FxHashMap::default();
-    let cf = store.cf_tokens();
-    let iter = store.iterator_cf(cf, IteratorMode::Start);
-    for item in iter {
-        let (key, value) =
-            item.map_err(|e| anyhow!("failed to iterate CF_TOKENS for token info preload: {}", e))?;
-        let info: ckbadger_store::types::TokenInfo = bincode::deserialize(&value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize token info during preload: key=0x{} error={}",
-                hex::encode(&key),
-                e
-            )
-        })?;
-        let display_name = info.symbol.or(info.name);
-        let decimals = match info.decimals {
-            Some(value) => Some(u8::try_from(value).map_err(|_| {
-                anyhow!(
-                    "token decimals out of u8 range during preload: key=0x{} decimals={}",
-                    hex::encode(&key),
-                    value
-                )
-            })?),
-            None => None,
-        };
-        cache.insert(key.to_vec(), (display_name, decimals));
-    }
-    info!(
-        token_count = cache.len(),
-        "Pre-loaded token info cache for bulk sync"
-    );
-    Ok(cache)
+/// Test fixtures hold bare `TxActions`; the activity stage takes them
+/// classified, as `build_history_rows_for_block` hands them on.
+#[cfg(test)]
+fn classified_for_test(tx_actions_list: &[TxActions]) -> Vec<ClassifiedTxActions> {
+    tx_actions_list
+        .iter()
+        .cloned()
+        .map(ClassifiedTxActions::classify)
+        .collect()
 }
 
 #[cfg(test)]
 fn build_sealed_aggregate_rows(
-    tx_actions_list: &[TxActions],
+    tx_actions_list: &[ClassifiedTxActions],
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut accumulator = ActivityStatsAccumulator::default();
-    accumulator.apply_tx_actions(tx_actions_list)?;
+    accumulator.apply_classified_tx_actions(tx_actions_list)?;
     accumulator.build_rows()
 }
 
@@ -6213,11 +6235,7 @@ fn parsed_udt_cell_from_parts(
 }
 
 fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option<UdtStandard> {
-    match semantic_tag {
-        facts::CellSemanticTag::Sudt => Some(UdtStandard::Sudt),
-        facts::CellSemanticTag::Xudt => Some(UdtStandard::Xudt),
-        _ => None,
-    }
+    semantic_tag.udt_standard()
 }
 
 fn emit_final_snapshot_rows<F>(
@@ -6820,8 +6838,8 @@ fn collect_core_owner_state_snapshot(
         address_balances.insert(key.to_vec(), balance);
     }
 
-    let script_infos = domain_store
-        .list_script_infos()?
+    let script_reference_infos = domain_store
+        .list_script_reference_infos()?
         .into_iter()
         .collect::<HashMap<_, _>>();
 
@@ -7095,7 +7113,7 @@ fn collect_core_owner_state_snapshot(
 
     Ok(CoreOwnerStateSnapshot {
         address_balances,
-        script_infos,
+        script_reference_infos,
         token_state,
         dao_state,
         object_state,
@@ -7155,7 +7173,7 @@ mod tests {
     use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
-        AssetAction, FiberChannelState, TokenInfo, TokenTransferRecord, TxActions,
+        AssetAction, FiberChannelState, TokenTransferRecord, TxActions,
         BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
@@ -7816,15 +7834,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
 
         // Convert rows to WriteBatch and commit to stores, then scan for CF_ADDR_TXS keys.
         let prepared =
@@ -7891,15 +7902,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
                 .expect("prepare flush");
@@ -7967,15 +7971,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         // Convert rows to WriteBatch and write to stores (no-WAL) to populate memtables.
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
@@ -8665,43 +8662,6 @@ mod tests {
     }
 
     #[test]
-    fn preload_token_info_cache_loads_label_data() {
-        let (test_store, test_root) = open_empty_domain_store("bulk-build-preload-token-cache");
-        let type_script = fixture_sudt_type_script();
-        let type_hash = ScriptParser::compute_script_hash(&type_script);
-        let type_args = crate::rpc::parse_hex_to_bytes(&type_script.args);
-        test_store
-            .put_token_direct(
-                &type_hash,
-                &TokenInfo {
-                    type_code_hash: crate::rpc::parse_hex_to_bytes(&type_script.code_hash),
-                    hash_type: 1,
-                    type_args,
-                    standard: "sUDT".to_string(),
-                    name: Some("Seal".to_string()),
-                    symbol: Some("SEAL".to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 14_000_889,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .expect("put token");
-
-        let cache = preload_token_info_cache(&test_store).expect("preload token info cache");
-        assert_eq!(
-            cache.get(&type_hash),
-            Some(&(Some("SEAL".to_string()), Some(8)))
-        );
-
-        let _ = std::fs::remove_dir_all(&test_root);
-    }
-
-    #[test]
     fn build_history_rows_materializes_ckb_tx_actions_in_tx_order() {
         let block = bulk_build_addr_tx_fixture();
         let split_tx_hash =
@@ -8733,15 +8693,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let result = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let result = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
                 .expect("prepare flush");
@@ -8811,15 +8764,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let result = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let result = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
                 .expect("prepare flush");
@@ -8911,15 +8857,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let sealed_rows =
             build_sealed_aggregate_rows(&history.tx_actions_list).expect("sealed rows");
         let final_snapshot_rows =
@@ -8960,7 +8899,7 @@ mod tests {
             .materialize_final_snapshot(&final_snapshot_rows)
             .expect("materialize final snapshot rows");
         owners
-            .materialize_all(&mut materializer)
+            .materialize_all(&mut materializer, &sequencer, &frozen)
             .expect("materialize core owners");
         let _ = materializer.finish();
 
@@ -9003,15 +8942,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let history = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("history batches");
+        let history = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("history batches");
         let prepared =
             materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
                 .expect("prepare flush");
@@ -10002,7 +9934,7 @@ mod tests {
             .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
-            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .apply_blocks_hex(std::slice::from_ref(&block), true)
             .unwrap();
 
         // Mainnet genesis virtual-occupied; both paths must use the same value.
@@ -10028,6 +9960,7 @@ mod tests {
     #[test]
     fn history_chunk_writes_stored_activity_values_as_encode_stored() {
         let tx_actions = TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![0x11; 32],
             block_hash: vec![0x22; 32],
             block_number: 100,
@@ -10110,6 +10043,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -10127,7 +10061,8 @@ mod tests {
             .format("%Y%m%d")
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
-        assert_eq!(daily.transfer_count, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.ckb, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.total(), 1);
         assert_eq!(daily.total_ckb_moved, 100_00000000);
         assert_eq!(daily.coinbase_count, 0);
         assert_eq!(acc.daily_addrs.get(&date_key).unwrap().len(), 1);
@@ -10151,6 +10086,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -10169,7 +10105,7 @@ mod tests {
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
         assert_eq!(daily.coinbase_count, 1);
-        assert_eq!(daily.transfer_count, 0);
+        assert_eq!(daily.kind_counts.total(), 0, "a cellbase is in no kind");
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
@@ -10223,6 +10159,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 1,
@@ -10241,7 +10178,10 @@ mod tests {
 
         let mut acc = ActivityStatsAccumulator::default();
         assert!(acc
-            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .apply_batch(
+                &[block(0, 0)],
+                &classified_for_test(std::slice::from_ref(&action))
+            )
             .unwrap()
             .is_empty());
 
@@ -10269,11 +10209,11 @@ mod tests {
         let next = acc
             .apply_batch(
                 &[block(3, 14_400_000)],
-                &[TxActions {
+                &classified_for_test(&[TxActions {
                     block_number: 3,
                     timestamp: 14_400_000,
                     ..action
-                }],
+                }]),
             )
             .unwrap();
         assert!(next.is_empty(), "new hour remains open");
@@ -10325,6 +10265,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x43; 32]),
                 ckb_delta: 123,
@@ -10348,7 +10289,10 @@ mod tests {
 
         let mut incremental = ActivityStatsAccumulator::default();
         let mut actual = incremental
-            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .apply_batch(
+                &[block(0, 0)],
+                &classified_for_test(std::slice::from_ref(&action)),
+            )
             .unwrap();
         actual.extend(
             incremental
@@ -10983,15 +10927,8 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
         // First call — should emit lock script rows.
-        let result1 = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("first build");
+        let result1 = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("first build");
 
         // Convert rows, commit, and count lock script entries in the store.
         let prepared1 =
@@ -11017,15 +10954,8 @@ mod tests {
         // Second call with the same arena/resolved/frozen and interner markers —
         // should emit zero NEW lock script rows since all lock_hash_ids are
         // already marked written.
-        let result2 = build_history_batches(
-            &arena,
-            &resolved,
-            &frozen,
-            &interner,
-            true,
-            &FxHashMap::default(),
-        )
-        .expect("second build");
+        let result2 = build_history_batches(&arena, &resolved, &frozen, &interner, true)
+            .expect("second build");
 
         // Convert rows and commit second batch.
         let prepared2 =
@@ -11095,7 +11025,7 @@ mod tests {
         let mut block = bulk_build_addr_tx_fixture();
         block.block.header.dao = format!("0x{}", hex::encode(genesis_dao));
         runtime
-            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .apply_blocks_hex(std::slice::from_ref(&block), true)
             .unwrap();
 
         let root = super::unique_temp_test_dir("bulk-build-final-rows");
@@ -11196,12 +11126,8 @@ mod tests {
             );
         }
 
-        // -- TokenOwner (needs domain store) --
-        let token_final = runtime
-            .owners
-            .token
-            .build_final_rows(&domain_store)
-            .unwrap();
+        // -- TokenOwner (its rows are the chain's: it reads no store) --
+        let token_final = runtime.owners.token.build_final_rows().unwrap();
         {
             let mut mat = Materializer::new(&domain_store, &append_store);
             runtime.owners.token.flush_sealed(&mut mat).unwrap();
@@ -11371,6 +11297,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
                 id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
@@ -11448,6 +11375,7 @@ mod tests {
             protocol_actions: vec![dotbit(0x01), dotbit(0x02)],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: (0..3).map(|i| participant(first_lock + i)).collect(),
         };
         let date = ckbadger_common::stats_bucket::stats_date_key(ts).unwrap();
@@ -11490,7 +11418,9 @@ mod tests {
         );
         for stats in [&run.daily_stats[&date], &run.hourly_stats[&hour]] {
             assert_eq!(stats.protocol_action_counts["dotbit:transfer_account"], 4);
-            assert_eq!(stats.identity_count, 2);
+            // `.bit` actions are listed under Identity: two transactions.
+            assert_eq!(stats.kind_counts.identity, 2);
+            assert_eq!(stats.kind_counts.total(), 2);
             assert_eq!(stats.total_ckb_moved, 60);
         }
         assert_eq!(run.daily_addrs[&date].len(), 5, "locks 0x40..0x44");
@@ -11543,6 +11473,7 @@ mod tests {
                   prefix_only: bool,
                   actions: &[(&str, &str)],
                   tags: u16| TxActions {
+            recognized_type_codes: vec![],
             tx_hash: vec![block as u8 * 16 + tx_index as u8; 32],
             block_hash: vec![block as u8; 32],
             block_number: blocks[block].number,
@@ -11631,12 +11562,14 @@ mod tests {
                 .daily_stats
                 .entry(date.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into())
+                .unwrap();
             oracle
                 .hourly_stats
                 .entry(hour.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into())
+                .unwrap();
             if !tx.is_cellbase {
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(lock_hash) = participant.id {
@@ -11705,6 +11638,7 @@ mod tests {
         // Production path, one batch: the hour and day boundaries fall
         // inside it, so it lands several runs and seals the first day.
         let mut single = ActivityStatsAccumulator::default();
+        let list = classified_for_test(&list);
         let mut actual = single.apply_batch(&blocks, &list).unwrap();
         assert!(!actual.is_empty(), "the batch seals day one");
         actual.extend(single.build_rows().unwrap());
@@ -11868,7 +11802,6 @@ mod tests {
                 &arena.cells,
                 &frozen,
                 &detectors,
-                &FxHashMap::default(),
             )
             .expect("history rows");
             let folds = COLLECTION_DAY_FOLDS.with(|folds| folds.borrow().clone());
@@ -11909,11 +11842,12 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
         let error = |blocks: &[facts::BlockFacts], actions: &[TxActions]| {
             ActivityStatsAccumulator::default()
-                .apply_batch(blocks, actions)
+                .apply_batch(blocks, &classified_for_test(actions))
                 .unwrap_err()
                 .to_string()
         };
@@ -11947,11 +11881,11 @@ mod tests {
         let mut acc = ActivityStatsAccumulator::default();
         acc.apply_batch(
             &[block(0, 0), block(1, 7_200_000), block(2, 10_800_000)],
-            &[action(0, 0, 0)],
+            &classified_for_test(&[action(0, 0, 0)]),
         )
         .unwrap();
         let late = acc
-            .apply_batch(&[block(3, 0)], &[action(3, 0, 0)])
+            .apply_batch(&[block(3, 0)], &classified_for_test(&[action(3, 0, 0)]))
             .unwrap_err()
             .to_string();
         assert!(
@@ -11976,6 +11910,7 @@ mod tests {
             protocol_actions: vec![],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
         let block = facts::BlockFacts {
@@ -11986,13 +11921,18 @@ mod tests {
         };
         let mut acc = ActivityStatsAccumulator::default();
         let err = acc
-            .accumulate_tx_actions(std::slice::from_ref(&action), |_| Some(i64::MIN))
+            .accumulate_tx_actions(&classified_for_test(std::slice::from_ref(&action)), |_| {
+                Some(i64::MIN)
+            })
             .expect_err("an unbucketable chain time must fail the fold");
         assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
         assert!(acc.daily_stats.is_empty() && acc.hourly_stats.is_empty());
 
         let err = ActivityStatsAccumulator::default()
-            .apply_batch(std::slice::from_ref(&block), std::slice::from_ref(&action))
+            .apply_batch(
+                std::slice::from_ref(&block),
+                &classified_for_test(std::slice::from_ref(&action)),
+            )
             .expect_err("the production batch path fails too");
         assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
     }

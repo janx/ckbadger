@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import { useQuery } from '@tanstack/react-query';
 import { api, type ClusterProtocol, type CollectionInsights } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
@@ -88,7 +89,11 @@ export function ClusterCellEvidence({
                   scriptKind: 'type',
                 })}
               >
-                {cell.typeName ?? <ShortId value={type.codeHash} kind="hash" size="row" />}
+                {cell.typeName ? (
+                  withNameBy(cell.typeName, cell.typeNameBy)
+                ) : (
+                  <ShortId value={type.codeHash} kind="hash" size="row" />
+                )}
               </AppLink>
               {type.args.toLowerCase() === clusterId.toLowerCase()
                 ? ' · the cluster id is this cell’s type args'

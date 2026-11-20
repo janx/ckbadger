@@ -1,16 +1,32 @@
-//! Token metadata provenance (IV-26): the one rule that decides which source
-//! writes a token's stored `name` / `symbol` / `decimals` — a curated label or
-//! the token's own Unique Cell — and whether the two disagree.
+//! Token metadata provenance (IV-26): the rules that say a token's
+//! `name` / `symbol` / `decimals` — what its own Unique Cell says, and a
+//! curated label joined over it — and whether the two disagree.
 //!
-//! Label import calls [`TokenInfo::apply_label`]; the live writer and the
-//! bulk snapshot writer both call [`TokenInfo::merge_chain_metadata`]
-//! (through `udt::apply_onchain_token_info`); the API reads
-//! [`TokenInfo::checked_metadata_source`], [`TokenInfo::chain_metadata_conflict`]
-//! and [`TokenInfo::claimed_symbols`]. No other code writes
-//! `metadata_source` / `chain_metadata`.
+//! A stored token row is the chain's (resync fix round 2, B): the live writer
+//! and the bulk snapshot writer both call [`TokenInfo::merge_chain_metadata`]
+//! (through `udt::apply_onchain_token_info`) and nothing else. The API joins
+//! a token's curated label when it reads the token, by
+//! [`TokenInfo::attach_label`] (its one `token_identity` function), and reads
+//! [`TokenInfo::checked_metadata_source`],
+//! [`TokenInfo::chain_metadata_conflict`] and [`TokenInfo::claimed_symbols`]
+//! on what that gives.
 use crate::types::{ChainTokenMetadata, OnchainInfoBinding, TokenInfo, TokenMetadataSource};
 
 impl TokenInfo {
+    /// THE label rule: a curated label joined to the token's row gives its
+    /// name, symbol and decimals ([`Self::apply_label`], the label wins where
+    /// it states a field), its icon and its description; the chain's own
+    /// values stay beside them (`chain_metadata`). The API applies it when it
+    /// reads a token (resync fix round 2, B); no stored row holds a label. The
+    /// standard stays the row's: a chain fact, what the pair of the token's
+    /// type script runs, which a label never states (resync fix round 3, item
+    /// 4, the lead's ruling).
+    pub fn attach_label(&mut self, label: &crate::types::TokenLabel) {
+        self.apply_label(label.name.clone(), label.symbol.clone(), label.decimals);
+        self.icon_url = label.icon_url.clone();
+        self.description = label.description.clone();
+    }
+
     /// A curated label writes `name`, `symbol` and `decimals`; the stored
     /// fields are now the label's. The bound chain values are kept.
     pub fn apply_label(&mut self, name: String, symbol: String, decimals: i32) {
@@ -27,8 +43,10 @@ impl TokenInfo {
     /// * `XudtExtension` — the xUDT's own args name the Unique Cell, so the
     ///   association is cryptographic: every field the chain asserts (a
     ///   non-empty name / symbol, the decimals) replaces the stored one, and
-    ///   the chain values become the bound ones. The source is chain unless a
-    ///   label-written field survives because the chain left it empty.
+    ///   the chain values become the bound ones. The source is chain: a stored
+    ///   row holds what the chain says and never a label (resync fix round 2,
+    ///   B; the branch that kept a label-written field the chain left empty
+    ///   went in round 3, item 3, unreachable since).
     /// * `IssuanceCooccurrence` — a heuristic: it fills gaps only and never
     ///   displaces already-known metadata or an earlier binding. A row it
     ///   fills from nothing is chain-sourced.
@@ -40,9 +58,6 @@ impl TokenInfo {
         );
         match chain.binding {
             OnchainInfoBinding::XudtExtension => {
-                let label_field_survives = self.metadata_source == Some(TokenMetadataSource::Label)
-                    && ((chain.name.is_none() && self.name.is_some())
-                        || (chain.symbol.is_none() && self.symbol.is_some()));
                 if let Some(name) = &chain.name {
                     self.name = Some(name.clone());
                 }
@@ -50,11 +65,7 @@ impl TokenInfo {
                     self.symbol = Some(symbol.clone());
                 }
                 self.decimals = Some(i32::from(chain.decimals));
-                self.metadata_source = Some(if label_field_survives {
-                    TokenMetadataSource::Label
-                } else {
-                    TokenMetadataSource::Chain
-                });
+                self.metadata_source = Some(TokenMetadataSource::Chain);
                 self.chain_metadata = Some(chain.clone());
             }
             OnchainInfoBinding::IssuanceCooccurrence => {
@@ -237,15 +248,18 @@ mod tests {
         );
     }
 
-    /// A cryptographic (extension) binding wins over the label: the stored
-    /// fields become the chain's and the source says chain — unless the chain
-    /// left a field empty, in which case that field stays the label's and the
-    /// source stays label.
+    /// A cryptographic (extension) binding gives the stored row the chain's
+    /// fields, the source chain; a label is joined after it when the token is
+    /// read, and wins where it states a field, the chain's values beside it.
+    /// (Re-pinned in resync fix round 3, item 3: a stored row never holds a
+    /// label, so the extension never meets a label-written field; it pinned
+    /// the branch that kept one the chain left empty, unreachable since round
+    /// 2's B and removed.)
     #[test]
-    fn extension_binding_overwrites_the_label_field_by_field() {
-        let mut row = labelled_rgbpp_jump();
+    fn extension_binding_gives_the_row_the_chains_fields_and_a_label_joined_after_wins() {
+        let mut row = unnamed_row();
         let full = chain(Some("On"), Some("ON"), 8, OnchainInfoBinding::XudtExtension);
-        assert!(row.merge_chain_metadata(&full).is_some());
+        assert_eq!(row.merge_chain_metadata(&full), None);
         assert_eq!(
             (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
             (Some("On"), Some("ON"), Some(8))
@@ -254,16 +268,21 @@ mod tests {
         assert!(!row.chain_metadata_conflict());
         assert_eq!(row.claimed_symbols(), ["ON"]);
 
-        let mut row = labelled_rgbpp_jump();
+        let mut row = unnamed_row();
         let nameless = chain(None, Some("ON"), 8, OnchainInfoBinding::XudtExtension);
         row.merge_chain_metadata(&nameless);
-        assert_eq!(row.name.as_deref(), Some("RGB++_Jump"));
+        assert_eq!(row.name.as_deref(), None);
         assert_eq!(row.symbol.as_deref(), Some("ON"));
+        assert_eq!(row.metadata_source, Some(TokenMetadataSource::Chain));
+
+        row.apply_label("RGB++_Jump".to_string(), "RGB++_Jump".to_string(), 8);
         assert_eq!(row.metadata_source, Some(TokenMetadataSource::Label));
+        assert_eq!(row.chain_metadata, Some(nameless));
         assert!(
-            !row.chain_metadata_conflict(),
-            "an empty name asserts nothing"
+            row.chain_metadata_conflict(),
+            "the label's symbol is not the chain's"
         );
+        assert_eq!(row.claimed_symbols(), ["RGB++_Jump", "ON"]);
     }
 
     /// With no label, the Unique Cell fills the row under either binding and

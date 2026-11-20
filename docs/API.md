@@ -123,42 +123,25 @@ feed and a transaction's own activity.
 **The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
 and these codes, never their args)
 
-- `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
-  transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
-  code-hash order: the type script of every token, object and identity any participant gained or
-  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Each is
-  what the indexer classified, read from ckbadger's own stores in the request's view, never a
-  match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
-  - a token: its row (`CF_TOKENS`), the script itself;
-  - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
-    item in its out point index (`object_outpoint_by_id`) BY KEY, the lowest transaction hash then
-    index, not the first in time (every cell recorded for one item has its one code); a .bit
-    account: the first cell recorded for its account id, by key the same way;
-  - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
-    (`object_outpoints`, MNFT_TOKEN);
-  - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
-    classifier would take as the cluster (a code the protocol registry names `Cluster`, the
-    cluster's id as args).
-
-  `null` on a pool row (a pending row never folds), and on a committed row whose item's script the
-  stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
-  item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
-  and a feed folds such a row with no other.
-
-  Its cost per activity, each item once and each creating transaction once per request: a token,
-  one row read; a spore or an identity, one seek and one payload read, whatever its history; an
-  m-NFT token or a cluster, its creating transaction's one read, its N payloads and, for m-NFT
-  tokens, the N token ids recorded for them (one multi_get each), shared by every item it made (a
-  batch of 1,000 tokens in a 1,000-output transaction: 2,001 reads); a DAO step, none.
-
-- `itemTypesUnread: string | null` — see `itemTypes`.
-- `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
-  with their args.
+- `recognizedTypes: [{ typeCodeHash, typeHashType, scriptName, scriptNameBy }]` — every type
+  script code the indexer recognises that ran in the transaction (sUDT, xUDT, the Nervos DAO,
+  Spore, Cluster, m-NFT, `.bit`, `.bit Cell`, did:ckb, `.cell`), on an input or an output cell,
+  each code (code hash and hash type) once, in code-hash order; `scriptName` is the name of the
+  code the pair runs and `scriptNameBy` its hash type where the pair is not the registry's
+  reference for that code (below: the same rule as every name). Read from the row
+  (`recognized_type_codes`, which the indexer writes from the transaction's own cells, C7), on a
+  committed row and a pool row alike; nothing is read per item. It holds the codes of the items
+  that changed hands and also those of recognised scripts that ran and moved nothing (a wallet
+  merging its own token cells). It replaced `itemTypes` (the items' codes, resolved per
+  request from token rows, recorded cells and creating transactions) and `itemTypesUnread` (why a
+  row's items could not be placed), which are gone with that resolver.
+- `typeCalls` — the type scripts the indexer does not recognise, with their args. With
+  `recognizedTypes` they are every type script code that ran.
 - `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args;
-  each lock's registry name is `lockScriptName` (as on a party; it was `scriptName`).
+  each lock's name is `lockScriptName`, with `lockScriptNameBy` (as on a party; it was
+  `scriptName` and `scriptNameBy`).
   An output's lock does not run: these are not the locks the transaction called. The locks that
-  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
-  input flag (a re-sync).
+  ran, its inputs', are the parties that sent (`sent`, below).
 
 **Participants**
 
@@ -172,7 +155,8 @@ drawn party (`GlobalActivityResponse.participants`) is described this way, besid
   "address": "ckb1q...",
   "lockHash": "0x...",
   "lockHashPrefix": null,
-  "roles": []
+  "roles": [],
+  "sent": true
 }
 ```
 
@@ -188,8 +172,16 @@ drawn party (`GlobalActivityResponse.participants`) is described this way, besid
   empty for a plain cell participant.
 - A named party that held no cell has `ckbDelta` and `usedDelta` of exactly `"0"` — that zero is
   what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
-- `ActivityResponse.roles` are this participant's own roles; the other parties are in its
-  `partyIds` alone (see **The parties a row draws**).
+- `sent` is `true` exactly when the party's lock is the lock of at least one input of the
+  transaction (one of its cells was consumed): the indexer's per-participant input flag
+  (`TAG_INPUT`, bit 8 of `tags`), set as the activity is built, the same on live sync and bulk
+  build; an input of zero capacity counts. A cellbase has no sender; a party a protocol only named
+  never sent. Every party a global activity draws states it, and an address activity states it of
+  its own participant; every party's tags in `partyIds` carry the same bit (`& 256`), so the folded
+  feed row counts its "senders" from the id pairs, drawn or not.
+- `ActivityResponse.roles` are this participant's own roles and `ActivityResponse.sent` whether
+  this participant sent; the other parties are in its `partyIds` alone (see **The parties a row
+  draws**).
 
 **Item deltas**
 
@@ -229,7 +221,7 @@ Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
 
 `/assets/summary` returns `source: "canonical_asset_indexes"`, `anchor: {blockNumber,blockHash} | null`, `counts: {token,object,identity}`, `objectStandards: [{standard,collectionsCount,liveCount}]`, `objectComposition: [{tier,collectionsCount,liveCount}]`, `fullyOnchainObjectsCount`, and `pendingItemsCount`. Composition rows classify whole collections; their `liveCount` counts members of those collections, not individual-item tiers. `pendingItemsCount` independently counts every live pending Spore, including members of mixed collections and the existing Sole Spores sentinel collection. A fully pending collection has tier `decode_pending`; mixed collections retain their normal aggregate classification. The same owning catalog supplies warmup membership/classification and the summary; no page sampling is used.
 
-The summary's request pins its canonical view. `/assets` remains a warmup snapshot, so separate list and summary requests do not claim a shared anchor. Summary reads token metadata, checks only enough canonical holder rows to establish positive membership for unlabelled tokens, scans collection aggregates and live Spore pending evidence; it does not run all token capacity/history/holder-sum scans. `composition_tier` additionally accepts `decode_pending`; filtering precedes pagination and `total` covers the entire matching snapshot.
+The summary's request pins its canonical view. `/assets` remains a warmup snapshot, so separate list and summary requests do not claim a shared anchor. Summary reads token metadata, checks only enough canonical holder rows to establish positive membership for unlabelled tokens (a token is listed only once the chain holds it: label import writes no token row for a token the chain has not held, store layout 8, so a curated label alone lists nothing), scans collection aggregates and live Spore pending evidence; it does not run all token capacity/history/holder-sum scans. `composition_tier` additionally accepts `decode_pending`; filtering precedes pagination and `total` covers the entire matching snapshot.
 
 Collection detail's `activitiesCount` counts canonical collection transactions, not individual item actions or transferred items. Spore detail and Inventory reuse the existing canonical-history counter (five-minute in-memory TTL); mNFT and identity collections use their owning persisted counters. Separate responses and the independently refreshed Inventory snapshot do not promise the same tip. A known Spore cluster with no indexed members, including the virtual Sole Spores collection, has a valid empty detail/items/holders/history/feed surface even before its first member is minted. A member index with a missing aggregate is an invariant error, not an empty collection; an unknown ID remains 404.
 
@@ -252,7 +244,24 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activity entries
 - `NftCollectionDetailResponse` — counts, composition, class/issuer summary
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
-- `RankedPage<CollectionHolderResponse>` — holders with item counts, a cursor page with `firstRank`
+- `RankedPage<CollectionHolderResponse>` — holders with item counts, a cursor page with `firstRank`;
+  each holder with its lock's
+  `lockKind`, `lockKindBy` and `lockHashType`: the lock is named by the code its pair (code hash,
+  hash type) runs, never by its code hash alone (lane rd/api-lock-names; the same on identity,
+  token and cluster holders, an item's owner lock, a token's supply events and issuer). The one
+  naming rule (`utils::ScriptNamer`): a pseudo deployment (Zero Lock, Type ID: no code cell) is
+  named by the registry's label of its own pair; every other pair is named by the family of the
+  one deployment it resolves to (by `type`: the binary its Type ID is bound to; by `data*`: the
+  binary whose data hash it is), and has no name where it resolves to none. Where the named pair
+  is not the registry's reference for that code (another data hash type; a Type ID where the
+  registry registers the data hash, or the reverse), `lockKindBy` is the pair's hash type, which a
+  page writes beside the name ("xUDT · by data2"); `null` otherwise. Every route that names a
+  script carries the same pair of fields: `lockKind`/`lockKindBy` (holders, owners, issuer, supply
+  events, gallery rows, activity participants), `scriptName`/`scriptNameBy` (activity type calls
+  and `recognizedTypes`), `lockScriptName`/`lockScriptNameBy` and `typeScriptName`/`typeScriptNameBy`
+  (cells, Fiber parties, identity and `.cell` parties, activity lock calls), `lockName`/`lockNameBy` and `typeName`/`typeNameBy` (cell versions),
+  `name`/`nameBy` (the lookup, an address's `lockScriptInfo`, a code cell's `codeCellOf`, the
+  daily `scriptCounts`); a resolved dependency's `scriptNames` writes "Name · by data1" itself
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
 - `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 
@@ -371,11 +380,14 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 **Params**
 
 - `ListParams` — `limit`, `block_number`, `cursor`, `activity_type`: one of `user`, `ckb`,
-  `script`, `cellbase`, `dao`, `token`, `object`, `identity` (none or `all`: every transaction).
-  `user` is every committed transaction but the cellbase, newest first, read from the
-  `activities` rows (which hold no cellbase) with their `tx_index` entries; the Transactions page
-  opens on it. A filtered list states no `total`. `/transactions/pool` takes the same values;
-  there `user` names every pool transaction (none is a cellbase), a partly read one too.
+  `script`, `cellbase`, `dao`, `token`, `object`, `identity`, `protocol` (none or `all`: every
+  transaction; any other value is `400`). Each kind but `user` and `cellbase` is one global activity
+  bucket, the classification the daily `kindCounts` count, so a kind lists what its count counts;
+  `user` is every committed transaction but the cellbase (the kinds together), newest first, read
+  from the `activities` rows (which hold no cellbase) with their `tx_index` entries; the
+  Transactions page opens on it. A filtered list states no `total`. `/transactions/pool` takes the
+  same values; there `user` names every pool transaction (none is a cellbase), a partly read one
+  too.
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**
@@ -509,7 +521,15 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
   - `display: TransactionCellDisplay | null` — the token / object / identity / file display the
     transaction detail serves for this cell (`transaction_cells::from_parts`), `null` when its
     type script has none.
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`).
+  - `codeCellOf: CodeCellScript[] | null` — the scripts that run this cell's code: `null` unless
+    its data is code (`keys::is_code_cell`, the ELF magic). Otherwise the pairs that resolve to
+    THIS cell: its type script hash by `type` (a Type ID deployment), and its data hash by `data`,
+    `data1` and `data2`, each listed where the chain has used it or the registry registers it (in
+    that order). Each carries `name` (the one naming rule; "Unknown" where it names none),
+    `nameBy` (the pair's hash type where it is not the registry's reference for this code),
+    `codeHash`, `hashType`, `deploymentTypeHash` (omitted for a cell with no type script) and
+    `deploymentDataHash`.
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`, the name of the code the lock's pair (code hash, hash type) runs, with its `nameBy`: a lock whose pair runs no code the registry names has none, whatever another hash type of its code hash is named (`deprecated` reflects the pair's label, e.g. an address on a superseded ACP deployment reports `true`).
   `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
   network — never the raw input echoed back. `pendingSummary` is described below
 - `CursorPaginatedResponse<PrefixTransactionResponse>` — `txHash`, `blockNumber`, `txIndex`,
@@ -642,36 +662,42 @@ status.
 
 ### statistics (crates/api/src/routes/statistics.rs)
 
-| Method | Path                                          | Handler                                  | Purpose                                                                                                    |
-| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                         |
-| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                    |
-| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                   |
-| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                              |
-| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                              |
-| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                              |
-| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                           |
-| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                     |
-| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                  |
-| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                             |
-| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                 |
-| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                  |
-| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs or fewer) + its window                                   |
-| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                   |
-| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (whole ms) + blocks                                                                       |
-| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time (whole ms)                                                                        |
-| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                      |
-| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                     |
-| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                     |
-| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                      |
-| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                               |
-| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                 |
-| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown plus exact protocol-total and frozen phase-1 shannon metadata                 |
-| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                         |
-| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (under 1 day … 3 years or more) + holder_count                                             |
-| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)                               |
-| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                                                |
-| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`) |
+| Method | Path                                          | Handler                                  | Purpose                                                                                                       |
+| ------ | --------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                            |
+| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                       |
+| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                      |
+| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                                 |
+| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                                 |
+| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                                 |
+| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                              |
+| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                        |
+| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                     |
+| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                                |
+| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                    |
+| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                     |
+| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs or fewer) + its window                                      |
+| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                      |
+| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (whole ms) + blocks                                                                          |
+| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time (whole ms)                                                                           |
+| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                         |
+| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                        |
+| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                        |
+| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                         |
+| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                                  |
+| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                    |
+| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown plus exact protocol-total and frozen phase-1 shannon metadata                    |
+| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                            |
+| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (under 1 day … 3 years or more) + holder_count                                                |
+| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity: transactions by kind (one kind each), protocol actions, scripts (param: `days`, default 30) |
+| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | The same counts over the exact rolling 24h chain-time window                                                  |
+| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`)    |
+
+`/statistics/network` also states `storeLayout: number | null`: the layout the domain store was built
+with (`sync_meta` `store_layout`, stamped by the indexer; `null` on a store not stamped yet). The
+API opens only a store of its own build's layout (`ckbadger_store::STORE_LAYOUT`, 8 at this
+writing), so a running API answers its own layout; the verify check `store_layout_matches_build`
+holds the field to the verifier's build, so a skipped re-sync or a mismatched API build is seen.
 
 **Params**
 
@@ -689,7 +715,20 @@ status.
 - `MinerDistributionResponse` — `data: Vec<MinerDistributionDataPoint>`, explicit
   `windowDays`/`fromDate`/`toDate`; each row exposes the canonical
   `minerLockHash` and an optional resolvable CKB `address`
-- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
+- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per complete UTC+8 day (`date`) or
+  the 24h window (`hoursCovered`): `activityCount` (non-cellbase transactions, the sum of the kinds),
+  `kindCounts` `{dao, token, object, identity, protocol, script, ckb}` (each transaction in exactly
+  one kind, the one `/activities?filter=<kind>` lists it under, so each count is what that filter
+  lists), `coinbaseCount` (the cellbases: on a day, those the activity rows counted; in the 24h
+  window, one per canonical block it holds, read at the block's `tx_index` position 0),
+  `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts: Vec<ScriptCountEntry>` (one entry per
+  script pair: `{codeHash, hashType, name, nameBy, count}`; `name` is the code the pair runs, by
+  the one naming rule, `null` when it runs no registered family's code; `nameBy` is the pair's hash
+  type where the pair is not the registry's reference for that code) and `protocolActionCounts`
+  (`protocol:action` → count of actions; the DAO split is `dao:deposit` / `dao:withdraw_request` /
+  `dao:withdraw_complete`). The per-layer fields `transferCount`, `daoDepositCount`,
+  `daoWithdrawRequestCount`, `daoWithdrawCompleteCount`, `tokenCount`, `objectCount`,
+  `identityCount`, `scriptCallCount` and `unknownCount` are gone (2026-11-18, F-6)
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
 - `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened), its window (`epochs`, `intervals`, `beyondRange`) and each bucket's count (`bucketCounts`)
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
@@ -780,26 +819,21 @@ bands it draws and the wholes it divides by, read-only on the store:
   than this cut sent the same shapes rounded half up, so a page cannot tell one
   from the other and draws it (part B8: accepted, the frontend and the API ship
   together).
-- `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
-  the charts read (transfers, the three DAO actions, tokens, objects,
-  identities, script calls) summed. Kinds overlap, an action counting in each
-  kind it is, so this is not a count of distinct activities; coinbase and
-  unknown transactions are not in it. `daoCount` is the day's three DAO
-  actions (deposits, withdraw requests, completed withdraws) summed, the DAO
-  band of Activity by type. `userTransactionCount` is the day's user
-  transactions: its committed transactions (its `DailyStats` row) less its
-  cellbases (`coinbaseCount`), the figure the Transactions page's lede and
-  "all" chip, the Activities page's lede and the home's daily bars state; a
-  day without its chain row, or with more cellbases than transactions, is a
-  500 naming the date.
-- `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
-  and `daoCount`, counted as the daily rows count them (one helper each in the
-  route); the home page's activity shares divide by `kindOccurrences` and its
-  DAO share is `daoCount`. `scriptCounts` is ranked by calls, ties by code hash;
-  `scriptCalls` is every call it counts (a transaction calling two scripts
-  counts twice, so it is not `scriptCallCount`), and `scriptRest`
-  (`{ scripts, calls } | null`) the scripts after the five largest: the home
-  card's script shares and its "others" row, summed nowhere in the page.
+- `GET /stats/daily-activities` — each day's `activityCount`: its non-cellbase
+  transactions, the sum of its `kindCounts`. Each transaction is in exactly one kind (the one the
+  activity filter lists it under), so the kinds partition the day's activities: Activity by type
+  stacks them to `activityCount`, and `activityCount` is the figure the Transactions page's lede
+  and "all" chip, the Activities page's lede and the home's daily bars state (it is every
+  committed transaction of the day less its cellbases; verify S39 checks it against the day's
+  `DailyStats` transactions). The DAO kind counts DAO transactions; the DAO split by action is
+  `protocolActionCounts`. (`kindOccurrences`, `daoCount` and `userTransactionCount` are gone: the
+  first two carried the kinds' overlap, which F-6 removed, and the third is `activityCount`.)
+- `GET /stats/activity-summary-24h` — the rolling window's `activityCount` and `kindCounts`,
+  counted as the daily rows count them; the home page's activity shares are shares of
+  `activityCount`. `scriptCounts` is ranked by calls, ties by code hash; `scriptCalls` is every
+  call it counts (a transaction calling two scripts counts twice, so it is not the Script kind's
+  count), and `scriptRest` (`{ scripts, calls } | null`) the scripts after the five largest: the
+  home card's script shares and its "others" row, summed nowhere in the page.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 
@@ -978,6 +1012,7 @@ network store too), no re-sync:
 **Responses**
 
 - `CursorPaginatedResponse<TokenResponse>` / `TokenResponse` — token info + standard, supply, holders/transfers
+- A token's name, symbol, decimals, icon, description and standard, its `metadata` (`source`, `chain`, `conflict`) and its `sameSymbolTokens` are its stored row (what the chain says) with its curated label joined when the route reads it (`crates/api/src/token_identity.rs`, resync fix round 2, B): the label wins where it states a field, the chain's values stay in `metadata.chain`, `metadata.source` says `label`. Every route that names a token (the token page and list, assets and their summary, search, activities, cells, transactions, holdings, Fiber, verify's export) reads it through that module, so a label added or removed changes the answer at once and no stored row. A label for a token the chain does not hold names nothing.
 - `TokenHoldersResponse` — flat cursor page plus `totalSupply`, nullable `anchor` and `firstRank`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`
@@ -985,9 +1020,9 @@ network store too), no re-sync:
 
 **D4 exact read contracts**
 
-- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
-- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
-- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
+- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockCodeHash, lockHashType, lockKind, lockKindBy} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
+- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`, `lockKindBy` and its lock's `lockHashType` (the name of the code the lock's pair runs, never of its code hash alone: the one naming rule above); percentages use this page's denominator, never another request's cached total.
+- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockCodeHash, lockHashType, lockKind, lockKindBy`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
 - New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every party is counted and named (`participantCount`, `partyIds`); the parties a row draws are in full, and its items are stated once (activities, **The parties a row draws**). A token's amount moved is the row's `items` entry's `amount`; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
@@ -1235,7 +1270,7 @@ disabled or empty state. A point lookup still returns not found.
 | Method | Path                                             | Handler                                          | Purpose                                                                                             |
 | ------ | ------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
 | GET    | `/api/v1/scripts`                                | `list_scripts`                                   | List script families from warmup cache (search/sort/cursor)                                         |
-| POST   | `/api/v1/scripts/lookup`                         | `lookup_scripts`                                 | Bulk-resolve up to 100 code_hashes (optional `tx_hash` per-tx resolution)                           |
+| POST   | `/api/v1/scripts/lookup`                         | `lookup_scripts`                                 | Bulk-resolve up to 100 scripts by their pairs (optional `tx_hash` per-tx resolution)                |
 | GET    | `/api/v1/scripts/code-cell`                      | `get_code_cell`                                  | Resolve a code-cell outpoint for a `code_hash`                                                      |
 | GET    | `/api/v1/scripts/code-cells`                     | `get_code_cells`                                 | List all code cells (live+consumed) for a `code_hash`, with ambiguity info                          |
 | GET    | `/api/v1/scripts/charts/capacity-history`        | `get_script_capacity_history_chart_by_code_hash` | Capacity history chart for a script identified by `code_hash` (range + `script_kind`)               |
@@ -1246,7 +1281,13 @@ disabled or empty state. A point lookup still returns not found.
 **Params**
 
 - `ListParams` — `limit`, `cursor`, `network`, `decoder_type` (unused), `search`, `sort_key`, `sort_direction`
-- `LookupScriptsRequest` (POST body via `Json<>`) — `code_hashes: Vec<String>`, optional `tx_hash`
+- `LookupScriptsRequest` (POST body via `Json<>`, unknown fields refused) — `scripts: [{codeHash, hashType}]`
+  (a script is its pair; a code hash alone is no script). Every fault of the request is a 400 with
+  the route's JSON error naming it, before anything is read: a body that is not this request (the
+  old `codeHashes`, a pair without `hashType`, an unknown field, no JSON content type), a
+  `hashType` that is not `data` \| `type` \| `data1` \| `data2`, more than 100 pairs, a pair asked
+  twice (the answer holds one entry per pair). Optional `tx_hash` (its `cell_deps` resolve only the
+  pairs of the form they serve)
 - `CodeCellQuery` — `code_hash`, optional `hash_type` (`data` \| `type` \| `data1` \| `data2`). With
   `hash_type` the lookup resolves the exact observed reference form (a data-family form only
   resolves when a code cell with that data hash exists on chain); without it the whole deployment
@@ -1258,11 +1299,20 @@ disabled or empty state. A point lookup still returns not found.
 **Responses**
 
 - `CursorPaginatedResponse<ScriptFamilyListItemResponse>` — script family listing (from `crate::response`)
-- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`.
-  Every deployment-scoped field describes **the queried reference**, never a sibling deployment
-  that happens to share the same bytecode: `liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum`
-  and `scriptKind` come from the queried reference's own usage rollup (zero when the reference has
-  no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
+- `HashMap<String, ScriptLookupInfo>` — keyed `"<code hash>:<hash type>"` (lower-case hex), one entry
+  per pair asked that the registry names or the chain has used (a pair with neither is absent);
+  `hashType` is the pair's. Each entry has `resolutionState` (`resolved`: one binary; `ambiguous`:
+  several live binaries; `unresolved`: no binary resolves the pair, its name and usage stand) and
+  optional `ambiguity: ScriptResolutionAmbiguityResponse`. `name` is the name of the code the
+  pair runs, by the one naming rule (see the holders' `lockKind` above), "Unknown" when it runs
+  none the registry names — never the name of the code hash by another hash type, and no other
+  pair is tried; `nameBy` is the pair's hash type where the pair is not the registry's reference
+  for that code, `null` otherwise.
+  Every deployment-scoped field describes **the queried pair**, never a sibling deployment
+  that happens to share the same bytecode, nor the code hash by another hash type:
+  `cellsCount`/`liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum` (cells ever and live whose
+  lock or type script is exactly the pair, as lock plus as type) and `scriptKind` come from the
+  pair's own `script_reference_info` row (zero when the pair has no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
   cover only the code cells deployed under that reference. `codeHash` remains the resolved bytecode
   version hash, which two deployments of one binary legitimately share. `deprecated` is reported for
   ambiguous references too, from the reference's own record.
@@ -1281,7 +1331,14 @@ disabled or empty state. A point lookup still returns not found.
   `verifiedByTx`, and the code cell it spent, `verifiedCodeCell`
   (`0x<tx hash>:<output index>`): both or neither, so a page opens the
   transaction at the cell it spent (lane exactness, part B, the third read's
-  N3).
+  N3). A type reference's custody is read from its live code cells only
+  (`live_code_cells_by_type`, one bounded read, never the type's whole live
+  set: resync fix round S3), or its one live cell for a Type ID reference.
+  Two answers changed with that read (resync fix round 2, D): a generic type
+  reference whose code cell sits beside a token or state cell under the same
+  type script names the code cell's owner (it was `ambiguous`, two data hashes
+  among the live cells), and one with no live code cell is `retired` (several
+  data hashes among its non-code cells made it `ambiguous`).
 - `ScriptUsageResponse` — totals + `by_deployment: Vec<DeploymentUsage>`
 - `StackedAreaChartResponse` (from statistics) for capacity history charts. Each day's `values` carry `occupiedCapacity`, `freeCapacity` and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`, the free part by the one helper `utils::assets::free_part`, which refuses an occupied part under zero or above the whole, the day failing with its date and its operands), so a page sums nothing; the series are `occupiedCapacity` ("Occupied") and `freeCapacity` ("Free"), from one helper (`held_series`). They were `used` and `unused` (part B, the third read's S4: one name for a held point's parts on every route, as the token history and the cell versions name them).
 
@@ -1310,9 +1367,10 @@ disabled or empty state. A point lookup still returns not found.
 
 ### verify (crates/api/src/routes/verify.rs)
 
-| Method | Path                               | Handler                    | Purpose                                                               |
-| ------ | ---------------------------------- | -------------------------- | --------------------------------------------------------------------- |
-| POST   | `/api/v1/verify/entity-statistics` | `export_entity_statistics` | Bounded, read-only export of raw entity daily deltas for the verifier |
+| Method | Path                               | Handler                    | Purpose                                                                                                           |
+| ------ | ---------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/v1/verify/entity-statistics` | `export_entity_statistics` | Bounded, read-only export of raw entity daily deltas for the verifier                                             |
+| GET    | `/api/v1/verify/live-code-cells`   | `export_live_code_cells`   | Raw `live_code_cells_by_type` rows under `type_hash`, or from a `from` key on (`limit` ≤ 64, `complete`), for S43 |
 
 A verification-only endpoint, not part of the public explorer surface. Every
 read happens inside the request's single read-view pin, so the anchor and the

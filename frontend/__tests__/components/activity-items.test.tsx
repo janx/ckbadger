@@ -15,7 +15,7 @@ import type { GlobalActivity, PartyId, RowItem, Transaction } from '@/lib/api';
 import {
   activityRead,
   ITEM_TYPE,
-  partyShortId,
+  partyId,
   type WrittenParty,
 } from '@/__tests__/utils/activity-read';
 
@@ -30,11 +30,14 @@ const party = (seed: string, ckbDelta: string): WrittenParty => ({
   lockKind: 'Default Lock',
   roles: [],
   tags: 0,
+  // it sent where its CKB fell (exact that way round), as the route states `sent` (resync/int)
+  sent: BigInt(ckbDelta) < BigInt(0),
   ckbDelta,
   usedDelta: '0',
   itemDeltas: [],
 });
-const idOf = (p: WrittenParty): PartyId => [partyShortId(p, 'test'), p.tags];
+/** The party as the route names it: its id and its tags, the senders bit where it sent. */
+const idOf = (p: WrittenParty): PartyId => partyId(p, 'test');
 
 const token = (hash: string, symbol: string, movement: RowItem['movement'], amount: string) =>
   ({
@@ -68,8 +71,7 @@ function godwoken(n: number, items: RowItem[]): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [ITEM_TYPE.sudt],
-    itemTypesUnread: null,
+    recognizedTypes: [ITEM_TYPE.sudt],
     participants: drawn,
     participantCount: named.length,
     partyIds: named.map(idOf),
@@ -115,7 +117,10 @@ describe('the page reads a row’s items from the route’s statement', () => {
         /\s+/g,
         ' '
       )
-    ).toBe('all 2 transactions ↓ · 600 participants · 2 tokens');
+      // re-pinned on purpose (resync/int, at the merge of lane feed): the run counts its senders
+      // (the owner's word at Gate B), each row's five drawn parties whose CKB fell, from the senders
+      // bit of the route's id list; it counted all 600 parties
+    ).toBe('all 2 transactions ↓ · 10 senders · 2 tokens');
   });
 
   it('reads an asset feed’s amount moved from the statement', () => {

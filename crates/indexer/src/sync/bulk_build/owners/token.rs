@@ -33,11 +33,22 @@ pub(crate) struct TokenOwner {
     daily_deltas: FxHashMap<Vec<u8>, FxHashMap<u32, TokenDailyDelta>>,
     /// On-chain max-supply claims (Omnilock supply-info cells, extension-bound
     /// Unique Cells): the first claim per token, as live keeps it.
-    max_supply_observations: FxHashMap<Vec<u8>, u128>,
-    /// The current transaction's Unique Cell infos (by 20-byte type args), in
-    /// output order: an extension binds only within the creating transaction,
-    /// as live binds it. Cleared and reused per transaction.
-    tx_unique_infos: Vec<(InternId, crate::sync::token_helpers::UniqueTokenInfo)>,
+    /// Every max-supply claim of the run per token, in chain order
+    /// (block, transaction, output); the rule
+    /// (`token_helpers::token_max_supply_claim`) picks the token's at finalize.
+    max_supply_observations: FxHashMap<Vec<u8>, crate::sync::token_helpers::MaxSupplyClaims>,
+    /// The current transaction's Unique Cell candidates
+    /// (`token_helpers::unique_cell_candidate`), in output order: type args,
+    /// type code hash, hash type, info. An extension binds only within the
+    /// creating transaction, as live binds it, and only the Unique Cell by
+    /// its pair (`token_helpers::bound_unique_cell`). Cleared and reused per
+    /// transaction.
+    tx_unique_infos: Vec<(
+        InternId,
+        InternId,
+        i16,
+        crate::sync::token_helpers::UniqueTokenInfo,
+    )>,
     /// Resolved on-chain token info (keyed by token type_hash).
     token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
     /// One transaction's `TOKEN_DAILY` contribution per token, folded here
@@ -73,7 +84,12 @@ impl TokenOwner {
             },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
-            |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
+            |k, claims| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
+                    + (claims.capacity()
+                        * std::mem::size_of::<crate::sync::token_helpers::MaxSupplyObservation>())
+                        as u64
+            },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.token_onchain_info, |k, v| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
                 + 1
@@ -83,9 +99,56 @@ impl TokenOwner {
         })
     }
 
-    fn observe_max_supply_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+    /// Record one claim on the run's claims of its token, at its place.
+    fn record_max_supply_claim(
+        &mut self,
+        token_type_hash: &[u8],
+        max_supply: u128,
+        claimant: crate::sync::token_helpers::MaxSupplyClaimant,
+        tx: &ResolvedTxFacts<'_>,
+        cell: &CellFacts,
+    ) {
+        let claim = crate::sync::token_helpers::MaxSupplyObservation {
+            max_supply,
+            block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            output_index: cell.outpoint.index,
+            claimant,
+        };
+        let claims = self
+            .max_supply_observations
+            .entry(token_type_hash.to_vec())
+            .or_default();
+        // Once the token exists, a claim the rule can never pick is not kept
+        // (an Omnilock supply-info cell is claimed again by every mint): one
+        // the rule refuses alone (not the token's), or one after the claim
+        // the rule already picks.
+        if let Some(token) = self.tokens.get(token_type_hash) {
+            let picks = |claims: &[crate::sync::token_helpers::MaxSupplyObservation]| {
+                crate::sync::token_helpers::token_max_supply_claim(
+                    claims,
+                    &token.type_args,
+                    token.first_seen_block,
+                    i64::MAX,
+                )
+            };
+            if picks(std::slice::from_ref(&claim)).is_none()
+                || picks(claims).is_some_and(|first| first.place() < claim.place())
+            {
+                return;
+            }
+        }
+        crate::sync::token_helpers::insert_max_supply_claim(claims, claim);
+    }
+
+    fn observe_max_supply_from_output(
+        &mut self,
+        cell: &CellFacts,
+        tx: &ResolvedTxFacts<'_>,
+        ctx: &ReducerContext<'_>,
+    ) {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
-        if !crate::sync::token_helpers::is_omnilock_code_hash(lock_code_hash) {
+        if !crate::sync::token_helpers::is_omnilock(lock_code_hash, cell.lock_hash_type) {
             return;
         }
         let lock_args = ctx.resolve_identity(cell.lock_args_id);
@@ -106,25 +169,33 @@ impl TokenOwner {
         else {
             return;
         };
-        // The first claim wins, as `token_helpers::observe_max_supply` keeps it.
-        self.max_supply_observations
-            .entry(token_type_hash.to_vec())
-            .or_insert(max_supply);
+        // Every claim is kept; the rule picks the token's at finalize.
+        let claimant = crate::sync::token_helpers::supply_omnilock_claimant(
+            ctx.resolve_identity(cell.lock_script_hash_id),
+        );
+        self.record_max_supply_claim(&token_type_hash, max_supply, claimant, tx, cell);
     }
 
     fn observe_unique_cell_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
         let Some(type_args_id) = cell.type_args_id else {
             return;
         };
-        let type_args = ctx.resolve_identity(type_args_id);
-        if type_args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
+        let Some(info) = crate::sync::token_helpers::unique_cell_candidate(
+            ctx.resolve_identity(type_args_id),
+            &cell.data,
+        ) else {
             return;
-        }
-        let Some(info) = crate::sync::token_helpers::parse_unique_cell_token_info(&cell.data)
+        };
+        // A typed cell's facts carry its code hash and hash type with its
+        // args (one script); they are kept for the pair the extension rule
+        // reads, with no lookup here.
+        let (Some(type_code_hash_id), Some(type_hash_type)) =
+            (cell.type_code_hash_id, cell.type_hash_type)
         else {
             return;
         };
-        self.tx_unique_infos.push((type_args_id, info));
+        self.tx_unique_infos
+            .push((type_args_id, type_code_hash_id, type_hash_type, info));
     }
 
     /// The extension binding, by the live rule
@@ -134,7 +205,12 @@ impl TokenOwner {
     /// info, displacing any co-occurrence binding; the bound cell's total
     /// supply is a max-supply claim
     /// (`token_helpers::collect_token_max_supply_observations`).
-    fn resolve_unique_cell_for_xudt(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+    fn resolve_unique_cell_for_xudt(
+        &mut self,
+        cell: &CellFacts,
+        tx: &ResolvedTxFacts<'_>,
+        ctx: &ReducerContext<'_>,
+    ) {
         let Some(CellProtocolFacts::XudtExtensions(extension_args)) = &cell.protocol_facts else {
             return;
         };
@@ -147,24 +223,31 @@ impl TokenOwner {
             if args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
                 continue;
             }
-            // Last Unique Cell output with these args, as live's per-tx map.
-            let Some((_, info)) = self
-                .tx_unique_infos
-                .iter()
-                .rev()
-                .find(|(id, _)| ctx.resolve_identity(*id) == args.as_slice())
-            else {
+            // The extension rule (`token_helpers::bound_unique_cell`, live's
+            // too): the last Unique Cell by its pair with these args.
+            let Some(info) = crate::sync::token_helpers::bound_unique_cell(
+                self.tx_unique_infos.iter(),
+                args.as_slice(),
+                |(args_id, ..)| ctx.resolve_identity(*args_id),
+                |(_, code_hash_id, hash_type, _)| (ctx.resolve_identity(*code_hash_id), *hash_type),
+            )
+            .map(|(.., info)| info.clone()) else {
                 continue;
             };
             if let Some(total_supply) = info.total_supply {
-                self.max_supply_observations
-                    .entry(token_type_hash.to_vec())
-                    .or_insert(total_supply);
+                let token_type_hash = token_type_hash.to_vec();
+                self.record_max_supply_claim(
+                    &token_type_hash,
+                    total_supply,
+                    crate::sync::token_helpers::MaxSupplyClaimant::TokenExtension,
+                    tx,
+                    cell,
+                );
             }
             self.token_onchain_info.insert(
                 token_type_hash.to_vec(),
                 crate::sync::token_helpers::OnchainTokenInfo {
-                    info: info.clone(),
+                    info,
                     binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
                 },
             );
@@ -189,11 +272,14 @@ impl TokenOwner {
         // Exactly one distinct parsed info among Unique-Cell-typed outputs.
         let mut unique_info: Option<crate::sync::token_helpers::UniqueTokenInfo> = None;
         for cell in tx.cells.iter() {
-            let Some(type_code_hash_id) = cell.type_code_hash_id else {
+            let (Some(type_code_hash_id), Some(type_hash_type)) =
+                (cell.type_code_hash_id, cell.type_hash_type)
+            else {
                 continue;
             };
-            if !crate::sync::token_helpers::is_unique_cell_code_hash(
+            if !crate::sync::token_helpers::is_unique_cell(
                 ctx.resolve_identity(type_code_hash_id),
+                type_hash_type,
             ) {
                 continue;
             }
@@ -221,7 +307,11 @@ impl TokenOwner {
         // Exactly one minted xUDT type among amount-carrying outputs.
         let mut minted: Option<&[u8]> = None;
         for cell in tx.cells.iter() {
-            if !matches!(cell.semantic_tag, CellSemanticTag::Xudt) {
+            if !cell
+                .semantic_tag
+                .udt_standard()
+                .is_some_and(|standard| standard.is_xudt())
+            {
                 continue;
             }
             if cell.udt_amount.is_none() {
@@ -334,7 +424,7 @@ impl BulkReducer for TokenOwner {
 
         // Collect max_supply observations from omnilock supply info output cells
         for cell in tx.cells.iter() {
-            self.observe_max_supply_from_output(cell, ctx);
+            self.observe_max_supply_from_output(cell, tx, ctx);
         }
 
         // This transaction's Unique Cell outputs, then the extension bindings
@@ -347,7 +437,7 @@ impl BulkReducer for TokenOwner {
         }
         if !self.tx_unique_infos.is_empty() {
             for cell in tx.cells.iter() {
-                self.resolve_unique_cell_for_xudt(cell, ctx);
+                self.resolve_unique_cell_for_xudt(cell, tx, ctx);
             }
         }
         // Same-tx issuance co-occurrence binding (no extension flags)
@@ -456,9 +546,8 @@ impl BulkReducer for TokenOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let domain_store = materializer.domain_store();
         materializer.materialize_final_snapshot_bounded(|sink| {
-            self.emit_snapshot_rows(domain_store, |row| sink.push(row))
+            self.emit_snapshot_rows(|row| sink.push(row))
         })
     }
 }
@@ -530,67 +619,44 @@ impl TokenOwner {
         Ok(rows)
     }
 
-    pub(crate) fn emit_snapshot_rows<F>(
-        &self,
-        domain_store: &CkbadgerStore,
-        mut emit: F,
-    ) -> Result<()>
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
     where
         F: FnMut(MaterializedRow) -> Result<()>,
     {
-        let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
-        let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = domain_store
-            .get_tokens_batch(&all_type_hashes)?
-            .into_iter()
-            .filter_map(|(k, v)| v.map(|info| (k, info)))
-            .collect();
-
-        let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
+        let mut type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
         type_hashes.sort();
 
-        for type_hash in type_hashes {
+        // Every row is the chain's, as live sync creates it: a curated label
+        // is joined when the row is read, never stored in it (resync fix
+        // round 2, B).
+        for type_hash in &type_hashes {
             let token = self
                 .tokens
                 .get(type_hash)
                 .expect("sorted token type hash must exist");
             let mut info = token.to_info(type_hash.clone());
 
-            // Start from what the store already holds. Label import runs
-            // before the first block is indexed, so on a fresh database this
-            // is the curated label; on a restart it is whatever the previous
-            // run stored. Live sync reads exactly this row before merging the
-            // chain observation, so seeding it here is what lets both modes
-            // share one merge rule instead of each inventing a precedence.
-            let existing = existing_tokens.get(type_hash);
-            if let Some(existing) = existing {
-                if existing.name.is_some() {
-                    info.name = existing.name.clone();
-                }
-                if existing.symbol.is_some() {
-                    info.symbol = existing.symbol.clone();
-                }
-                if existing.decimals.is_some() {
-                    info.decimals = existing.decimals;
-                }
-                if existing.icon_url.is_some() {
-                    info.icon_url = existing.icon_url.clone();
-                }
-                if existing.description.is_some() {
-                    info.description = existing.description.clone();
-                }
-                // Which source wrote the fields just copied, and any chain
-                // values already bound to the token (IV-26).
-                info.metadata_source = existing.metadata_source;
-                info.chain_metadata = existing.chain_metadata.clone();
-            }
-
-            // max_supply: the stored value, then the first on-chain claim by
-            // the live rule (`udt::apply_observed_max_supply`: a claim fills an
-            // unknown value; a conflicting one keeps the stored value).
-            info.max_supply = existing.and_then(|existing| existing.max_supply);
-            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
+            // max_supply: the token's claim by the one rule
+            // (`token_helpers::token_max_supply_claim`: the first claim in
+            // chain order at or after the token's first block;
+            // `udt::apply_observed_max_supply`: a claim fills an unknown value).
+            if let Some(claim) = self
+                .max_supply_observations
+                .get(type_hash)
+                .and_then(|claims| {
+                    crate::sync::token_helpers::token_max_supply_claim(
+                        claims,
+                        &info.type_args,
+                        info.first_seen_block,
+                        i64::MAX,
+                    )
+                })
+            {
                 crate::db::writer::udt::apply_observed_max_supply(
-                    type_hash, &mut info, observed, true,
+                    type_hash,
+                    &mut info,
+                    claim.max_supply,
+                    true,
                 );
             }
 
@@ -637,9 +703,9 @@ impl TokenOwner {
     }
 
     #[cfg(test)]
-    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
-        self.emit_snapshot_rows(domain_store, |row| {
+        self.emit_snapshot_rows(|row| {
             rows.push(row);
             Ok(())
         })?;
@@ -647,13 +713,10 @@ impl TokenOwner {
     }
 
     #[cfg(test)]
-    pub(crate) fn build_final_rows(
-        &self,
-        domain_store: &CkbadgerStore,
-    ) -> Result<super::super::materialize::OwnerFinalRows> {
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows()?,
-            snapshot_rows: self.build_snapshot_rows(domain_store)?,
+            snapshot_rows: self.build_snapshot_rows()?,
         })
     }
 }
@@ -863,10 +926,11 @@ impl TokenCellView {
         tx: &ResolvedTxFacts<'_>,
         location: CellLocator<'_>,
     ) -> Result<Option<Self>> {
-        let standard = match semantic_tag {
-            CellSemanticTag::Sudt => "sudt",
-            CellSemanticTag::Xudt => "xudt",
-            _ => return Ok(None),
+        let Some(standard) = semantic_tag
+            .udt_standard()
+            .map(|standard| standard.as_str())
+        else {
+            return Ok(None);
         };
 
         let Some(amount) = udt_amount else {
@@ -972,7 +1036,7 @@ fn token_daily_type_id(
     tx: &ResolvedTxFacts<'_>,
     side: &str,
 ) -> Result<Option<InternId>> {
-    if !matches!(semantic_tag, CellSemanticTag::Sudt | CellSemanticTag::Xudt) {
+    if semantic_tag.udt_standard().is_none() {
         return Ok(None);
     }
     type_script_hash_id.map(Some).ok_or_else(|| {
@@ -2402,6 +2466,20 @@ mod tests {
         assert_eq!(token.decimals, Some(8));
     }
 
+    /// The curated label of `labelled_token_row`, as label import stores it
+    /// (`token_labels`; resync fix round M1: label import writes no token row
+    /// for a token the chain does not hold, so the label is seeded there).
+    fn token_label() -> ckbadger_store::types::TokenLabel {
+        ckbadger_store::types::TokenLabel {
+            name: "Labelled".to_string(),
+            symbol: "LBL".to_string(),
+            decimals: 4,
+            icon_url: Some("logo.png".to_string()),
+            description: Some("curated".to_string()),
+        }
+    }
+
+    /// The row the label makes when attached to the token's chain row.
     fn labelled_token_row() -> TokenInfo {
         TokenInfo {
             type_code_hash: vec![0x11; 32],
@@ -2431,6 +2509,11 @@ mod tests {
     /// token therefore ended up with a different name/symbol/decimals
     /// depending on whether its issuance block arrived during bulk or live
     /// sync — and a rebuild from genesis silently changed the answer.
+    ///
+    /// Re-pinned in resync fix round 2, B: the label is in `token_labels` and
+    /// no writer reads it; both paths make the row from the chain alone (the
+    /// live half starts from the chain's row, not a labelled one), and the
+    /// curated icon and description are no part of it.
     #[test]
     fn bulk_and_live_agree_on_onchain_token_metadata_precedence() {
         let dir = tempfile::tempdir().unwrap();
@@ -2439,7 +2522,7 @@ mod tests {
         let type_hash = vec![0x7a; 32];
         let labelled = labelled_token_row();
         domain_store
-            .put_token_direct(&type_hash, &labelled)
+            .put_token_label_direct(&type_hash, &token_label())
             .unwrap();
 
         for binding in [
@@ -2474,14 +2557,22 @@ mod tests {
                 .token_onchain_info
                 .insert(type_hash.clone(), observed.clone());
 
-            let rows = owner.build_snapshot_rows(&domain_store).unwrap();
+            let rows = owner.build_snapshot_rows().unwrap();
             let row = rows
                 .iter()
                 .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
                 .expect("bulk snapshot must emit the token row");
             let bulk: TokenInfo = bincode::deserialize(&row.value).unwrap();
 
-            let mut live = labelled.clone();
+            let mut live = TokenInfo {
+                name: None,
+                symbol: None,
+                decimals: None,
+                icon_url: None,
+                description: None,
+                metadata_source: None,
+                ..labelled.clone()
+            };
             crate::db::writer::udt::apply_onchain_token_info(
                 &type_hash,
                 &mut live,
@@ -2493,25 +2584,27 @@ mod tests {
                 (live.name.as_deref(), live.symbol.as_deref(), live.decimals),
                 "bulk and live must store identical token metadata for {binding:?}"
             );
-            // Curated fields the chain never carries survive in both modes.
-            assert_eq!(bulk.icon_url, labelled.icon_url);
-            assert_eq!(bulk.description, labelled.description);
+            assert_eq!(bulk, live, "{binding:?}: the chain's row on both paths");
+            assert_eq!((bulk.icon_url, bulk.description), (None, None));
         }
     }
 
-    /// The bulk snapshot writer must surface a curated label that contradicts
-    /// the token's own Unique Cell, exactly as the live writer does. Bulk is
-    /// the path a rebuild from genesis takes, so detection that only exists in
-    /// live sync never runs for a historically issued token.
+    /// Re-pinned in resync fix round 2, B (it was
+    /// `bulk_snapshot_reports_a_label_that_contradicts_the_chain`): no writer
+    /// reads a label, so the bulk snapshot writes the chain's row and logs
+    /// nothing of the label. A label that contradicts the token's own Unique
+    /// Cell is reported where it is joined, by the API (`metadata.conflict`,
+    /// `api_tokens::a_label_names_a_token_when_it_is_read_...`), on every
+    /// store whichever path built it.
     #[test]
-    fn bulk_snapshot_reports_a_label_that_contradicts_the_chain() {
+    fn bulk_snapshot_writes_the_chains_row_and_reads_no_label() {
         let dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let type_hash = vec![0x7b; 32];
         let labelled = labelled_token_row();
         domain_store
-            .put_token_direct(&type_hash, &labelled)
+            .put_token_label_direct(&type_hash, &token_label())
             .unwrap();
 
         let mut owner = TokenOwner::default();
@@ -2542,18 +2635,20 @@ mod tests {
         );
 
         let (rows, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
-            owner.build_snapshot_rows(&domain_store).unwrap()
+            owner.build_snapshot_rows().unwrap()
         });
 
-        assert!(
-            logs.contains(&hex::encode(&type_hash)),
-            "bulk must identify the contradicted token: {logs}"
+        assert!(!logs.contains("LBL"), "no writer reads the label: {logs}");
+        let row = rows
+            .iter()
+            .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
+            .expect("the token row");
+        let row: TokenInfo = bincode::deserialize(&row.value).unwrap();
+        assert_eq!(
+            (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
+            (Some("OnChain"), Some("OC"), Some(8)),
+            "the chain's fields"
         );
-        assert!(
-            logs.contains("LBL") && logs.contains("OC"),
-            "bulk must show both the stored and the on-chain value: {logs}"
-        );
-        assert!(rows.iter().any(|row| row.cf_name == CF_TOKENS));
     }
 
     /// J15: one transaction's whole `TOKEN_DAILY` contribution reaches the

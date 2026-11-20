@@ -46,28 +46,37 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
     );
     // Select a real bundled Spore deployment instead of duplicating its hashes.
     let spore_code = ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY
-        .iter()
-        .filter(|(_, p)| *p == ckbadger_indexer::parser::registry::ProtocolScript::SporeNft)
-        .min_by_key(|(hash, _)| *hash)
+        .protocol_pairs()
+        .filter(|((_, hash_type), p)| {
+            *p == ckbadger_indexer::parser::registry::ProtocolScript::SporeNft && *hash_type == 2
+        })
+        .min_by_key(|((hash, _), _)| *hash)
         .unwrap()
         .0
-        .clone();
+         .0
+        .to_vec();
     let spore = script(&hex::encode(&spore_code), &[0x51; 32]);
     let token_code = ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY
-        .iter()
-        .filter(|(_, p)| *p == ckbadger_indexer::parser::registry::ProtocolScript::Sudt)
-        .min_by_key(|(hash, _)| *hash)
+        .protocol_pairs()
+        .filter(|((_, hash_type), p)| {
+            *p == ckbadger_indexer::parser::registry::ProtocolScript::Sudt && *hash_type == 2
+        })
+        .min_by_key(|((hash, _), _)| *hash)
         .unwrap()
         .0
-        .clone();
+         .0
+        .to_vec();
     let token = script(&hex::encode(&token_code), &[0x61; 32]);
     let did_code = ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY
-        .iter()
-        .filter(|(_, p)| *p == ckbadger_indexer::parser::registry::ProtocolScript::DidCkb)
-        .min_by_key(|(hash, _)| *hash)
+        .protocol_pairs()
+        .filter(|((_, hash_type), p)| {
+            *p == ckbadger_indexer::parser::registry::ProtocolScript::DidCkb && *hash_type == 2
+        })
+        .min_by_key(|((hash, _), _)| *hash)
         .unwrap()
         .0
-        .clone();
+         .0
+        .to_vec();
     let did = script(&hex::encode(did_code), &[0x71; 20]);
     let file_data = if malformed_file {
         vec![1, 2, 3]
@@ -171,14 +180,6 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             chain_time_ms: 1_700_000_000_000,
         },
     );
-    batch.put_script_info(
-        file.code_hash().as_slice(),
-        &ckbadger_store::types::ScriptInfo {
-            code_hash: file.code_hash().as_slice().to_vec(),
-            hash_type: 1,
-            ..Default::default()
-        },
-    );
     batch.put_tx_hash_map(&tx_hash, 7, 1);
     batch.put_tx_index(
         7,
@@ -260,27 +261,27 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             },
         )
         .unwrap();
-    store
-        .put_token_direct(
-            token.calc_script_hash().as_slice(),
-            &TokenInfo {
-                type_code_hash: token_code,
-                hash_type: 2,
-                type_args: vec![0x61; 32],
-                standard: "sudt".into(),
-                name: Some("Exact Token".into()),
-                symbol: Some("EXACT".into()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        token.calc_script_hash().as_slice(),
+        &TokenInfo {
+            type_code_hash: token_code,
+            hash_type: 2,
+            type_args: vec![0x61; 32],
+            standard: "sudt".into(),
+            name: Some("Exact Token".into()),
+            symbol: Some("EXACT".into()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     let mut identities = StoreBatch::new(store.as_ref());
     identities.put_identity(
         &[0x71; 20],
@@ -375,15 +376,16 @@ async fn transaction_cells_reject_malformed_registered_file_data() {
 
 /// The type script of `protocol`'s first bundled registry deployment.
 fn registered(protocol: ProtocolScript, args: &[u8]) -> packed::Script {
-    let code_hash = PROTOCOL_REGISTRY
-        .iter()
+    // a pair the protocol runs (resync/protocol-pairs: its hash type with it)
+    let ((code_hash, hash_type), _) = PROTOCOL_REGISTRY
+        .protocol_pairs()
         .filter(|(_, p)| *p == protocol)
-        .min_by_key(|(hash, _)| *hash)
-        .unwrap()
-        .0;
+        // a reference by type first, as the fixtures' cells are
+        .min_by_key(|((hash, hash_type), _)| (*hash_type != 1, *hash, *hash_type))
+        .unwrap();
     packed::Script::new_builder()
         .code_hash(packed::Byte32::from_slice(code_hash).unwrap())
-        .hash_type(1u8.into())
+        .hash_type(hash_type.into())
         .args(Bytes::copy_from_slice(args).pack())
         .build()
 }
@@ -619,7 +621,8 @@ async fn every_kind_fixture(
     }
     for (kind, standard) in [(&kinds[3], "sudt"), (&kinds[4], "xudt")] {
         let token = kind.type_script.as_ref().unwrap();
-        batch.put_token(
+        put_token_in_batch_as_indexed(
+            &mut batch,
             token.calc_script_hash().as_slice(),
             &TokenInfo {
                 type_code_hash: token.code_hash().as_slice().to_vec(),

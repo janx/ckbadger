@@ -1153,32 +1153,75 @@ async fn print_single_network_sync_status(workdir: &Path) -> Result<()> {
     let store_paths = resolve_store_paths(workdir, &config.store);
 
     let secondary_path = secondary_store_path(&store_paths.domain_data, SecondaryStoreOwner::Cli);
-    match CkbadgerStore::open_domain_secondary_with_runtime(
+    for line in sync_status_lines(
         &store_paths.domain_data,
         &secondary_path,
         store_runtime_config(&config.store, workdir)?,
     ) {
-        Ok(store) => match store.get_sync_status() {
-            Ok(status) => {
-                println!("Sync status:");
-                println!("  Tip block:           {}", status.tip_block_number);
-                println!("  Total transactions:  {}", status.total_transactions);
-                println!("  Total cells created: {}", status.total_cells_created);
-                println!("  Total cells consumed:{}", status.total_cells_consumed);
-                if status.deep_fork_detected {
-                    println!("  WARNING: deep fork detected");
-                }
-            }
-            Err(e) => {
-                println!("Could not read sync status: {}", e);
-            }
-        },
-        Err(e) => {
-            println!("Could not open store: {} (has the indexer run yet?)", e);
-        }
+        println!("{line}");
     }
 
     Ok(())
+}
+
+/// What `ckbadger status` prints of the domain store at `domain_data_path`,
+/// read through a secondary at `secondary_path`.
+fn sync_status_lines(
+    domain_data_path: &Path,
+    secondary_path: &Path,
+    runtime_config: ckbadger_store::StoreRuntimeConfig,
+) -> Vec<String> {
+    match CkbadgerStore::open_domain_secondary_with_runtime(
+        domain_data_path,
+        secondary_path,
+        runtime_config,
+    ) {
+        Ok(store) => sync_status_report(&store, domain_data_path),
+        Err(e) => vec![format!(
+            "Could not open store: {} (has the indexer run yet?)",
+            e
+        )],
+    }
+}
+
+/// The lines `ckbadger status` prints for the domain store opened at
+/// `domain_data_path`. The store's layout is read first (resync fix round
+/// N7): a store of another layout is shown as the refusal, both layouts
+/// named, with the way out, never as its tip; a fresh store (no row, no
+/// stamp yet) is a fresh start and its status is shown.
+fn sync_status_report(store: &CkbadgerStore, domain_data_path: &Path) -> Vec<String> {
+    match store.check_store_layout() {
+        Err(e) => return vec![format!("Could not read the store layout: {e:#}")],
+        Ok(Err(mismatch)) => {
+            return vec![
+                format!(
+                    "Sync status: refused (domain store {})",
+                    domain_data_path.display()
+                ),
+                format!("  {mismatch}"),
+            ]
+        }
+        Ok(Ok(ckbadger_store::StoreLayoutState::NotReady)) => {
+            return vec![format!("Sync status: {}", being_created(domain_data_path))]
+        }
+        Ok(Ok(_)) => {}
+    }
+    match store.get_sync_status() {
+        Ok(status) => {
+            let mut lines = vec![
+                "Sync status:".to_string(),
+                format!("  Tip block:           {}", status.tip_block_number),
+                format!("  Total transactions:  {}", status.total_transactions),
+                format!("  Total cells created: {}", status.total_cells_created),
+                format!("  Total cells consumed:{}", status.total_cells_consumed),
+            ];
+            if status.deep_fork_detected {
+                lines.push("  WARNING: deep fork detected".to_string());
+            }
+            lines
+        }
+        Err(e) => vec![format!("Could not read sync status: {}", e)],
+    }
 }
 
 /// Aggregate `status` across all networks in an orchestrator root: query the
@@ -1235,6 +1278,8 @@ async fn cmd_status_orchestrator(root: &Path) -> Result<()> {
 struct VerifyTarget {
     network: String,
     workdir: PathBuf,
+    /// The network's domain store, read for its layout before the run.
+    domain_data_path: PathBuf,
     api_url: String,
     rpc_url: String,
     explorer_url: String,
@@ -1255,6 +1300,7 @@ fn build_verify_target(
 ) -> Result<VerifyTarget> {
     Ok(VerifyTarget {
         network: network.to_string(),
+        domain_data_path: resolve_store_paths(&workdir, &config.store).domain_data,
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         rpc_url: config.ckb.rpc_url.clone(),
         explorer_url: verify_explorer_url(network)?,
@@ -1296,6 +1342,56 @@ fn reject_multi_network_overrides(
         workdir.display(),
         overrides.join(", ")
     )
+}
+
+/// Why verify cannot run a network, read from its domain store before the
+/// run, writing nothing in it (`ckbadger_store::inspect_domain_store`): a
+/// store this build refuses (resync fix round 2, A), in the words every
+/// opener says; one still being created (resync fix round 3, M); one it
+/// cannot read, with the error (round 3, item 6). Each is that network's
+/// failed-start report, never the end of the run for the others. No store, a
+/// fresh store and a store of this build's layout are no reason: verify then
+/// reads the network through its API.
+fn verify_failed_start(domain_data_path: &Path) -> Option<String> {
+    match ckbadger_store::inspect_domain_store(
+        domain_data_path,
+        &secondary_store_path(domain_data_path, SecondaryStoreOwner::Verify),
+    ) {
+        Err(error) => Some(format!(
+            "the domain store {} could not be read: {error:#}",
+            domain_data_path.display()
+        )),
+        Ok(Some(Err(mismatch))) => Some(format!(
+            "domain store {} refused: {mismatch}",
+            domain_data_path.display()
+        )),
+        Ok(Some(Ok(ckbadger_store::StoreLayoutState::NotReady))) => {
+            Some(being_created(domain_data_path))
+        }
+        Ok(None | Some(Ok(_))) => None,
+    }
+}
+
+/// What a short-lived reader says of a domain store still being created
+/// (resync fix round 3, M): no refusal; try again.
+fn being_created(domain_data_path: &Path) -> String {
+    format!(
+        "the domain store {} is still being created: try again once the indexer has made it",
+        domain_data_path.display()
+    )
+}
+
+/// The local domain store verify inspects before it runs `target`: the
+/// network's own when verify reads the network's own API (no `--api-url`, or
+/// one naming it); none when `--api-url` names another API, whose store is not
+/// the local one, which may not exist (resync fix round 4, item 2).
+fn local_store_to_inspect<'a>(target: &'a VerifyTarget, api_url: Option<&str>) -> Option<&'a Path> {
+    match api_url {
+        Some(api_url) if api_url.trim_end_matches('/') != target.api_url.trim_end_matches('/') => {
+            None
+        }
+        _ => Some(&target.domain_data_path),
+    }
 }
 
 /// Resolve and validate every network before starting any potentially long-running
@@ -1644,6 +1740,17 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
 
     for target in targets {
         let network = target.network.clone();
+        // A network whose store this build refuses, or that is still being
+        // created, or that cannot be read, is that network's report, not
+        // run against an API that refuses it too, nor the end of the run.
+        if let Some(reason) =
+            local_store_to_inspect(&target, args.api_url.as_deref()).and_then(verify_failed_start)
+        {
+            reports.push(indexer_verify::VerifyReport::for_failed_start(
+                &run_id, &network, reason,
+            ));
+            continue;
+        }
         let verify_args = indexer_verify::VerifyArgs {
             network: network.clone(),
             api_url: args.api_url.clone().unwrap_or(target.api_url),
@@ -2241,6 +2348,175 @@ fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// resync fix round 2, A: `ckbadger status` and `ckbadger verify` on a
+    /// store an earlier build left (without the column families this build
+    /// added; one row and no stamp, or stamped 7): each says the refusal with
+    /// the way out, and nothing is created in the store.
+    #[test]
+    fn status_and_verify_refuse_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+
+            let lines = super::sync_status_lines(
+                &domain,
+                &dir.path().join("cli-secondary"),
+                ckbadger_store::StoreRuntimeConfig::default(),
+            );
+            assert_eq!(
+                lines[0],
+                format!("Sync status: refused (domain store {})", domain.display()),
+                "stamp {stamp:?}: {lines:?}"
+            );
+            assert!(
+                lines[1].contains("live_code_cells_by_type")
+                    && lines[1].contains("delete RocksDB and re-sync from genesis"),
+                "{lines:?}"
+            );
+
+            let refusal = super::verify_failed_start(&domain).expect("verify says the refusal");
+            assert!(
+                refusal.contains("live_code_cells_by_type")
+                    && refusal.contains(&format!(
+                        "this build reads and writes store layout {}",
+                        ckbadger_store::STORE_LAYOUT
+                    )),
+                "{refusal}"
+            );
+
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: nothing is created in a refused store"
+            );
+        }
+    }
+
+    /// resync fix round 3, M: `ckbadger status` and `verify` meet a store
+    /// still being created: they say so, and to try again, refusing nothing
+    /// and writing nothing in it.
+    #[test]
+    fn status_and_verify_say_a_store_still_being_created_is_being_created() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_store_in_creation, store_files_and_column_families,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let before = store_files_and_column_families(&domain);
+        let being_created = format!(
+            "the domain store {} is still being created: try again once the indexer has made it",
+            domain.display()
+        );
+
+        let lines = super::sync_status_lines(
+            &domain,
+            &dir.path().join("cli-secondary"),
+            ckbadger_store::StoreRuntimeConfig::default(),
+        );
+        assert_eq!(lines, vec![format!("Sync status: {being_created}")]);
+        assert_eq!(super::verify_failed_start(&domain), Some(being_created));
+        assert_eq!(store_files_and_column_families(&domain), before);
+    }
+
+    /// resync fix round 4, item 2 (logic N-4): verify inspects the local
+    /// network's store only when it verifies that network's own API; when
+    /// `--api-url` names another API (there may be no local store, and it is
+    /// not the store that API serves), it inspects none.
+    #[test]
+    fn verify_inspects_no_local_store_for_an_api_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let target = super::VerifyTarget {
+            network: "mainnet".to_string(),
+            workdir: dir.path().to_path_buf(),
+            domain_data_path: domain.clone(),
+            api_url: "http://127.0.0.1:8101/api/v1".to_string(),
+            rpc_url: "http://127.0.0.1:8114".to_string(),
+            explorer_url: "https://explorer.invalid".to_string(),
+            cache_dir: dir.path().join("cache"),
+        };
+        assert_eq!(
+            super::local_store_to_inspect(&target, None),
+            Some(domain.as_path())
+        );
+        assert_eq!(
+            super::local_store_to_inspect(&target, Some("http://127.0.0.1:8101/api/v1/")),
+            Some(domain.as_path()),
+            "the network's own API, given"
+        );
+        assert_eq!(
+            super::local_store_to_inspect(&target, Some("http://elsewhere.invalid:8101/api/v1")),
+            None,
+            "an API elsewhere"
+        );
+    }
+
+    /// resync fix round 3, item 6 (logic N-4, tests NOTE-3): a domain store
+    /// verify cannot read (here a `CURRENT` naming a MANIFEST that is not
+    /// there) is that network's failed start, said with the store and the
+    /// error, never an error that ends the run for every network.
+    #[test]
+    fn verify_reports_a_store_it_cannot_read_as_that_networks_failed_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        std::fs::create_dir_all(&domain).unwrap();
+        std::fs::write(domain.join("CURRENT"), "MANIFEST-000099\n").unwrap();
+        match super::verify_failed_start(&domain) {
+            Some(reason) => assert!(
+                reason.starts_with(&format!(
+                    "the domain store {} could not be read: ",
+                    domain.display()
+                )),
+                "{reason}"
+            ),
+            other => panic!("that network's failed start, got {other:?}"),
+        }
+    }
+
+    /// resync fix round N7: `ckbadger status` checks the store's layout after
+    /// opening it (read-only) and, on a store of another layout, prints the
+    /// refusal with the way out instead of that store's tip.
+    #[test]
+    fn status_names_a_store_of_another_layout_instead_of_its_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        store.set_store_layout(7).unwrap();
+        assert_eq!(
+            super::sync_status_report(&store, path),
+            vec![
+                format!("Sync status: refused (domain store {})", path.display()),
+                format!(
+                    "  {}",
+                    ckbadger_store::StoreLayoutMismatch::stamped(Some(7))
+                ),
+            ],
+            "the refusal, not the old store's tip"
+        );
+
+        // A fresh store (no row, no stamp yet) is a fresh start, not an old
+        // store: its (empty) status is shown.
+        let fresh = tempfile::tempdir().unwrap();
+        let fresh_store = ckbadger_store::CkbadgerStore::open_domain(fresh.path()).unwrap();
+        assert_eq!(
+            super::sync_status_report(&fresh_store, fresh.path())[0],
+            "Sync status:"
+        );
+
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+        assert_eq!(super::sync_status_report(&store, path)[0], "Sync status:");
+    }
+
     use super::*;
     use clap::CommandFactory;
     use std::path::Path;

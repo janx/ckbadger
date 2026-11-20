@@ -33,24 +33,17 @@ it('links every chart drawn from activities (lane L)', async () => {
   );
 });
 
-// Re-pinned on purpose (the P3 follow-up's 2b): the count is the route's, the day's
-// userTransactionCount; the page read the day's transactions (60) from /stats/tx and subtracted
-// its cellbases (10) itself.
-it('uses the exact non-cellbase count instead of overlapping kind occurrences', async () => {
+// Re-pinned on purpose (the P3 follow-up's 2b, then F-6): the count is the route's, the day's
+// activityCount, every transaction but the cellbases in exactly one kind (it was the route's
+// activityCount while the kinds overlapped; before that the page subtracted the cellbases).
+it('states the exact non-cellbase count, the route’s activityCount, which the kinds partition', async () => {
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: '20261025',
-      userTransactionCount: 50,
       coinbaseCount: 10,
-      transferCount: 12,
-      daoDepositCount: 1,
-      daoWithdrawRequestCount: 2,
-      daoWithdrawCompleteCount: 3,
-      tokenCount: 4,
-      objectCount: 5,
-      identityCount: 6,
-      scriptCallCount: 7,
+      activityCount: 50,
+      kindCounts: { dao: 3, token: 4, object: 5, identity: 6, protocol: 13, script: 7, ckb: 12 },
       uniqueAddressCount: 42,
     },
     { ...dailyActivities[0], date: '20261026', uniqueAddressCount: 9999 },
@@ -83,7 +76,12 @@ it('does not silently substitute stale statistics for a missing completed day', 
 it('selects UTC+8 yesterday at the UTC date boundary', async () => {
   vi.setSystemTime(new Date('2026-10-25T17:00:00Z'));
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-    { ...dailyActivities[0], date: '20261025', userTransactionCount: 50 },
+    {
+      ...dailyActivities[0],
+      date: '20261025',
+      activityCount: 50,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 50 },
+    },
   ]);
   render(<ActivitiesPage />);
   expect(await screen.findByText('50')).toBeInTheDocument();
@@ -94,10 +92,10 @@ it('selects UTC+8 yesterday at the UTC date boundary', async () => {
 // draws truthfully. Every field this plan added and this page reads goes through the one reader
 // (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
 // it drew the lede without its count, silently
-it('refuses yesterday without userTransactionCount by name, never a lede with no count', async () => {
+it('refuses yesterday without activityCount by name, never a lede with no count', async () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
-  const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+  const { activityCount: _gone, ...older } = dailyActivities[0];
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     { ...older, date: yesterday.replaceAll('-', '') } as (typeof dailyActivities)[0],
   ]);
@@ -108,7 +106,7 @@ it('refuses yesterday without userTransactionCount by name, never a lede with no
   );
   expect(
     await screen.findByText(
-      `daily activities on ${yesterday.replaceAll('-', '')}: the API sends no userTransactionCount: it is older than this page`
+      `daily activities on ${yesterday.replaceAll('-', '')}: the API sends no activityCount: it is older than this page`
     )
   ).toHaveAttribute('role', 'alert');
   log.mockRestore();

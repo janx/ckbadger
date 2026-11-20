@@ -31,15 +31,18 @@ pub struct DidCkbParser;
 impl DidCkbParser {
     /// Single classification path for did:ckb type scripts (both networks),
     /// resolved through the bundled metadata registry.
-    pub fn is_type_script(code_hash: &[u8]) -> bool {
-        PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DidCkb)
+    pub fn is_type_script(code_hash: &[u8], hash_type: i16) -> bool {
+        PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DidCkb)
     }
 
     /// Parse a did:ckb identity cell from an RPC output (live sync path).
     /// Returns `None` for cells that are not did:ckb-typed.
     pub fn parse_did_cell(output: &CellOutput) -> Option<ParsedDidCkbCell> {
         let type_script = output.type_.as_ref()?;
-        if !Self::is_type_script(&parse_hex_to_bytes(&type_script.code_hash)) {
+        if !Self::is_type_script(
+            &parse_hex_to_bytes(&type_script.code_hash),
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -54,7 +57,7 @@ impl DidCkbParser {
     pub fn parse_did_parsed_cell(cell: &ParsedCell) -> Option<ParsedDidCkbCell> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
         let type_args = cell.type_args.as_ref()?;
-        if !Self::is_type_script(type_code_hash) {
+        if !Self::is_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -91,12 +94,12 @@ mod tests {
     fn test_real_did_ckb_code_hashes_classify_on_both_networks() {
         let testnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_TESTNET);
         assert!(
-            DidCkbParser::is_type_script(&testnet),
+            DidCkbParser::is_type_script(&testnet, 1),
             "did:ckb testnet code_hash must classify as did:ckb"
         );
         let mainnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_MAINNET);
         assert!(
-            DidCkbParser::is_type_script(&mainnet),
+            DidCkbParser::is_type_script(&mainnet, 1),
             "did:ckb mainnet code_hash must classify as did:ckb"
         );
     }
@@ -161,9 +164,10 @@ mod tests {
             }),
         };
         assert!(DidCkbParser::parse_did_cell(&output).is_none());
-        assert!(!DidCkbParser::is_type_script(&parse_hex_to_bytes(
-            SPORE_CODE_HASH_MAINNET_V2
-        )));
+        assert!(!DidCkbParser::is_type_script(
+            &parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
+            1
+        ));
     }
 
     #[test]
@@ -180,9 +184,10 @@ mod tests {
             }),
         };
         assert!(DidCkbParser::parse_did_cell(&output).is_none());
-        assert!(!DidCkbParser::is_type_script(&parse_hex_to_bytes(
-            BIT_CELL_CODE_HASH_MAINNET
-        )));
+        assert!(!DidCkbParser::is_type_script(
+            &parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET),
+            1
+        ));
     }
 
     #[test]

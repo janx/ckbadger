@@ -9,9 +9,10 @@ pub const INTENT_LOCK_CODE_HASH_TESTNET: &str =
 /// path and one set of field names. Re-exported here for parser-local callers.
 pub use ckbadger_common::utxoswap::{parse_intent_args, IntentPayload, IntentType};
 
-pub fn is_intent_lock(code_hash: &[u8]) -> bool {
+pub fn is_intent_lock(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::UtxoSwapIntent,
     )
 }
@@ -24,22 +25,22 @@ mod tests {
     #[test]
     fn test_is_intent_lock_mainnet() {
         let code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_intent_lock(&code_hash));
+        assert!(is_intent_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_intent_lock_testnet() {
         let code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_TESTNET);
-        assert!(is_intent_lock(&code_hash));
+        assert!(is_intent_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_intent_lock_rejects_other() {
         let code_hash = vec![0xAA; 32];
-        assert!(!is_intent_lock(&code_hash));
+        assert!(!is_intent_lock(&code_hash, 1));
 
         let zero = vec![0u8; 32];
-        assert!(!is_intent_lock(&zero));
+        assert!(!is_intent_lock(&zero, 1));
     }
 
     #[test]

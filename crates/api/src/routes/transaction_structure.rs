@@ -29,13 +29,21 @@ pub fn cell_type(
     let code_hash = hex::decode(script.code_hash.trim_start_matches("0x")).map_err(|e| {
         crate::response::ApiError::internal(format!("invalid cell type code hash: {e}"))
     })?;
+    let hash_type = i16::from(
+        ckbadger_common::hash_type_from_label(&script.hash_type).ok_or_else(|| {
+            crate::response::ApiError::internal(format!(
+                "invalid cell type hash type {}",
+                script.hash_type
+            ))
+        })?,
+    );
     if let Some(standard) =
-        ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(&code_hash, 0)
+        ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(&code_hash, hash_type)
     {
         return Ok(standard.as_str().into());
     }
     Ok(ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY
-        .get(&code_hash)
+        .protocol(&code_hash, hash_type)
         .map(|protocol| protocol.slug())
         .unwrap_or("typed")
         .into())
@@ -313,8 +321,12 @@ pub fn name_cobuild_actions(
         .chain(outputs.iter().filter_map(|output| output.r#type.as_ref()))
     {
         let code_hash = hex::decode(script.code_hash.trim_start_matches("0x"))?;
+        let hash_type = ckbadger_common::hash_type_from_label(&script.hash_type)
+            .ok_or_else(|| anyhow::anyhow!("invalid script hash type {}", script.hash_type))?;
+        // By the pair the type runs (resync fix round S2): a code hash by a
+        // hash type that runs no registered code has no schema.
         if let Some(schema) = SCRIPT_LAYOUTS
-            .get(&code_hash)
+            .get(&code_hash, i16::from(hash_type))
             .and_then(|layout| layout.cobuild.as_ref())
         {
             schemas.insert(script_hash(script)?, schema);
@@ -482,7 +494,9 @@ pub fn resolved_dependencies(
     tx: &ckb_types::core::TransactionView,
     reader: &ckb_store_reader::CkbChainReader,
     store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
 ) -> anyhow::Result<Vec<super::transactions::CellDepResponse>> {
+    let mut names = crate::utils::ScriptNamer::new(store, cells_store);
     let mut scripts = BTreeMap::<String, packed::Script>::new();
     for input in tx
         .inputs()
@@ -577,11 +591,16 @@ pub fn resolved_dependencies(
                             .get(hash)
                             .or_else(|| output_locks.get(hash))
                             .expect("matched hash is a key of its set");
-                        if let Some(name) = crate::utils::script_resolution::registered_script_name(
-                            store,
-                            script.code_hash().as_slice(),
-                        )? {
-                            script_names.insert(name);
+                        // Named by the code its pair runs, the one rule
+                        // (`utils::ScriptNamer`); where the pair is not the
+                        // registry's reference for that code, its hash type is
+                        // written beside the name.
+                        let hash_type: u8 = script.hash_type().into();
+                        if let Some(name) = names.name(script.code_hash().as_slice(), hash_type)? {
+                            script_names.insert(match name.by {
+                                Some(by) => format!("{} · by {by}", name.name),
+                                None => name.name,
+                            });
                         }
                     }
                     Ok(ResolvedDependencyCell {
@@ -1049,8 +1068,21 @@ mod tests {
     fn spore_actions_decode_only_for_their_own_script_family() {
         use ckbadger_indexer::parser::registry::{CobuildSchema, SCRIPT_LAYOUTS};
         let schema_of = |protocol: ProtocolScript| -> Option<&'static CobuildSchema> {
-            let (code_hash, _) = PROTOCOL_REGISTRY.iter().find(|(_, p)| *p == protocol)?;
-            SCRIPT_LAYOUTS.get(code_hash)?.cobuild.as_ref()
+            // a registered pair of the protocol: the layouts are keyed by the
+            // pairs the registry's rule registers (resync fix round S2)
+            let ((code_hash, hash_type), _) =
+                PROTOCOL_REGISTRY
+                    .protocol_pairs()
+                    .find(|((code_hash, hash_type), p)| {
+                        *p == protocol
+                            && SCRIPT_LAYOUTS
+                                .get(code_hash, i16::from(*hash_type))
+                                .is_some()
+                    })?;
+            SCRIPT_LAYOUTS
+                .get(code_hash, i16::from(hash_type))?
+                .cobuild
+                .as_ref()
         };
         let spore = schema_of(ProtocolScript::SporeNft).expect("Spore schema");
         let cluster = schema_of(ProtocolScript::Cluster).expect("Cluster schema");
@@ -1277,22 +1309,12 @@ mod tests {
     /// (`cellType`) and the cell detail (`typeCellType`) serve, and the
     /// frontend's `kindOf` reads: no type is `plain`; a UDT is its standard
     /// (`sudt`, never the registry's `simple-udt` slug); any other registered
-    /// type is its registry slug; an unregistered one is `typed`. The code
-    /// hash alone decides — hash type and args do not.
+    /// type is its registry slug; an unregistered one is `typed`. The pair
+    /// decides (resync/protocol-pairs): every pair a protocol registers is it,
+    /// args aside, and its code hash by a hash type it does not register is
+    /// `typed`.
     #[test]
-    fn cell_type_names_the_class_vocabulary_by_code_hash() {
-        let registered = |protocol: ProtocolScript, hash_type: &str| {
-            let (code_hash, _) = PROTOCOL_REGISTRY
-                .iter()
-                .filter(|(_, p)| *p == protocol)
-                .min_by_key(|(hash, _)| *hash)
-                .expect("bundled registry deployment");
-            script(
-                &format!("0x{}", hex::encode(code_hash)),
-                hash_type,
-                "0x1234",
-            )
-        };
+    fn cell_type_names_the_class_vocabulary_by_the_pair() {
         assert_eq!(cell_type(None).unwrap(), "plain");
         for (protocol, expected) in [
             (ProtocolScript::Sudt, "sudt"),
@@ -1306,12 +1328,41 @@ mod tests {
             (ProtocolScript::DotCellAccount, "dotcell-account"),
             (ProtocolScript::Ckbfs, "ckbfs"),
         ] {
-            for hash_type in ["type", "data1"] {
-                assert_eq!(
-                    cell_type(Some(&registered(protocol, hash_type))).unwrap(),
-                    expected,
-                    "{protocol:?} {hash_type}"
-                );
+            let pairs: Vec<(&[u8], u8)> = PROTOCOL_REGISTRY
+                .protocol_pairs()
+                .filter(|(_, p)| *p == protocol)
+                .map(|(pair, _)| pair)
+                .collect();
+            assert!(!pairs.is_empty(), "{protocol:?} has registered pairs");
+            for (code_hash, hash_type) in &pairs {
+                let label = ckbadger_common::hash_type_label(*hash_type).unwrap();
+                for args in ["0x1234", "0x"] {
+                    assert_eq!(
+                        cell_type(Some(&script(
+                            &format!("0x{}", hex::encode(code_hash)),
+                            label,
+                            args
+                        )))
+                        .unwrap(),
+                        expected,
+                        "{protocol:?} {label}"
+                    );
+                }
+                for other in [0u8, 1, 2, 4] {
+                    if pairs.contains(&(*code_hash, other)) {
+                        continue;
+                    }
+                    assert_eq!(
+                        cell_type(Some(&script(
+                            &format!("0x{}", hex::encode(code_hash)),
+                            ckbadger_common::hash_type_label(other).unwrap(),
+                            "0x"
+                        )))
+                        .unwrap(),
+                        "typed",
+                        "{protocol:?}'s code hash by a hash type it does not register"
+                    );
+                }
             }
         }
         assert_ne!(ProtocolScript::Sudt.slug(), "sudt");

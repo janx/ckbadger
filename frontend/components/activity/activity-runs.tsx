@@ -5,7 +5,7 @@ import {
   rowReadFails,
   type ActivityRowData,
 } from '@/components/activity/activity-row';
-import { foldRuns, runKey, runParties, runTokens, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runSenders, runTokens, type RunSubject } from '@/lib/activity-runs';
 import { readable } from '@/components/activity-event-row';
 import { sentField } from '@/lib/api-fields';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -42,37 +42,40 @@ export interface FeedRow {
 /**
  * What a row is compared on (`lib/activity-runs.ts`): the title in words (`activityTitleText`), its
  * protocol actions and the code its items carry and its scripts called; and what a run counts: its
- * transaction's every party, by the route's ids (`partyIds`, lane feed: the row draws some of them,
- * the address page its own alone), and on a token row the tokens its items moved, by their type
- * script's hash (ruling 6 of gate P), from the row's stated items (lane feed, part 4: the route's,
- * of every party; the address page states its own). Null for a row that cannot read one of its protocol
- * actions (`rowReadFails`): it
- * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1); and for
- * a committed row whose item types the API could not state (`itemTypesUnread`): its code is not
- * known, so it stands alone (the lead's ruling on the item types' security read). A pending row
- * carries none and folds with nothing anyway.
+ * transaction's every party, by the route's ids and tags (`partyIds`, lane feed: the row draws some
+ * of them, the address page its own alone), whose senders bit the run counts, and on a token row the
+ * tokens its items moved, by their type script's hash (ruling 6 of gate P), from the row's stated
+ * items (lane feed, part 4: the route's, of every party; the address page states its own). Null for
+ * a row that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its
+ * place, so it is never folded (lane B4 fix round, review NOTE 1). Every other row has one, a
+ * committed row and a pending row alike: its recognised codes are read from its row
+ * (`recognizedTypes`, C7), never resolved per item, so no row stands alone for codes it cannot say
+ * (a pending row folds with nothing anyway). A row that states no list is refused: an API older
+ * than the page.
  */
 export function runSubject(activity: ActivityRowData, title: string): RunSubject | null {
   if (rowReadFails(activity)) return null;
-  const pending = activity.blockNumber === null;
-  // the API states the field on every row (null where it has none): one without it is older than
-  // this page, refused by name through the one reader
-  const itemTypes = sentField(activity.itemTypes, `transaction ${activity.txHash}`, 'itemTypes');
-  if (!pending && itemTypes === null) {
-    if (activity.itemTypesUnread === null)
-      throw new Error(
-        `transaction ${activity.txHash}: a committed row with no item types says no why`
-      );
-    return null;
-  }
+  // the API states the list on every row (empty where no recognised code ran): a row without it
+  // is older than this page, refused by name through the one reader; a row whose list is no list
+  // is not this API either
+  const recognizedTypes = sentField(
+    activity.recognizedTypes,
+    `transaction ${activity.txHash}`,
+    'recognizedTypes'
+  );
+  if (!Array.isArray(recognizedTypes))
+    throw new Error(
+      `transaction ${activity.txHash}: the row states recognizedTypes ${String(recognizedTypes)}, not a list`
+    );
   return {
     title,
     txHash: activity.txHash,
     blockNumber: activity.blockNumber,
+    isCellbase: activity.isCellbase,
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
-    itemTypes: itemTypes ?? [],
+    recognizedTypes,
     parties: partyIds(activity),
     tokens:
       classifyActivity(activity).displayType === 'token'
@@ -195,10 +198,13 @@ export function ActivityRuns({
               {readable(lead.key, () => lead.row, versionOf(lead))}
             </Fragment>,
           ];
-        const folded = (
+        // drawn inside the run's boundary, so a run that cannot be counted (no party of a
+        // transaction sent) is refused in its place, as a row is
+        const folded = () => (
           <FoldedActivityRow
             rows={run.map((r) => r.activity)}
-            participants={runParties(run.map(subjectOf))}
+            // a run of cellbases has no sender to count (none of them has an input)
+            senders={lead.activity.isCellbase ? null : runSenders(run.map(subjectOf))}
             tokens={runTokens(run.map(subjectOf))}
             title={lead.title}
             showScriptDetails={showScriptDetails}
@@ -211,7 +217,7 @@ export function ActivityRuns({
             onToggle={() => toggle(run, isOpen)}
           />
         );
-        const headed = <Fragment key={`run:${head}`}>{readable(head, () => folded)}</Fragment>;
+        const headed = <Fragment key={`run:${head}`}>{readable(head, folded)}</Fragment>;
         return isOpen
           ? [
               headed,

@@ -92,8 +92,7 @@ export const genesisTransactions: Transaction[] = [
       isCellbase: false,
       protocolActions: [],
       typeCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       lockCalls: [
         {
           lockCodeHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -117,6 +116,7 @@ export const genesisTransactions: Transaction[] = [
           usedDelta: '-6100000000',
           itemDeltas: [],
           tags: 128,
+          sent: true,
         },
         {
           address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
@@ -128,6 +128,7 @@ export const genesisTransactions: Transaction[] = [
           usedDelta: '23400000000',
           itemDeltas: [],
           tags: 0,
+          sent: false,
         },
       ],
     }),
@@ -180,12 +181,12 @@ export const genesisActivities: GlobalActivity[] = [
       },
     ],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     // the five largest of its 667 parties (the burn cell's zero lock and four multisig locks), and
     // every party by its short id: a cellbase of many outputs, the only one (CKB's consensus allows
-    // a later cellbase one output at most)
-    participants: genesisCellbaseParties.participants,
+    // a later cellbase one output at most). The capture predates `sent`: a cellbase has no input,
+    // so no party of it sent, as the route states it (resync/int)
+    participants: genesisCellbaseParties.participants.map((p) => ({ ...p, sent: false })),
     participantCount: genesisCellbaseParties.participantCount,
     partyIds: genesisCellbaseParties.partyIds as PartyId[],
     feePayer: null,
@@ -199,8 +200,7 @@ export const genesisActivities: GlobalActivity[] = [
     isCellbase: false,
     protocolActions: [],
     typeCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     lockCalls: [
       {
         lockCodeHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -224,6 +224,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '-6100000000',
         itemDeltas: [],
         tags: 128,
+        sent: true,
       },
       {
         address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
@@ -235,6 +236,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '23400000000',
         itemDeltas: [],
         tags: 0,
+        sent: false,
       },
     ],
   }),

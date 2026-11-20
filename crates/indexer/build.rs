@@ -247,12 +247,6 @@ impl<'de> Deserialize<'de> for ValidatedHashType {
     }
 }
 
-impl ScriptNetworkMetadata {
-    fn versions(&self) -> &[ScriptDeployment] {
-        &self.versions
-    }
-}
-
 /// One `docs/metadata/protocols.toml` entry: a protocol id the indexer emits
 /// in activity protocol actions.
 #[derive(Deserialize)]
@@ -360,57 +354,7 @@ fn main() {
     )
     .expect("failed to write bundled_protocol_names.json");
 
-    // --- UDT-compatible script code_hashes ---
-    // Extract code_hashes from scripts with category "udt", excluding the 3
-    // well-known UDT code_hashes (SUDT, xUDT data1, xUDT type) that are already
-    // recognized by the shared protocol registry.
-    let excluded_udt_code_hashes: HashSet<&str> = [
-        "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5", // SUDT
-        "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95", // xUDT data1
-        "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb", // xUDT type
-    ]
-    .into_iter()
-    .collect();
-
-    let mut udt_script_code_hashes: Vec<String> = Vec::new();
-    for entry in &script_entries {
-        let is_udt = entry.category.as_deref() == Some("udt");
-        if !is_udt {
-            continue;
-        }
-
-        let mainnet_versions = entry
-            .mainnet
-            .as_ref()
-            .map(ScriptNetworkMetadata::versions)
-            .into_iter()
-            .flatten();
-        let testnet_versions = entry
-            .testnet
-            .as_ref()
-            .map(ScriptNetworkMetadata::versions)
-            .into_iter()
-            .flatten();
-
-        for deployment in mainnet_versions.chain(testnet_versions) {
-            if deployment.deprecated {
-                continue;
-            }
-            if !deployment.canonical_ref_hash.is_empty()
-                && !excluded_udt_code_hashes.contains(deployment.canonical_ref_hash.as_str())
-            {
-                udt_script_code_hashes.push(deployment.canonical_ref_hash.clone());
-            }
-        }
-    }
-    udt_script_code_hashes.sort();
-    udt_script_code_hashes.dedup();
-
-    let udt_code_hashes_json = serde_json::to_string(&udt_script_code_hashes)
-        .expect("failed to serialize UDT script code_hashes");
-    fs::write(
-        Path::new(&out_dir).join("bundled_udt_script_code_hashes.json"),
-        udt_code_hashes_json,
-    )
-    .expect("failed to write bundled_udt_script_code_hashes.json");
+    // The xUDT-compatible deployments' pairs are the registry's
+    // (`parser::registry::XUDT_COMPATIBLE_PAIRS`, THE pair rule at runtime):
+    // nothing is bundled for them here (resync fix round, logic NOTE N3).
 }

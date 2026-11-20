@@ -9,6 +9,7 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
 import { CELL_COLORS } from '@/lib/design-tokens';
@@ -400,8 +401,9 @@ describe('TransactionDetailPage', () => {
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createCommittedTransactionDetail());
 
+    // the registry's names, each by its script's pair (lane rd/api-lock-names)
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [LOCK_CODE_HASH]: {
+      [scriptLookupKey(LOCK_CODE_HASH, 'type')]: {
         codeHash: LOCK_CODE_HASH,
         name: 'Default Multisig',
         scriptKind: 'lock',
@@ -409,13 +411,14 @@ describe('TransactionDetailPage', () => {
         hashType: 'type',
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 10,
         liveCellsCount: 10,
         ownedCapacitySum: '100000000000',
         ownedKnowledgeSum: '60000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
       },
-      [TYPE_CODE_HASH]: {
+      [scriptLookupKey(TYPE_CODE_HASH, 'type')]: {
         codeHash: TYPE_CODE_HASH,
         name: 'Unknown',
         scriptKind: 'type',
@@ -423,6 +426,7 @@ describe('TransactionDetailPage', () => {
         hashType: 'type',
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 1,
         liveCellsCount: 1,
         ownedCapacitySum: '10000000000',
         ownedKnowledgeSum: '6000000000',
@@ -723,7 +727,7 @@ describe('TransactionDetailPage', () => {
       vi.mocked(api.getTransactionActivity).mockResolvedValue(
         activityRead({
           ...feedSamples.objectTransfer,
-          itemTypes: [],
+          recognizedTypes: [],
           txHash: TX_HASH,
           typeCalls: [],
           participants: [first, ...rest].map((p, i) => ({

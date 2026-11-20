@@ -2577,6 +2577,93 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
     );
 }
 
+/// F-6 follow-up: the Transactions page's Protocol kind. `activity_type=protocol`
+/// lists exactly the transactions of the Protocol bucket — the bucket the
+/// Activities filter reads — and none the precedence puts elsewhere: a `.bit`
+/// renewal stays under identity, a DAO deposit beside a Fiber close under dao.
+/// An unknown value is still refused.
+#[tokio::test]
+async fn transaction_protocol_kind_lists_exactly_the_protocol_bucket() {
+    use ckbadger_store::types::{ProtocolAction, TAG_DAO, TAG_PROTOCOL, TAG_TOKEN};
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    put_test_block_header(&mut batch, 11, &[0xba; 32], 1_700_000_000_011);
+    let cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    // (tx index, participant tags, protocol actions as (protocol, action))
+    type Fixture<'a> = (i32, u16, &'a [(&'a str, &'a str)]);
+    let fixtures: [Fixture; 5] = [
+        (1, TAG_PROTOCOL, &[("fiber", "channel_open")]),
+        (2, TAG_TOKEN, &[]),
+        (3, TAG_PROTOCOL, &[("dotbit", "renew_account")]),
+        (
+            4,
+            TAG_PROTOCOL | TAG_DAO,
+            &[("dao", "deposit"), ("fiber", "channel_close")],
+        ),
+        (5, 0, &[]),
+    ];
+    for (index, tags, protocols) in fixtures {
+        let mut hash = [0x50; 32];
+        hash[31] = index as u8;
+        let mut actions =
+            make_test_tx_actions(&[0x21; 32], &hash, &[0xba; 32], 11, index, 1000, tags);
+        actions.protocol_actions = protocols
+            .iter()
+            .map(|(protocol, action)| {
+                ProtocolAction::new(*protocol, *action, serde_json::json!({}))
+            })
+            .collect();
+        index_tx_of_actions(&mut batch, &actions);
+        batch.put_tx_actions(&actions);
+        batch.put_cell(&hash, 0, &cell, 11);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let listed = |body: &serde_json::Value| -> Vec<i64> {
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["index"].as_i64().unwrap())
+            .collect()
+    };
+    for (kind, expected) in [
+        ("protocol", vec![1]),
+        ("identity", vec![3]),
+        ("dao", vec![4]),
+        ("token", vec![2]),
+        ("ckb", vec![5]),
+    ] {
+        let (status, body) = get_json(
+            &app,
+            &format!("/transactions?activity_type={kind}&limit=20"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+        assert_eq!(listed(&body), expected, "{kind}");
+    }
+    let (status, body) = get_json(&app, "/transactions?activity_type=protocols").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string().contains(
+            "expected user, ckb, script, cellbase, dao, token, object, identity, or protocol"
+        ),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
     use ckbadger_api::pool::{Interpretation, PoolStatus};
@@ -2648,6 +2735,10 @@ async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
     assert_eq!(status, StatusCode::OK, "{users}");
     assert_eq!(users["total"], 4);
     assert_eq!(users["summary"], all["summary"]);
+    // The pool takes the same kinds as the committed list, Protocol included.
+    let (status, protocols) = get_json(&app, "/transactions/pool?activity_type=protocol").await;
+    assert_eq!(status, StatusCode::OK, "{protocols}");
+    assert_eq!(protocols["total"], 0);
     assert_eq!(
         get_json(&app, "/transactions/pool?activity_type=nft")
             .await
@@ -3571,17 +3662,7 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
     let store = test_store();
     let code_data = vec![0x7fu8; 52];
     let code_hash = ckb_types::packed::CellOutput::calc_data_hash(&code_data);
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_info(
-        code_hash.as_slice(),
-        &ScriptInfo {
-            code_hash: code_hash.as_slice().to_vec(),
-            hash_type: 2,
-            name: Some("Test Lock".into()),
-            ..Default::default()
-        },
-    );
-    batch.commit().unwrap();
+    seed_script_label(store.as_ref(), code_hash.as_slice(), 2, "Test Lock");
     let code = ckb_types::core::TransactionBuilder::default()
         .output(ckb_types::packed::CellOutput::default())
         .output_data(code_data.pack())
@@ -3654,6 +3735,92 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
     );
 }
 
+/// Lane rd/api-lock-names (T SHOULD-3): a resolved dependency names the scripts
+/// it supplies by the code each pair runs. The code cell's binary is
+/// registered by its data hash (`data`); one output lock references it by
+/// `data`, the registry's reference ("Test Lock"), another by `data1`, the
+/// same code by another reference ("Test Lock · by data1").
+#[tokio::test]
+async fn by_pair_cell_deps_name_each_supplied_script_by_its_pair() {
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    let code_data = vec![0x7fu8; 52];
+    let code_hash = ckb_types::packed::CellOutput::calc_data_hash(&code_data);
+    seed_script_label(store.as_ref(), code_hash.as_slice(), 0, "Test Lock");
+    let code = ckb_types::core::TransactionBuilder::default()
+        .output(ckb_types::packed::CellOutput::default())
+        .output_data(code_data.pack())
+        .build();
+    let attached = |hash_type: ckb_types::core::ScriptHashType| {
+        ckb_types::packed::Script::new_builder()
+            .code_hash(code_hash.clone())
+            .hash_type(hash_type.into())
+            .args(ckb_types::bytes::Bytes::from(vec![0x01]).pack())
+            .build()
+    };
+    let by_data = attached(ckb_types::core::ScriptHashType::Data);
+    let by_data1 = attached(ckb_types::core::ScriptHashType::Data1);
+    let tx = ckb_types::core::TransactionBuilder::default()
+        .cell_dep(
+            ckb_types::packed::CellDep::new_builder()
+                .out_point(
+                    ckb_types::packed::OutPoint::new_builder()
+                        .tx_hash(code.hash())
+                        .index(0u32.pack())
+                        .build(),
+                )
+                .dep_type(ckb_types::core::DepType::Code.into())
+                .build(),
+        )
+        .output(
+            ckb_types::packed::CellOutput::new_builder()
+                .lock(by_data.clone())
+                .build(),
+        )
+        .output(
+            ckb_types::packed::CellOutput::new_builder()
+                .lock(by_data1.clone())
+                .build(),
+        )
+        .output_data(Vec::<u8>::new().pack())
+        .output_data(Vec::<u8>::new().pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = ckb_types::core::BlockBuilder::default()
+        .number(77u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(code)
+        .transaction(tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cell-deps", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let member = &json[0]["resolvedCells"][0];
+    assert_eq!(
+        member["outputLockScriptHashes"].as_array().unwrap().len(),
+        2,
+        "{json}"
+    );
+    assert_eq!(
+        member["scriptNames"],
+        serde_json::json!(["Test Lock", "Test Lock · by data1"]),
+        "{json}"
+    );
+}
+
 /// Molecule table of `fields` (test helper).
 fn r2b_table(fields: &[Vec<u8>]) -> Vec<u8> {
     let mut size = 4 + fields.len() * 4;
@@ -3683,6 +3850,67 @@ fn r2b_bytes(content: &[u8]) -> Vec<u8> {
 /// with no known schema keeps only its hashes and raw data.
 #[tokio::test]
 async fn detail_names_cobuild_actions_of_a_known_schema() {
+    // a Spore pair by data1, as the fixture's type says
+    let json = cobuild_detail_with_a_spore_type_by("data1", 2).await;
+    let actions = json["witnessDetails"][0]["actions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("CoBuild actions: {json}"));
+    assert_eq!(actions.len(), 2, "{json}");
+    assert_eq!(actions[0]["schema"], "spore", "{json}");
+    assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
+    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
+    // null and the action is identified by its `scriptInfoHash`.
+    assert_eq!(
+        actions[1].get("schema"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1].get("name"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1]["scriptInfoHash"],
+        format!("0x{}", "11".repeat(32))
+    );
+    assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+}
+
+/// resync fix round S2 (logic S2, `transaction_structure.rs:316-330`): a CoBuild
+/// schema is read by the pair the type script runs, not by its code hash. The
+/// Spore binary's code hash by `data2` is the same code (a registered binary
+/// pair) and its actions are named; by `type` it runs no registered code (no
+/// Type ID cell has that hash), so its action keeps its hashes and raw data.
+#[tokio::test]
+async fn detail_names_cobuild_actions_by_the_pair_the_type_runs() {
+    for (label, byte, schema, name) in [
+        (
+            "data2",
+            4,
+            serde_json::json!("spore"),
+            serde_json::json!("TransferSpore"),
+        ),
+        ("type", 1, serde_json::Value::Null, serde_json::Value::Null),
+    ] {
+        let json = cobuild_detail_with_a_spore_type_by(label, byte).await;
+        let action = &json["witnessDetails"][0]["actions"][0];
+        assert_eq!(
+            (action.get("schema"), action.get("name")),
+            (Some(&schema), Some(&name)),
+            "the Spore binary by {label}: {json}"
+        );
+    }
+}
+
+/// The detail of a pending transaction whose output is typed by the Spore
+/// binary (the registered Spore pair's code hash) by `hash_type_label`
+/// (`hash_type_byte`), with a CoBuild witness carrying a TransferSpore
+/// action for that script and one action for an unknown script.
+async fn cobuild_detail_with_a_spore_type_by(
+    hash_type_label: &str,
+    hash_type_byte: u8,
+) -> serde_json::Value {
     use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
     let store = test_store();
     seed_genesis_baseline(&store);
@@ -3693,20 +3921,23 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
         funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
     )
     .await;
+    // the Spore binary: a registered Spore pair by data1
     let spore_code = PROTOCOL_REGISTRY
-        .iter()
-        .filter(|(_, p)| *p == ProtocolScript::SporeNft)
-        .min_by_key(|(hash, _)| *hash)
+        .protocol_pairs()
+        .filter(|((_, hash_type), p)| *p == ProtocolScript::SporeNft && *hash_type == 2)
+        .min_by_key(|((hash, _), _)| *hash)
         .unwrap()
         .0
+         .0
         .to_vec();
     let spore_id = [0x41u8; 32];
     let spore_type = serde_json::json!({
         "code_hash": format!("0x{}", hex::encode(&spore_code)),
-        "hash_type": "data1",
+        "hash_type": hash_type_label,
         "args": format!("0x{}", hex::encode(spore_id)),
     });
-    let spore_hash = ckbadger_api::utils::address::compute_script_hash(&spore_code, 2, &spore_id);
+    let spore_hash =
+        ckbadger_api::utils::address::compute_script_hash(&spore_code, hash_type_byte, &spore_id);
     let lock = |args: u8| {
         r2b_table(&[
             TEST_SECP_LOCK_CODE_HASH
@@ -3764,29 +3995,7 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     let app = create_router(config).await;
     let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    let actions = json["witnessDetails"][0]["actions"]
-        .as_array()
-        .unwrap_or_else(|| panic!("CoBuild actions: {json}"));
-    assert_eq!(actions.len(), 2, "{json}");
-    assert_eq!(actions[0]["schema"], "spore", "{json}");
-    assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
-    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
-    // null and the action is identified by its `scriptInfoHash`.
-    assert_eq!(
-        actions[1].get("schema"),
-        Some(&serde_json::Value::Null),
-        "{json}"
-    );
-    assert_eq!(
-        actions[1].get("name"),
-        Some(&serde_json::Value::Null),
-        "{json}"
-    );
-    assert_eq!(
-        actions[1]["scriptInfoHash"],
-        format!("0x{}", "11".repeat(32))
-    );
-    assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+    json
 }
 
 /// R-7 (TX-36): every schema the scripts registry declares names its
@@ -4455,7 +4664,8 @@ async fn committed_tx_with_xudt_output(
     );
     batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
     if token {
-        batch.put_token(
+        put_token_in_batch_as_indexed(
+            &mut batch,
             xudt.calc_script_hash().as_slice(),
             &TokenInfo {
                 type_code_hash: xudt_code_hash.to_vec(),

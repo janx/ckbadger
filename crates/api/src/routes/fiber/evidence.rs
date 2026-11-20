@@ -222,7 +222,7 @@ fn canonical_raw_tx(state: &AppState, hash: &[u8], expected_block: i64) -> Resul
 /// The funding-lock arbiter (`parser::fiber::parse_funding_cell`) over a
 /// canonical cell: its args when the cell is a channel funding cell.
 fn funding_cell(cell: &LiveCellInfo) -> Result<Option<protocol::FundingLockArgs<'_>>> {
-    if !protocol::is_funding_lock(&cell.lock_code_hash) {
+    if !protocol::is_funding_lock(&cell.lock_code_hash, cell.lock_hash_type) {
         return Ok(None);
     }
     let data_len = usize::try_from(cell.data_size)
@@ -239,7 +239,7 @@ fn funding_cell(cell: &LiveCellInfo) -> Result<Option<protocol::FundingLockArgs<
 /// code hash whose bytes fit no layout its lock accepts is an ordinary cell.
 fn is_channel_cell(cell: &LiveCellInfo) -> Result<bool> {
     Ok(funding_cell(cell)?.is_some()
-        || (protocol::is_commitment_lock(&cell.lock_code_hash)
+        || (protocol::is_commitment_lock(&cell.lock_code_hash, cell.lock_hash_type)
             && protocol::parse_commitment_lock_args(&cell.lock_args).is_some()))
 }
 
@@ -584,7 +584,7 @@ fn build_evidence(
         let version = canonical_version_at(state, id, hash, i16::try_from(output_index)?)?;
         let tx = raw_transaction(state, &version)?;
         ensure!(
-            protocol::is_commitment_lock(&version.cell.lock_code_hash),
+            protocol::is_commitment_lock(&version.cell.lock_code_hash, version.cell.lock_hash_type),
             "Fiber tracked output is not a commitment lock: 0x{}:{output_index}",
             hex::encode(hash)
         );

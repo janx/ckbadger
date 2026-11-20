@@ -1,5 +1,5 @@
 import type { ChartPoint } from '@/components/ui/chart';
-import { ACTIVITY_COUNT_WORDS, type ChartDefinition } from '@/components/charts/chart-catalogue';
+import type { ChartDefinition } from '@/components/charts/chart-catalogue';
 import {
   axisOutliers,
   axisStyle,
@@ -74,7 +74,6 @@ const COUNT_WORDS = new Set([
   'transactions',
   'addresses',
   'activities',
-  'kind counts',
   'cells',
   'blocks',
   'epochs',
@@ -301,6 +300,7 @@ const KIND_WORDS: Record<string, string> = {
   token: 'tokens',
   object: 'objects',
   identity: 'identities',
+  protocol: 'protocols',
 };
 const KNOWLEDGE_WORDS: Record<string, { name: string; one: boolean }> = {
   transfer: { name: 'plain CKB', one: true },
@@ -416,13 +416,12 @@ const HEADS: Record<string, HeadOf> = {
     dated(m, 'confirmed in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'active-addresses': (_, m) => dated(m, 'active in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'ckb-volume': (_, m) => dated(m, 'moved in a day', (x) => sinceSentence(x, FLOW_CKB)),
-  // counted, not recorded: the series is the day's kind counts (ACTIVITY_COUNT_WORDS)
-  'activity-volume': (_, m) => dated(m, 'counted in a day', (x) => sinceSentence(x, FLOW_COUNT)),
+  'activity-volume': (_, m) => dated(m, 'recorded in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'activity-type-breakdown': (_, m) => {
     const last = m.points.at(-1);
     if (!last) return dated(m, 'the largest kind in a day', () => '');
     const keys = m.series.map((entry) => entry.key);
-    // the day's kind occurrences, the route's: kinds overlap, so they are no count of activities
+    // the day's activities, the route's: one kind each, so the kinds partition them
     const whole = wholeAt(last, 'activities whole');
     // a whole of zero (a day of cellbases only): no largest kind and no share, words for the
     // empty day, as the band ends write a dash (S8: one rule)
@@ -445,7 +444,7 @@ const HEADS: Record<string, HeadOf> = {
         display: formatChartHead(last.values[first], m.unit),
         unit: m.unit,
       },
-      sentence: `${capitalise(names)} were ${cutShare(last.values[first], whole, 'activities')}${tied ? ' each' : ''} of the day's ${ACTIVITY_COUNT_WORDS.noun}${next ? `, ${word(KIND_WORDS, next)} ${cutShare(last.values[next], whole, 'activities')}` : ''}.`,
+      sentence: `${capitalise(names)} were ${cutShare(last.values[first], whole, 'activities')}${tied ? ' each' : ''} of the day's activities${next ? `, ${word(KIND_WORDS, next)} ${cutShare(last.values[next], whole, 'activities')}` : ''}.`,
     };
   },
   'cell-count': (_, m) => dated(m, 'live', peakSentence),
@@ -719,12 +718,6 @@ export function chartHead(definition: ChartDefinition, model: ChartModel): Chart
   const figure = head.figure;
   return {
     ...head,
-    // what the series counts, said once where it needs saying (ACTIVITY_COUNT_WORDS.note)
-    // said where a figure counts (an empty day has none: S8)
-    sentence:
-      definition.countNote && model.points.length && figure
-        ? `${head.sentence} ${definition.countNote}`
-        : head.sentence,
     figure: figure && {
       ...figure,
       title:
@@ -752,7 +745,7 @@ export function capNote(
       const whole = wholeAt(point, `${model.title} cap`);
       return {
         ratio: ratio(whole, 'cap whole'),
-        text: stated(whole, model.wholeUnit ?? model.unit, true),
+        text: stated(whole, model.unit, true),
       };
     }
     const key = model.series.reduce((best, entry) =>

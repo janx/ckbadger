@@ -78,17 +78,25 @@ describe('ActivityStats', () => {
     expect(stats).toHaveTextContent('CKB moved346.28M');
   });
 
-  it('uses the exact transaction count independently of overlapping category occurrences', async () => {
+  it('shares the types of the one transaction count the API sends: one kind per transaction', async () => {
     server.use(
       http.get(`${API}/stats/activity-summary-24h`, () =>
-        HttpResponse.json({ ...activitySummary24h, activityCount: 123 })
+        HttpResponse.json({
+          ...activitySummary24h,
+          activityCount: 20,
+          kindCounts: { dao: 1, token: 2, object: 3, identity: 4, protocol: 5, script: 0, ckb: 5 },
+        })
       )
     );
     render(<ActivityStats />);
     await waitFor(() =>
-      expect(screen.getByTestId('home-activity-stats')).toHaveTextContent('Activities123')
+      expect(screen.getByTestId('home-activity-stats')).toHaveTextContent('Activities20')
     );
-    expect(screen.getByTestId('home-activity-types')).toHaveTextContent('7,115 kind occurrences');
+    const types = screen.getByTestId('home-activity-types');
+    expect(types).toHaveTextContent('By type, share of 20 transactions');
+    expect(types).not.toHaveTextContent('occurrences');
+    // F-6: a protocol-only transaction is a kind of its own, with its share of the total.
+    expect(types).toHaveTextContent('Protocol25.00%');
   });
 
   it('ranks activity types by share, hiding the empty ones', async () => {
@@ -98,7 +106,7 @@ describe('ActivityStats', () => {
     const labels = [...types.querySelectorAll('[data-rank-row]')].map((r) =>
       r.getAttribute('data-rank-row')
     );
-    expect(labels).toEqual(['script', 'transfer', 'identity', 'dao']);
+    expect(labels).toEqual(['script', 'transfer', 'identity', 'dao', 'protocol']);
     // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
     // re-pinned for lane exactness, part B2 (one percentage, cut): 5,795 script calls of 7,115 kind occurrences is 81.447…%, 81.44% (half up 81.45%)
     expect(types).toHaveTextContent('Script call81.44%');
@@ -131,6 +139,38 @@ describe('ActivityStats', () => {
     expect(screen.queryByText(/Hover for details/)).not.toBeInTheDocument();
   });
 
+  // Lane rd/api-lock-names (T N9): each share row is a pair. An unnamed pair links to its code
+  // hash with its hash type (no guess of another pair's page); a pair named by another reference
+  // writes its hash type beside the name and links to its family's page.
+  it('links an unnamed pair with its hash type and writes a name by another reference', async () => {
+    const codeHash = `0x${'9b'.repeat(32)}`;
+    server.use(
+      http.get(`${API}/stats/activity-summary-24h`, () =>
+        HttpResponse.json({
+          ...activitySummary24h,
+          scriptCounts: [
+            { codeHash, hashType: 'data', name: null, count: 30 },
+            { codeHash, hashType: 'data1', name: 'Default Lock', nameBy: 'data1', count: 20 },
+          ],
+          // the route's whole since the merge of fix/readability: its total and its rest
+          scriptCalls: 50,
+          scriptRest: null,
+        })
+      )
+    );
+    render(<ActivityStats />);
+    const scripts = await screen.findByTestId('home-activity-scripts');
+    await waitFor(() => expect(scripts.querySelectorAll('[data-rank-row]')).toHaveLength(2));
+    expect(within(scripts).getByRole('link', { name: /0x9b9b.*by data\b/ })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${codeHash}?hashType=data`
+    );
+    expect(within(scripts).getByRole('link', { name: /Default Lock · by data1/ })).toHaveAttribute(
+      'href',
+      '/mainnet/scripts/Default%20Lock'
+    );
+  });
+
   it('charts daily activity with the last day highlighted as the headline', async () => {
     render(<ActivityStats />);
     await waitFor(() =>
@@ -154,12 +194,19 @@ describe('ActivityStats', () => {
   });
 });
 
-// Re-pinned on purpose (the P3 follow-up's 2b): a day's bar is the route's count of its user
-// transactions (userTransactionCount); it was the transaction-count chart's day less the day's
-// cellbases, joined and subtracted here.
+// Re-pinned on purpose (the P3 follow-up's 2b, then F-6): a day's bar is the route's count of its
+// activities (activityCount, every transaction but the cellbases, each in one kind); it was the
+// route's activityCount while the kinds overlapped, and before that the transaction-count
+// chart's day less the day's cellbases, joined and subtracted here.
 describe('dailyActivityView', () => {
-  it('draws each day the route’s user transactions, not its overlapping kinds', () => {
-    const view = dailyActivityView([{ ...dailyActivities[0], userTransactionCount: 7 }]);
+  it('draws each day the route’s activities, the activityCount its kinds partition', () => {
+    const view = dailyActivityView([
+      {
+        ...dailyActivities[0],
+        activityCount: 7,
+        kindCounts: { dao: 1, token: 0, object: 0, identity: 0, protocol: 2, script: 0, ckb: 4 },
+      },
+    ]);
     expect(view?.last.value).toBe(7);
   });
   it('draws the days oldest first and rejects days out of order', () => {
@@ -177,10 +224,10 @@ describe('dailyActivityView', () => {
 // (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
 describe('dailyActivityView on an older API', () => {
   // it drew a TypeError on the day's count
-  it('refuses a day without userTransactionCount by name', () => {
-    const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+  it('refuses a day without activityCount by name', () => {
+    const { activityCount: _gone, ...older } = dailyActivities[0];
     expect(() => dailyActivityView([older as (typeof dailyActivities)[0]])).toThrow(
-      `daily activities on ${dailyActivities[0].date}: the API sends no userTransactionCount: it is older than this page`
+      `daily activities on ${dailyActivities[0].date}: the API sends no activityCount: it is older than this page`
     );
   });
 });

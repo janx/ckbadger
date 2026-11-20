@@ -10,6 +10,10 @@ use crate::types::{
 };
 
 use crate::bytes_to_hex;
+
+/// One `live_code_cells_by_type` row read back: `(tx_hash, output_index,
+/// binary)`.
+pub type LiveCodeCellRow = (Vec<u8>, i16, [u8; 32]);
 use crate::types::{LockScriptEntry, TokenCellStats};
 
 /// One stored `cell_by_data_hash` row and the cell it names.
@@ -708,6 +712,103 @@ impl CkbadgerStore {
             });
         }
         Ok(DataHashIndexPage { rows, complete })
+    }
+
+    /// The live code cells under the type script whose hash is `type_hash`
+    /// (`live_code_cells_by_type`, resync fix round S3): `(tx_hash,
+    /// output_index, binary)` in key order. One prefix seek over that type's
+    /// code cells, never its other live cells. A malformed row is an error
+    /// naming it.
+    pub fn list_live_code_cells_by_type(
+        &self,
+        type_hash: &[u8],
+    ) -> anyhow::Result<Vec<LiveCodeCellRow>> {
+        self.list_live_code_cells_by_type_up_to(type_hash, usize::MAX)
+    }
+
+    /// The first `max_rows` rows of [`Self::list_live_code_cells_by_type`]:
+    /// the read stops there (resync fix round 3, item 2: the verify export
+    /// reads one row past its answer, never every row of the type).
+    pub fn list_live_code_cells_by_type_up_to(
+        &self,
+        type_hash: &[u8],
+        max_rows: usize,
+    ) -> anyhow::Result<Vec<LiveCodeCellRow>> {
+        let mut rows = Vec::new();
+        for item in self.iterator_cf(
+            self.cf_live_code_cells_by_type(),
+            rocksdb::IteratorMode::From(type_hash, rocksdb::Direction::Forward),
+        ) {
+            if rows.len() == max_rows {
+                break;
+            }
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to seek live_code_cells_by_type for type 0x{}: {e}",
+                    bytes_to_hex(type_hash)
+                )
+            })?;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            anyhow::ensure!(
+                key.len() == keys::LIVE_CODE_CELL_KEY_SIZE,
+                "live_code_cells_by_type row of {} bytes, expected {}: key=0x{}",
+                key.len(),
+                keys::LIVE_CODE_CELL_KEY_SIZE,
+                bytes_to_hex(&key)
+            );
+            let binary: [u8; 32] = value.as_ref().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "live_code_cells_by_type value of {} bytes, expected a 32-byte binary: key=0x{}",
+                    value.len(),
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let (tx_hash, output_index) = keys::decode_outpoint(&key[32..]);
+            rows.push((tx_hash, output_index, binary));
+        }
+        Ok(rows)
+    }
+
+    /// Up to `limit` rows of `live_code_cells_by_type` from the first key at
+    /// or after `from`, in key order: `(type_hash, (tx_hash, output_index,
+    /// binary))`. The verifier's sample of the index (`/verify/live-code-cells`,
+    /// resync fix round 2, E) starts at a random key. A malformed row is an
+    /// error naming it.
+    pub fn list_live_code_cells_from(
+        &self,
+        from: &[u8],
+        limit: usize,
+    ) -> anyhow::Result<Vec<(Vec<u8>, LiveCodeCellRow)>> {
+        let mut rows = Vec::new();
+        for item in self.iterator_cf(
+            self.cf_live_code_cells_by_type(),
+            rocksdb::IteratorMode::From(from, rocksdb::Direction::Forward),
+        ) {
+            if rows.len() == limit {
+                break;
+            }
+            let (key, value) =
+                item.map_err(|e| anyhow::anyhow!("failed to scan live_code_cells_by_type: {e}"))?;
+            anyhow::ensure!(
+                key.len() == keys::LIVE_CODE_CELL_KEY_SIZE,
+                "live_code_cells_by_type row of {} bytes, expected {}: key=0x{}",
+                key.len(),
+                keys::LIVE_CODE_CELL_KEY_SIZE,
+                bytes_to_hex(&key)
+            );
+            let binary: [u8; 32] = value.as_ref().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "live_code_cells_by_type value of {} bytes, expected a 32-byte binary: key=0x{}",
+                    value.len(),
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let (tx_hash, output_index) = keys::decode_outpoint(&key[32..]);
+            rows.push((key[..32].to_vec(), (tx_hash, output_index, binary)));
+        }
+        Ok(rows)
     }
 
     /// Whether the data under `data_hash` is code: `cell_by_data_hash` holds a

@@ -15,12 +15,18 @@ import { runSubject } from '@/components/activity/activity-runs';
 import { activityHeadline } from '@/components/activity-event-row';
 import { AddressActivity } from '@/components/address/address-history';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
-import { runParties } from '@/lib/activity-runs';
-import type { Activity, GlobalActivity, PartyId, Transaction } from '@/lib/api';
+import { runSenders } from '@/lib/activity-runs';
+import {
+  TAG_INPUT,
+  type Activity,
+  type GlobalActivity,
+  type PartyId,
+  type Transaction,
+} from '@/lib/api';
 import {
   activityRead,
   ITEM_TYPE,
-  partyShortId,
+  partyId,
   type WrittenParty,
 } from '@/__tests__/utils/activity-read';
 
@@ -31,12 +37,15 @@ const party = (seed: string, ckbDelta: string, over: Partial<WrittenParty> = {})
   lockKind: 'Default Lock',
   roles: [],
   tags: 0,
+  // it sent where its CKB fell (exact that way round), as the route states `sent` (resync/int)
+  sent: BigInt(ckbDelta) < BigInt(0),
   ckbDelta,
   usedDelta: '0',
   itemDeltas: [],
   ...over,
 });
-const idOf = (p: WrittenParty): PartyId => [partyShortId(p, 'test'), p.tags];
+/** The party as the route names it: its id and its tags, the senders bit where it sent. */
+const idOf = (p: WrittenParty): PartyId => partyId(p, 'test');
 const hashOf = (n: number) => `0x${String(n).padStart(2, '0').repeat(32)}`;
 
 /**
@@ -48,7 +57,7 @@ function routeRow(
   drawn: WrittenParty[],
   named: WrittenParty[],
   feePayer: string | null = null,
-  itemTypes: GlobalActivity['itemTypes'] = [],
+  recognizedTypes: GlobalActivity['recognizedTypes'] = [],
   items: GlobalActivity['items'] = []
 ): GlobalActivity {
   return activityRead({
@@ -60,8 +69,7 @@ function routeRow(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes,
-    itemTypesUnread: null,
+    recognizedTypes,
     participants: drawn,
     participantCount: named.length,
     partyIds: named.map(idOf),
@@ -81,14 +89,18 @@ function without<R extends object>(row: R, field: string): R {
 
 const lines = (c: HTMLElement) => c.querySelectorAll('[data-role="participant"]');
 
-describe('the fold counts every party a run names, drawn or not', () => {
-  // a party drawn in one row and only listed in another counts once; a party listed and never
-  // drawn counts too (the fold read the drawn parties alone: 2 here)
-  it('reads the parties from the route’s id list', () => {
-    const [x, y, z] = [party('aaaaaa', '-1000'), party('bbbbbb', '500'), party('cccccc', '500')];
+// Re-pinned on purpose (resync/int, at the merge of lane feed): the fold counts the parties that
+// sent (the owner's word at Gate B), each once, from the senders bit of every party's tags in the
+// route's id list; lane feed counted every party from the list (3 here, `runParties`)
+describe('the fold counts every sender a run names, drawn or not', () => {
+  // a sender drawn in one row and only listed in another counts once; a sender listed and never
+  // drawn counts too (the fold read the drawn parties alone: 1 here); a party that did not send
+  // (z, drawn) counts not
+  it('reads the senders from the route’s id list', () => {
+    const [x, y, z] = [party('aaaaaa', '-1000'), party('bbbbbb', '-500'), party('cccccc', '500')];
     const a = routeRow(1, [x], [x, y]);
     const b = routeRow(2, [z], [x, z]);
-    expect(runParties([runSubject(a, 'CKB Transfer')!, runSubject(b, 'CKB Transfer')!])).toBe(3);
+    expect(runSenders([runSubject(a, 'CKB Transfer')!, runSubject(b, 'CKB Transfer')!])).toBe(2);
   });
 });
 
@@ -146,12 +158,14 @@ describe('the page reads what the route states of every party', () => {
   // party, so the row says "fee" where the transaction has other parties too (it could not: their
   // changes were not on the row)
   it('says the fee on an address’s row where the route names the address', () => {
-    const own = [addressFixture.lockScriptHash.slice(0, 42), 0] as PartyId;
+    // the address paid the fee: it sent (resync/int), its own id with the senders bit
+    const own = [addressFixture.lockScriptHash.slice(0, 42), TAG_INPUT] as PartyId;
     const other = party('other1', '0');
     const row: Activity = activityRead({
       ...addressActivitiesFixture[0],
       ckbDelta: '-30000',
       usedDelta: '0',
+      sent: true,
       participantCount: 2,
       partyIds: [own, idOf(other)],
       feePayer: addressFixture.lockScriptHash,
@@ -163,11 +177,13 @@ describe('the page reads what the route states of every party', () => {
   // the address's own change is the only one its row draws; the route names no fee payer (another
   // party received): no "fee" (the row drew it from the one line it had)
   it('says no fee on an address’s row where the route names no fee payer', () => {
-    const own = [addressFixture.lockScriptHash.slice(0, 42), 0] as PartyId;
+    // the address's CKB fell: it sent (resync/int), its own id with the senders bit
+    const own = [addressFixture.lockScriptHash.slice(0, 42), TAG_INPUT] as PartyId;
     const row: Activity = activityRead({
       ...addressActivitiesFixture[0],
       ckbDelta: '-30000',
       usedDelta: '0',
+      sent: true,
       participantCount: 2,
       partyIds: [own, idOf(party('other1', '29000'))],
       feePayer: null,

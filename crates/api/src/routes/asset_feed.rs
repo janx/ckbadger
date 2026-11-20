@@ -168,14 +168,13 @@ pub(crate) fn project_actions(
     state: &AppState,
     actions: &[TxActions],
 ) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
-    let mut scripts = HashMap::new();
+    let mut scripts = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut addresses = HashMap::new();
     actions
         .iter()
         .map(|actions| {
             build_global_activity_response(
                 &state.store,
-                &state.append_only_store,
                 &state.ckb_network,
                 actions,
                 Draw::Row,

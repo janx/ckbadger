@@ -3,9 +3,15 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from '@/src/navigation';
-import { api } from '@/lib/api';
+import { api, type ScriptLookupInfo } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { NotFoundPage } from '@/components/not-found-page';
+import Link from '@/components/ui/link';
+import { ReadFailure } from '@/components/read-failure';
+import { getScriptDetailHref } from '@/lib/detail-routes';
+import { titleHash, useDocumentTitle } from '@/lib/use-document-title';
+import { retryTransientOnly } from '@/lib/query-client';
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 /** What `/script/` takes besides a script name, as the not-an-id page says it. */
@@ -25,39 +31,74 @@ function normalizeScriptKind(value: string | null | undefined): 'lock' | 'type' 
   return null;
 }
 
+/** The hash types a script can have on chain. */
+const HASH_TYPES = ['type', 'data', 'data1', 'data2'] as const;
+
+/**
+ * The hash type asked, or null when none is: a script is its code hash and its hash type, and the
+ * registry names the pair (lane rd/api-lock-names), so the page reads the pair asked and never
+ * guesses one. Any other word is not a CKB hash type, and the page says so.
+ */
 function normalizeHashType(value: string | null | undefined): string | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
-  return normalized || null;
+  if (!normalized) return null;
+  if (!(HASH_TYPES as readonly string[]).includes(normalized))
+    throw new Error(`/script: hash type ${JSON.stringify(value)} is not a CKB hash type`);
+  return normalized;
 }
 
 /**
- * Whether the family the registry names for a code hash references it by the hash type asked
- * (lane B4 third round): by `type` where the code hash is the family's type id (or the registry
- * references it by type), by `data` / `data1` / `data2` where it is the code's data hash (or the
- * registry references it by data). The registry names a code hash alone, so a lock on a family's
- * type-id code hash by data is another script, no cell's data hashing to a type id: it stays on
- * the code hash, read by the hash type asked. No hash type asked takes the registry's reference.
+ * A code hash alone names no script: the code hash, the pairs on it that the registry names or
+ * the chain has used, each a link to its own page, and no guess among them. A read that failed
+ * says so (`ReadFailure`), never a page left reading. Its sentences are the reading ink (R3); a
+ * pair's name is a value, its separator quiet.
  */
-function familyReferences(
-  known: {
-    hashType: string | null;
-    deploymentTypeHash?: string | null;
-    deploymentDataHash?: string | null;
-  },
-  codeHash: string,
-  hashType: string | null
-): boolean {
-  if (hashType === null) return true;
-  if (hashType === 'type')
-    return known.hashType === 'type' || known.deploymentTypeHash?.toLowerCase() === codeHash;
-  if (hashType === 'data' || hashType === 'data1' || hashType === 'data2')
-    return (
-      (known.hashType !== null && known.hashType !== 'type') ||
-      known.deploymentDataHash?.toLowerCase() === codeHash
-    );
-  throw new Error(
-    `/script/${codeHash}: hash type ${JSON.stringify(hashType)} is not a CKB hash type`
+function CodeHashPairs({
+  codeHash,
+  pairs,
+  error,
+}: {
+  codeHash: string;
+  pairs: ScriptLookupInfo[] | undefined;
+  error: Error | null;
+}) {
+  useDocumentTitle([titleHash(codeHash), 'script']);
+  return (
+    <div className="min-h-screen">
+      <main className="container mx-auto space-y-3 py-8">
+        <h1 className="text-text-bright text-body break-all">{codeHash}</h1>
+        <p className="text-body text-text max-w-measure">
+          a code hash alone names no script: a script is its code hash and its hash type.
+        </p>
+        {error ? (
+          <ReadFailure what="code hash's scripts" error={error} />
+        ) : pairs === undefined ? (
+          <p className="text-text text-body">Reading the scripts on this code hash…</p>
+        ) : pairs.length === 0 ? (
+          <p className="text-text text-body">no script on this code hash is indexed.</p>
+        ) : (
+          <ul className="text-body space-y-1">
+            {pairs.map((pair) => (
+              <li key={pair.hashType}>
+                <Link
+                  look="inline"
+                  href={getScriptDetailHref({ codeHash, hashType: pair.hashType })}
+                >
+                  by {pair.hashType}
+                </Link>
+                {pair.name.toLowerCase() !== 'unknown' && (
+                  <>
+                    <span className="text-text-dim"> · </span>
+                    <span className="text-text">{pair.name}</span>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </main>
+    </div>
   );
 }
 
@@ -90,23 +131,36 @@ export default function ScriptByCodeHashPage({
     router.replace(`/scripts/${encodeURIComponent(scriptIdentifier)}`);
   }, [isCodeHashIdentifier, isMalformedCodeHash, router, scriptIdentifier]);
 
-  const { data: lookupResult } = useQuery({
-    queryKey: ['script-lookup-detail', normalizedCodeHash],
+  // The pair asked: the reference page's own read of it (its key and its shape, one fetch).
+  const { data: knownScript } = useQuery({
+    queryKey: ['script-lookup-detail', normalizedCodeHash, initialHashType],
     queryFn: async () => {
-      const result = await api.lookupScripts([normalizedCodeHash]);
-      return result[normalizedCodeHash] ?? null;
+      const pair = { codeHash: normalizedCodeHash, hashType: initialHashType! };
+      const result = await api.lookupScripts([pair]);
+      return result[scriptLookupKey(pair.codeHash, pair.hashType)] ?? null;
     },
-    enabled: isCodeHashIdentifier,
+    enabled: isCodeHashIdentifier && initialHashType !== null,
     staleTime: Infinity,
   });
-  const knownScript = lookupResult;
-  // the family the registry names, where it references this code hash by the hash type asked
-  const family =
-    knownScript &&
-    hasKnownScriptName(knownScript.name) &&
-    familyReferences(knownScript, normalizedCodeHash, initialHashType)
-      ? knownScript
-      : null;
+  // With no hash type asked, every pair on the code hash: the page lists the ones that exist and
+  // guesses none.
+  const { data: codeHashPairs, error: codeHashPairsError } = useQuery({
+    queryKey: ['script-code-hash-pairs', normalizedCodeHash],
+    queryFn: async () => {
+      const result = await api.lookupScripts(
+        HASH_TYPES.map((hashType) => ({ codeHash: normalizedCodeHash, hashType }))
+      );
+      return HASH_TYPES.map(
+        (hashType) => result[scriptLookupKey(normalizedCodeHash, hashType)]
+      ).filter((entry): entry is ScriptLookupInfo => entry !== undefined);
+    },
+    enabled: isCodeHashIdentifier && initialHashType === null,
+    staleTime: Infinity,
+    // a real failure is said at once; only the API's transient states are waited through
+    retry: retryTransientOnly,
+  });
+  // the family the registry names for the pair asked
+  const family = knownScript && hasKnownScriptName(knownScript.name) ? knownScript : null;
 
   useEffect(() => {
     if (!isCodeHashIdentifier || !family || family.resolutionState !== 'resolved') {
@@ -116,8 +170,7 @@ export default function ScriptByCodeHashPage({
     const targetName = family.name.trim();
     const query = new URLSearchParams();
     query.set('ref', normalizedCodeHash);
-    const redirectHashType = initialHashType ?? normalizeHashType(family.hashType);
-    if (redirectHashType) query.set('hashType', redirectHashType);
+    if (initialHashType) query.set('hashType', initialHashType);
     const redirectKind = initialKind ?? normalizeScriptKind(family.scriptKind);
     if (redirectKind) query.set('kind', redirectKind);
     const suffix = query.toString();
@@ -127,6 +180,16 @@ export default function ScriptByCodeHashPage({
 
   if (isMalformedCodeHash) {
     return <NotFoundPage notAnId={{ kind: 'script', reason: CODE_HASH_RULE }} />;
+  }
+
+  if (isCodeHashIdentifier && !initialHashType) {
+    return (
+      <CodeHashPairs
+        codeHash={normalizedCodeHash}
+        pairs={codeHashPairs}
+        error={codeHashPairsError}
+      />
+    );
   }
 
   if (!isCodeHashIdentifier || family) {

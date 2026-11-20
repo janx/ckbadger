@@ -248,7 +248,7 @@ fn pool_transactions_page(
     } else {
         None
     };
-    let mut script_cache = super::activities::ScriptNameCache::new();
+    let mut script_cache = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut addresses = HashMap::new();
     let mut data = Vec::with_capacity(records.len());
     for record in records {
@@ -258,7 +258,6 @@ fn pool_transactions_page(
             .map(|actions| {
                 super::activities::build_global_activity_response_with_pool(
                     &state.store,
-                    &state.append_only_store,
                     &state.ckb_network,
                     actions,
                     Draw::Row,

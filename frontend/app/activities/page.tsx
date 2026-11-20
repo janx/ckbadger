@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
-import { api, dayUserTransactions } from '@/lib/api';
+import { api, dayActivityCount } from '@/lib/api';
 import { completedYesterdayActivities, previousChainDay } from '@/lib/activity-stats';
 import { countNoun } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
@@ -17,8 +17,9 @@ export default function ActivitiesPage() {
   });
   const yesterday = previousChainDay();
   const summary = data ? completedYesterdayActivities(data) : undefined;
-  // yesterday's activities: the day's user transactions, the route's count (no page subtracts)
-  const count = summary === undefined ? undefined : dayUserTransactions(summary);
+  // yesterday's activities, the route's count: every transaction but the cellbases, each in one
+  // kind (no page sums); an API older than the page sends none, refused by name
+  const count = summary === undefined ? undefined : dayActivityCount(summary);
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
@@ -60,7 +61,7 @@ export default function ActivitiesPage() {
           ) : (
             <div className="bg-base-surface h-5 w-72 animate-pulse" />
           )}
-          <ActivitiesStreamExplorer summary={summary} totalCount={count} />
+          <ActivitiesStreamExplorer summary={summary} />
         </DetailLayout>
         <TopicCharts topic="/activities" />
       </main>

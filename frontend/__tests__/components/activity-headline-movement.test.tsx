@@ -87,10 +87,28 @@ it('shows exact RGB++ Bitcoin evidence with the lock transition', () => {
 
 it('interprets an uncommitted body without fabricated block evidence', () => {
   // re-pinned on purpose (lane feed, part 4): a body's interpretation reads its stated items
-  const { participants, protocolActions, typeCalls, lockCalls, isCellbase, items } =
-    feedSamples.objectTransfer;
+  // and, at the merge into resync/int, its parties' ids (a script call is read from their tags, C7)
+  const {
+    participants,
+    protocolActions,
+    typeCalls,
+    lockCalls,
+    isCellbase,
+    items,
+    participantCount,
+    partyIds,
+  } = feedSamples.objectTransfer;
   expect(
-    activityHeadline({ participants, protocolActions, typeCalls, lockCalls, isCellbase, items })
+    activityHeadline({
+      participants,
+      protocolActions,
+      typeCalls,
+      lockCalls,
+      isCellbase,
+      items,
+      participantCount,
+      partyIds,
+    })
   ).toBe('Object transfer');
 });
 
@@ -121,10 +139,11 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       title: protocolActionLabel(ringRelink),
       txHash: '0x01',
       blockNumber: 1,
+      isCellbase: false,
       protocolActions: [ringRelink],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
+      recognizedTypes: [],
       parties: [],
       tokens: null,
     })
@@ -136,10 +155,11 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       }),
       txHash: '0x02',
       blockNumber: 2,
+      isCellbase: false,
       protocolActions: [ringRelink],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
+      recognizedTypes: [],
       parties: [],
       tokens: null,
     })
@@ -148,7 +168,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
 it('shows a register beside the ring_relink it caused in one transaction', () => {
   const activity: GlobalActivity = activityRead<GlobalActivity>({
     ...feedSamples.tokenTransfer,
-    itemTypes: [],
+    recognizedTypes: [],
     participants: feedSamples.tokenTransfer.participants.map((p) => ({ ...p, itemDeltas: [] })),
     typeCalls: [],
     protocolActions: [

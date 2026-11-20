@@ -650,8 +650,7 @@ describe('additive shared props (F2 blocks)', () => {
           protocolActions: [],
           typeCalls: [],
           lockCalls: [],
-          itemTypes: [],
-          itemTypesUnread: null,
+          recognizedTypes: [],
           participants: [],
         })}
         headline="Cellbase"

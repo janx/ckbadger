@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
-use std::sync::OnceLock;
+use std::collections::BTreeMap;
 
 use tracing::warn;
 
@@ -8,26 +7,6 @@ use ckbadger_common::TokenBalance;
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
-
-mod bundled_udt {
-    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled_udt_script_code_hashes.json"
-    ));
-}
-
-static XUDT_COMPATIBLE_CODE_HASHES: OnceLock<HashSet<Vec<u8>>> = OnceLock::new();
-
-fn xudt_compatible_code_hashes() -> &'static HashSet<Vec<u8>> {
-    XUDT_COMPATIBLE_CODE_HASHES.get_or_init(|| {
-        let encoded: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
-            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
-        encoded
-            .into_iter()
-            .map(|code_hash| parse_hex_to_bytes(&code_hash))
-            .collect()
-    })
-}
 
 pub const SUDT_CODE_HASH: &str =
     "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
@@ -39,9 +18,14 @@ pub const XUDT_CODE_HASH_TYPE: &str =
     "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A token's standard: which registered deployment its type script's pair
+/// runs, by the registry (resync fix round 4, item 1, the lead's ruling): the
+/// canonical xUDT, a deployment of the registry's xUDT-compatible list, or
+/// sUDT. A chain fact; a label never states it.
 pub enum UdtStandard {
     Sudt,
     Xudt,
+    XudtCompatible,
 }
 
 impl UdtStandard {
@@ -49,13 +33,23 @@ impl UdtStandard {
         match self {
             UdtStandard::Sudt => "sudt",
             UdtStandard::Xudt => "xudt",
+            UdtStandard::XudtCompatible => "xudt_compatible",
         }
+    }
+
+    /// THE predicate of the xUDT layout (its amount, its args and extension,
+    /// its holders and transfers): the canonical xUDT and a compatible
+    /// deployment alike. Everything that treats the two alike asks this, never
+    /// the standard's string.
+    pub fn is_xudt(&self) -> bool {
+        matches!(self, UdtStandard::Xudt | UdtStandard::XudtCompatible)
     }
 
     pub fn from_standard_hint(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "sudt" => Some(UdtStandard::Sudt),
-            "xudt" | "xudt_compatible" => Some(UdtStandard::Xudt),
+            "xudt" => Some(UdtStandard::Xudt),
+            "xudt_compatible" => Some(UdtStandard::XudtCompatible),
             _ => None,
         }
     }
@@ -103,12 +97,14 @@ impl UdtParser {
         )
     }
 
-    pub fn is_udt_code_hash_bytes(code_hash: &[u8], _hash_type: i16) -> Option<UdtStandard> {
+    pub fn is_udt_code_hash_bytes(code_hash: &[u8], hash_type: i16) -> Option<UdtStandard> {
         use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
-        match PROTOCOL_REGISTRY.get(code_hash) {
+        match PROTOCOL_REGISTRY.protocol(code_hash, hash_type) {
             Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
             Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
-            _ if xudt_compatible_code_hashes().contains(code_hash) => Some(UdtStandard::Xudt),
+            _ if crate::parser::registry::is_xudt_compatible(code_hash, hash_type) => {
+                Some(UdtStandard::XudtCompatible)
+            }
             _ => None,
         }
     }
@@ -126,31 +122,15 @@ impl UdtParser {
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| {
-                Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
-            })
+            .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
             .collect()
     }
 
+    /// The output as a UDT cell, when its type pair is a UDT (THE pair rule);
+    /// no other source makes it one (resync fix round 2, B).
     pub fn parse_udt_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedUdtCell> {
-        Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
-    }
-
-    pub fn parse_udt_cell_with_standard_hint(
-        output: &CellOutput,
-        data_hex: &str,
-        standard_hint: Option<&str>,
-    ) -> Option<ParsedUdtCell> {
         let type_script = output.type_.as_ref()?;
-        let standard = if let Some(standard) =
-            Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)
-        {
-            standard
-        } else if matches!(standard_hint, Some("xudt_compatible")) {
-            UdtStandard::Xudt
-        } else {
-            return None;
-        };
+        let standard = Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)?;
 
         let data = parse_hex_to_bytes(data_hex);
         let amount = Self::parse_amount(&data)?;
@@ -457,21 +437,25 @@ mod tests {
     }
 
     #[test]
-    fn test_is_udt_type_script_is_hash_type_string_agnostic() {
-        // Post-registry migration, detection keys on code_hash alone (a 32-byte
-        // collision-resistant deployment id); the hash_type STRING is no longer
-        // a discriminator. A registered code_hash therefore classifies
-        // regardless of the hash_type argument. (Such a code_hash paired with a
-        // mismatched hash_type does not occur on-chain — these are specific
-        // deployment ids, not arbitrary data hashes.)
+    fn test_is_udt_type_script_reads_the_pair() {
+        // resync/protocol-pairs: a UDT is the pair its deployment registers
+        // (the registry's one lookup). sUDT's mainnet reference is by `type`;
+        // the xUDT binary 0x50bd… runs by the data hash types. The same code
+        // hashes by another hash type are no UDT (for a type script the pair
+        // is exact by construction: such a cell's type never ran).
         assert!(matches!(
-            UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data"),
+            UdtParser::is_udt_type_script(SUDT_CODE_HASH, "type"),
             Some(UdtStandard::Sudt)
         ));
+        assert_eq!(UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data"), None);
         assert!(matches!(
-            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type"),
+            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "data1"),
             Some(UdtStandard::Xudt)
         ));
+        assert_eq!(
+            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type"),
+            None
+        );
     }
 
     #[test]
@@ -543,9 +527,54 @@ mod tests {
             "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a",
         ] {
             let code_hash = parse_hex_to_bytes(code_hash);
+            // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
             assert_eq!(
                 UdtParser::is_udt_code_hash_bytes(&code_hash, 1),
-                Some(UdtStandard::Xudt)
+                Some(UdtStandard::XudtCompatible)
+            );
+        }
+    }
+
+    /// resync fix round, logic NOTE N3: an xUDT-compatible deployment runs at
+    /// the pairs THE pair rule registers for every registry entry (the
+    /// protocol registry's): its reference by its hash type and its version's
+    /// binary by every data hash type. The Stable++ Asset (mainnet) binary by
+    /// data1 is that token code; the binary by `type` runs no registered code.
+    #[test]
+    fn test_an_xudt_compatible_binary_is_a_udt_by_the_one_pair_rule() {
+        let binary = parse_hex_to_bytes(
+            "0xec32ad0c478ab011f9d089a900f3d06c91338a1954e45d9d8152c74859f99945",
+        );
+        for data_type in [0i16, 2, 4] {
+            assert_eq!(
+                UdtParser::is_udt_code_hash_bytes(&binary, data_type),
+                // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
+                Some(UdtStandard::XudtCompatible),
+                "the Stable++ Asset binary by hash type {data_type}"
+            );
+        }
+        assert_eq!(UdtParser::is_udt_code_hash_bytes(&binary, 1), None);
+    }
+
+    /// Tests report NOTE-6 (N3's own question): a compatible deployment's
+    /// Type ID REFERENCE is a UDT by `type` only; by a data hash type it names
+    /// no code (the reference is no binary's data hash).
+    #[test]
+    fn test_an_xudt_compatible_type_id_reference_is_a_udt_by_type_only() {
+        let reference = parse_hex_to_bytes(
+            "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+        );
+        assert_eq!(
+            UdtParser::is_udt_code_hash_bytes(&reference, 1),
+            // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
+            Some(UdtStandard::XudtCompatible),
+            "the Stable++ Asset reference by type"
+        );
+        for data_type in [0i16, 2, 4] {
+            assert_eq!(
+                UdtParser::is_udt_code_hash_bytes(&reference, data_type),
+                None,
+                "the Stable++ Asset reference by hash type {data_type}"
             );
         }
     }
@@ -668,10 +697,13 @@ mod tests {
     fn test_udt_standard_parse() {
         assert!(matches!(UdtStandard::parse("sudt"), UdtStandard::Sudt));
         assert!(matches!(UdtStandard::parse("xudt"), UdtStandard::Xudt));
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
         assert!(matches!(
             UdtStandard::parse("xudt_compatible"),
-            UdtStandard::Xudt
+            UdtStandard::XudtCompatible
         ));
+        assert!(UdtStandard::XudtCompatible.is_xudt() && UdtStandard::Xudt.is_xudt());
+        assert!(!UdtStandard::Sudt.is_xudt());
     }
 
     #[test]
@@ -696,62 +728,37 @@ mod tests {
             UdtStandard::from_standard_hint("xudt"),
             Some(UdtStandard::Xudt)
         ));
+        // re-pinned on purpose (resync fix round 4, item 1): a compatible deployment's standard is its own
         assert!(matches!(
             UdtStandard::from_standard_hint("xudt_compatible"),
-            Some(UdtStandard::Xudt)
+            Some(UdtStandard::XudtCompatible)
         ));
         assert!(UdtStandard::from_standard_hint("omiga_inscription").is_none());
     }
 
+    /// A type script whose code hash the registry does not know is no UDT,
+    /// whatever its args. (The two tests that parsed it with an
+    /// `xudt_compatible` or an `sudt` hint, re-pinned in resync fix round 2,
+    /// B, when the hint went, tested this one thing; merged in round 3, tests
+    /// NOTE-11, both cells kept.)
     #[test]
-    fn test_parse_udt_cell_with_xudt_compatible_hint() {
-        let output = CellOutput {
-            capacity: "0x174876e800".to_string(),
-            lock: create_lock_script(),
-            type_: Some(Script {
-                code_hash: "0x4242424242424242424242424242424242424242424242424242424242424242"
-                    .to_string(),
-                hash_type: "type".to_string(),
-                args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
-                    .to_string(),
-            }),
-        };
-
-        // A genuinely unknown code hash should not parse without a metadata hint.
-        assert!(UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none());
-
-        let parsed = UdtParser::parse_udt_cell_with_standard_hint(
-            &output,
-            "0x01000000000000000000000000000000",
-            Some("xudt_compatible"),
-        )
-        .unwrap();
-
-        assert_eq!(parsed.amount, 1);
-        assert!(matches!(parsed.standard, UdtStandard::Xudt));
-    }
-
-    #[test]
-    fn test_parse_udt_cell_with_sudt_hint_does_not_parse_unknown_code_hash() {
-        let output = CellOutput {
-            capacity: "0x174876e800".to_string(),
-            lock: create_lock_script(),
-            type_: Some(Script {
-                code_hash: "0x4343434343434343434343434343434343434343434343434343434343434343"
-                    .to_string(),
-                hash_type: "type".to_string(),
-                args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
-                    .to_string(),
-            }),
-        };
-
-        let parsed = UdtParser::parse_udt_cell_with_standard_hint(
-            &output,
-            "0x01000000000000000000000000000000",
-            Some("sudt"),
-        );
-
-        assert!(parsed.is_none());
+    fn test_parse_udt_cell_of_an_unknown_code_hash_is_none() {
+        for code in ["42", "43"] {
+            let output = CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(Script {
+                    code_hash: format!("0x{}", code.repeat(32)),
+                    hash_type: "type".to_string(),
+                    args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
+                        .to_string(),
+                }),
+            };
+            assert!(
+                UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none(),
+                "0x{code}…"
+            );
+        }
     }
 
     #[test]

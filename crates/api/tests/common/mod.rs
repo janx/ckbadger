@@ -726,8 +726,178 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
 pub const TEST_SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
+/// The default lock's code hash ([`TEST_SECP_LOCK_CODE_HASH`]) as bytes.
+pub fn default_lock_code_hash() -> Vec<u8> {
+    hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap()
+}
+
+/// The bundled mainnet registry (label import, which names the default lock
+/// by its pair: its code hash by `type`), and two locks on the default lock's
+/// code hash with a secp-shaped 20-byte args: `by_type` is the default lock,
+/// `by_data` the same code hash by `data`, another script (no cell's data
+/// hashes to a type hash, so it runs no code the registry names). CKB names a
+/// script by the pair (code hash, hash type).
+pub fn seed_default_lock_by_type_and_by_data(
+    store: &CkbadgerStore,
+    by_type: &[u8],
+    by_data: &[u8],
+) {
+    run_label_import_bundled(store, "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    observe_default_lock_deployment(store);
+    let mut batch = StoreBatch::new(store);
+    for (lock_hash, hash_type) in [(by_type, 1), (by_data, 0)] {
+        batch.put_lock_script(
+            lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type,
+                args: vec![lock_hash[0]; 20],
+            },
+        );
+    }
+    batch.commit().unwrap();
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): the three locks every naming route
+/// must tell apart by their pair, with a secp-shaped 20-byte args. `by_type` is
+/// the default lock ("Default Lock", the registry's reference); `by_data` is
+/// its code hash by `data`, which runs no code (no name); `by_binary_data1` is
+/// the default lock's binary by `data1`, which runs the default lock's code by
+/// another reference than the registry's ("Default Lock", with "data1" beside
+/// the name).
+pub fn seed_default_lock_three_pairs(
+    store: &CkbadgerStore,
+    by_type: &[u8],
+    by_data: &[u8],
+    by_binary_data1: &[u8],
+) {
+    seed_default_lock_by_type_and_by_data(store, by_type, by_data);
+    let mut batch = StoreBatch::new(store);
+    batch.put_lock_script(
+        by_binary_data1,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: hex::decode(DEFAULT_LOCK_BINARY).unwrap(),
+            hash_type: 2,
+            args: vec![by_binary_data1[0]; 20],
+        },
+    );
+    batch.commit().unwrap();
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): a family `name` whose one version, the
+/// binary `binary`, the registry registers by its data hash (`data`), and the
+/// indexer's binding of the Type ID hash `type_id` to that binary (it saw a
+/// code cell of `binary` under that Type ID). The pair (`type_id`, type) runs
+/// the family's code by another reference than the registry's: it is named
+/// `name`, with "type" beside the name.
+pub fn seed_family_run_by_its_type_id(
+    store: &CkbadgerStore,
+    binary: &[u8],
+    type_id: &[u8],
+    name: &str,
+) {
+    seed_script_label(store, binary, 0, name);
+    store
+        .put_script_reference_to_version_direct(1, type_id, binary)
+        .unwrap();
+}
+
 /// A lock code hash the scripts registry does not name.
 pub const UNREGISTERED_LOCK_CODE_HASH: [u8; 32] = [0x99; 32];
+
+/// The default lock's binary (its genesis code cell's data hash), which the
+/// bundled registry registers by the default lock's Type ID.
+pub const DEFAULT_LOCK_BINARY: &str =
+    "709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649";
+
+/// What the indexer records when it sees the genesis secp256k1 code cell: the
+/// default lock's Type ID bound to its binary. Without it a store holding the
+/// bundled registry but no chain runs no code under that Type ID, and the
+/// one naming rule (the code a pair runs: lane rd/api-lock-names) names none.
+pub fn observe_default_lock_deployment(store: &CkbadgerStore) {
+    store
+        .put_script_reference_to_version_direct(
+            1,
+            &default_lock_code_hash(),
+            &hex::decode(DEFAULT_LOCK_BINARY).unwrap(),
+        )
+        .unwrap();
+}
+
+/// What the indexer records when it sees every registered Type ID deployment's
+/// code cell: each registered `type` reference bound to its registered binary
+/// (a store with the bundled registry and no chain otherwise runs no code
+/// under those Type IDs, and names none of them).
+pub fn observe_registered_type_deployments(store: &CkbadgerStore) {
+    for (binary, version) in store.list_script_versions().unwrap() {
+        for (reference, hash_type) in &version.registered_references {
+            if *hash_type == 1 {
+                store
+                    .put_script_reference_to_version_direct(1, reference, &binary)
+                    .unwrap();
+            }
+        }
+    }
+}
+
+/// Seed the scripts registry's family `name` registering the script
+/// (`code_hash`, `hash_type`) as one of its references, as label import and
+/// the indexer record it (lane rd/api-lock-names, the fix round's ruling: a
+/// script is named by the code it runs): by `data*` the code hash is the
+/// binary; by `type` a binary bound to that Type ID (the binding the indexer
+/// records when it sees the code cell). The pair is named `name`; no other
+/// hash type of the code hash is, unless it runs the same binary (the code
+/// hash by another data hash type, which is named with its hash type beside).
+pub fn seed_script_label(store: &CkbadgerStore, code_hash: &[u8], hash_type: u8, name: &str) {
+    let binary: Vec<u8> = if hash_type == 1 {
+        // a binary of its own per Type ID, never another pair's
+        code_hash.iter().map(|byte| byte ^ 0xa5).collect()
+    } else {
+        code_hash.to_vec()
+    };
+    let existing = store.get_script_version(&binary).unwrap();
+    // one family per seeded script (two scripts that share a name are two
+    // families), the binary's own where it already has one
+    let family_id = existing
+        .as_ref()
+        .and_then(|version| version.family_id.clone())
+        .unwrap_or_else(|| format!("seeded-{}-{hash_type}", hex::encode(&code_hash[..8])));
+    let mut family = store
+        .get_script_family(&family_id)
+        .unwrap()
+        .unwrap_or_else(|| ckbadger_store::types::ScriptFamilyInfo {
+            family_id: family_id.clone(),
+            name: name.to_string(),
+            ..Default::default()
+        });
+    let mut version = existing.unwrap_or_else(|| ckbadger_store::types::ScriptVersionInfo {
+        version_hash: binary.clone(),
+        name: Some(name.to_string()),
+        family_id: Some(family_id.clone()),
+        ..Default::default()
+    });
+    if !version
+        .registered_references
+        .contains(&(code_hash.to_vec(), hash_type))
+    {
+        version
+            .registered_references
+            .push((code_hash.to_vec(), hash_type));
+        version.registered_references.sort();
+        family.versions_count += 1;
+    }
+    store.put_script_version(&binary, &version).unwrap();
+    store.put_script_family_direct(&family_id, &family).unwrap();
+    store
+        .put_script_version_by_family_direct(&family_id, &binary)
+        .unwrap();
+    if hash_type == 1 {
+        store
+            .put_script_reference_to_version_direct(1, code_hash, &binary)
+            .unwrap();
+    }
+}
 
 /// [`UNREGISTERED_LOCK_CODE_HASH`] as the API writes a code hash.
 pub fn unregistered_lock_code_hash_hex() -> String {
@@ -745,16 +915,8 @@ pub const UNADDRESSABLE_LOCK_ARGS_LEN: usize = 600;
 /// bytes: a lock the chain accepts and no address can write.
 pub fn seed_unaddressable_lock(store: &CkbadgerStore, lock_hash: &[u8]) {
     let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    seed_script_label(store, &secp, 1, "SECP256K1/blake160");
     let mut batch = StoreBatch::new(store);
-    batch.put_script_info(
-        &secp,
-        &ScriptInfo {
-            code_hash: secp.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1/blake160".into()),
-            ..Default::default()
-        },
-    );
     batch.put_lock_script(
         lock_hash,
         &ckbadger_store::types::LockScriptEntry {
@@ -772,16 +934,8 @@ pub fn seed_unaddressable_lock(store: &CkbadgerStore, lock_hash: &[u8]) {
 /// with a secp-shaped 20-byte args, so no kind can come from the args).
 pub fn seed_named_and_unnamed_locks(store: &CkbadgerStore, named: &[u8], unnamed: &[u8]) {
     let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    seed_script_label(store, &secp, 1, "SECP256K1/blake160");
     let mut batch = StoreBatch::new(store);
-    batch.put_script_info(
-        &secp,
-        &ScriptInfo {
-            code_hash: secp.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1/blake160".into()),
-            ..Default::default()
-        },
-    );
     for (lock_hash, code_hash) in [
         (named, secp.as_slice()),
         (unnamed, UNREGISTERED_LOCK_CODE_HASH.as_slice()),
@@ -1361,6 +1515,7 @@ pub fn make_test_tx_actions(
         protocol_actions: vec![],
         type_calls: vec![],
         lock_calls: vec![],
+        recognized_type_codes: vec![],
         participants: vec![ParticipantDelta {
             id: ckbadger_store::types::ParticipantId::lock(lock_hash).unwrap(),
             ckb_delta,
@@ -1373,8 +1528,7 @@ pub fn make_test_tx_actions(
 }
 
 /// A cell whose type script is `code` (hash type `type`) with `args`: the cell an item's own
-/// record places for an activity's `itemTypes` (an object's creating output, an identity's cell in
-/// the item outpoint index).
+/// record places (an object's creating output, an identity's cell in the item outpoint index).
 pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
     LiveCellInfo {
         capacity: 200_00000000,
@@ -1390,7 +1544,7 @@ pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
     }
 }
 
-/// An object's creating transaction for `itemTypes`: its location and index row at
+/// An object's creating transaction: its location and index row at
 /// `(block, tx_index)` and one output per id, each a `code` cell whose type args are the id.
 pub fn seed_creating_tx(
     batch: &mut StoreBatch,
@@ -1783,23 +1937,10 @@ pub fn seed_two_reference_script_family(
                 },
             )
             .unwrap();
-        store
-            .put_script_info_direct(
-                reference_hash,
-                &ScriptInfo {
-                    code_hash: reference_hash.to_vec(),
-                    hash_type: 1,
-                    name: Some(label.to_string()),
-                    type_cells_count: cells,
-                    type_live_cells_count: cells,
-                    type_capacity_sum: capacity,
-                    type_owned_capacity_sum: capacity,
-                    type_used_capacity_sum: knowledge,
-                    type_owned_knowledge_sum: knowledge,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        // `label` (`alt_label` for the second reference) named the reference
+        // in a store from before lane rd/api-lock-names; a version's pair has
+        // no label row now: it is named by its family, the code it runs.
+        let _ = label;
     }
 }
 
@@ -2180,4 +2321,80 @@ pub fn seed_deep_fork_pause(store: &CkbadgerStore, fork_point: i64) {
             });
         })
         .unwrap();
+}
+
+/// A test's token as the indexer writes it, its label where label import keeps it (resync fix
+/// round 3, item 3, tests SHOULD-2): a token whose source is `Label` (its name, symbol, decimals,
+/// icon and description the label's) is split into the chain's row, the label's fields out of it
+/// (its bound chain metadata's where it has some, as the indexer's merge gives them), and the
+/// label, which the API joins when it reads the token; any other token is the row as it is. So a
+/// route that read the row without the join would answer no label's name.
+pub fn token_as_indexed(
+    token: &ckbadger_store::types::TokenInfo,
+) -> (
+    ckbadger_store::types::TokenInfo,
+    Option<ckbadger_store::types::TokenLabel>,
+) {
+    use ckbadger_store::types::TokenMetadataSource;
+    if token.metadata_source != Some(TokenMetadataSource::Label) {
+        return (token.clone(), None);
+    }
+    let label = ckbadger_store::types::TokenLabel {
+        name: token.name.clone().expect("a label names the token"),
+        symbol: token
+            .symbol
+            .clone()
+            .expect("a label states the token's symbol"),
+        decimals: token.decimals.expect("a label states the token's decimals"),
+        icon_url: token.icon_url.clone(),
+        description: token.description.clone(),
+    };
+    let mut row = token.clone();
+    row.icon_url = None;
+    row.description = None;
+    match &token.chain_metadata {
+        Some(chain) => {
+            row.name = chain.name.clone();
+            row.symbol = chain.symbol.clone();
+            row.decimals = Some(i32::from(chain.decimals));
+            row.metadata_source = Some(TokenMetadataSource::Chain);
+        }
+        None => {
+            row.name = None;
+            row.symbol = None;
+            row.decimals = None;
+            row.metadata_source = None;
+        }
+    }
+    (row, Some(label))
+}
+
+/// Write `token` at `type_hash` as the indexer and label import would ([`token_as_indexed`]).
+pub fn put_token_as_indexed(
+    store: &CkbadgerStore,
+    type_hash: &[u8],
+    token: &ckbadger_store::types::TokenInfo,
+) -> anyhow::Result<()> {
+    let (row, label) = token_as_indexed(token);
+    store.put_token_direct(type_hash, &row)?;
+    if let Some(label) = label {
+        store.put_token_label_direct(type_hash, &label)?;
+    }
+    Ok(())
+}
+
+/// [`put_token_as_indexed`] with the row in `batch` (the label beside it, label import's write).
+pub fn put_token_in_batch_as_indexed(
+    batch: &mut StoreBatch,
+    type_hash: &[u8],
+    token: &ckbadger_store::types::TokenInfo,
+) {
+    let (row, label) = token_as_indexed(token);
+    batch.put_token(type_hash, &row);
+    if let Some(label) = label {
+        batch
+            .store()
+            .put_token_label_direct(type_hash, &label)
+            .expect("write the token's label");
+    }
 }

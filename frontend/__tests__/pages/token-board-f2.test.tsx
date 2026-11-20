@@ -111,12 +111,12 @@ const activity: GlobalActivity = activityRead({
       ckbDelta: '100000001',
       usedDelta: '0',
       itemDeltas: [{ kind: 'token', typeScriptHash: hash, delta: '100000000000' }],
+      sent: false,
     },
   ],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [ITEM_TYPE.xudt],
-  itemTypesUnread: null,
+  recognizedTypes: [ITEM_TYPE.xudt],
   protocolActions: [],
 });
 
@@ -168,7 +168,7 @@ describe('Token board (F2 objects)', () => {
       data: [
         activityRead({
           ...activity,
-          itemTypes: [ITEM_TYPE.xudt],
+          recognizedTypes: [ITEM_TYPE.xudt],
           typeCalls: [
             {
               typeCodeHash: other,

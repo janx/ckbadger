@@ -477,6 +477,163 @@ async fn assert_rollback_properties(
 }
 
 // ---------------------------------------------------------------------------
+// The senders bit through a rollback (resync/int, step 2)
+// ---------------------------------------------------------------------------
+
+/// Block `n`'s transfer as the domain store holds it: each party's lock
+/// hash and whether it sent ([`ckbadger_store::types::TAG_INPUT`]).
+fn transfer_senders(store: &CkbadgerStore, n: u64) -> Option<Vec<([u8; 32], bool)>> {
+    let tag = 0x100 + n as u16;
+    store
+        .get_tx_actions(n as i64, 1, &tx_hash(tag))
+        .unwrap()
+        .map(|actions| {
+            actions
+                .participants
+                .iter()
+                .map(|p| match p.id {
+                    ckbadger_store::types::ParticipantId::Lock(hash) => (hash, p.sent()),
+                    other => panic!("block {n}: a transfer party named by {other:?}"),
+                })
+                .collect()
+        })
+}
+
+/// The transfer chain's block `n` (1 ..) spends owner `n % 8 + 1`'s cell and
+/// pays owner `(n % 8 + 1) % 8 + 1`, the change back to the spender: the
+/// spender sent, the payee did not. Each lock hash is found as the one
+/// party whose CKB fell (the spender's: its input less its change).
+fn assert_transfer_senders(store: &CkbadgerStore, n: u64, context: &str) {
+    let parties = transfer_senders(store, n)
+        .unwrap_or_else(|| panic!("{context}: block {n}'s transfer has no TxActions row"));
+    assert_eq!(parties.len(), 2, "{context}: block {n}: {parties:?}");
+    let actions = store
+        .get_tx_actions(n as i64, 1, &tx_hash(0x100 + n as u16))
+        .unwrap()
+        .unwrap();
+    for p in &actions.participants {
+        assert_eq!(
+            p.sent(),
+            p.ckb_delta < 0,
+            "{context}: block {n}: the spender (its CKB fell) and only it sent: {:?}",
+            actions.participants
+        );
+    }
+}
+
+/// The senders bit lives in the `TxActions` and addr_txs rows, which a
+/// rollback deletes for the blocks it removes (`sync/undo.rs`): after rolling
+/// back from 7 to 3 the rows of blocks 1 ..= 3 keep their senders, those of
+/// 4 ..= 7 are gone, and the replay writes them again, senders and all, as the
+/// property's byte comparison (both forms) holds over the bit.
+#[tokio::test]
+async fn a_rollback_keeps_and_restores_the_senders_bit() {
+    let chain = transfer_chain(8);
+    let plan = [0..=2, 3..=5, 6..=7];
+    let stores = open_stores();
+    sync_prefix(&stores, &chain, &plan, 0, 7).await;
+    for n in 1..=7 {
+        assert_transfer_senders(&stores.domain, n, "at tip 7");
+    }
+    reorg_to(&stores.indexer, 3).await.unwrap();
+    for n in 1..=3 {
+        assert_transfer_senders(&stores.domain, n, "rolled back to 3");
+    }
+    for n in 4..=7 {
+        assert_eq!(
+            transfer_senders(&stores.domain, n),
+            None,
+            "block {n} is rolled back"
+        );
+    }
+    sync_prefix(&stores, &chain, &plan, 4, 7).await;
+    for n in 1..=7 {
+        assert_transfer_senders(&stores.domain, n, "replayed to 7");
+    }
+    assert_rollback_property(&chain, &plan, 7, 3).await;
+}
+
+// ---------------------------------------------------------------------------
+// C7: the recognised type codes, both write paths and a rollback
+// ---------------------------------------------------------------------------
+
+/// C7 (resync/type-codes): the protocol chain's activity rows record the recognised type codes
+/// that ran (its xUDT by data1, the Nervos DAO and did:ckb by type among them); the three shapes,
+/// a store bulk-built to the tip, one synced live a block per batch and one synced live in one
+/// batch (resync/final: the third shape added at the merge), hold byte-identical activity rows; and
+/// a rollback keeps, removes and replays them as every other row (the rollback property, both
+/// forms, over the chain whose rows carry them).
+#[tokio::test]
+async fn the_recognized_type_codes_are_written_alike_by_both_paths_and_survive_a_rollback() {
+    use ckbadger_store::types::{decode_stored_tx_actions, TypeCode};
+    let chain = protocol_chain(0);
+    let plan = single_block_plan(chain.len());
+    let tip = 16usize;
+    let activity_rows = |store: &CkbadgerStore| -> Dump {
+        dump_domain(store)
+            .into_iter()
+            .filter(|((cf, _), _)| *cf == ckbadger_store::CF_TX_ACTIONS)
+            .collect()
+    };
+
+    let live = open_stores();
+    sync_prefix(&live, &chain, &plan, 0, tip).await;
+    let live_rows = activity_rows(&live.domain);
+    let codes: std::collections::BTreeSet<TypeCode> = live_rows
+        .values()
+        .flat_map(|value| {
+            decode_stored_tx_actions(value)
+                .unwrap()
+                .recognized_type_codes
+        })
+        .collect();
+    let code = |hex: &str, hash_type: i16| TypeCode {
+        code_hash: hex::decode(hex.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        hash_type,
+    };
+    for (name, expected) in [
+        ("xUDT by data1", code(XUDT_CODE_HASH_DATA1, 2)),
+        ("the Nervos DAO by type", code(DAO_CODE_HASH, 1)),
+        ("did:ckb by type", code(DID_CKB_CODE_HASH, 1)),
+    ] {
+        assert!(
+            codes.contains(&expected),
+            "{name} is not recorded: {codes:?}"
+        );
+    }
+
+    let FixtureStores {
+        domain,
+        _append: append,
+        _dirs,
+    } = open_fixture_stores();
+    ckbadger_indexer::sync::bulk_build_into_stores_for_test(&domain, &append, &chain[..=tip])
+        .unwrap_or_else(|e| panic!("bulk build to {tip}: {e:#}"));
+    compare_dumps(
+        &activity_rows(&domain),
+        &live_rows,
+        "bulk vs live activity rows",
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+
+    let one_batch = open_stores();
+    // one live batch: the whole chain as a single range of the plan
+    let one_range: Vec<std::ops::RangeInclusive<usize>> = chunked_plan(chain.len(), chain.len());
+    sync_prefix(&one_batch, &chain, &one_range, 0, tip).await;
+    compare_dumps(
+        &activity_rows(&one_batch.domain),
+        &live_rows,
+        "live in one batch vs live a block per batch activity rows",
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+
+    assert_rollback_property(&chain, &plan, tip, 10).await;
+}
+
+// ---------------------------------------------------------------------------
 // The journal oracle (store refactor lane B, B-2 … B-4)
 // ---------------------------------------------------------------------------
 
@@ -539,10 +696,13 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_IDENTITY_DATA, None),
     (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
     (ckbadger_store::store::CF_STATS_IDENTITY, None),
-    // B-3 addresses.rs: address balances, script usage and script reference
-    // usage are applied block by block.
+    // B-3 addresses.rs: address balances and script reference usage are
+    // applied block by block. `script_info` is not here (lane
+    // rd/api-lock-names, T N3): it holds the pseudo deployments' labels,
+    // which label import alone writes, and a block's batch writing it is
+    // refused (`store.rs` `label_import_is_the_only_writer_of_script_info`),
+    // so no journal row restores it.
     (ckbadger_store::CF_ADDR_BALANCE, None),
-    (ckbadger_store::store::CF_SCRIPT_INFO, None),
     (ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO, None),
     // B-3 addresses.rs: the script version / family rollups are recomputed
     // and written per block that moves a reference or a Type ID binding.

@@ -422,7 +422,7 @@ fn classify(
     result.class = Class::Script;
     if UdtParser::is_udt_code_hash_bytes(code, hash_type).is_some() {
         ensure!(
-            store.get_token(type_hash)?.is_some(),
+            crate::token_identity::token_exists(store, type_hash)?,
             "missing indexed token metadata 0x{}",
             hex::encode(type_hash)
         );
@@ -433,8 +433,10 @@ fn classify(
         result.class = Class::Token;
         return Ok(result);
     }
-    let protocol = PROTOCOL_REGISTRY.get(code);
-    if protocol == Some(ProtocolScript::Dao) && hash_type == 1 {
+    let protocol = PROTOCOL_REGISTRY.protocol(code, hash_type);
+    // The DAO by its consensus pair, the one function (resync fix round,
+    // logic NOTE N2).
+    if ckbadger_indexer::parser::dao::DaoParser::is_dao_code_hash(code, hash_type) {
         ensure!(
             info.data_size == 8,
             "invalid DAO cell data size {}",

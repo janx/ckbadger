@@ -133,17 +133,19 @@ impl<'a> CommitmentLockArgs<'a> {
 }
 
 /// Returns true if the given code_hash matches a Fiber funding-lock (any network).
-pub fn is_funding_lock(code_hash: &[u8]) -> bool {
+pub fn is_funding_lock(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::FiberFunding,
     )
 }
 
 /// Returns true if the given code_hash matches a Fiber commitment-lock (any network).
-pub fn is_commitment_lock(code_hash: &[u8]) -> bool {
+pub fn is_commitment_lock(code_hash: &[u8], hash_type: i16) -> bool {
     crate::parser::registry::PROTOCOL_REGISTRY.is(
         code_hash,
+        hash_type,
         crate::parser::registry::ProtocolScript::FiberCommitment,
     )
 }
@@ -255,25 +257,25 @@ mod tests {
     #[test]
     fn test_is_funding_lock_mainnet() {
         let code_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET);
-        assert!(is_funding_lock(&code_hash));
+        assert!(is_funding_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_funding_lock_testnet() {
         let code_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_TESTNET);
-        assert!(is_funding_lock(&code_hash));
+        assert!(is_funding_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_funding_lock_rejects_commitment_hash() {
         let code_hash = parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET);
-        assert!(!is_funding_lock(&code_hash));
+        assert!(!is_funding_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_funding_lock_rejects_zero() {
         let code_hash = vec![0u8; 32];
-        assert!(!is_funding_lock(&code_hash));
+        assert!(!is_funding_lock(&code_hash, 1));
     }
 
     // --- is_commitment_lock tests ---
@@ -281,25 +283,25 @@ mod tests {
     #[test]
     fn test_is_commitment_lock_mainnet() {
         let code_hash = parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_commitment_lock(&code_hash));
+        assert!(is_commitment_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_commitment_lock_testnet() {
         let code_hash = parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_TESTNET);
-        assert!(is_commitment_lock(&code_hash));
+        assert!(is_commitment_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_commitment_lock_rejects_funding_hash() {
         let code_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET);
-        assert!(!is_commitment_lock(&code_hash));
+        assert!(!is_commitment_lock(&code_hash, 1));
     }
 
     #[test]
     fn test_is_commitment_lock_rejects_zero() {
         let code_hash = vec![0u8; 32];
-        assert!(!is_commitment_lock(&code_hash));
+        assert!(!is_commitment_lock(&code_hash, 1));
     }
 
     // --- all_fiber_lock_code_hashes tests ---
@@ -696,9 +698,9 @@ mod tests {
         assert_ne!(funding_mainnet, commitment_mainnet);
 
         // Funding hash should not match commitment check
-        assert!(!is_commitment_lock(&funding_mainnet));
+        assert!(!is_commitment_lock(&funding_mainnet, 1));
         // Commitment hash should not match funding check
-        assert!(!is_funding_lock(&commitment_mainnet));
+        assert!(!is_funding_lock(&commitment_mainnet, 1));
     }
 
     #[test]

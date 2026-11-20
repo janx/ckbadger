@@ -19,6 +19,7 @@ function party(tail: string, over: Partial<WrittenParty> = {}): WrittenParty {
     address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
+    sent: false,
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,
@@ -44,7 +45,7 @@ function object(n: number, delta: 1 | -1, composition: CompositionTier | null): 
 function row(
   participants: WrittenParty[],
   // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
-  over: Pick<ActivityRowData, 'itemTypes'> = { itemTypes: [] }
+  over: Pick<ActivityRowData, 'recognizedTypes'> = { recognizedTypes: [] }
 ): ActivityRowData {
   return activityRead({
     txHash: TX,
@@ -55,7 +56,6 @@ function row(
     typeCalls: [],
     lockCalls: [],
 
-    itemTypesUnread: null,
     participants,
     ...over,
   });
@@ -189,7 +189,7 @@ describe('composition badges: once per participant line when all its items share
           itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'btc_ckb'), object(3, 1, 'btc_ckb')],
         }),
       ],
-      { itemTypes: [ITEM_TYPE.spore] }
+      { recognizedTypes: [ITEM_TYPE.spore] }
     );
     const { container } = render(<ActivityRow activity={batch} />);
     const [line] = lines(container);
@@ -217,7 +217,7 @@ describe('composition badges: once per participant line when all its items share
           itemDeltas: [object(1, 1, 'btc_ckb'), object(2, 1, 'pure_ckb'), object(3, 1, null)],
         }),
       ],
-      { itemTypes: [ITEM_TYPE.spore] }
+      { recognizedTypes: [ITEM_TYPE.spore] }
     );
     const { container } = render(<ActivityRow activity={mixed} />);
     const [line] = lines(container);
@@ -235,7 +235,7 @@ describe('composition badges: once per participant line when all its items share
           itemDeltas: [1, 2, 3, 4, 5].map((n) => object(n, 1, 'btc_ckb')),
         }),
       ],
-      { itemTypes: [ITEM_TYPE.spore] }
+      { recognizedTypes: [ITEM_TYPE.spore] }
     );
     const { container } = render(<ActivityRow activity={batch} foldObjects />);
     const [line] = lines(container);
@@ -272,7 +272,7 @@ describe('composition badges: once per participant line when all its items share
           ],
         }),
       ],
-      { itemTypes: [ITEM_TYPE.spore, ITEM_TYPE.dotcell] }
+      { recognizedTypes: [ITEM_TYPE.spore, ITEM_TYPE.dotcell] }
     );
     const { container } = render(<ActivityRow activity={deed} />);
     const [line] = lines(container);
@@ -284,7 +284,7 @@ describe('composition badges: once per participant line when all its items share
   it('draws no badge for objects that carry no tier', () => {
     const untiered = row(
       [party('hprdnn', { itemDeltas: [object(1, 1, null), object(2, 1, null)] })],
-      { itemTypes: [ITEM_TYPE.spore] }
+      { recognizedTypes: [ITEM_TYPE.spore] }
     );
     const { container } = render(<ActivityRow activity={untiered} />);
     expect(badges(container)).toHaveLength(0);

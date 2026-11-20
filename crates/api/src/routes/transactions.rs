@@ -283,11 +283,10 @@ pub(crate) fn transaction_response(
         (false, Some(actions)) => {
             let activity = super::activities::build_global_activity_response(
                 &state.store,
-                &state.append_only_store,
                 &state.ckb_network,
                 actions,
                 super::activities::Draw::Row,
-                &mut std::collections::HashMap::new(),
+                &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
                 &mut std::collections::HashMap::new(),
             )
             .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -382,13 +381,23 @@ pub(crate) fn transaction_response(
     })
 }
 
+/// The kinds `/transactions` and `/transactions/pool` list by: every global
+/// activity bucket (the classification the daily kind counts use, so each kind
+/// a page names lists what its count counts), `user` (every transaction but the
+/// cellbase: the kinds together) and `cellbase`.
 pub(crate) fn transaction_activity_filter(
     filter: Option<&str>,
 ) -> Result<Option<&str>, ApiRouteError> {
     match filter {
         None | Some("") | Some("all") => Ok(None),
-        Some(value @ ("user" | "ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity")) => Ok(Some(value)),
-        Some(value) => Err(ApiError::bad_request(format!("invalid activity_type '{value}'; expected user, ckb, script, cellbase, dao, token, object, or identity"))),
+        Some(
+            value @ ("user" | "ckb" | "script" | "cellbase" | "dao" | "token" | "object"
+            | "identity" | "protocol"),
+        ) => Ok(Some(value)),
+        Some(value) => Err(ApiError::bad_request(format!(
+            "invalid activity_type '{value}'; expected user, ckb, script, cellbase, dao, token, \
+             object, identity, or protocol"
+        ))),
     }
 }
 
@@ -940,8 +949,16 @@ fn decode_detail_lock_args(
         };
         let code_hash =
             decode_hex_bytes_with_context(&lock.code_hash, "lock code hash", at, Some(32))?;
+        let hash_type =
+            ckbadger_common::hash_type_from_label(&lock.hash_type).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "{at}: lock hash type {} is no CKB hash type",
+                    lock.hash_type
+                ))
+            })?;
         let args = decode_hex_bytes_with_context(&lock.args, "lock args", at, None)?;
-        super::activities::decode_lock_args(&code_hash, &args)
+        // By the pair the lock runs (resync fix round S2).
+        super::activities::decode_lock_args(&code_hash, i16::from(hash_type), &args)
             .map_err(|e| ApiError::internal(format!("{at}: {e}")))
     };
     for (index, input) in inputs.iter_mut().enumerate() {
@@ -2625,6 +2642,7 @@ async fn get_cell_deps(
             &tx_view,
             store,
             &state.store,
+            &state.append_only_store,
         )
         .map_err(|e| ApiError::internal(format!("cell deps for {hash}: {e}")))?);
     }

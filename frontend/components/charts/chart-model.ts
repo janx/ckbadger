@@ -1,6 +1,6 @@
 import type { ChartPoint, ChartSeries } from '@/components/ui/chart';
 import {
-  SIX_KINDS_SLUG,
+  ACTIVITY_KINDS_SLUG,
   type ChartDefinition,
   type ChartPayload,
   type ChartScale,
@@ -151,8 +151,6 @@ function readingAt(
 export interface ChartModel {
   title: string;
   points: ChartPoint[];
-  /** The unit a stack's whole is stated in where it is not its bands' (`wholeUnit`). */
-  wholeUnit?: string;
   /**
    * A histogram's whole, the route's: what its page's shares of a bucket divide by (cell size's
    * live cells; the D1 hand-back, item 2). A stack's wholes are its points' own.
@@ -333,7 +331,6 @@ const RATE_UNITS = new Set(['%', 'PH/s', 'P', 'h', 's']);
 /** Units that count discrete things; an exact whole count is shown without decimals. */
 const COUNT_UNITS = new Set([
   'activities',
-  'kind counts',
   'addresses',
   'blocks',
   'cells',
@@ -784,7 +781,7 @@ const STATED_WHOLES: Readonly<
     { field: string; on: 'values' } | { field: string; on: 'point'; scale: ChartScale }
   >
 > = {
-  'activity-type-breakdown': { field: 'kindOccurrences', on: 'values' },
+  'activity-type-breakdown': { field: 'activityCount', on: 'values' },
   'total-supply': { field: 'totalIssuance', on: 'values' },
   'common-knowledge-composition': { field: 'knowledgeSize', on: 'values' },
   // the protocol total, the one whole the route sends, which the destinations make (S1)
@@ -804,8 +801,11 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
       : payload.series;
   if (!drawn.length) throw new Error(`${definition.slug}: no chart series`);
   // Rule 5: a stack draws at most five bands. The one allowance is the lead's ruling, by name
-  // (SIX_KINDS_SLUG): Activity by type keeps its six kinds, none of them "others".
-  const most = definition.slug === SIX_KINDS_SLUG ? MAX_BANDS + 1 : MAX_BANDS;
+  // (ACTIVITY_KINDS_SLUG): Activity by type keeps every activity kind, none of them "others".
+  const most =
+    definition.slug === ACTIVITY_KINDS_SLUG
+      ? Object.keys(CLASSED_SERIES[ACTIVITY_KINDS_SLUG]).length
+      : MAX_BANDS;
   if (drawn.length > most)
     throw new Error(
       `${definition.slug}: ${drawn.length} bands, more than the ${most} a page draws`
@@ -924,7 +924,6 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
         : undefined,
   };
   if (banded) model.yDomain = [0, 100];
-  if (definition.wholeUnit) model.wholeUnit = definition.wholeUnit;
   if (!last) return model;
   // Each band's figure at its right end and on the card's key, from one place (lane D1, CH-07): a
   // share the API states is as sent; a share of the whole, the route's, is cut from the exact part.
@@ -1539,6 +1538,7 @@ const CLASSED_SERIES: Readonly<
     object: { label: 'Objects', color: ACTIVITY_KIND_COLORS.object },
     identity: { label: 'Identities', color: ACTIVITY_KIND_COLORS.identity },
     scriptCall: { label: 'Script calls', color: ACTIVITY_KIND_COLORS.scriptCall },
+    protocol: { label: 'Protocols', color: ACTIVITY_KIND_COLORS.protocol },
   },
 };
 

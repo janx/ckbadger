@@ -23,8 +23,7 @@ function makeGlobal(overrides: Partial<Written<GlobalActivity>> = {}): GlobalAct
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [],
     ...overrides,
   });
@@ -81,7 +80,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(
       activityHeadline(
         makeGlobal({
-          itemTypes: [ITEM_TYPE.dao],
+          recognizedTypes: [ITEM_TYPE.dao],
           protocolActions: [
             {
               protocol: 'dao',
@@ -114,9 +113,10 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
       usedDelta: '0',
       itemDeltas: [{ kind: 'object' as const, objectId: '0x51', delta: 1 }],
       tags: 2,
+      sent: false,
     };
     expect(
-      activityHeadline(makeGlobal({ itemTypes: [ITEM_TYPE.spore], participants: [party] }))
+      activityHeadline(makeGlobal({ recognizedTypes: [ITEM_TYPE.spore], participants: [party] }))
     ).toBe('Object mint');
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');

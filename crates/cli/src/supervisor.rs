@@ -12,7 +12,8 @@ use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_indexer::entry::EXIT_CODE_UNRECOVERABLE;
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
 use ckbadger_store::{
-    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreRuntimeConfig,
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreLayoutMismatch,
+    StoreRuntimeConfig,
 };
 use std::future::Future;
 use std::path::Path;
@@ -208,6 +209,29 @@ enum ChildExitAction {
     Restart,
 }
 
+/// Whether a supervised service holds this network's chain stores: the
+/// indexer writes them and the API reads them, and each refuses a store it
+/// must not use with rebuild-required, exit 78: both refuse a store of
+/// another layout (resync fix round 2, A); the indexer also refuses a store
+/// a bulk build left half built (the API serves a stamped store mid-bulk).
+/// The two refusals are one case to the operator (resync fix round N7; logic
+/// N-10 corrected the words).
+fn holds_chain_stores(service: &str) -> bool {
+    matches!(service, "indexer" | "api")
+}
+
+/// What the supervisor says, in its log line and in the blocked reason, of
+/// a chain-store child it blocked on exit 78: the child named, the way out.
+/// The child's own error line, in its log, names the stores and the layouts.
+fn rebuild_required_reason(label: &str) -> String {
+    format!(
+        "{label} refused this network's chain stores (exit {}): they need a rebuild, so it is \
+         not restarted; delete the network's RocksDB data and re-sync from genesis (the error \
+         line in {label}'s log names the stores and both layouts)",
+        ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
+    )
+}
+
 /// Classify a child exit by its exit *code*, i.e. what the child itself reported
 /// about its own termination. Rate/backoff is a separate axis, decided by
 /// [`decide_restart`] for the [`ChildExitAction::Restart`] case only.
@@ -226,7 +250,7 @@ fn classify_child_exit(
     if spec.service == "indexer" && exit_success {
         return ChildExitAction::CleanHandoff;
     }
-    if spec.service == "indexer"
+    if holds_chain_stores(&spec.service)
         && exit_code
             == Some(i32::from(
                 ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE,
@@ -506,6 +530,9 @@ struct BulkStatusSample {
     past_bulk: Option<bool>,
     lag: Option<i128>,
     bulk_completed: bool,
+    /// The store is one this build refuses: the gating network needs a
+    /// rebuild (no signal all the same).
+    refused: bool,
 }
 
 /// One gating network's bulk-status source: a LAZILY-opened, LONG-LIVED domain
@@ -519,6 +546,12 @@ struct BulkStatusSample {
 ///
 /// Every method here is BLOCKING (RocksDB open/catch-up/read). Callers on the
 /// async supervisor runtime must go through `spawn_blocking`.
+/// A store the probe read and holds no handle on (resync fix round 4, A).
+enum SeenStore {
+    Refused(StoreLayoutMismatch),
+    NotReady,
+}
+
 struct BulkStatusReader {
     /// The gating network's child label, used for log context.
     label: String,
@@ -529,7 +562,16 @@ struct BulkStatusReader {
     /// [`SequencedIndexer::store_runtime_config`].
     runtime_config: StoreRuntimeConfig,
     store: Option<CkbadgerStore>,
+    /// The store's signature read before `store` was opened (resync fix
+    /// round 4, A).
+    opened_at: Option<ckbadger_store::StoreSignature>,
+    /// A store last read refused or not ready, no handle kept, and the
+    /// signature it was read at: opened again only once that has changed.
+    seen: Option<(ckbadger_store::StoreSignature, SeenStore)>,
     failures: ReadFailureTracker,
+    /// The store's refusal was logged (resync fix round 2, A): logged once,
+    /// again only after the store reads as this build's.
+    refusal_logged: bool,
 }
 
 impl BulkStatusReader {
@@ -544,7 +586,10 @@ impl BulkStatusReader {
             bulk_sync_threshold: idx.bulk_sync_threshold,
             runtime_config: idx.store_runtime_config,
             store: None,
+            opened_at: None,
+            seen: None,
             failures: ReadFailureTracker::default(),
+            refusal_logged: false,
         }
     }
 
@@ -560,7 +605,29 @@ impl BulkStatusReader {
     /// counter and the gate simply keeps waiting.
     fn poll(&mut self) -> BulkStatusSample {
         match self.read() {
+            // A store this build refuses (resync fix round 2, A) is no read
+            // failure: no signal, the refusal said once. No handle is kept:
+            // the next poll looks again, opening anew only once the store has
+            // changed (resync fix round 4, A).
+            Err(error) if error.downcast_ref::<StoreLayoutMismatch>().is_some() => {
+                if !self.refusal_logged {
+                    error!(
+                        child = %self.label,
+                        store = %self.domain_data_path.display(),
+                        "sequencer status read refuses this store: domain store {} refused: \
+                         {error}; the next network is waiting for '{}', which needs a rebuild",
+                        self.domain_data_path.display(),
+                        self.label
+                    );
+                    self.refusal_logged = true;
+                }
+                BulkStatusSample {
+                    refused: true,
+                    ..BulkStatusSample::default()
+                }
+            }
             Ok(sample) => {
+                self.refusal_logged = false;
                 let recovered_from = self.failures.record_success();
                 if recovered_from > 0 {
                     info!(
@@ -609,14 +676,30 @@ impl BulkStatusReader {
         }
     }
 
-    /// Read the gating network's bulk status. A missing RocksDB `CURRENT` is the
-    /// sole not-ready state (an all-`None` sample); once the store exists, every
-    /// open/refresh/read/decode failure is an error. [`Self::poll`] is the
-    /// tolerant wrapper the sequencer actually uses.
+    /// Read the gating network's bulk status. A missing RocksDB `CURRENT`, or
+    /// a store still being created (resync fix round 3, M), is not ready (an
+    /// all-`None` sample); once the store exists, every open/refresh/read/
+    /// decode failure is an error. [`Self::poll`] is the tolerant wrapper the
+    /// sequencer actually uses.
     fn read(&mut self) -> Result<BulkStatusSample> {
         if self.store.is_none() {
-            if !self.domain_data_path.join("CURRENT").is_file() {
+            // What the store looks like, read before the open lists its
+            // column families (resync fix round 4, A).
+            let Some(signature) = ckbadger_store::store_signature(&self.domain_data_path)? else {
+                self.seen = None;
                 return Ok(BulkStatusSample::default());
+            };
+            // A store last read refused or not ready, unchanged since: the
+            // same answer, nothing opened (one look: CURRENT and the
+            // MANIFEST's length).
+            match &self.seen {
+                Some((seen, SeenStore::Refused(mismatch))) if *seen == signature => {
+                    return Err(anyhow::Error::new(mismatch.clone()));
+                }
+                Some((seen, SeenStore::NotReady)) if *seen == signature => {
+                    return Ok(BulkStatusSample::default());
+                }
+                _ => {}
             }
             let store = CkbadgerStore::open_domain_secondary_with_runtime(
                 &self.domain_data_path,
@@ -630,6 +713,7 @@ impl BulkStatusReader {
                 )
             })?;
             self.store = Some(store);
+            self.opened_at = Some(signature);
         }
         let store = self
             .store
@@ -642,6 +726,38 @@ impl BulkStatusReader {
                 self.domain_data_path.display()
             )
         })?;
+        // The layout first: a store this build must not use is refused,
+        // never read for a bulk status (resync fix round 2, A). A store still
+        // being created is not ready: the handle is dropped, since a secondary
+        // never gains a column family made after it opened, and the store is
+        // opened again on the next poll (resync fix round 3, M).
+        // Refused or not ready: no handle kept (a secondary never gains a
+        // column family made after it opened), the signature it opened at
+        // kept, so the next poll opens again only once the store has changed
+        // (resync fix round 4, A).
+        let seen = match store.check_store_layout()? {
+            Err(mismatch) => SeenStore::Refused(mismatch),
+            Ok(ckbadger_store::StoreLayoutState::NotReady) => SeenStore::NotReady,
+            Ok(_) => {
+                self.seen = None;
+                return self.read_bulk_status();
+            }
+        };
+        self.store = None;
+        let opened_at = self
+            .opened_at
+            .take()
+            .expect("the signature is read before every open");
+        self.seen = Some((opened_at, seen));
+        match &self.seen {
+            Some((_, SeenStore::Refused(mismatch))) => Err(anyhow::Error::new(mismatch.clone())),
+            _ => Ok(BulkStatusSample::default()),
+        }
+    }
+
+    /// The bulk status of the store held, read once its layout passed.
+    fn read_bulk_status(&self) -> Result<BulkStatusSample> {
+        let store = self.store.as_ref().expect("read with a store held");
         let status = store.get_sync_status().with_context(|| {
             format!(
                 "failed to read sync status from {}",
@@ -675,6 +791,7 @@ impl BulkStatusReader {
             )),
             lag,
             bulk_completed,
+            refused: false,
         })
     }
 }
@@ -711,12 +828,19 @@ async fn observe_gate(
     .await
     .context("sequencer bulk-status read task failed")?;
 
-    let blocked = {
+    // The gating indexer blocked as rebuild-required: blocked with the reason
+    // the one function writes for it ([`rebuild_required_reason`]).
+    let (blocked, blocked_as_rebuild) = {
         let locked = state.lock().await;
         locked
             .children
             .get(gate_child_index)
-            .and_then(|child| child.blocked.clone())
+            .map(|child| {
+                let as_rebuild =
+                    child.blocked.as_deref() == Some(rebuild_required_reason(&child.name).as_str());
+                (child.blocked.clone(), as_rebuild)
+            })
+            .unwrap_or((None, false))
     };
 
     Ok(GateStatus {
@@ -724,6 +848,7 @@ async fn observe_gate(
         lag: sample.lag,
         bulk_completed: sample.bulk_completed,
         blocked,
+        needs_rebuild: sample.refused || blocked_as_rebuild,
     })
 }
 
@@ -1239,17 +1364,14 @@ async fn monitor_children_multi(
                         continue;
                     }
                     ChildExitAction::BlockRebuildRequired => {
+                        let reason = rebuild_required_reason(label);
                         error!(
                             child = %label,
                             exit_status = %status,
                             workdir = %specs[i].workdir,
-                            "indexer requires an explicit RocksDB purge and genesis rebuild; automatic restart is blocked"
+                            "{reason}"
                         );
-                        locked.children[i].blocked = Some(format!(
-                            "indexer requires an explicit RocksDB purge and genesis rebuild \
-                             (exit {})",
-                            ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
-                        ));
+                        locked.children[i].blocked = Some(reason);
                         continue;
                     }
                     ChildExitAction::Restart => {}
@@ -1548,6 +1670,15 @@ mod tests {
         }
     }
 
+    /// A store this build's indexer wrote carries its layout stamp, its first
+    /// write: the sequencer's probe refuses any other (resync fix round 2,
+    /// A), so the fixtures that seed a store as the indexer would stamp it.
+    fn stamp_as_this_builds(store: &CkbadgerStore) {
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+    }
+
     #[test]
     fn sequencer_waits_only_while_domain_store_is_absent() {
         let dir = TempDir::new().unwrap();
@@ -1566,6 +1697,7 @@ mod tests {
         let domain = dir.path().join("domain");
         let store = CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
             .unwrap();
+        stamp_as_this_builds(&store);
         store.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
 
@@ -1585,6 +1717,7 @@ mod tests {
         let primary =
             CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
                 .unwrap();
+        stamp_as_this_builds(&primary);
         primary.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
         let mut reader = BulkStatusReader::new(&idx);
@@ -1738,6 +1871,7 @@ mod tests {
         let primary =
             CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
                 .unwrap();
+        stamp_as_this_builds(&primary);
         primary.put_sync_progress(&progress_json(9, 10)).unwrap();
 
         assert_eq!(reader.read().unwrap().past_bulk, Some(true));
@@ -1856,11 +1990,260 @@ mod tests {
             classify_child_exit(&indexer, true, Some(0)),
             ChildExitAction::CleanHandoff
         );
+        // Re-pinned on purpose (resync fix round N7): the indexer's and the
+        // API's refusal of an old store are one case to the operator, so an
+        // API that exits rebuild-required is blocked like the indexer, never
+        // restarted into the same refusal (it was "an indexer-specific
+        // lifecycle state").
         assert_eq!(
             classify_child_exit(&api, false, Some(rebuild_code)),
-            ChildExitAction::Restart,
-            "rebuild-required is an indexer-specific lifecycle state"
+            ChildExitAction::BlockRebuildRequired,
+            "the API's refusal of an old store blocks it, as the indexer's does"
         );
+        // A child that holds no chain store has no such state.
+        let frontend = ChildSpec {
+            label: "frontend".to_string(),
+            service: "frontend".to_string(),
+            workdir: "/tmp".to_string(),
+        };
+        assert_eq!(
+            classify_child_exit(&frontend, false, Some(rebuild_code)),
+            ChildExitAction::Restart
+        );
+    }
+
+    /// resync fix round 2, A: the sequencer's probe of a gating network's
+    /// store refuses a store an earlier build left (without the column
+    /// families this build added), saying the refusal (not "very likely
+    /// corrupt"), and creates nothing in it.
+    #[test]
+    fn the_sequencers_probe_refuses_a_store_of_an_earlier_layout() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+            let mut reader = BulkStatusReader::new(&SequencedIndexer {
+                spec: ChildSpec {
+                    label: "mainnet/indexer".to_string(),
+                    service: "indexer".to_string(),
+                    workdir: dir.path().to_string_lossy().into_owned(),
+                },
+                domain_data_path: domain.clone(),
+                bulk_sync_threshold: 1_000,
+                store_runtime_config: StoreRuntimeConfig::default(),
+            });
+            let error = reader.read().unwrap_err();
+            let mismatch = error
+                .downcast_ref::<ckbadger_store::StoreLayoutMismatch>()
+                .unwrap_or_else(|| panic!("stamp {stamp:?}: the refusal, got {error:#}"));
+            assert_eq!(mismatch.found, stamp);
+            assert!(
+                mismatch.to_string().contains("live_code_cells_by_type"),
+                "{mismatch}"
+            );
+            assert_eq!(store_files_and_column_families(&domain), before);
+        }
+    }
+
+    /// resync fix round 4, A (the third read's SHOULD-1): the probe's two
+    /// reads straddle the end of creation: the families listed before the
+    /// creating open ended (the first 60 of the creation order), this build's
+    /// stamp read after. Not refused; once the store is whole, read.
+    #[test]
+    fn the_sequencers_probe_reads_a_store_whose_stamp_came_after_its_family_list() {
+        use ckbadger_store::earlier_layout_for_test::create_domain_store_by_hand;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let order = ckbadger_store::domain_creation_order();
+        create_domain_store_by_hand(
+            &domain,
+            &order[..60],
+            false,
+            Some(ckbadger_store::STORE_LAYOUT),
+        );
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain.clone()));
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert_eq!(sample.past_bulk, None, "{sample:?}");
+        drop(CkbadgerStore::open_domain(&domain).unwrap());
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert!(
+            sample.past_bulk.is_some(),
+            "the whole store is read: {sample:?}"
+        );
+    }
+
+    /// resync fix round 4, A: a store of an earlier layout stays refused on
+    /// every poll, and the probe's looking again costs no file in its own
+    /// directory: over 20 polls the secondary's directory holds what it held
+    /// after the first (nothing it can see changed, so it opens nothing).
+    #[test]
+    fn a_refused_store_is_refused_on_every_poll_and_grows_no_file() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        create_earlier_layout_domain_store(&domain, Some(7));
+        let idx = test_sequenced_indexer(domain);
+        let mut reader = BulkStatusReader::new(&idx);
+        let files = |path: &std::path::Path| std::fs::read_dir(path).unwrap().count();
+        assert!(reader.poll().refused);
+        let after_first = files(&reader.secondary_path);
+        for poll in 1..20 {
+            assert!(reader.poll().refused, "poll {poll}");
+        }
+        assert_eq!(files(&reader.secondary_path), after_first);
+    }
+
+    /// resync fix round 3, M (logic MUST-1): the sequencer's probe meets the
+    /// gating store while its creating open is still making its column
+    /// families. It is not refused and no handle is kept (a secondary never
+    /// gains a column family made after it opened); once the store is made
+    /// and stamped, the next poll reads it.
+    #[test]
+    fn the_sequencers_probe_waits_on_a_store_still_being_created_and_reads_it_once_made() {
+        use ckbadger_store::earlier_layout_for_test::create_store_in_creation;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let all = ckbadger_store::domain_creation_order().len();
+        create_store_in_creation(&domain, all / 2);
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain.clone()));
+
+        let sample = reader.poll();
+        assert!(
+            !sample.refused,
+            "a store being created is no refusal: {sample:?}"
+        );
+        assert_eq!(sample.past_bulk, None, "and no signal yet: {sample:?}");
+
+        {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        let sample = reader.poll();
+        assert!(!sample.refused, "{sample:?}");
+        assert!(
+            sample.past_bulk.is_some(),
+            "the made store is read: {sample:?}"
+        );
+    }
+
+    /// The lead's ruling on rule 11 (resync fix round 2): a gating network
+    /// refused as rebuild-required holds the next network, and the gate knows
+    /// it needs a rebuild, from its store (refused before its indexer exits)
+    /// and from its indexer blocked as rebuild-required; a gate blocked for
+    /// another reason does not.
+    #[tokio::test]
+    async fn observe_gate_says_a_gate_whose_stores_need_a_rebuild() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = TempDir::new().unwrap();
+        let refused = dir.path().join("refused/domain");
+        create_earlier_layout_domain_store(&refused, Some(7));
+        let absent = dir.path().join("absent/domain");
+        let readers: BulkStatusReaders = Arc::new(std::sync::Mutex::new(vec![
+            BulkStatusReader::new(&test_sequenced_indexer(refused)),
+            BulkStatusReader::new(&test_sequenced_indexer(absent)),
+        ]));
+
+        let exe = std::env::current_exe().unwrap();
+        let log_dir = dir.path().join("run/logs");
+        let spec = ChildSpec {
+            label: "mainnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let child = spawn_child(&exe, &spec, &log_dir).unwrap();
+        let state = Arc::new(Mutex::new(SupervisorState {
+            children: vec![child],
+            shutdown_requested: false,
+        }));
+
+        // its store is refused, its indexer not yet blocked
+        let status = observe_gate(&readers, &state, 0, 0).await.unwrap();
+        assert_eq!(status.past_bulk, None);
+        assert!(status.needs_rebuild, "a refused store needs a rebuild");
+
+        // its indexer blocked as rebuild-required (exit 78), its store not read
+        state.lock().await.children[0].blocked = Some(rebuild_required_reason("mainnet/indexer"));
+        let status = observe_gate(&readers, &state, 1, 0).await.unwrap();
+        assert!(
+            status.needs_rebuild,
+            "an indexer blocked as rebuild-required"
+        );
+
+        // blocked for another reason: no rebuild said
+        state.lock().await.children[0].blocked =
+            Some("exceeded max restart attempts (10)".to_string());
+        let status = observe_gate(&readers, &state, 1, 0).await.unwrap();
+        assert!(!status.needs_rebuild, "a crash loop is no rebuild");
+
+        let mut locked = state.lock().await;
+        let _ = locked.children[0].child.kill().await;
+        let _ = locked.children[0].child.wait().await;
+    }
+
+    /// resync fix round 3, tests NOTE-4: a refused store is no read failure,
+    /// on every poll: polled past the threshold at which a failing read is
+    /// called PERSISTENT ("very likely corrupt"), it is still refused and has
+    /// recorded no failure.
+    #[test]
+    fn a_refused_store_records_no_read_failure_however_long_it_is_polled() {
+        use ckbadger_store::earlier_layout_for_test::create_earlier_layout_domain_store;
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        create_earlier_layout_domain_store(&domain, Some(7));
+        let mut reader = BulkStatusReader::new(&test_sequenced_indexer(domain));
+        for poll in 0..=SEQUENCER_READ_FAILURE_PERSISTENT {
+            let sample = reader.poll();
+            assert!(sample.refused, "poll {poll}: {sample:?}");
+            assert_eq!(reader.failures.consecutive(), 0, "poll {poll}");
+        }
+    }
+
+    /// resync fix round 3, tests NOTE-4: the monitor blocks a child with
+    /// `rebuild_required_reason(spec.label)`, and the gate reads that reason
+    /// by the child's name (`observe_gate`): a child is named by its spec's
+    /// label.
+    #[tokio::test]
+    async fn a_spawned_child_is_named_by_its_specs_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = ChildSpec {
+            label: "testnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let mut child = spawn_child(
+            &std::env::current_exe().unwrap(),
+            &spec,
+            &dir.path().join("logs"),
+        )
+        .unwrap();
+        assert_eq!(child.name, spec.label);
+        let _ = child.child.kill().await;
+        let _ = child.child.wait().await;
+    }
+
+    /// resync fix round N7: the supervisor names the blocked chain-store
+    /// child and the way out, the same words for the indexer and the API.
+    #[test]
+    fn a_blocked_chain_store_child_is_named_with_the_way_out() {
+        for label in ["testnet/indexer", "testnet/api"] {
+            let reason = rebuild_required_reason(label);
+            assert_eq!(
+                reason,
+                format!(
+                    "{label} refused this network's chain stores (exit 78): they need a rebuild, \
+                     so it is not restarted; delete the network's RocksDB data and re-sync from \
+                     genesis (the error line in {label}'s log names the stores and both layouts)"
+                )
+            );
+        }
     }
 
     #[test]

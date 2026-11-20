@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 import {
   lockPhrase,
   lockWords,
+  nameByOf,
   namedLockWords,
   namedPartyLockFacts,
   partyLockWordsText,
@@ -49,11 +50,14 @@ const COLUMN_WORDS = cn(LOCK_WORDS, 'text-meta min-w-0 truncate leading-4');
  */
 export function rowLockFacts({
   lockKind,
+  lockKindBy,
   lockCodeHash,
   lockHashType,
   address,
 }: {
   lockKind: string | null;
+  /** The hash type the API writes beside the name (`LockFacts.nameBy`), where the row sends it. */
+  lockKindBy?: string | null;
   lockCodeHash: string | null;
   /** The lock's hash type, where the row sends one. */
   lockHashType?: string | null;
@@ -65,7 +69,8 @@ export function rowLockFacts({
     lockHashType === undefined || lockHashType === null
       ? null
       : hashTypeOf(lockHashType, `lock ${lockCodeHash}`);
-  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType };
+  const nameBy = nameByOf(lockKindBy, `lock ${lockCodeHash}`);
+  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType, nameBy };
   const script = addressScript(address);
   if (lockCodeHash !== null && lockCodeHash.toLowerCase() !== script.codeHash)
     throw new Error(
@@ -75,7 +80,7 @@ export function rowLockFacts({
     throw new Error(
       `address ${address} spells the lock ${script.codeHash} by ${script.hashType}, the row says by ${hashType}`
     );
-  return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType };
+  return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType, nameBy };
 }
 
 /** A lock's hash type as the chain writes it; any other word is a contract break, named. */
@@ -96,11 +101,14 @@ export function cellLockFacts(
   cell: {
     lock: { codeHash: string; hashType: string; args: string };
     name: string | null;
+    /** The hash type the API writes beside the name (`LockFacts.nameBy`), where it sends one. */
+    nameBy?: string | null;
     address: string | null;
   },
   where: string
 ): LockFacts {
   const { lock, name, address } = cell;
+  const nameBy = nameByOf(cell.nameBy, where);
   const hashType = hashTypeOf(lock.hashType, where);
   if (address !== null) {
     const spelled = addressScript(address);
@@ -113,7 +121,7 @@ export function cellLockFacts(
         `${where}: address ${address} spells the lock ${spelled.codeHash} by ${spelled.hashType}, args ${spelled.args}; the cell's lock is ${lock.codeHash} by ${hashType}, args ${lock.args}`
       );
   }
-  return { name, codeHash: lock.codeHash.toLowerCase(), hashType };
+  return { name, codeHash: lock.codeHash.toLowerCase(), hashType, nameBy };
 }
 
 /**
@@ -123,7 +131,11 @@ export function cellLockFacts(
  * the name alone.
  */
 export function partyLockFacts(party: ParticipantRef): LockFacts {
-  return namedPartyLockFacts({ lockScriptName: party.lockKind ?? null, address: party.address });
+  return namedPartyLockFacts({
+    lockScriptName: party.lockKind ?? null,
+    lockScriptNameBy: party.lockKindBy,
+    address: party.address,
+  });
 }
 
 /**
@@ -157,6 +169,8 @@ export function cellOwnerLock(cell: ItemCellLock): LockWords | null {
 interface ItemCellLock {
   lock: { codeHash: string; hashType: string; args: string };
   lockName: string | null;
+  /** The hash type the API writes beside the lock's name (`LockFacts.nameBy`). */
+  lockNameBy?: string | null;
   ownerAddress: string;
   txHash: string;
   outputIndex: number;
@@ -165,7 +179,12 @@ interface ItemCellLock {
 /** A version of an item's cell's lock facts (`cellLockFacts`), refused with the cell named. */
 function itemCellLockFacts(cell: ItemCellLock): LockFacts {
   return cellLockFacts(
-    { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
+    {
+      lock: cell.lock,
+      name: cell.lockName,
+      nameBy: cell.lockNameBy,
+      address: cell.ownerAddress,
+    },
     `cell ${cell.txHash}:${cell.outputIndex}`
   );
 }
@@ -257,7 +276,8 @@ export function LockWordsView({
       {name !== null ? (
         <>
           {name}
-          {by && <span className="whitespace-normal">{by}</span>}
+          {/* a name by another reference than the registry's: "xUDT · by data2" */}
+          {by && <span className="whitespace-normal"> ·{by}</span>}
         </>
       ) : (
         <>
@@ -298,6 +318,7 @@ export function LockWordsView({
  */
 export function LockKind({
   lockKind,
+  lockKindBy,
   lockCodeHash,
   address,
   size,
@@ -305,6 +326,8 @@ export function LockKind({
   place = 'inline',
 }: {
   lockKind: string | null;
+  /** The hash type the API writes beside the name, where the row sends it (`LockFacts.nameBy`). */
+  lockKindBy?: string | null;
   lockCodeHash: string | null;
   /** The row's address, which spells its lock: it decides the default lock. */
   address: string | null;
@@ -313,6 +336,6 @@ export function LockKind({
   className?: string;
   place?: LockPlace;
 }) {
-  const words = lockWords(rowLockFacts({ lockKind, lockCodeHash, address }), place);
+  const words = lockWords(rowLockFacts({ lockKind, lockKindBy, lockCodeHash, address }), place);
   return words && <LockWordsView words={words} size={size} className={className} />;
 }

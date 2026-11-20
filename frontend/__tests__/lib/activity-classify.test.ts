@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobalActivity } from '@/lib/api';
+import { TAG_TYPE_CALL } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { activityHeadline } from '@/components/activity-event-row';
 import { activityRead, ITEM_TYPE, type Written } from '@/__tests__/utils/activity-read';
 
 function makeActivity(overrides: Partial<Written<GlobalActivity>> = {}): GlobalActivity {
@@ -12,15 +14,16 @@ function makeActivity(overrides: Partial<Written<GlobalActivity>> = {}): GlobalA
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
-    // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
-    itemTypes: overrides.itemTypes ?? [],
-    itemTypesUnread: null,
+    // the row's recognised codes as its caller states them, as the route would (the third read's T
+    // SHOULD-1, carried to C7's list)
+    recognizedTypes: overrides.recognizedTypes ?? [],
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants ?? [
       {
         address: 'ckb1qtest',
         lockHash: '0xaa',
         lockHashPrefix: null,
+        sent: false,
         roles: [],
         ckbDelta: '0',
         usedDelta: '0',
@@ -35,7 +38,7 @@ describe('classifyActivity', () => {
   it('classifies DAO deposit from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -52,7 +55,7 @@ describe('classifyActivity', () => {
   it('classifies DAO withdraw request from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -69,7 +72,7 @@ describe('classifyActivity', () => {
   it('classifies DAO withdraw complete from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -86,12 +89,13 @@ describe('classifyActivity', () => {
   it('classifies token transfer via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.xudt],
+        recognizedTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -115,12 +119,13 @@ describe('classifyActivity', () => {
   it('classifies object action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.spore],
+        recognizedTypes: [ITEM_TYPE.spore],
         participants: [
           {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -136,12 +141,13 @@ describe('classifyActivity', () => {
   it('classifies identity action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.dotbit],
+        recognizedTypes: [ITEM_TYPE.dotbit],
         participants: [
           {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -173,6 +179,34 @@ describe('classifyActivity', () => {
     expect(result.displayType).toBe('typeCall');
   });
 
+  // C7 (resync/type-codes): a recognised type script that ran for a party and moved none of its
+  // items, no DAO step (a wallet merging its own sUDT cells), sets the party's TAG_TYPE_CALL in the
+  // indexer, the bit an unrecognised call sets; its transaction is a script call, which the global
+  // kind already says (Script), never a CKB transfer. It has no unrecognised call to name.
+  it('classifies a recognised type that moved nothing (the party’s TAG_TYPE_CALL) as a script call', () => {
+    // the indexer's bit 6 (crates/ckbadger-store/src/types.rs)
+    expect(TAG_TYPE_CALL).toBe(1 << 6);
+    const merge = makeActivity({
+      participants: [
+        {
+          address: 'ckb1qtest',
+          lockHash: '0xaa',
+          lockHashPrefix: null,
+          sent: true,
+          roles: [],
+          ckbDelta: '-30000',
+          usedDelta: '0',
+          itemDeltas: [],
+          tags: TAG_TYPE_CALL,
+        },
+      ],
+    });
+    const result = classifyActivity(merge);
+    expect(result.displayType).toBe('typeCall');
+    expect(result.primaryTypeCall).toBeNull();
+    expect(activityHeadline(merge)).toBe('Script call');
+  });
+
   it('classifies CKB transfer as fallback', () => {
     const result = classifyActivity(
       makeActivity({
@@ -181,6 +215,7 @@ describe('classifyActivity', () => {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: true,
             roles: [],
             ckbDelta: '-50000000000',
             usedDelta: '0',
@@ -196,7 +231,7 @@ describe('classifyActivity', () => {
   it('DAO deposit takes priority over token in same activity', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -210,6 +245,7 @@ describe('classifyActivity', () => {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -227,12 +263,13 @@ describe('classifyActivity', () => {
   it('token takes priority over script call', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.xudt],
+        recognizedTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -259,7 +296,7 @@ describe('classifyActivity', () => {
   it('returns the first matching item delta for the classified type', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.dao],
+        recognizedTypes: [ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
@@ -282,12 +319,13 @@ describe('classifyActivity', () => {
   it('item delta takes priority over lock calls', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.xudt],
+        recognizedTypes: [ITEM_TYPE.xudt],
         participants: [
           {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -349,7 +387,7 @@ describe('classifyActivity', () => {
   it('protocol action takes priority over item deltas', () => {
     const result = classifyActivity(
       makeActivity({
-        itemTypes: [ITEM_TYPE.xudt],
+        recognizedTypes: [ITEM_TYPE.xudt],
         protocolActions: [
           { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
         ],
@@ -358,6 +396,7 @@ describe('classifyActivity', () => {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: false,
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
@@ -381,6 +420,7 @@ describe('classifyActivity', () => {
             address: 'ckb1qtest',
             lockHash: '0xaa',
             lockHashPrefix: null,
+            sent: true,
             roles: [],
             ckbDelta: '-50000000000',
             usedDelta: '0',

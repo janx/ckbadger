@@ -74,9 +74,10 @@ pub struct DotbitParser;
 impl DotbitParser {
     /// Return whether a type script is the canonical `.bit` AccountCell.
     /// `.bit Cell` is a separate identity asset with an independent lifecycle.
-    pub fn is_account_cell_type_script(code_hash: &[u8]) -> bool {
+    pub fn is_account_cell_type_script(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
+            hash_type,
             crate::parser::registry::ProtocolScript::DotbitAccount,
         )
     }
@@ -86,7 +87,12 @@ impl DotbitParser {
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
         let type_args = parse_hex_to_bytes(&type_script.args);
         let data = parse_hex_to_bytes(data_hex);
-        let parsed = Self::parse_identity_cell_data(&type_code_hash, &type_args, &data)?;
+        let parsed = Self::parse_identity_cell_data(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            &type_args,
+            &data,
+        )?;
 
         let type_script_hash = ScriptParser::compute_script_hash(type_script);
         let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
@@ -106,7 +112,12 @@ impl DotbitParser {
     pub fn parse_account_parsed_cell(cell: &ParsedCell) -> Option<ParsedDotbitAccount> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
         let type_args = cell.type_args.as_deref().unwrap_or_default();
-        let parsed = Self::parse_identity_cell_data(type_code_hash, type_args, &cell.data)?;
+        let parsed = Self::parse_identity_cell_data(
+            type_code_hash,
+            cell.type_hash_type?,
+            type_args,
+            &cell.data,
+        )?;
 
         Some(ParsedDotbitAccount {
             account_id: parsed.account_id,
@@ -129,11 +140,17 @@ impl DotbitParser {
     /// id sits at `data[32..52]`.
     pub(crate) fn parse_account_id_from_data(
         type_code_hash: &[u8],
+        type_hash_type: i16,
         type_args: Option<&[u8]>,
         data: &[u8],
     ) -> Option<Vec<u8>> {
-        Self::parse_identity_cell_data(type_code_hash, type_args.unwrap_or_default(), data)
-            .map(|parsed| parsed.account_id)
+        Self::parse_identity_cell_data(
+            type_code_hash,
+            type_hash_type,
+            type_args.unwrap_or_default(),
+            data,
+        )
+        .map(|parsed| parsed.account_id)
     }
 
     /// The `.bit` account id of a consumed AccountCell INPUT.
@@ -147,10 +164,11 @@ impl DotbitParser {
     /// parsed exactly like an output.
     pub(crate) fn resolve_account_id(
         type_code_hash: &[u8],
+        type_hash_type: i16,
         type_args: Option<&[u8]>,
         indexed_id_or_data: &[u8],
     ) -> Option<Vec<u8>> {
-        if !Self::is_account_cell_type_script(type_code_hash) {
+        if !Self::is_account_cell_type_script(type_code_hash, type_hash_type) {
             return None;
         }
         if indexed_id_or_data.len() == ACCOUNT_ID_LEN
@@ -158,7 +176,12 @@ impl DotbitParser {
         {
             return Some(indexed_id_or_data.to_vec());
         }
-        Self::parse_account_id_from_data(type_code_hash, type_args, indexed_id_or_data)
+        Self::parse_account_id_from_data(
+            type_code_hash,
+            type_hash_type,
+            type_args,
+            indexed_id_or_data,
+        )
     }
 
     /// The DAS root AccountCell: the head of the account ring. Its data has
@@ -175,12 +198,13 @@ impl DotbitParser {
 
     fn parse_identity_cell_data(
         type_code_hash: &[u8],
+        type_hash_type: i16,
         type_args: &[u8],
         data: &[u8],
     ) -> Option<ParsedDotbitCellData> {
         use crate::parser::registry::ProtocolScript;
 
-        match crate::parser::registry::PROTOCOL_REGISTRY.get(type_code_hash) {
+        match crate::parser::registry::PROTOCOL_REGISTRY.protocol(type_code_hash, type_hash_type) {
             Some(ProtocolScript::DotbitAccount) => {
                 Self::parse_legacy_account_cell_data(type_args, data)
             }
@@ -274,7 +298,10 @@ impl DotbitParser {
             let Some(type_script) = output.type_.as_ref() else {
                 continue;
             };
-            if !Self::is_account_cell_type_script(&parse_hex_to_bytes(&type_script.code_hash)) {
+            if !Self::is_account_cell_type_script(
+                &parse_hex_to_bytes(&type_script.code_hash),
+                ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            ) {
                 continue;
             }
             let output_index = i16::try_from(output_index).map_err(|_| {
@@ -768,12 +795,12 @@ mod tests {
     #[test]
     fn test_is_account_cell_type_script() {
         let hash = parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        assert!(DotbitParser::is_account_cell_type_script(&hash));
+        assert!(DotbitParser::is_account_cell_type_script(&hash, 1));
 
         let other = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
-        assert!(!DotbitParser::is_account_cell_type_script(&other));
+        assert!(!DotbitParser::is_account_cell_type_script(&other, 1));
     }
 
     #[test]
@@ -781,7 +808,7 @@ mod tests {
         let t = crate::rpc::parse_hex_to_bytes(
             "0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1",
         );
-        assert!(DotbitParser::is_account_cell_type_script(&t));
+        assert!(DotbitParser::is_account_cell_type_script(&t, 1));
     }
 
     #[test]
@@ -864,17 +891,17 @@ mod tests {
         let id = crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_ID);
 
         assert_eq!(
-            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &data),
+            DotbitParser::parse_account_id_from_data(&code_hash, 1, Some(&[]), &data),
             Some(id.clone())
         );
         // An input carries the id it was indexed under (live and bulk), or the
         // real data (tx-pool mirror): both resolve to the same id.
         assert_eq!(
-            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &id),
+            DotbitParser::resolve_account_id(&code_hash, 1, Some(&[]), &id),
             Some(id.clone())
         );
         assert_eq!(
-            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &data),
+            DotbitParser::resolve_account_id(&code_hash, 1, Some(&[]), &data),
             Some(id)
         );
     }
@@ -886,11 +913,11 @@ mod tests {
         let code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
         let args = [0x2d; 20];
         assert_eq!(
-            DotbitParser::resolve_account_id(&code_hash, Some(&args), &[]),
+            DotbitParser::resolve_account_id(&code_hash, 1, Some(&args), &[]),
             None
         );
         assert_eq!(
-            DotbitParser::parse_account_id_from_data(&code_hash, Some(&args), &[]),
+            DotbitParser::parse_account_id_from_data(&code_hash, 1, Some(&args), &[]),
             None
         );
     }
@@ -904,19 +931,19 @@ mod tests {
         let root = crate::rpc::parse_hex_to_bytes(MAINNET_ROOT_ACCOUNT_CELL_DATA);
         assert_eq!(root.len(), 176);
         assert_eq!(
-            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &root),
+            DotbitParser::parse_account_id_from_data(&code_hash, 1, Some(&[]), &root),
             None
         );
         assert_eq!(
-            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &root),
+            DotbitParser::resolve_account_id(&code_hash, 1, Some(&[]), &root),
             None
         );
         assert_eq!(
-            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &[0xAA; 20]),
+            DotbitParser::parse_account_id_from_data(&code_hash, 1, Some(&[]), &[0xAA; 20]),
             None
         );
         assert_eq!(
-            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &[0xAA; 51]),
+            DotbitParser::parse_account_id_from_data(&code_hash, 1, Some(&[]), &[0xAA; 51]),
             None
         );
     }
@@ -1095,6 +1122,7 @@ mod tests {
             };
             let from_data = DotbitParser::parse_account_id_from_data(
                 &parse_hex_to_bytes(&type_script.code_hash),
+                1,
                 Some(&parse_hex_to_bytes(&type_script.args)),
                 &parse_hex_to_bytes(data_hex),
             );

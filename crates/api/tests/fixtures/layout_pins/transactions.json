@@ -23,8 +23,6 @@
         "blockNumber": 5,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [],
-        "itemTypesUnread": null,
         "items": [],
         "lockCalls": [],
         "participantCount": 2,
@@ -36,8 +34,10 @@
             "lockHash": "0xe283d25800772fa5df7552b9e1e60bc7a34848acb7d329b0c94f1ffe767c46e7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "-6100000000"
           },
           {
@@ -47,7 +47,9 @@
             "lockHash": "0xf3423c94e4c2a20c4bf0864d2fdf06b737b041e16635790c6c8edf3e724ec11a",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 0,
             "usedDelta": "6100000000"
           }
@@ -55,7 +57,7 @@
         "partyIds": [
           [
             "0xe283d25800772fa5df7552b9e1e60bc7a34848ac",
-            0
+            256
           ],
           [
             "0xf3423c94e4c2a20c4bf0864d2fdf06b737b041e1",
@@ -63,6 +65,7 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [],
         "timestamp": "1790041800000",
         "txHash": "0x1e20955f4cd6108d951fb52e9bbd5c3a74f9765f1666fd045722aa3c2ec07a88",
         "txIndex": 1,
@@ -107,8 +110,6 @@
         "blockNumber": 4,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [],
-        "itemTypesUnread": null,
         "items": [],
         "lockCalls": [],
         "participantCount": 2,
@@ -120,8 +121,10 @@
             "lockHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "-6100000000"
           },
           {
@@ -131,7 +134,9 @@
             "lockHash": "0xe283d25800772fa5df7552b9e1e60bc7a34848acb7d329b0c94f1ffe767c46e7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 0,
             "usedDelta": "6100000000"
           }
@@ -139,7 +144,7 @@
         "partyIds": [
           [
             "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
-            0
+            256
           ],
           [
             "0xe283d25800772fa5df7552b9e1e60bc7a34848ac",
@@ -147,6 +152,7 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [],
         "timestamp": "1790041200000",
         "txHash": "0xee4bca16ac5aa95734409c7a6a87bed9190a9fac4ec535284c435f890e377646",
         "txIndex": 1,
@@ -191,14 +197,6 @@
         "blockNumber": 3,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [
-          {
-            "scriptName": "did:ckb",
-            "typeCodeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
-            "typeHashType": "type"
-          }
-        ],
-        "itemTypesUnread": null,
         "items": [
           {
             "identityId": "0x1616161616161616161616161616161616161616161616161616161616161616",
@@ -226,8 +224,10 @@
             "lockHash": "0x5d64d444aacad37ded80fd80dd4a56120279d1b5095a724e1afdbfe93f72b7b8",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 4,
+            "sent": true,
+            "tags": 260,
             "usedDelta": "-12900000000"
           },
           {
@@ -245,7 +245,9 @@
             "lockHash": "0xc1e0e142cfa13a77ab92004fd124cd1f953a6db51855ee3d3b39c13dcca17a64",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 4,
             "usedDelta": "12900000000"
           }
@@ -253,7 +255,7 @@
         "partyIds": [
           [
             "0x5d64d444aacad37ded80fd80dd4a56120279d1b5",
-            4
+            260
           ],
           [
             "0xc1e0e142cfa13a77ab92004fd124cd1f953a6db5",
@@ -261,6 +263,14 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [
+          {
+            "scriptName": "did:ckb",
+            "scriptNameBy": null,
+            "typeCodeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
+            "typeHashType": "type"
+          }
+        ],
         "timestamp": "1790040600000",
         "txHash": "0x66ceaf4f13457d4af6978c2e76f1b2d1d6284f122d56a443bb895098575f1d89",
         "txIndex": 2,
@@ -287,14 +297,6 @@
         "blockNumber": 3,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [
-          {
-            "scriptName": "Spore",
-            "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-            "typeHashType": "data1"
-          }
-        ],
-        "itemTypesUnread": null,
         "items": [
           {
             "class": "object",
@@ -334,8 +336,10 @@
             "lockHash": "0xbe1a32103e168e4e382dcaf294c7743c7a482c02a1b3b8656262071333f1cff7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 2,
+            "sent": true,
+            "tags": 258,
             "usedDelta": "-20200000000"
           },
           {
@@ -359,7 +363,9 @@
             "lockHash": "0xbf7373a319dce28331dfdf2b158db8b67ba213c61a19d7a6cab5e6c23c11ff4b",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 2,
             "usedDelta": "20200000000"
           }
@@ -367,7 +373,7 @@
         "partyIds": [
           [
             "0xbe1a32103e168e4e382dcaf294c7743c7a482c02",
-            2
+            258
           ],
           [
             "0xbf7373a319dce28331dfdf2b158db8b67ba213c6",
@@ -375,6 +381,14 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [
+          {
+            "scriptName": "Spore",
+            "scriptNameBy": null,
+            "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "typeHashType": "data1"
+          }
+        ],
         "timestamp": "1790040600000",
         "txHash": "0x7e28b01df5473700f5fa0038acce77cdc5d9a2ccc3862c0c4ecc401efe204970",
         "txIndex": 1,
@@ -419,14 +433,6 @@
         "blockNumber": 2,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [
-          {
-            "scriptName": "did:ckb",
-            "typeCodeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
-            "typeHashType": "type"
-          }
-        ],
-        "itemTypesUnread": null,
         "items": [
           {
             "identityId": "0x1616161616161616161616161616161616161616161616161616161616161616",
@@ -446,8 +452,10 @@
             "lockHash": "0x2f09a3e4c673fb2ad16c0b225f5d6634ee05e5dd28e5333adcb82b88eb762a6d",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "0"
           },
           {
@@ -465,7 +473,9 @@
             "lockHash": "0x5d64d444aacad37ded80fd80dd4a56120279d1b5095a724e1afdbfe93f72b7b8",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 4,
             "usedDelta": "12900000000"
           }
@@ -473,7 +483,7 @@
         "partyIds": [
           [
             "0x2f09a3e4c673fb2ad16c0b225f5d6634ee05e5dd",
-            0
+            256
           ],
           [
             "0x5d64d444aacad37ded80fd80dd4a56120279d1b5",
@@ -481,6 +491,14 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [
+          {
+            "scriptName": "did:ckb",
+            "scriptNameBy": null,
+            "typeCodeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
+            "typeHashType": "type"
+          }
+        ],
         "timestamp": "1790040000000",
         "txHash": "0xf3735cb7e5d5a156e72aa677bdf94b66cc75e9b5df016a227e5440d9099fa28b",
         "txIndex": 2,
@@ -507,14 +525,6 @@
         "blockNumber": 2,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [
-          {
-            "scriptName": "Spore",
-            "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-            "typeHashType": "data1"
-          }
-        ],
-        "itemTypesUnread": null,
         "items": [
           {
             "class": "object",
@@ -554,7 +564,9 @@
             "lockHash": "0xbe1a32103e168e4e382dcaf294c7743c7a482c02a1b3b8656262071333f1cff7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 2,
             "usedDelta": "20200000000"
           },
@@ -565,8 +577,10 @@
             "lockHash": "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "0"
           }
         ],
@@ -577,10 +591,18 @@
           ],
           [
             "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6",
-            0
+            256
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [
+          {
+            "scriptName": "Spore",
+            "scriptNameBy": null,
+            "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "typeHashType": "data1"
+          }
+        ],
         "timestamp": "1790040000000",
         "txHash": "0x7ab75305ec5cadfe5a4bc814f712f8c4dbf6f121dde0419fe394e69b88424c64",
         "txIndex": 1,
@@ -625,8 +647,6 @@
         "blockNumber": 1,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [],
-        "itemTypesUnread": null,
         "items": [],
         "lockCalls": [],
         "participantCount": 2,
@@ -638,8 +658,10 @@
             "lockHash": "0x783238c9b02633e0f37959e275385f78c0e2c1f5a31b69ce24c743e4bef768e7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "0"
           },
           {
@@ -649,7 +671,9 @@
             "lockHash": "0x95add7c28976054c39c8a2a95fe6e8a8053a9898a2417723daed5da0000bf92c",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 0,
             "usedDelta": "6100000000"
           }
@@ -657,7 +681,7 @@
         "partyIds": [
           [
             "0x783238c9b02633e0f37959e275385f78c0e2c1f5",
-            0
+            256
           ],
           [
             "0x95add7c28976054c39c8a2a95fe6e8a8053a9898",
@@ -665,6 +689,7 @@
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [],
         "timestamp": "1790039400000",
         "txHash": "0x2518f6535cd50d5f3c668f8d1f5a247b91c3cb01c28b612795cc5a9fad2b9188",
         "txIndex": 2,
@@ -691,14 +716,6 @@
         "blockNumber": 1,
         "feePayer": null,
         "isCellbase": false,
-        "itemTypes": [
-          {
-            "scriptName": "Spore Cluster",
-            "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
-            "typeHashType": "data1"
-          }
-        ],
-        "itemTypesUnread": null,
         "items": [
           {
             "class": "object",
@@ -738,7 +755,9 @@
             "lockHash": "0xbe1a32103e168e4e382dcaf294c7743c7a482c02a1b3b8656262071333f1cff7",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
+            "sent": false,
             "tags": 2,
             "usedDelta": "17100000000"
           },
@@ -749,8 +768,10 @@
             "lockHash": "0xc7f452d9580bd9e6d031614261265af1c85ed2aee7627a2a1338c1e6c8381d4d",
             "lockHashPrefix": null,
             "lockKind": "Default Lock",
+            "lockKindBy": null,
             "roles": [],
-            "tags": 0,
+            "sent": true,
+            "tags": 256,
             "usedDelta": "0"
           }
         ],
@@ -761,10 +782,18 @@
           ],
           [
             "0xc7f452d9580bd9e6d031614261265af1c85ed2ae",
-            0
+            256
           ]
         ],
         "protocolActions": [],
+        "recognizedTypes": [
+          {
+            "scriptName": "Spore Cluster",
+            "scriptNameBy": null,
+            "typeCodeHash": "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+            "typeHashType": "data1"
+          }
+        ],
         "timestamp": "1790039400000",
         "txHash": "0x89b28cfe549365ccc3a3caecb9982065bf24b0ae9d27274a02c665a0d3fd19c7",
         "txIndex": 1,

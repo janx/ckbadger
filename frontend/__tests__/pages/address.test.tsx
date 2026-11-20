@@ -110,8 +110,7 @@ const poolActivity = (): Activity =>
     timeAddedToPool: new Date(Date.now() - 120000).toISOString(),
     ckbDelta: '-50000000000',
     interpretation: { status: 'complete' },
-    itemTypes: null,
-    itemTypesUnread: null,
+    recognizedTypes: [],
   });
 const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
@@ -646,12 +645,10 @@ describe('Address v3', () => {
       ...addressFixture,
       address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
       lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
-      lockScriptInfo: {
-        codeHash: DEFAULT_LOCK_CODE_HASH,
-        name: 'SECP256K1/blake160',
-        scriptKind: 'lock',
-        deprecated: false,
-      },
+      // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+      // and a lock on the default lock's code hash by data runs none, so it sends no name (no
+      // lockScriptInfo)
+      lockScriptInfo: undefined,
     });
     render(<AddressDetailPage />);
     await loaded();

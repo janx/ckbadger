@@ -3598,7 +3598,7 @@ mod tests {
 
         for (label, code_hash, type_args, facts, expected) in cases {
             let from_bulk = classify_nft_collection_from_protocol(&facts);
-            let from_live = classify_object_collection_id(&code_hash, &type_args);
+            let from_live = classify_object_collection_id(&code_hash, 1, &type_args);
             assert_eq!(
                 from_bulk,
                 Some(expected.clone()),
@@ -3618,7 +3618,7 @@ mod tests {
         // And the negative: a plain cell classifies to no collection on both
         // sides, so neither invents a row for it.
         assert_eq!(classify_nft_collection_from_protocol(&None), None);
-        assert_eq!(classify_object_collection_id(&[0x77; 32], &[]), None);
+        assert_eq!(classify_object_collection_id(&[0x77; 32], 1, &[]), None);
     }
 
     macro_rules! cell_facts {

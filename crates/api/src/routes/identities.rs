@@ -248,10 +248,9 @@ async fn list_identity_collection_holders(
     // into the same fixed-width key. Decoding it by collection is what keeps a
     // padded prefix from being served as a lock hash nobody can look up.
     let is_dotcell = collection_id_bytes == DOTCELL_SENTINEL_COLLECTION;
-    let resolver = DotCellPartyResolver {
-        store: state.store.as_ref(),
-        network: &state.ckb_network,
-    };
+    let resolver =
+        DotCellPartyResolver::new(&state.store, &state.append_only_store, &state.ckb_network);
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut rows: Vec<CollectionHolderResponse> = Vec::with_capacity(page.len());
     for (owner_segment, count) in page {
         if is_dotcell {
@@ -263,21 +262,29 @@ async fn list_identity_collection_holders(
                     ))
                 })?;
             let (party, lock) = resolver.resolve_with_lock(&owner20)?;
-            let lock_code_hash = lock.as_ref().map(|lock| &lock.entry.code_hash);
+            let lock_pair = lock
+                .as_ref()
+                .map(|lock| (&lock.entry.code_hash, lock.entry.hash_type));
+            let lock_name = lock_pair
+                .map(|(code, hash_type)| super::assets::lock_kind(&mut names, code, hash_type))
+                .transpose()?
+                .flatten();
             rows.push(CollectionHolderResponse {
                 lock_script_hash: party.lock_hash,
                 owner_hash_prefix: Some(party.hash_prefix),
                 address: party.address,
-                lock_code_hash: lock_code_hash.map(|code| format!("0x{}", hex::encode(code))),
-                lock_kind: lock_code_hash
-                    .map(|code| super::assets::lock_kind(state.store.as_ref(), code))
-                    .transpose()?
-                    .flatten(),
+                lock_code_hash: lock_pair.map(|(code, _)| format!("0x{}", hex::encode(code))),
+                lock_hash_type: lock_pair
+                    .map(|(code, hash_type)| super::assets::lock_hash_type_label(code, hash_type))
+                    .transpose()?,
+                lock_kind_by: lock_name.as_ref().and_then(|name| name.by()),
+                lock_kind: lock_name.map(|name| name.name),
                 item_count: *count,
             });
         } else {
             rows.push(super::assets::holder_row(
                 state.store.as_ref(),
+                &mut names,
                 owner_segment,
                 *count,
                 &state.ckb_network,
@@ -860,9 +867,14 @@ pub struct PartyRef {
     pub hash_prefix: String,
     pub lock_hash: Option<String>,
     pub address: Option<String>,
-    /// The registry's name for the party's lock code hash: `lockScriptName`, the one name every
-    /// route gives a lock's registry name (lane P2's third round, item 12; it was `scriptName`).
+    /// The name of the code the party's lock pair runs (`utils::ScriptNamer`,
+    /// the one rule; lane rd/api-lock-names): `lockScriptName`, the one name
+    /// every route gives a lock's name (lane P2's third round, item 12; it was
+    /// `scriptName`).
     pub lock_script_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_script_name_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1028,6 +1040,22 @@ struct ResolvedLock {
 pub(super) struct DotCellPartyResolver<'a> {
     pub(super) store: &'a CkbadgerStore,
     pub(super) network: &'a str,
+    /// The request's script names (`utils::ScriptNamer`, the one rule).
+    pub(super) names: std::cell::RefCell<crate::utils::ScriptNamer<'a>>,
+}
+
+impl<'a> DotCellPartyResolver<'a> {
+    pub(super) fn new(
+        store: &'a CkbadgerStore,
+        cells_store: &'a CkbadgerStore,
+        network: &'a str,
+    ) -> Self {
+        Self {
+            store,
+            network,
+            names: std::cell::RefCell::new(crate::utils::ScriptNamer::new(store, cells_store)),
+        }
+    }
 }
 
 impl DotCellPartyResolver<'_> {
@@ -1059,6 +1087,7 @@ impl DotCellPartyResolver<'_> {
                     lock_hash: None,
                     address: None,
                     lock_script_name: None,
+                    lock_script_name_by: None,
                 },
                 None,
             ));
@@ -1071,17 +1100,20 @@ impl DotCellPartyResolver<'_> {
             self.network,
         )
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-        let script_name = self
-            .store
-            .get_script_info(&entry.code_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .and_then(|info| info.name);
+        // The name of the code the lock's pair runs, the one rule
+        // (`utils::ScriptNamer`).
+        let lock_name = self
+            .names
+            .borrow_mut()
+            .name_stored(&entry.code_hash, entry.hash_type)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
         Ok((
             PartyRef {
                 hash_prefix,
                 lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
                 address,
-                lock_script_name: script_name,
+                lock_script_name_by: lock_name.as_ref().and_then(|name| name.by()),
+                lock_script_name: lock_name.map(|name| name.name),
             },
             Some(ResolvedLock {
                 lock_hash: lock_hash.to_vec(),
@@ -1094,13 +1126,13 @@ impl DotCellPartyResolver<'_> {
     fn resolve_full(&self, lock_hash: &[u8; 32]) -> Result<PartyRef, ApiRouteError> {
         let resolved = resolve_lock_address(self.store, lock_hash, self.network)
             .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-        let (address, script_name) = match resolved {
+        let (address, lock_name) = match resolved {
             Some(resolved) => (
                 resolved.address,
-                self.store
-                    .get_script_info(&resolved.entry.code_hash)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .and_then(|info| info.name),
+                self.names
+                    .borrow_mut()
+                    .name_stored(&resolved.entry.code_hash, resolved.entry.hash_type)
+                    .map_err(|e| ApiError::internal(format!("{e:#}")))?,
             ),
             None => (None, None),
         };
@@ -1108,7 +1140,8 @@ impl DotCellPartyResolver<'_> {
             hash_prefix: format!("0x{}", hex::encode(&lock_hash[..20])),
             lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
             address,
-            lock_script_name: script_name,
+            lock_script_name_by: lock_name.as_ref().and_then(|name| name.by()),
+            lock_script_name: lock_name.map(|name| name.name),
         })
     }
 }
@@ -1228,10 +1261,7 @@ async fn get_dotcell_item_detail(
     };
 
     let store = state.store.as_ref();
-    let resolver = DotCellPartyResolver {
-        store,
-        network: &state.ckb_network,
-    };
+    let resolver = DotCellPartyResolver::new(store, &state.append_only_store, &state.ckb_network);
     let (owner, owner_lock) = resolver.resolve_with_lock(&owner_hash20)?;
     let manager = resolver.resolve(&manager_hash20)?;
     let owner_name_count = store
@@ -1257,7 +1287,10 @@ async fn get_dotcell_item_detail(
     let sale = match owner_lock {
         None => None,
         Some(ResolvedLock { entry, .. })
-            if !ckbadger_indexer::parser::DotCellParser::is_sale_lock(&entry.code_hash) =>
+            if !ckbadger_indexer::parser::DotCellParser::is_sale_lock(
+                &entry.code_hash,
+                entry.hash_type,
+            ) =>
         {
             None
         }

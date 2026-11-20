@@ -41,15 +41,21 @@ struct ParsedBitCellData {
 pub struct BitCellParser;
 
 impl BitCellParser {
-    pub fn is_type_script(code_hash: &[u8]) -> bool {
-        crate::parser::registry::PROTOCOL_REGISTRY
-            .is(code_hash, crate::parser::registry::ProtocolScript::BitCell)
+    pub fn is_type_script(code_hash: &[u8], hash_type: i16) -> bool {
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            hash_type,
+            crate::parser::registry::ProtocolScript::BitCell,
+        )
     }
 
     pub fn parse_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedBitCell> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
-        if !Self::is_type_script(&type_code_hash) {
+        if !Self::is_type_script(
+            &type_code_hash,
+            ScriptParser::hash_type_to_i16(&type_script.hash_type),
+        ) {
             return None;
         }
 
@@ -70,7 +76,7 @@ impl BitCellParser {
 
     pub fn parse_parsed_cell(cell: &ParsedCell) -> Option<ParsedBitCell> {
         let type_code_hash = cell.type_code_hash.as_deref()?;
-        if !Self::is_type_script(type_code_hash) {
+        if !Self::is_type_script(type_code_hash, cell.type_hash_type?) {
             return None;
         }
 
@@ -108,7 +114,10 @@ impl BitCellParser {
                 continue;
             };
             let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
-            if !Self::is_type_script(&type_code_hash) {
+            if !Self::is_type_script(
+                &type_code_hash,
+                ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            ) {
                 continue;
             }
 
@@ -137,10 +146,11 @@ impl BitCellParser {
 
     pub(crate) fn parse_identity_id_from_data(
         type_code_hash: &[u8],
+        type_hash_type: i16,
         type_args: Option<&[u8]>,
         data: &[u8],
     ) -> Option<Vec<u8>> {
-        if !Self::is_type_script(type_code_hash) {
+        if !Self::is_type_script(type_code_hash, type_hash_type) {
             return None;
         }
         let parsed = Self::parse_data(data)?;

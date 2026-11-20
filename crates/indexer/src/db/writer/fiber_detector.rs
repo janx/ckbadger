@@ -85,11 +85,12 @@ struct FiberCellSummary {
     participants: BTreeSet<Vec<u8>>,
 }
 
-/// The Fiber lock a code hash names: the batch / transaction prefilter.
-fn classify_lock(code_hash: &[u8]) -> FiberLockType {
-    if is_funding_lock(code_hash) {
+/// The Fiber lock a lock script's pair runs: the batch / transaction
+/// prefilter.
+fn classify_lock(code_hash: &[u8], hash_type: i16) -> FiberLockType {
+    if is_funding_lock(code_hash, hash_type) {
         FiberLockType::FundingLock
-    } else if is_commitment_lock(code_hash) {
+    } else if is_commitment_lock(code_hash, hash_type) {
         FiberLockType::CommitmentLock
     } else {
         FiberLockType::Other
@@ -103,12 +104,13 @@ fn classify_lock(code_hash: &[u8]) -> FiberLockType {
 /// it is created and when it is spent.
 fn classify_cell(
     lock_code_hash: &[u8],
+    lock_hash_type: i16,
     lock_args: &[u8],
     typed: bool,
     data_size: i32,
     tx: &TxView<'_>,
 ) -> Result<FiberLockType> {
-    Ok(match classify_lock(lock_code_hash) {
+    Ok(match classify_lock(lock_code_hash, lock_hash_type) {
         FiberLockType::FundingLock => {
             let data_len = usize::try_from(data_size).map_err(|_| {
                 anyhow::anyhow!(
@@ -145,6 +147,7 @@ impl FiberDetector {
         for input in &tx.inputs {
             match classify_cell(
                 input.lock_code_hash,
+                input.lock_hash_type,
                 input.lock_args,
                 input.type_code_hash.is_some(),
                 input.data_size,
@@ -181,6 +184,7 @@ impl FiberDetector {
         for (idx, output) in tx.outputs.iter().enumerate() {
             match classify_cell(
                 output.lock_code_hash,
+                output.lock_hash_type,
                 output.lock_args,
                 output.type_code_hash.is_some(),
                 output.data_size,
@@ -522,19 +526,19 @@ impl ProtocolDetector for FiberDetector {
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
         _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
     ) -> bool {
-        lock_code_hashes
-            .iter()
-            .any(|h| classify_lock(h) != FiberLockType::Other)
+        lock_code_hashes.iter().any(|h| {
+            crate::parser::registry::HASH_TYPES
+                .iter()
+                .any(|&ht| classify_lock(h, ht) != FiberLockType::Other)
+        })
     }
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
-        tx.inputs
-            .iter()
-            .any(|input| classify_lock(input.lock_code_hash) != FiberLockType::Other)
-            || tx
-                .outputs
-                .iter()
-                .any(|output| classify_lock(output.lock_code_hash) != FiberLockType::Other)
+        tx.inputs.iter().any(|input| {
+            classify_lock(input.lock_code_hash, input.lock_hash_type) != FiberLockType::Other
+        }) || tx.outputs.iter().any(|output| {
+            classify_lock(output.lock_code_hash, output.lock_hash_type) != FiberLockType::Other
+        })
     }
 
     /// Fiber channel lifecycle events are properties of the TRANSACTION, not of
@@ -977,6 +981,100 @@ mod tests {
             .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([commitment_owner; 32])));
     }
 
+    /// resync/protocol-pairs: the funding and commitment locks are Fiber locks
+    /// by their registered pairs only. A channel's funding output, or a
+    /// commitment input, under the lock's code hash by `data` (a pair anyone
+    /// can lock a cell with; no such binary runs) writes no Fiber action and
+    /// stays a called lock.
+    #[test]
+    fn fiber_locks_act_only_by_their_registered_pairs() {
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
+        let funding_code_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET);
+        let input = make_input_with_lock(
+            0xAA,
+            vec![0x11; 32],
+            vec![0x22; 20],
+            200_00000000,
+            None,
+            None,
+        );
+        let outputs = [
+            make_output_with_lock(
+                0xF0,
+                funding_code_hash.clone(),
+                vec![0xBB; 20],
+                145_00000000,
+                None,
+                None,
+            ),
+            make_output_with_lock(
+                0xAA,
+                vec![0x11; 32],
+                vec![0x22; 20],
+                55_00000000,
+                None,
+                None,
+            ),
+        ];
+        let open = TxView {
+            tx_hash: &[0x40; 32],
+            block_hash: &[0xC0; 32],
+            tx_index: 1,
+            block_number: 5000,
+            timestamp: 1_700_200_000,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+        crate::db::writer::activities::assert_protocol_runs_only_its_pair(
+            &open,
+            &detectors,
+            &[&funding_code_hash],
+            "fiber",
+        );
+
+        let commitment_code_hash = parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET);
+        let mut commitment_args = vec![0xCC; 20];
+        commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        commitment_args.extend_from_slice(&[0xDD; 20]);
+        commitment_args.push(0x01);
+        let input = make_input_with_lock(
+            0xF1,
+            commitment_code_hash.clone(),
+            commitment_args,
+            100_00000000,
+            None,
+            None,
+        );
+        let outputs = [make_output_with_lock(
+            0xAA,
+            vec![0x11; 32],
+            vec![0x22; 20],
+            100_00000000,
+            None,
+            None,
+        )];
+        let settle = TxView {
+            tx_hash: &[0x43; 32],
+            block_hash: &[0xC3; 32],
+            tx_index: 1,
+            block_number: 5003,
+            timestamp: 1_700_200_030,
+            is_cellbase: false,
+            dotbit_action: None,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+        crate::db::writer::activities::assert_protocol_runs_only_its_pair(
+            &settle,
+            &detectors,
+            &[&commitment_code_hash],
+            "fiber",
+        );
+    }
+
     #[test]
     fn test_settlement() {
         // Commitment-lock input consumed -> settlement
@@ -1175,6 +1273,7 @@ mod tests {
             )],
             type_calls: vec![],
             lock_calls: vec![],
+            recognized_type_codes: vec![],
             participants: vec![],
         };
 

@@ -32,6 +32,7 @@ function party(seed: string, ckbDelta: string, itemDeltas: ItemDelta[]): Written
     ckbDelta,
     usedDelta: '0',
     itemDeltas,
+    sent: false,
   };
 }
 
@@ -44,8 +45,7 @@ const swap: GlobalActivity = activityRead({
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [ITEM_TYPE.xudt],
-  itemTypesUnread: null,
+  recognizedTypes: [ITEM_TYPE.xudt],
   participants: [
     // pays the page's token and another, and the CKB
     party('payer1', '-276411026713', [

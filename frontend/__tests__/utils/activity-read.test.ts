@@ -1,36 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import { activityRead as checked } from '@/__tests__/utils/activity-read';
+import { TAG_INPUT } from '@/lib/api';
 
 /** The checker over this file's partial rows, the shapes its rules read. */
 const activityRead = (row: object) => checked(row as never);
 
-// The checker's own tests (the third read's T SHOULD-1): rows the route sends pass, and each rule
-// of the route's `item_types` (crates/api/src/routes/activities.rs) refuses the row that breaks it.
-// The rows here are its inputs on purpose; the gate exempts this file.
+// The checker's own tests (the third read's T SHOULD-1, restated for C7 at the merge into
+// resync/type-codes): rows the route sends pass, and each rule of the route and the indexer's
+// builder (a row's `recognizedTypes`, written as `recognized_type_codes`) refuses the row that
+// breaks it. The rows here are its inputs on purpose; the gate exempts this file.
 
 const SUDT = {
   typeCodeHash: '0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5',
   typeHashType: 'type',
   scriptName: 'Simple UDT',
+  scriptNameBy: null,
 };
 const SPORE = {
   typeCodeHash: '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
   typeHashType: 'data1',
   scriptName: 'Spore',
+  scriptNameBy: null,
 };
 const DAO = {
   typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
   typeHashType: 'type',
   scriptName: 'Nervos DAO',
+  scriptNameBy: null,
 };
+/** The indexer's TAG_TYPE_CALL, bit 6. */
+const TYPE_CALL = 64;
 const token = (id: string) => ({ kind: 'token', typeScriptHash: id, delta: '1' });
 const object = (id: string) => ({ kind: 'object', objectId: id, delta: 1 });
-// a party as the checker states a row's parties from it (lane feed): its lock hash, tags and CKB
+// a party as the checker states a row's parties from it (lane feed): its lock hash, tags and CKB;
+// its tags the route's (a token's bit where it moves an item) unless the test writes them (a
+// script call's, C7)
 let parties = 0;
-const party = (itemDeltas: object[] = [], ckbDelta = '0') => ({
+const party = (
+  itemDeltas: object[] = [],
+  tags: number = itemDeltas.length > 0 ? 1 : 0,
+  ckbDelta = '0'
+) => ({
   lockHash: `0x${String((parties += 1)).padStart(64, '0')}`,
   lockHashPrefix: null,
-  tags: itemDeltas.length > 0 ? 1 : 0,
+  tags,
   ckbDelta,
   itemDeltas,
 });
@@ -42,13 +55,12 @@ const addressParties = {
   items: [],
 };
 
-/** A feed's row: every party's items. */
+/** A feed's row: every party's items and tags. */
 const feedRow = (over: Record<string, unknown>) => ({
   txHash: '0xaa',
   blockNumber: 7,
   protocolActions: [] as { protocol: string }[],
-  itemTypes: [] as object[] | null,
-  itemTypesUnread: null as string | null,
+  recognizedTypes: [] as object[] | null,
   participants: [party(), party()],
   ...over,
 });
@@ -56,7 +68,7 @@ const feedRow = (over: Record<string, unknown>) => ({
 describe('activityRead passes the rows the route sends', () => {
   it('passes a transfer that names its token’s code, a CKB transfer with none, a DAO step with the DAO’s', () => {
     const transfer = feedRow({
-      itemTypes: [SUDT],
+      recognizedTypes: [SUDT],
       participants: [party([token('0x71')]), party()],
     });
     // re-pinned on purpose (lane feed): the checker gives back the row as the route states it (its
@@ -64,38 +76,54 @@ describe('activityRead passes the rows the route sends', () => {
     expect(activityRead(transfer)).toMatchObject(transfer);
     expect(() => activityRead(feedRow({}))).not.toThrow();
     expect(() =>
-      activityRead(feedRow({ protocolActions: [{ protocol: 'dao' }], itemTypes: [DAO] }))
+      activityRead(feedRow({ protocolActions: [{ protocol: 'dao' }], recognizedTypes: [DAO] }))
     ).not.toThrow();
     // two items of one code name it once; a Spore and a token, in the route's order
     expect(() =>
       activityRead(
-        feedRow({ itemTypes: [SUDT], participants: [party([token('0x71'), token('0x72')])] })
+        feedRow({ recognizedTypes: [SUDT], participants: [party([token('0x71'), token('0x72')])] })
       )
     ).not.toThrow();
     expect(() =>
       activityRead(
         feedRow({
-          itemTypes: [SPORE, SUDT],
+          recognizedTypes: [SPORE, SUDT],
           participants: [party([token('0x71')]), party([object('0x41')])],
         })
       )
     ).not.toThrow();
   });
 
-  it('passes an unread row with its reason, a pool row with null and null, an address row whose items are the others’', () => {
+  it('passes more codes than items moved, and a recognised script that moved nothing, a party a script call', () => {
+    // a Spore transfer whose transaction also ran the sUDT (a wallet merging its own token cells)
     expect(() =>
       activityRead(
         feedRow({
-          itemTypes: null,
-          itemTypesUnread: 'item 0x41 (Object) of tx 0xaa: no cell recorded',
-          participants: [party([object('0x41')])],
+          recognizedTypes: [SPORE, SUDT],
+          participants: [party([object('0x41')]), party([], TYPE_CALL)],
         })
       )
     ).not.toThrow();
-    expect(() => activityRead(feedRow({ blockNumber: null, itemTypes: null }))).not.toThrow();
+    // the merge alone: no item moved, its party a script call
+    expect(() =>
+      activityRead(feedRow({ recognizedTypes: [SUDT], participants: [party([], TYPE_CALL)] }))
+    ).not.toThrow();
+  });
+
+  it('passes a pool row with its list, an address row whose items are the others’', () => {
+    expect(() =>
+      activityRead(
+        feedRow({
+          blockNumber: null,
+          recognizedTypes: [SUDT],
+          participants: [party([token('0x71')])],
+        })
+      )
+    ).not.toThrow();
+    expect(() => activityRead(feedRow({ blockNumber: null }))).not.toThrow();
     // an address's row: its own items beside the other parties, who carry none on the wire (lane
     // feed: it states what the route states of every party, the parties by their short ids)
-    const { participants: _drawn, ...typed } = feedRow({ itemTypes: [SUDT] });
+    const { participants: _drawn, ...typed } = feedRow({ recognizedTypes: [SUDT] });
     expect(() =>
       activityRead({
         ...typed,
@@ -115,11 +143,15 @@ describe('activityRead refuses a row the route cannot send', () => {
   const refuses = (row: Record<string, unknown>, said: string) =>
     expect(() => activityRead(row)).toThrow(said);
 
-  it('refuses a row that states no itemTypes or no reason field', () => {
-    const { itemTypes: _t, ...noTypes } = feedRow({});
-    refuses(noTypes, 'states no itemTypes or no itemTypesUnread: the route states both');
-    const { itemTypesUnread: _u, ...noReason } = feedRow({});
-    refuses(noReason, 'states no itemTypes or no itemTypesUnread');
+  it('refuses a row that states no list: no field, null, or the retired item types', () => {
+    const { recognizedTypes: _t, ...noList } = feedRow({});
+    refuses(noList, 'states recognizedTypes undefined: the route states a list on every row');
+    refuses(
+      feedRow({ recognizedTypes: null }),
+      'states recognizedTypes null: the route states a list on every row'
+    );
+    // a pool row too: it states the list, never null
+    refuses(feedRow({ blockNumber: null, recognizedTypes: null }), 'states recognizedTypes null');
   });
 
   it('refuses a row that moves an item and names no code, the fixtures’ 45', () => {
@@ -144,53 +176,32 @@ describe('activityRead refuses a row the route cannot send', () => {
       feedRow({ protocolActions: [{ protocol: 'dao' }] }),
       'takes a Nervos DAO step and does not name the DAO’s code'
     );
-    refuses(feedRow({ itemTypes: [DAO] }), 'names the DAO’s code and takes no Nervos DAO step');
-  });
-
-  it('refuses a pool row that says [] where the route sends null', () => {
     refuses(
-      feedRow({ blockNumber: null }),
-      'is a pool row: the route sends itemTypes null and no reason'
+      feedRow({ recognizedTypes: [DAO] }),
+      'names the DAO’s code and takes no Nervos DAO step'
     );
   });
 
-  it('refuses a null without its reason, a reason beside a list, an unread type with no item', () => {
-    refuses(
-      feedRow({ itemTypes: null }),
-      'states itemTypes null and no reason: the route says why'
-    );
-    refuses(
-      feedRow({
-        itemTypesUnread: 'why',
-        participants: [party([token('0x71')])],
-        itemTypes: [SUDT],
-      }),
-      'lists its item types and gives a reason they are unread'
-    );
-    refuses(
-      feedRow({ itemTypes: null, itemTypesUnread: 'why' }),
-      'reads no item and says its type is unread: only an item’s can be'
-    );
-  });
-
-  it('refuses a code twice, codes out of the route’s order, more codes than items, a code with no item', () => {
+  it('refuses a code twice and codes out of the route’s order', () => {
     const one = [party([token('0x71'), object('0x41')])];
-    refuses(feedRow({ itemTypes: [SUDT, SUDT], participants: one }), 'names the code');
+    refuses(feedRow({ recognizedTypes: [SUDT, SUDT], participants: one }), 'names the code');
     refuses(
-      feedRow({ itemTypes: [SUDT, SPORE], participants: one }),
+      feedRow({ recognizedTypes: [SUDT, SPORE], participants: one }),
       'the route lists the codes in their bytes’ order'
     );
+  });
+
+  it('refuses a recognised code that moved nothing on a row with no party a script call', () => {
     refuses(
-      feedRow({ itemTypes: [SPORE, SUDT], participants: [party([token('0x71')])] }),
-      'names 2 item code(s) for 1 item(s) moved'
+      feedRow({ recognizedTypes: [SUDT] }),
+      'names 1 recognised code(s) that moved no item and no party is a script call (TAG_TYPE_CALL)'
     );
-    refuses(feedRow({ itemTypes: [SUDT] }), 'names 1 item code(s) for 0 item(s) moved');
   });
 });
 
 describe('activityRead states what the route states of every party (lane feed)', () => {
   it('states a row written with every party as the route states it', () => {
-    const [other, payer] = [party(), party([], '-1000')];
+    const [other, payer] = [party(), party([], 0, '-1000')];
     const row = activityRead(feedRow({ participants: [other, payer] })) as unknown as {
       participantCount: number;
       partyIds: [string, number][];
@@ -207,7 +218,7 @@ describe('activityRead states what the route states of every party (lane feed)',
 
   it('states each item’s movement in the whole transaction where the fixture writes none', () => {
     const minted = activityRead(
-      feedRow({ itemTypes: [SUDT], participants: [party([token('0x71')]), party()] })
+      feedRow({ recognizedTypes: [SUDT], participants: [party([token('0x71')]), party()] })
     ) as unknown as { participants: { itemDeltas: { movement: string }[] }[] };
     expect(minted.participants[0].itemDeltas[0].movement).toBe('mint');
   });
@@ -238,13 +249,36 @@ describe('activityRead states what the route states of every party (lane feed)',
 
   it('states again a row written over a stated one, from the parties it writes', () => {
     const base = activityRead(feedRow({})) as object;
-    const payer = party([], '-5');
+    const payer = party([], 0, '-5');
     const over = activityRead({ ...base, participants: [payer] }) as unknown as {
       participantCount: number;
       feePayer: string | null;
     };
     expect(over.participantCount).toBe(1);
     expect(over.feePayer).toBe(payer.lockHash);
+  });
+
+  // resync fix round 3, tests NOTE-7: the route states a drawn party's `sent` and the senders bit
+  // in its tags (and in its id's) from one bit, so the checker refuses a fixture saying both ways
+  it('refuses a party whose tags carry the senders bit while it says it did not send', () => {
+    refuses(
+      feedRow({ participants: [{ ...party([], TAG_INPUT, '-5'), sent: false }, party()] }),
+      'carries the senders bit (TAG_INPUT) in its tags and says it did not send'
+    );
+  });
+
+  it('refuses an id list naming a drawn party with a bit its sent denies', () => {
+    const sender = { ...party([], 0, '-5'), sent: true };
+    refuses(
+      feedRow({
+        participants: [sender],
+        participantCount: 1,
+        partyIds: [[sender.lockHash, 0]],
+        feePayer: null,
+        items: [],
+      }),
+      'as a sender and names it with tags 0: the route states both from one bit (TAG_INPUT)'
+    );
   });
 
   it('refuses an address’s row that does not state its parties, or draws other parties', () => {

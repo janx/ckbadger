@@ -46,11 +46,19 @@ function dailyCount(last: readonly number[]): string[] {
 /** A day of activity kinds, the newest 5,425 script calls, day 50 a spike; with the API's whole. */
 const activityDay = (i: number, n: number) => {
   const scriptCall = i === n - 1 ? 5425 : i === 50 ? 1_000_000 : 5000;
-  const kinds = { transfer: 600 + (i % 30), dao: 5, token: 3, object: 0, identity: 70, scriptCall };
+  const kinds = {
+    transfer: 600 + (i % 30),
+    dao: 5,
+    token: 3,
+    object: 0,
+    identity: 70,
+    scriptCall,
+    protocol: 0,
+  };
   return {
     ...Object.fromEntries(Object.entries(kinds).map(([key, count]) => [key, String(count)])),
-    // the day's kind occurrences, the API's sum of the kinds (lane D1, the hand-back's item 2)
-    kindOccurrences: String(Object.values(kinds).reduce((sum, count) => sum + count, 0)),
+    // the day's activities, the API's one number, which the kinds partition (F-6)
+    activityCount: String(Object.values(kinds).reduce((sum, count) => sum + count, 0)),
   };
 };
 
@@ -149,6 +157,7 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     ['object', 'Object'],
     ['identity', 'Identity'],
     ['scriptCall', 'Script Call'],
+    ['protocol', 'Protocol'],
   ]),
   getCellCountChart: {
     ...stacked(

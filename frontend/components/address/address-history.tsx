@@ -130,6 +130,7 @@ function addressRow(activity: Activity, address: Address) {
     itemDeltas: activity.itemDeltas,
     roles: activity.roles,
     tags: activity.tags,
+    sent: activity.sent,
   };
   // The endpoint supplies this participant's deltas only, and every party by its short id
   // (`partyIds`); do not invent zero balances for the others to construct a cross-user transaction.

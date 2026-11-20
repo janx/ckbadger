@@ -455,8 +455,7 @@ describe('transaction and activity foundations', () => {
           ...activity,
           blockNumber: null,
           timestamp: null,
-          itemTypes: null,
-          itemTypesUnread: null,
+          recognizedTypes: [],
           poolStatus: 'proposed',
           timeAddedToPool: new Date().toISOString(),
           interpretation: {

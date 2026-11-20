@@ -2,6 +2,7 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
+import { withNameBy } from '@/lib/lock-words';
 import { sentField } from '@/lib/api-fields';
 import type {
   ActivitySummary24h,
@@ -13,20 +14,10 @@ import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 
 /**
- * The activity-type counters a summary or a daily row carries, with the two the API counts for
- * the page (lists lane P3: a page sums no count): its kind occurrences (categories overlap; never a
- * transaction total) and its DAO actions.
+ * The activity kinds a summary or a daily row carries: each non-cellbase transaction in exactly one
+ * kind (the one the global filter lists it under), and their total, one number from the API.
  */
-export type ActivityCounts = Pick<
-  ActivitySummary24h,
-  | 'transferCount'
-  | 'daoCount'
-  | 'tokenCount'
-  | 'objectCount'
-  | 'identityCount'
-  | 'scriptCallCount'
-  | 'kindOccurrences'
->;
+export type ActivityCounts = Pick<ActivitySummary24h, 'activityCount' | 'kindCounts'>;
 
 export interface ShareRow {
   key: string;
@@ -36,17 +27,18 @@ export interface ShareRow {
   share: number;
 }
 
-/** Each activity type's share of the kind occurrences, largest first; types with no activity are left out. */
+/** Each activity kind's share of the activities, largest first; kinds with none are left out. */
 export function activityTypeShares(c: ActivityCounts): ShareRow[] {
-  const total = c.kindOccurrences;
+  const total = c.activityCount;
   if (total === 0) return [];
   return [
-    { key: 'script', label: 'Script call', count: c.scriptCallCount },
-    { key: 'transfer', label: 'Transfer', count: c.transferCount },
-    { key: 'token', label: 'Token', count: c.tokenCount },
-    { key: 'object', label: 'Object', count: c.objectCount },
-    { key: 'identity', label: 'Identity', count: c.identityCount },
-    { key: 'dao', label: 'DAO', count: c.daoCount },
+    { key: 'script', label: 'Script call', count: c.kindCounts.script },
+    { key: 'transfer', label: 'Transfer', count: c.kindCounts.ckb },
+    { key: 'token', label: 'Token', count: c.kindCounts.token },
+    { key: 'object', label: 'Object', count: c.kindCounts.object },
+    { key: 'identity', label: 'Identity', count: c.kindCounts.identity },
+    { key: 'dao', label: 'DAO', count: c.kindCounts.dao },
+    { key: 'protocol', label: 'Protocol', count: c.kindCounts.protocol },
   ]
     .filter((row) => row.count > 0)
     .map((row) => ({ ...row, share: row.count / total }))
@@ -55,6 +47,8 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
 
 export interface ScriptShareRow extends ShareRow {
   codeHash: string;
+  /** The script's hash type: a row is one script, by its pair. */
+  hashType: string;
   name: string | null;
 }
 
@@ -67,12 +61,17 @@ export interface ScriptShares {
 }
 
 /**
- * A script's name when the API knows one, else its code hash at the tight size: the label of a
- * share bar in the home page's stats card (U-09).
+ * A script's name when the API knows one (the registry's name of its pair), else its code hash at
+ * the tight size and its hash type: the label of a share bar in the home page's stats card (U-09).
+ * A script is its pair (lane rd/api-lock-names), so an unnamed one is never its code hash alone.
  */
-export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>): string {
+export function scriptLabel(
+  entry: Pick<ScriptCountEntry, 'name' | 'nameBy' | 'codeHash' | 'hashType'>
+): string {
   const name = entry.name?.trim();
-  return name ? name : shortenHash(entry.codeHash, 'tight');
+  if (!name) return `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
+  // the code the pair runs, by another reference than the registry's: "xUDT · by data2"
+  return withNameBy(name, entry.nameBy);
 }
 
 /** How many scripts the route names before its rest (`scriptRest`): its `SCRIPT_TOP`. */
@@ -97,12 +96,14 @@ export function scriptShares(
   if (total === 0) return { total: 0, top: [], others: null };
   return {
     total,
+    // each script by its pair: one code hash by type and by data is two rows
     top: named.map((e) => ({
-      key: e.codeHash,
+      key: `${e.codeHash}:${e.hashType}`,
       label: scriptLabel(e),
       count: e.count,
       share: e.count / total,
       codeHash: e.codeHash,
+      hashType: e.hashType,
       name: e.name,
     })),
     others: summary.scriptRest && {
@@ -131,18 +132,12 @@ export function completedYesterdayActivities(
   const yesterday = previousChainDay(now);
   return days.find((day) => day.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') === yesterday);
 }
-/** Per-kind occurrences, with All supplied independently as an exact unique count. */
+/**
+ * Each filter chip's count: its kind's activities (what that filter lists) and All, the day's
+ * activities. One kind per activity, so the kinds make All.
+ */
 export function activityFilterCounts(
-  summary: ActivityCounts,
-  allCount?: number
+  summary: ActivityCounts
 ): Partial<Record<GlobalActivityFilter, number>> {
-  return {
-    ...(allCount === undefined ? {} : { all: allCount }),
-    ckb: summary.transferCount,
-    token: summary.tokenCount,
-    object: summary.objectCount,
-    identity: summary.identityCount,
-    dao: summary.daoCount,
-    script: summary.scriptCallCount,
-  };
+  return { all: summary.activityCount, ...summary.kindCounts };
 }

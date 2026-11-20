@@ -60,6 +60,7 @@ describe('the participant line says "occupied ±N B"', () => {
       ckbDelta: '-100000000',
       usedDelta: '-6100000000',
       itemDeltas: [],
+      sent: true,
     };
     const { container } = render(
       <ActivityRow
@@ -71,8 +72,7 @@ describe('the participant line says "occupied ±N B"', () => {
           protocolActions: [],
           typeCalls: [],
           lockCalls: [],
-          itemTypes: [],
-          itemTypesUnread: null,
+          recognizedTypes: [],
           participants: [party, { ...party, lockHash: `0x${'02'.repeat(32)}`, ckbDelta: '1' }],
         })}
       />

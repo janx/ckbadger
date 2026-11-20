@@ -44,6 +44,7 @@ mod dotbit_ops;
 mod dotcell_ops;
 mod fiber_ops;
 mod identity_ops;
+mod layout_ops;
 mod mnft_ops;
 mod network_ops;
 mod object_ops;
@@ -79,11 +80,18 @@ pub use block_overlay::{
 };
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
-pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
+pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucket};
+#[cfg(any(test, feature = "test-store"))]
+pub use layout_ops::earlier_layout_for_test;
+pub use layout_ops::{
+    domain_creation_order, inspect_domain_store, store_signature, StoreColumnFamilies,
+    StoreLayoutMismatch, StoreLayoutState, StoreSignature, DOMAIN_CFS_CREATED_FIRST, STORE_LAYOUT,
+    STORE_LAYOUT_CHANGE,
+};
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;
 pub use reorg_ops::{JournalEntry, RollbackResult};
-pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
+pub use script_reference_ops::{ReferenceCode, ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
@@ -101,17 +109,18 @@ pub use store::{
     CF_DAO_BY_LOCK_BLOCK, CF_DAO_BY_STATUS_BLOCK, CF_DAO_BY_WITHDRAW_TX, CF_DAO_DEPOSITS,
     CF_DAO_LIVE_AGG, CF_DOTCELL_NAME_BY_OWNER, CF_DOTCELL_RING, CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT, CF_HODL_CAPACITY_BY_DATE, CF_IDENTITY_AGG,
-    CF_IDENTITY_COLLECTION_ACTIVITIES, CF_IDENTITY_DATA, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
-    CF_MNFT_BY_COLLECTION, CF_MNFT_COLLECTION_AGG, CF_MNFT_DATA, CF_NET_CRAWL, CF_NET_NODES,
-    CF_NET_STATS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
-    CF_OBJECT_OUTPOINTS, CF_OBJECT_OUTPOINT_BY_ID, CF_PENDING_PROPOSALS, CF_REORG_EVENTS,
-    CF_REORG_UNDO_LOG_BY_BLOCK, CF_SCRIPT_FAMILIES, CF_SCRIPT_FAMILY_BY_NAME, CF_SCRIPT_INFO,
-    CF_SCRIPT_REFERENCE_INFO, CF_SCRIPT_REFERENCE_TO_VERSION, CF_SCRIPT_VERSIONS,
-    CF_SCRIPT_VERSIONS_BY_FAMILY, CF_SCRIPT_VERSIONS_BY_LABEL, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA,
-    CF_STATS_CHAIN, CF_STATS_DAO, CF_STATS_HODL, CF_STATS_MNFT, CF_STATS_SCRIPT, CF_STATS_SPORE,
-    CF_STATS_TOKEN, CF_SYNC_META, CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
-    CF_TX_ACTIONS, CF_TX_ACTIONS_BY_BUCKET, CF_TX_GROUP_CYCLES, CF_TX_HASH_MAP, CF_TX_INDEX,
-    DOMAIN_CFS, NETWORK_CFS,
+    CF_IDENTITY_COLLECTION_ACTIVITIES, CF_IDENTITY_DATA, CF_LIVE_CELLS, CF_LIVE_CODE_CELLS_BY_TYPE,
+    CF_LOCK_SCRIPTS, CF_MNFT_BY_COLLECTION, CF_MNFT_COLLECTION_AGG, CF_MNFT_DATA, CF_NET_CRAWL,
+    CF_NET_NODES, CF_NET_STATS, CF_OBJECT_COLLECTION_ACTIVITIES,
+    CF_OBJECT_COLLECTION_ACTIVITY_COUNT, CF_OBJECT_OUTPOINTS, CF_OBJECT_OUTPOINT_BY_ID,
+    CF_PENDING_PROPOSALS, CF_REORG_EVENTS, CF_REORG_UNDO_LOG_BY_BLOCK, CF_SCRIPT_FAMILIES,
+    CF_SCRIPT_FAMILY_BY_NAME, CF_SCRIPT_INFO, CF_SCRIPT_REFERENCE_INFO,
+    CF_SCRIPT_REFERENCE_TO_VERSION, CF_SCRIPT_VERSIONS, CF_SCRIPT_VERSIONS_BY_FAMILY,
+    CF_SCRIPT_VERSIONS_BY_LABEL, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS_CHAIN, CF_STATS_DAO,
+    CF_STATS_HODL, CF_STATS_MNFT, CF_STATS_SCRIPT, CF_STATS_SPORE, CF_STATS_TOKEN, CF_SYNC_META,
+    CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE, CF_TOKEN_LABELS, CF_TX_ACTIONS,
+    CF_TX_ACTIONS_BY_BUCKET, CF_TX_GROUP_CYCLES, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS,
+    NETWORK_CFS,
 };
 pub use sync_ops::HeartbeatTick;
 pub use token_ops::token_live_cells_from_daily;
