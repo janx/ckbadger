@@ -508,6 +508,88 @@ describe('renderMarkdownPage', () => {
     expect(cells[6]).toBe('-');
   });
 
+  // Lane feed (ruling 14 of gate P; the lead's F2): a feed row draws some of its parties, so the
+  // agent view counts every party from the route's `participantCount`, names the party it lists as
+  // the first one the row draws, and says where every party is read
+  it('counts every party from the route and names its listed party as the first one drawn', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 1,
+      transferCount: 1,
+      daoDepositCount: 0,
+      daoWithdrawRequestCount: 0,
+      daoWithdrawCompleteCount: 0,
+      tokenCount: 0,
+      objectCount: 0,
+      identityCount: 0,
+      scriptCallCount: 0,
+      unknownCount: 0,
+      coinbaseCount: 0,
+      uniqueAddressCount: 770,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      scriptCalls: 0,
+      scriptRest: null,
+      hoursCovered: 24,
+      kindOccurrences: 1,
+      daoCount: 0,
+    });
+    const party = (i: number) => ({
+      address: `ckt1qyq9party${String(i).padStart(4, '0')}0000000000000000000000000`,
+      lockHash: `0x${String(i).padStart(64, '0')}`,
+      lockHashPrefix: null,
+      roles: [],
+      ckbDelta: i === 0 ? '-500000000000' : '100000000000',
+      usedDelta: '0',
+      itemDeltas: [],
+      tags: 0,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            txHash: `0x${'d'.repeat(64)}`,
+            blockNumber: 125,
+            txIndex: 1,
+            timestamp: '1700000000',
+            isCellbase: false,
+            typeCalls: [],
+            lockCalls: [],
+            protocolActions: [],
+            participants: [0, 1, 2, 3, 4, 5].map(party),
+            participantCount: 770,
+            partyIds: Array.from({ length: 770 }, (_, i) => [party(i).lockHash, 0]),
+            feePayer: null,
+          },
+        ],
+        limit: 1,
+        hasMore: false,
+        nextCursor: null,
+      }) as any
+    );
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    const lines = result.body.split('\n');
+    const head = lines.find((line) => line.startsWith('| timestamp'))!;
+    const row = lines.find((line) => line.includes('0xdddddddd'))!;
+    const cell = (name: string) => {
+      const names = head.split('|').map((c) => c.trim());
+      return row.split('|').map((c) => c.trim())[names.indexOf(name)];
+    };
+    expect(cell('participants')).toBe('770');
+    expect(cell('drawn')).toBe('6');
+    expect(cell('firstDrawnParty')).toBe('ckt1qyq9pa...00000000');
+    expect(cell('firstDrawnCkbDelta')).toBe('-500000000000');
+    expect(result.body).toContain(
+      'firstDrawnParty is the first of the parties a row draws: every party of a row of at most six; beyond six, the five largest CKB changes, the fee payer and every party whose items moved. Every party of a transaction, with its change, is on its page, /tx/{txHash}.'
+    );
+  });
+
   it('names a lock party without an address by its lock hash in the activities table', async () => {
     // A Lock participant whose lock script the store does not know encodes to
     // no address; the API sends its lock hash instead.
