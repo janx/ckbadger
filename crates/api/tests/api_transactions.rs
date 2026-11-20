@@ -4664,7 +4664,8 @@ async fn committed_tx_with_xudt_output(
     );
     batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
     if token {
-        batch.put_token(
+        put_token_in_batch_as_indexed(
+            &mut batch,
             xudt.calc_script_hash().as_slice(),
             &TokenInfo {
                 type_code_hash: xudt_code_hash.to_vec(),

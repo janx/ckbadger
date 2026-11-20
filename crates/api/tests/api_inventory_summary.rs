@@ -109,32 +109,32 @@ async fn inventory_summary_and_pending_filter_use_full_collection_scope() {
 async fn catalog_visibility_ignores_zero_holders_but_finds_later_positive_holder() {
     let store = test_store();
     for id in 1..=3u8 {
-        store
-            .put_token_direct(
-                &[id; 32],
-                &TokenInfo {
-                    type_code_hash: vec![0x22; 32],
-                    hash_type: 1,
-                    type_args: vec![0; 32],
-                    standard: "sudt".into(),
-                    name: if id == 3 {
-                        Some("Named empty token".into())
-                    } else {
-                        None
-                    },
-                    symbol: None,
-                    decimals: None,
-                    max_supply: None,
-                    first_seen_block: 0,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 0,
-                    metadata_source: (id == 3)
-                        .then_some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
+        put_token_as_indexed(
+            &store,
+            &[id; 32],
+            &TokenInfo {
+                type_code_hash: vec![0x22; 32],
+                hash_type: 1,
+                type_args: vec![0; 32],
+                standard: "sudt".into(),
+                name: if id == 3 {
+                    Some("Named empty token".into())
+                } else {
+                    None
                 },
-            )
-            .unwrap();
+                symbol: None,
+                decimals: None,
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: (id == 3)
+                    .then_some(ckbadger_store::types::TokenMetadataSource::Chain), // re-pinned on purpose (resync fix round 3, item 3): a name alone is no label's (a label states a name, a symbol and decimals); the chain's, partly named
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
     }
     let mut batch = StoreBatch::new(&store);
     batch.put_token_holder(&[1; 32], &[1; 32], 0);
@@ -175,28 +175,27 @@ async fn summary_counts_catalog_tokens_per_standard() {
         (7, "xudt", false),
     ];
     for (id, standard, named) in tokens {
-        store
-            .put_token_direct(
-                &[id; 32],
-                &TokenInfo {
-                    type_code_hash: vec![0x22; 32],
-                    hash_type: 1,
-                    type_args: vec![id; 32],
-                    standard: standard.into(),
-                    name: named.then(|| format!("Token {id}")),
-                    symbol: None,
-                    decimals: None,
-                    max_supply: None,
-                    first_seen_block: 0,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 0,
-                    metadata_source: named
-                        .then_some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .unwrap();
+        put_token_as_indexed(
+            &store,
+            &[id; 32],
+            &TokenInfo {
+                type_code_hash: vec![0x22; 32],
+                hash_type: 1,
+                type_args: vec![id; 32],
+                standard: standard.into(),
+                name: named.then(|| format!("Token {id}")),
+                symbol: None,
+                decimals: None,
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: named.then_some(ckbadger_store::types::TokenMetadataSource::Chain), // re-pinned on purpose (resync fix round 3, item 3): a name alone is no label's (a label states a name, a symbol and decimals); the chain's, partly named
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
     }
     let app = create_router(test_config(store)).await;
     let (status, summary) = get_json(&app, "/assets/summary").await;

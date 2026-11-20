@@ -3407,7 +3407,8 @@ async fn test_xudt_cell_without_an_amount_names_its_token_and_the_reason() {
     let type_hash = xudt.calc_script_hash().as_slice().to_vec();
     let (app, tx_hash, _chain) =
         one_output_cell_app(lock, Some(xudt), Vec::new(), 828_099_995_918, |batch| {
-            batch.put_token(
+            put_token_in_batch_as_indexed(
+                batch,
                 &type_hash,
                 &TokenInfo {
                     type_code_hash: hex::decode(

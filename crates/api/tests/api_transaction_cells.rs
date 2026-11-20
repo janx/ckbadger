@@ -261,27 +261,27 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             },
         )
         .unwrap();
-    store
-        .put_token_direct(
-            token.calc_script_hash().as_slice(),
-            &TokenInfo {
-                type_code_hash: token_code,
-                hash_type: 2,
-                type_args: vec![0x61; 32],
-                standard: "sudt".into(),
-                name: Some("Exact Token".into()),
-                symbol: Some("EXACT".into()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        token.calc_script_hash().as_slice(),
+        &TokenInfo {
+            type_code_hash: token_code,
+            hash_type: 2,
+            type_args: vec![0x61; 32],
+            standard: "sudt".into(),
+            name: Some("Exact Token".into()),
+            symbol: Some("EXACT".into()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     let mut identities = StoreBatch::new(store.as_ref());
     identities.put_identity(
         &[0x71; 20],
@@ -621,7 +621,8 @@ async fn every_kind_fixture(
     }
     for (kind, standard) in [(&kinds[3], "sudt"), (&kinds[4], "xudt")] {
         let token = kind.type_script.as_ref().unwrap();
-        batch.put_token(
+        put_token_in_batch_as_indexed(
+            &mut batch,
             token.calc_script_hash().as_slice(),
             &TokenInfo {
                 type_code_hash: token.code_hash().as_slice().to_vec(),

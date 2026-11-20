@@ -2322,3 +2322,79 @@ pub fn seed_deep_fork_pause(store: &CkbadgerStore, fork_point: i64) {
         })
         .unwrap();
 }
+
+/// A test's token as the indexer writes it, its label where label import keeps it (resync fix
+/// round 3, item 3, tests SHOULD-2): a token whose source is `Label` (its name, symbol, decimals,
+/// icon and description the label's) is split into the chain's row, the label's fields out of it
+/// (its bound chain metadata's where it has some, as the indexer's merge gives them), and the
+/// label, which the API joins when it reads the token; any other token is the row as it is. So a
+/// route that read the row without the join would answer no label's name.
+pub fn token_as_indexed(
+    token: &ckbadger_store::types::TokenInfo,
+) -> (
+    ckbadger_store::types::TokenInfo,
+    Option<ckbadger_store::types::TokenLabel>,
+) {
+    use ckbadger_store::types::TokenMetadataSource;
+    if token.metadata_source != Some(TokenMetadataSource::Label) {
+        return (token.clone(), None);
+    }
+    let label = ckbadger_store::types::TokenLabel {
+        name: token.name.clone().expect("a label names the token"),
+        symbol: token
+            .symbol
+            .clone()
+            .expect("a label states the token's symbol"),
+        decimals: token.decimals.expect("a label states the token's decimals"),
+        icon_url: token.icon_url.clone(),
+        description: token.description.clone(),
+    };
+    let mut row = token.clone();
+    row.icon_url = None;
+    row.description = None;
+    match &token.chain_metadata {
+        Some(chain) => {
+            row.name = chain.name.clone();
+            row.symbol = chain.symbol.clone();
+            row.decimals = Some(i32::from(chain.decimals));
+            row.metadata_source = Some(TokenMetadataSource::Chain);
+        }
+        None => {
+            row.name = None;
+            row.symbol = None;
+            row.decimals = None;
+            row.metadata_source = None;
+        }
+    }
+    (row, Some(label))
+}
+
+/// Write `token` at `type_hash` as the indexer and label import would ([`token_as_indexed`]).
+pub fn put_token_as_indexed(
+    store: &CkbadgerStore,
+    type_hash: &[u8],
+    token: &ckbadger_store::types::TokenInfo,
+) -> anyhow::Result<()> {
+    let (row, label) = token_as_indexed(token);
+    store.put_token_direct(type_hash, &row)?;
+    if let Some(label) = label {
+        store.put_token_label_direct(type_hash, &label)?;
+    }
+    Ok(())
+}
+
+/// [`put_token_as_indexed`] with the row in `batch` (the label beside it, label import's write).
+pub fn put_token_in_batch_as_indexed(
+    batch: &mut StoreBatch,
+    type_hash: &[u8],
+    token: &ckbadger_store::types::TokenInfo,
+) {
+    let (row, label) = token_as_indexed(token);
+    batch.put_token(type_hash, &row);
+    if let Some(label) = label {
+        batch
+            .store()
+            .put_token_label_direct(type_hash, &label)
+            .expect("write the token's label");
+    }
+}

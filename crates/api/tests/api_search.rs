@@ -127,48 +127,48 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
         )
         .unwrap();
 
-    store
-        .put_token_direct(
-            &token_hash,
-            &TokenInfo {
-                type_code_hash: vec![0x44; 32],
-                hash_type: 1,
-                type_args: vec![0x55; 32],
-                standard: "xudt".to_string(),
-                name: Some("Alpha Token".to_string()),
-                symbol: Some("ALPHA".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 0,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
-    store
-        .put_token_direct(
-            &popular_token_hash,
-            &TokenInfo {
-                type_code_hash: vec![0x45; 32],
-                hash_type: 1,
-                type_args: vec![0x56; 32],
-                standard: "xudt".to_string(),
-                name: Some("Alpha Popular Token".to_string()),
-                symbol: Some("ALPHA2".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 0,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_hash,
+        &TokenInfo {
+            type_code_hash: vec![0x44; 32],
+            hash_type: 1,
+            type_args: vec![0x55; 32],
+            standard: "xudt".to_string(),
+            name: Some("Alpha Token".to_string()),
+            symbol: Some("ALPHA".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
+    put_token_as_indexed(
+        &store,
+        &popular_token_hash,
+        &TokenInfo {
+            type_code_hash: vec![0x45; 32],
+            hash_type: 1,
+            type_args: vec![0x56; 32],
+            standard: "xudt".to_string(),
+            name: Some("Alpha Popular Token".to_string()),
+            symbol: Some("ALPHA2".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_token_holder(&token_hash, &[0x61; 32], 100u128);

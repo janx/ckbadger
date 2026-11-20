@@ -28,27 +28,27 @@ async fn response_json(app: &axum::Router, path: &str) -> (StatusCode, serde_jso
 
 fn fixture() -> Arc<CkbadgerStore> {
     let store = test_store();
-    store
-        .put_token_direct(
-            &TOKEN,
-            &TokenInfo {
-                type_code_hash: vec![0x72; 32],
-                hash_type: 1,
-                type_args: vec![0x73; 32],
-                standard: "sudt".into(),
-                name: Some("Token".into()),
-                symbol: Some("TOK".into()),
-                decimals: Some(0),
-                max_supply: None,
-                first_seen_block: 0,
-                icon_url: None,
-                description: None,
-                transfers_count: 4,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &TOKEN,
+        &TokenInfo {
+            type_code_hash: vec![0x72; 32],
+            hash_type: 1,
+            type_args: vec![0x73; 32],
+            standard: "sudt".into(),
+            name: Some("Token".into()),
+            symbol: Some("TOK".into()),
+            decimals: Some(0),
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 4,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     seed_block_headers_at(
         &store,
         &[
@@ -655,9 +655,13 @@ async fn token_history_dates_follow_chain_time_after_raw_timestamp_regression() 
 #[tokio::test]
 async fn token_authority_and_same_symbol_are_evidence_based() {
     let store = fixture();
-    let mut other = store.get_token(&TOKEN).unwrap().unwrap();
+    // the token as the API names it, its label joined (re-pinned on purpose, resync fix round 3,
+    // item 3: the stored row is the chain's alone; it held the label's symbol)
+    let mut other = ckbadger_api::token_identity::get_token(&store, &TOKEN)
+        .unwrap()
+        .unwrap();
     other.standard = "xudt_compatible".into();
-    store.put_token_direct(&[0x72; 32], &other).unwrap();
+    put_token_as_indexed(&store, &[0x72; 32], &other).unwrap();
     let app = create_router(test_config(store)).await;
     let (_, known) = response_json(&app, &format!("/tokens/0x{}", hex::encode(TOKEN))).await;
     assert_eq!(
@@ -734,9 +738,10 @@ async fn real_token_router_producer_contract() {
 #[tokio::test]
 async fn distribution_preserves_wide_balances_and_explicit_unknown_units() {
     let store = fixture();
-    let mut info = store.get_token(&TOKEN).unwrap().unwrap();
-    info.decimals = None;
-    store.put_token_direct(&TOKEN, &info).unwrap();
+    // the token as the chain alone names it, no decimals: its label removed (re-pinned on purpose,
+    // resync fix round 3, item 3: the fixture's label is in `token_labels`; it was in the row,
+    // whose decimals the test cleared)
+    store.delete_token_label_direct(&TOKEN).unwrap();
     let mut batch = StoreBatch::new(&store);
     batch.put_token_holder(&TOKEN, &[0xd1; 32], u128::MAX);
     batch.put_token_holder(&TOKEN, &[0xd2; 32], u128::MAX);
@@ -790,7 +795,7 @@ async fn token_history_rejects_missing_capacity_evidence_for_existing_transfers(
 async fn token_history_accepts_same_day_mint_burn_with_zero_net_capacity() {
     let info = fixture().get_token(&TOKEN).unwrap().unwrap();
     let store = test_store();
-    store.put_token_direct(&TOKEN, &info).unwrap();
+    put_token_as_indexed(&store, &TOKEN, &info).unwrap();
     let timestamp = utc_ms("2026-10-01T00:00:00Z");
     seed_block_headers_at(
         &store,
@@ -900,27 +905,27 @@ async fn token_history_accepts_same_day_mint_burn_with_zero_net_capacity() {
 fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
     assert!(blocks <= 40);
     let store = test_store();
-    store
-        .put_token_direct(
-            &TOKEN,
-            &TokenInfo {
-                type_code_hash: vec![0x72; 32],
-                hash_type: 1,
-                type_args: vec![0x73; 32],
-                standard: "sudt".into(),
-                name: Some("Token".into()),
-                symbol: Some("TOK".into()),
-                decimals: Some(0),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: blocks,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &TOKEN,
+        &TokenInfo {
+            type_code_hash: vec![0x72; 32],
+            hash_type: 1,
+            type_args: vec![0x73; 32],
+            standard: "sudt".into(),
+            name: Some("Token".into()),
+            symbol: Some("TOK".into()),
+            decimals: Some(0),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: blocks,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     let start = utc_ms("2026-09-30T16:00:00Z");
     let tip = 48;
     let headers: Vec<(i64, i64)> = (0..=tip)
@@ -1170,7 +1175,7 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
 fn tab_fixture(n: i64) -> Arc<CkbadgerStore> {
     let store = test_store();
     let info = fixture().get_token(&TOKEN).unwrap().unwrap();
-    store.put_token_direct(&TOKEN, &info).unwrap();
+    put_token_as_indexed(&store, &TOKEN, &info).unwrap();
     let start = utc_ms("2026-09-30T16:00:00Z");
     let headers: Vec<(i64, i64)> = (0..=n).map(|b| (b, start + b * 60_000)).collect();
     seed_block_headers_at(&store, &headers);

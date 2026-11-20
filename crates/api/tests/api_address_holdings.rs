@@ -185,7 +185,8 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
             last_activity_tx_idx: 0,
         },
     );
-    batch.put_token(
+    put_token_in_batch_as_indexed(
+        &mut batch,
         token.calc_script_hash().as_slice(),
         &TokenInfo {
             type_code_hash: token.code_hash().as_slice().to_vec(),

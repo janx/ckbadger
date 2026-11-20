@@ -86,27 +86,27 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
     for (type_hash, standard, symbol) in
         [(token_xudt, "xudt", "XUDT"), (token_sudt, "sudt", "SUDT")]
     {
-        store
-            .put_token_direct(
-                &type_hash,
-                &TokenInfo {
-                    type_code_hash: vec![0xAA; 32],
-                    hash_type: 1,
-                    type_args: vec![0x01; 20],
-                    standard: standard.to_string(),
-                    name: Some(format!("{symbol} Token")),
-                    symbol: Some(symbol.to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 1,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .unwrap();
+        put_token_as_indexed(
+            &store,
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: standard.to_string(),
+                name: Some(format!("{symbol} Token")),
+                symbol: Some(symbol.to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
         store
             .put_token_daily_delta(
                 &type_hash,
@@ -426,48 +426,48 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
     let token_a = [0x11u8; 32];
     let token_b = [0x22u8; 32];
 
-    store
-        .put_token_direct(
-            &token_a,
-            &TokenInfo {
-                type_code_hash: vec![0xAA; 32],
-                hash_type: 1,
-                type_args: vec![0x01; 20],
-                standard: "xudt".to_string(),
-                name: Some("Alpha Token".to_string()),
-                symbol: Some("ALPHA".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 1,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
-    store
-        .put_token_direct(
-            &token_b,
-            &TokenInfo {
-                type_code_hash: vec![0xBB; 32],
-                hash_type: 1,
-                type_args: vec![0x02; 20],
-                standard: "xudt".to_string(),
-                name: Some("Beta Token".to_string()),
-                symbol: Some("BETA".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 2,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_a,
+        &TokenInfo {
+            type_code_hash: vec![0xAA; 32],
+            hash_type: 1,
+            type_args: vec![0x01; 20],
+            standard: "xudt".to_string(),
+            name: Some("Alpha Token".to_string()),
+            symbol: Some("ALPHA".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 1,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_b,
+        &TokenInfo {
+            type_code_hash: vec![0xBB; 32],
+            hash_type: 1,
+            type_args: vec![0x02; 20],
+            standard: "xudt".to_string(),
+            name: Some("Beta Token".to_string()),
+            symbol: Some("BETA".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 2,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
 
     store
         .put_token_daily_delta(
@@ -546,48 +546,48 @@ async fn test_assets_supply_sort_orders_aggregate_beyond_u128() {
 
     let amount = 200u128 << 120;
 
-    store
-        .put_token_direct(
-            &token_small,
-            &TokenInfo {
-                type_code_hash: vec![0xAA; 32],
-                hash_type: 1,
-                type_args: vec![0x01; 20],
-                standard: "xudt".to_string(),
-                name: Some("Small Supply".to_string()),
-                symbol: Some("SMALL".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
-    store
-        .put_token_direct(
-            &token_huge,
-            &TokenInfo {
-                type_code_hash: vec![0xBB; 32],
-                hash_type: 1,
-                type_args: vec![0x02; 20],
-                standard: "xudt".to_string(),
-                name: Some("Huge Supply".to_string()),
-                symbol: Some("HUGE".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_small,
+        &TokenInfo {
+            type_code_hash: vec![0xAA; 32],
+            hash_type: 1,
+            type_args: vec![0x01; 20],
+            standard: "xudt".to_string(),
+            name: Some("Small Supply".to_string()),
+            symbol: Some("SMALL".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_huge,
+        &TokenInfo {
+            type_code_hash: vec![0xBB; 32],
+            hash_type: 1,
+            type_args: vec![0x02; 20],
+            standard: "xudt".to_string(),
+            name: Some("Huge Supply".to_string()),
+            symbol: Some("HUGE".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
 
     let mut batch = StoreBatch::new(&store);
     batch.put_token_holder(&token_small, &[0x01; 32], 1_000u128);
@@ -649,27 +649,27 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
         (healthy_token, "Healthy Token", "HLT"),
         (broken_token, "Broken Token", "BKT"),
     ] {
-        store
-            .put_token_direct(
-                &hash,
-                &TokenInfo {
-                    type_code_hash: vec![0xAA; 32],
-                    hash_type: 1,
-                    type_args: vec![0x01; 20],
-                    standard: "xudt".to_string(),
-                    name: Some(name.to_string()),
-                    symbol: Some(symbol.to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 1,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .unwrap();
+        put_token_as_indexed(
+            &store,
+            &hash,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some(name.to_string()),
+                symbol: Some(symbol.to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
     }
 
     store
@@ -3805,27 +3805,27 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
         (&token_a, 0xAAu8, 0x01u8, "Alpha Token", "ALPHA"),
         (&token_b, 0xBBu8, 0x02u8, "Beta Token", "BETA"),
     ] {
-        store
-            .put_token_direct(
-                id,
-                &TokenInfo {
-                    type_code_hash: vec![code_hash; 32],
-                    hash_type: 1,
-                    type_args: vec![arg; 20],
-                    standard: "xudt".to_string(),
-                    name: Some(name.to_string()),
-                    symbol: Some(symbol.to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 1,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .unwrap();
+        put_token_as_indexed(
+            &store,
+            id,
+            &TokenInfo {
+                type_code_hash: vec![code_hash; 32],
+                hash_type: 1,
+                type_args: vec![arg; 20],
+                standard: "xudt".to_string(),
+                name: Some(name.to_string()),
+                symbol: Some(symbol.to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
     }
 
     store
@@ -4154,27 +4154,27 @@ async fn test_assets_list_token_capacity_after_real_writer_rollback() {
         (surviving, "Surviving Token", "SRV"),
         (orphan_only, "Orphan Only Token", "ORP"),
     ] {
-        store
-            .put_token_direct(
-                &hash,
-                &TokenInfo {
-                    type_code_hash: vec![0xAA; 32],
-                    hash_type: 1,
-                    type_args: vec![0x01; 20],
-                    standard: "xudt".to_string(),
-                    name: Some(name.to_string()),
-                    symbol: Some(symbol.to_string()),
-                    decimals: Some(8),
-                    max_supply: None,
-                    first_seen_block: 1,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 1,
-                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                    chain_metadata: None,
-                },
-            )
-            .unwrap();
+        put_token_as_indexed(
+            &store,
+            &hash,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some(name.to_string()),
+                symbol: Some(symbol.to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        )
+        .unwrap();
     }
 
     let writer = BatchWriter::new(store.clone(), store.clone());
@@ -6908,27 +6908,27 @@ async fn identity_collection_routes_reject_malformed_id_and_miss_unknown() {
 async fn test_assets_list_names_the_block_its_snapshot_was_built_at() {
     let store = test_store();
     let token = [0x11u8; 32];
-    store
-        .put_token_direct(
-            &token,
-            &TokenInfo {
-                type_code_hash: vec![0xAA; 32],
-                hash_type: 1,
-                type_args: vec![0x01; 20],
-                standard: "xudt".to_string(),
-                name: Some("Alpha Token".to_string()),
-                symbol: Some("ALPHA".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 1,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token,
+        &TokenInfo {
+            type_code_hash: vec![0xAA; 32],
+            hash_type: 1,
+            type_args: vec![0x01; 20],
+            standard: "xudt".to_string(),
+            name: Some("Alpha Token".to_string()),
+            symbol: Some("ALPHA".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 1,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     let mut batch = StoreBatch::new(&store);
     batch.put_token_holder(&token, &[0x01; 32], 5u128);
     batch.commit().unwrap();

@@ -86,7 +86,8 @@ async fn calendar_contract_real_api_and_verifier_keep_amounts_exact_and_dates_ex
     let token_id = format!("0x{}", hex::encode(type_hash));
     let type_script = json!({"code_hash":hash(0xa1), "hash_type":"type", "args":"0x01"});
     let mut batch = StoreBatch::new(&store);
-    batch.put_token(
+    put_token_in_batch_as_indexed(
+        &mut batch,
         &type_hash,
         &TokenInfo {
             type_code_hash: vec![0xa1; 32],
@@ -101,7 +102,9 @@ async fn calendar_contract_real_api_and_verifier_keep_amounts_exact_and_dates_ex
             icon_url: None,
             description: None,
             transfers_count: 0,
-            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            // re-pinned on purpose (resync fix round 3, item 3): decimals alone are no label's (a
+            // label states a name, a symbol and decimals); the chain's, partly named
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Chain),
             chain_metadata: None,
         },
     );

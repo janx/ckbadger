@@ -2627,27 +2627,27 @@ async fn test_asset_ecosystem_returns_expected_structure() {
     seed_knowledge_size_fixture(&store, 519_967_746_700_000_000);
 
     // Seed one token so the warmup cache populates CACHE_KEY_ASSETS_TOKEN.
-    store
-        .put_token_direct(
-            &[0xAA; 32],
-            &TokenInfo {
-                type_code_hash: vec![0x01; 32],
-                hash_type: 1,
-                type_args: vec![0x02; 20],
-                standard: "xudt".to_string(),
-                name: Some("TestToken".to_string()),
-                symbol: Some("TT".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 10,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &[0xAA; 32],
+        &TokenInfo {
+            type_code_hash: vec![0x01; 32],
+            hash_type: 1,
+            type_args: vec![0x02; 20],
+            standard: "xudt".to_string(),
+            name: Some("TestToken".to_string()),
+            symbol: Some("TT".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 10,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     // Seed holder entries in CF_TOKEN_HOLDERS so the live scan finds them.
     {
         let mut batch = StoreBatch::new(store.as_ref());
@@ -2789,27 +2789,27 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
         .unwrap();
 
     // One token (500 CKB owned capacity) so the tokens share is non-zero.
-    store
-        .put_token_direct(
-            &[0xAA; 32],
-            &TokenInfo {
-                type_code_hash: vec![0x01; 32],
-                hash_type: 1,
-                type_args: vec![0x02; 20],
-                standard: "xudt".to_string(),
-                name: Some("TestToken".to_string()),
-                symbol: Some("TT".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 10,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &[0xAA; 32],
+        &TokenInfo {
+            type_code_hash: vec![0x01; 32],
+            hash_type: 1,
+            type_args: vec![0x02; 20],
+            standard: "xudt".to_string(),
+            name: Some("TestToken".to_string()),
+            symbol: Some("TT".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 10,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     {
         let mut batch = StoreBatch::new(store.as_ref());
         batch.put_token_holder(&[0xAA; 32], &[0x01; 32], 500_000);

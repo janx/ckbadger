@@ -1566,7 +1566,8 @@ async fn fiber_channels_sort_by_capacity_with_totals_and_network_names_parties_p
     batch.put_lock_script(&party_a, &lock_a);
     batch.put_lock_script(&party_b, &lock_b);
     seed_script_label(&store, &lock_a.code_hash, 1, "Default Lock");
-    batch.put_token(
+    put_token_in_batch_as_indexed(
+        &mut batch,
         &[0x77; 32],
         &ckbadger_store::types::TokenInfo {
             type_code_hash: vec![0x78; 32],

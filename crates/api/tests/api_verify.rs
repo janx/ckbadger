@@ -47,7 +47,8 @@ fn seed_retention(store: &Arc<CkbadgerStore>, state: &ckbadger_store::types::Hou
 
 fn seed_token(store: &Arc<CkbadgerStore>, type_hash: &[u8], rows: &[(u32, i128, i128)]) {
     let mut batch = StoreBatch::new(store);
-    batch.put_token(
+    put_token_in_batch_as_indexed(
+        &mut batch,
         type_hash,
         &TokenInfo {
             type_code_hash: vec![0xa1; 32],

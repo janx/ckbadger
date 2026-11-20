@@ -1398,27 +1398,27 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let cluster_id = vec![0x51; 32];
     let nft_collection_id = vec![0x61; 32];
 
-    store
-        .put_token_direct(
-            &token_a,
-            &TokenInfo {
-                type_code_hash: vec![0x01; 32],
-                hash_type: 1,
-                type_args: vec![0x02; 20],
-                standard: "xudt".to_string(),
-                name: Some("Token A".to_string()),
-                symbol: Some("A".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_a,
+        &TokenInfo {
+            type_code_hash: vec![0x01; 32],
+            hash_type: 1,
+            type_args: vec![0x02; 20],
+            standard: "xudt".to_string(),
+            name: Some("Token A".to_string()),
+            symbol: Some("A".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     store
         .put_token_daily_delta(
             &token_a,
@@ -1432,27 +1432,27 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
         )
         .unwrap();
 
-    store
-        .put_token_direct(
-            &token_b,
-            &TokenInfo {
-                type_code_hash: vec![0x03; 32],
-                hash_type: 1,
-                type_args: vec![0x04; 20],
-                standard: "xudt".to_string(),
-                name: Some("Token B".to_string()),
-                symbol: Some("B".to_string()),
-                decimals: Some(8),
-                max_supply: None,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
-                chain_metadata: None,
-            },
-        )
-        .unwrap();
+    put_token_as_indexed(
+        &store,
+        &token_b,
+        &TokenInfo {
+            type_code_hash: vec![0x03; 32],
+            hash_type: 1,
+            type_args: vec![0x04; 20],
+            standard: "xudt".to_string(),
+            name: Some("Token B".to_string()),
+            symbol: Some("B".to_string()),
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    )
+    .unwrap();
     store
         .put_token_daily_delta(
             &token_b,
