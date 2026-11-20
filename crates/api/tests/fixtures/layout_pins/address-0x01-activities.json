@@ -28,6 +28,21 @@
         }
       ],
       "itemTypesUnread": null,
+      "items": [
+        {
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": "pure_ckb",
+          "kind": "object",
+          "movement": "transfer",
+          "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
+          "parties": 2,
+          "role": "spore"
+        }
+      ],
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [
@@ -77,6 +92,21 @@
         }
       ],
       "itemTypesUnread": null,
+      "items": [
+        {
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": "pure_ckb",
+          "kind": "object",
+          "movement": "mint",
+          "objectId": "0x1212121212121212121212121212121212121212121212121212121212121212",
+          "parties": 1,
+          "role": "spore"
+        }
+      ],
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [
@@ -126,6 +156,21 @@
         }
       ],
       "itemTypesUnread": null,
+      "items": [
+        {
+          "class": "object",
+          "collection": {
+            "id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Pins"
+          },
+          "composition": null,
+          "kind": "object",
+          "movement": "mint",
+          "objectId": "0x1111111111111111111111111111111111111111111111111111111111111111",
+          "parties": 1,
+          "role": "cluster"
+        }
+      ],
       "lockCalls": [],
       "participantCount": 2,
       "partyIds": [

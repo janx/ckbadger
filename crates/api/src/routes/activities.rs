@@ -11,6 +11,7 @@ use ckbadger_store::{
     },
     CkbadgerStore, ResolvedTx,
 };
+use num_bigint::{BigInt, BigUint, Sign};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -273,7 +274,7 @@ pub struct TypeCallResponse {
 /// address's row carries only its own deltas and a feed's row only the parties it draws, so a page
 /// cannot tell a burn from a send, nor a mint from a transfer in, without it. `movement` is `mint`
 /// where the item's net over every party of the transaction rose, `burn` where it fell, `transfer`
-/// where it only changed hands ([`item_movement`], the one rule).
+/// where it only changed hands ([`ItemsMoved`], the one rule).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowItemDelta {
@@ -282,49 +283,105 @@ pub struct RowItemDelta {
     pub movement: &'static str,
 }
 
-/// An exact sum of u128 amounts: its low 128 bits and how many times they carried past a u128. A
-/// token amount is a u128 on chain (anyone can mint 2^127 units or more), so a transaction's amounts
-/// of one item can sum past a u128: the carries keep the sum exact for any number of deltas (a
-/// carry count bounded by the number of deltas a transaction holds, never near a usize), with no
-/// allocation, and two sums compare exactly, carries first (the derived order).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ExactSum {
-    carries: usize,
-    low: u128,
+/// One item of a transaction, totalled over every party (an item by its kind and id: a token by its
+/// type script hash, an object by its id, an identity by its id and standard).
+struct ItemTotals<'a> {
+    /// The item's first delta in the transaction's order: what names it.
+    first: &'a ItemDelta,
+    /// What its holders gained: the sum of every party's rise, each party's deltas of it netted
+    /// first (a party that gave 5 from one cell and took 3 back in another changed by −2).
+    received: BigUint,
+    /// What its holders gave: the sum of every party's fall, netted the same way.
+    sent: BigUint,
+    /// How many parties' holdings of it changed (a party whose deltas net to zero did not).
+    parties: usize,
 }
 
-impl ExactSum {
-    fn add(&mut self, amount: u128) {
-        let (low, carried) = self.low.overflowing_add(amount);
-        self.low = low;
-        if carried {
-            self.carries += 1;
+impl ItemTotals<'_> {
+    /// `mint` where its holders gained more than they gave, `burn` where they gave more, `transfer`
+    /// where the two are equal: it only changed hands.
+    fn movement(&self) -> &'static str {
+        match self.received.cmp(&self.sent) {
+            std::cmp::Ordering::Greater => "mint",
+            std::cmp::Ordering::Less => "burn",
+            std::cmp::Ordering::Equal => "transfer",
         }
+    }
+
+    /// The amount moved: the larger of what its holders gained and what they gave. For a transfer
+    /// the two are equal, the amount that changed hands; for a mint, what holders gained (the
+    /// minted amount and whatever changed hands beside it); for a burn, what holders gave (the
+    /// burnt amount and whatever changed hands beside it). Integer arithmetic on the raw amounts.
+    fn amount(&self) -> &BigUint {
+        std::cmp::max(&self.received, &self.sent)
     }
 }
 
-/// An item's movement in a transaction: the amounts every party received and the amounts every
-/// party sent, each summed apart and exactly ([`ExactSum`]), then compared: `mint` where more was
-/// received than sent, `burn` where more was sent, `transfer` where they are equal (a token by its
-/// type script hash, an object by its id, an identity by its id and standard: the item delta's
-/// kind and id). It cannot fail: an amount is never converted to a signed type (the lead's
-/// finding on a3c52252: a u128 past an i128 failed the whole page).
-fn item_movement(actions: &TxActions, item: &ItemDelta) -> &'static str {
-    let (mut received, mut sent) = (ExactSum::default(), ExactSum::default());
-    for delta in actions.participants.iter().flat_map(|p| &p.item_deltas) {
-        if delta.kind != item.kind || delta.item_id != item.item_id {
-            continue;
+/// Every item of a transaction, each once in the order it first appears among its parties, with
+/// its totals over every party (lane feed, part 4): the one computation of an item's movement, its
+/// amount moved and its movers, which a row states once (`ActivityParties::items`) and each drawn
+/// delta reads its movement from. Exact for any amount (a token amount is a u128 on chain and a
+/// transaction's sum of them can pass it: big integers, never a cast to a signed type, the lead's
+/// finding on a3c52252).
+pub(crate) struct ItemsMoved<'a>(Vec<ItemTotals<'a>>);
+
+impl<'a> ItemsMoved<'a> {
+    pub(crate) fn of(actions: &'a TxActions) -> Self {
+        let same = |a: &ItemDelta, b: &ItemDelta| a.kind == b.kind && a.item_id == b.item_id;
+        let mut items: Vec<ItemTotals<'a>> = Vec::new();
+        for party in &actions.participants {
+            // the party's change of each item, its deltas of it netted
+            let mut nets: Vec<(&'a ItemDelta, BigInt)> = Vec::new();
+            for delta in &party.item_deltas {
+                let signed = if delta.negative {
+                    -BigInt::from(delta.magnitude)
+                } else {
+                    BigInt::from(delta.magnitude)
+                };
+                match nets.iter_mut().find(|(first, _)| same(first, delta)) {
+                    Some((_, net)) => *net += signed,
+                    None => nets.push((delta, signed)),
+                }
+            }
+            for (first, net) in nets {
+                let at = match items.iter().position(|item| same(item.first, first)) {
+                    Some(at) => at,
+                    None => {
+                        items.push(ItemTotals {
+                            first,
+                            received: BigUint::default(),
+                            sent: BigUint::default(),
+                            parties: 0,
+                        });
+                        items.len() - 1
+                    }
+                };
+                let item = &mut items[at];
+                let (sign, magnitude) = net.into_parts();
+                match sign {
+                    Sign::Plus => item.received += magnitude,
+                    Sign::Minus => item.sent += magnitude,
+                    Sign::NoSign => continue,
+                }
+                item.parties += 1;
+            }
         }
-        if delta.negative {
-            sent.add(delta.magnitude);
-        } else {
-            received.add(delta.magnitude);
-        }
+        Self(items)
     }
-    match received.cmp(&sent) {
-        std::cmp::Ordering::Greater => "mint",
-        std::cmp::Ordering::Less => "burn",
-        std::cmp::Ordering::Equal => "transfer",
+
+    /// The movement of the item a delta moves.
+    fn movement(&self, delta: &ItemDelta) -> anyhow::Result<&'static str> {
+        self.0
+            .iter()
+            .find(|item| item.first.kind == delta.kind && item.first.item_id == delta.item_id)
+            .map(ItemTotals::movement)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "item 0x{} ({:?}) is none of its transaction's items",
+                    hex::encode(&delta.item_id),
+                    delta.kind
+                )
+            })
     }
 }
 
@@ -382,9 +439,9 @@ pub struct GlobalActivityResponse {
     /// (`item_types_unread` says why).
     pub item_types: Option<Vec<ItemTypeResponse>>,
     pub item_types_unread: Option<String>,
-    /// The parties drawn, in full, in the transaction's order ([`drawn_parties`]). Every party
-    /// whose items moved is one, so their item deltas are the transaction's whole; their CKB is
-    /// not, where `participantCount` is larger.
+    /// The parties drawn, in full, in the transaction's order ([`drawn_parties`]), each with its
+    /// own item deltas; what the row says of the transaction's items is `items`, of every party
+    /// its count and ids.
     pub participants: Vec<ParticipantResponse>,
     /// Every party, counted and named by its short id, and the fee payer ([`activity_parties`]).
     #[serde(flatten)]
@@ -402,10 +459,106 @@ pub struct ParticipantResponse {
     pub roles: Vec<&'static str>,
     pub ckb_delta: String,
     pub used_delta: String,
-    /// Each with its movement in the whole transaction ([`item_movement`]), as an address's row
-    /// states its own: a page reads a headline's mint, burn or transfer here, never sums it.
+    /// Each with its movement in the whole transaction ([`ItemsMoved`]), as an address's row
+    /// states its own: the party's own line reads them; a row's facts of its items are `items`.
     pub item_deltas: Vec<RowItemDelta>,
     pub tags: u16,
+}
+
+/// One item of a transaction as a row states it once (lane feed, part 4), computed from every
+/// party ([`ItemsMoved`]): what it is (the fields its deltas carry, but the delta), its movement,
+/// how many parties' holdings of it changed, and for a token the amount moved
+/// ([`ItemTotals::amount`]) as an exact decimal string of its raw units.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind")]
+pub enum RowItemResponse {
+    #[serde(rename = "token", rename_all = "camelCase")]
+    Token {
+        type_script_hash: String,
+        symbol: Option<String>,
+        decimals: Option<u8>,
+        movement: &'static str,
+        amount: String,
+        parties: usize,
+    },
+    #[serde(rename = "object", rename_all = "camelCase")]
+    Object {
+        object_id: String,
+        collection: Option<super::transaction_cells::DeltaCollection>,
+        class: &'static str,
+        composition: Option<&'static str>,
+        role: Option<&'static str>,
+        movement: &'static str,
+        parties: usize,
+    },
+    #[serde(rename = "identity", rename_all = "camelCase")]
+    Identity {
+        identity_id: String,
+        standard: &'static str,
+        movement: &'static str,
+        parties: usize,
+    },
+}
+
+/// The items of a transaction as a row states them, each once in the order it first appears among
+/// the parties: the one conversion of a delta names each ([`convert_item_delta`], its first delta).
+fn row_items(
+    store: &CkbadgerStore,
+    items_moved: &ItemsMoved<'_>,
+    cache: &mut ItemDeltaCache,
+    indexed: bool,
+) -> anyhow::Result<Vec<RowItemResponse>> {
+    items_moved
+        .0
+        .iter()
+        .map(|item| {
+            let movement = item.movement();
+            let parties = item.parties;
+            Ok(
+                match convert_item_delta(item.first, cache, store, indexed)? {
+                    ItemDeltaResponse::Token {
+                        type_script_hash,
+                        symbol,
+                        decimals,
+                        ..
+                    } => RowItemResponse::Token {
+                        type_script_hash,
+                        symbol,
+                        decimals,
+                        movement,
+                        amount: item.amount().to_string(),
+                        parties,
+                    },
+                    ItemDeltaResponse::Object {
+                        object_id,
+                        collection,
+                        class,
+                        composition,
+                        role,
+                        ..
+                    } => RowItemResponse::Object {
+                        object_id,
+                        collection,
+                        class,
+                        composition,
+                        role,
+                        movement,
+                        parties,
+                    },
+                    ItemDeltaResponse::Identity {
+                        identity_id,
+                        standard,
+                        ..
+                    } => RowItemResponse::Identity {
+                        identity_id,
+                        standard,
+                        movement,
+                        parties,
+                    },
+                },
+            )
+        })
+        .collect()
 }
 
 /// Up to this many parties, a row draws every one; beyond it, the parties [`drawn_parties`] names.
@@ -433,6 +586,9 @@ pub struct ActivityParties {
     pub party_ids: Vec<PartyIdResponse>,
     /// The lock hash of the party whose only movement is the fee ([`fee_payer`]), or `None`.
     pub fee_payer: Option<String>,
+    /// Every item of the transaction, once, from every party ([`row_items`], lane feed part 4): a
+    /// row draws no party for moving an item, so what a page says of an item it reads here.
+    pub items: Vec<RowItemResponse>,
 }
 
 /// Which of an activity's parties a response sends in full.
@@ -489,10 +645,16 @@ fn fee_payer(actions: &TxActions) -> Option<usize> {
 }
 
 /// Every party of an activity, counted, each by its short id ([`PartyIdResponse`]) in the
-/// transaction's order, and its fee payer: read from all of them, once. Two parties of one
-/// transaction under one short id is an error naming both: the indexer makes a protocol-named
+/// transaction's order, its fee payer, and its items: read from all of them, once. Two parties of
+/// one transaction under one short id is an error naming both: the indexer makes a protocol-named
 /// party that is a cell holder that holder, so a short id names one party.
-pub(crate) fn activity_parties(actions: &TxActions) -> anyhow::Result<ActivityParties> {
+pub(crate) fn activity_parties(
+    store: &CkbadgerStore,
+    actions: &TxActions,
+    items_moved: &ItemsMoved<'_>,
+    cache: &mut ItemDeltaCache,
+    indexed: bool,
+) -> anyhow::Result<ActivityParties> {
     let mut seen = std::collections::HashSet::with_capacity(actions.participants.len());
     let party_ids = actions
         .participants
@@ -526,6 +688,7 @@ pub(crate) fn activity_parties(actions: &TxActions) -> anyhow::Result<ActivityPa
         participant_count: actions.participants.len(),
         party_ids,
         fee_payer,
+        items: row_items(store, items_moved, cache, indexed)?,
     })
 }
 
@@ -533,9 +696,9 @@ pub(crate) fn activity_parties(actions: &TxActions) -> anyhow::Result<ActivityPa
 /// [`Draw::Every`]: all of them. [`Draw::Row`], the one rule of a feed's or a list's row: every
 /// party of a row of at most [`ROW_PARTY_LIMIT`]; beyond it, the [`ROW_LARGEST_PARTIES`] largest
 /// CKB changes (by size, the earlier party first where two are equal: the page's own pick of the
-/// five it shows folded, `participantsToShow`), the fee payer, and every party whose items moved,
-/// so a row holds every item delta of its transaction. A rule, not a cap: a row whose 700 parties
-/// all moved an item draws 700.
+/// five it shows folded, `participantsToShow`) and the fee payer (lane feed, part 4: no party is
+/// drawn for moving an item; the row states its items once, [`ActivityParties::items`]). A drawn
+/// party keeps its own item deltas.
 fn drawn_parties(actions: &TxActions, draw: Draw) -> Vec<usize> {
     let parties = &actions.participants;
     if draw == Draw::Every || parties.len() <= ROW_PARTY_LIMIT {
@@ -555,11 +718,6 @@ fn drawn_parties(actions: &TxActions, draw: Draw) -> Vec<usize> {
     }
     if let Some(index) = fee_payer(actions) {
         drawn[index] = true;
-    }
-    for (index, party) in parties.iter().enumerate() {
-        if !party.item_deltas.is_empty() {
-            drawn[index] = true;
-        }
     }
     (0..parties.len()).filter(|index| drawn[*index]).collect()
 }
@@ -1459,16 +1617,18 @@ pub(crate) fn build_activity_response(
         "activity tx 0x{}: item types are a committed row's, and only a committed row's",
         hex::encode(&actions.tx_hash)
     );
+    let items_moved = ItemsMoved::of(actions);
     let item_deltas = participant
         .item_deltas
         .iter()
         .map(|item| {
             Ok(RowItemDelta {
                 delta: convert_item_delta(item, item_cache, store, pool.is_none())?,
-                movement: item_movement(actions, item),
+                movement: items_moved.movement(item)?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let parties = activity_parties(store, actions, &items_moved, item_cache, pool.is_none())?;
 
     Ok(ActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
@@ -1493,7 +1653,7 @@ pub(crate) fn build_activity_response(
             .collect::<anyhow::Result<Vec<_>>>()?,
         roles: participant_roles::names(participant.roles),
         tags: participant.tags,
-        parties: activity_parties(actions)?,
+        parties,
     })
 }
 
@@ -1533,6 +1693,7 @@ pub(crate) fn build_global_activity_response_with_pool(
     pool_record: Option<&PoolTxRecord>,
 ) -> anyhow::Result<GlobalActivityResponse> {
     let mut item_cache = ItemDeltaCache::default();
+    let items_moved = ItemsMoved::of(actions);
 
     let participants = drawn_parties(actions, draw)
         .into_iter()
@@ -1550,7 +1711,7 @@ pub(crate) fn build_global_activity_response_with_pool(
                             store,
                             pool_record.is_none(),
                         )?,
-                        movement: item_movement(actions, item),
+                        movement: items_moved.movement(item)?,
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -1575,6 +1736,13 @@ pub(crate) fn build_global_activity_response_with_pool(
             unread: None,
         },
     };
+    let parties = activity_parties(
+        store,
+        actions,
+        &items_moved,
+        &mut item_cache,
+        pool_record.is_none(),
+    )?;
     Ok(GlobalActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
         block_number: actions.block_number,
@@ -1591,7 +1759,7 @@ pub(crate) fn build_global_activity_response_with_pool(
         item_types: types.types,
         item_types_unread: types.unread,
         participants,
-        parties: activity_parties(actions)?,
+        parties,
     })
 }
 

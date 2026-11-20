@@ -4258,27 +4258,39 @@ async fn a_many_party_row_states_its_count_draws_by_the_rule_and_names_every_par
         .collect();
     assert_eq!(row["partyIds"], serde_json::Value::Array(expected_ids));
 
-    // the drawn set: the five largest (100, 101, 102, 103, 400; not the sixth, 104), every party
-    // whose items moved (7, 101, 650), 101 once though it is in both, in the transaction's order
+    // the drawn set: the five largest (100, 101, 102, 103, 400; not the sixth, 104), in the
+    // transaction's order. Re-pinned on purpose (lane feed, part 4): a party is drawn for moving
+    // an item no more (7 and 650 were; 101 is drawn as one of the five), the row states its items
+    // once instead
     let drawn: Vec<String> = row["participants"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| p["lockHash"].as_str().unwrap().to_string())
         .collect();
-    let expected_drawn: Vec<String> = [7, 100, 101, 102, 103, 400, 650]
+    let expected_drawn: Vec<String> = [100, 101, 102, 103, 400]
         .iter()
         .map(|i| format!("0x{}", hex::encode(many_party_lock(*i))))
         .collect();
     assert_eq!(drawn, expected_drawn);
     // no party paid the fee alone: many changed
     assert_eq!(row["feePayer"], serde_json::Value::Null);
-    // every item a drawn party moved carries its movement in the whole transaction (−50 −10 +60)
-    for p in row["participants"].as_array().unwrap() {
-        for item in p["itemDeltas"].as_array().unwrap() {
-            assert_eq!(item["movement"], "transfer", "{item}");
-        }
-    }
+    // a drawn party's own item carries its movement in the whole transaction (−50 −10 +60)
+    let own = &row["participants"][1]["itemDeltas"][0];
+    assert_eq!(own["movement"], "transfer", "{own}");
+    // and the row states the token once: it changed hands, 60 of it, among three parties
+    assert_eq!(
+        row["items"],
+        serde_json::json!([{
+            "kind": "token",
+            "typeScriptHash": format!("0x{}", "7e".repeat(32)),
+            "symbol": null,
+            "decimals": null,
+            "movement": "transfer",
+            "amount": "60",
+            "parties": 3,
+        }])
+    );
 
     let row_bytes = serde_json::to_string(row).unwrap().len();
     let id_bytes = serde_json::to_string(&row["partyIds"]).unwrap().len();

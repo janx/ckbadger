@@ -97,13 +97,26 @@ feed and a transaction's own activity.
 - `feePayer: "0x<lock hash>" | null` — the party whose only movement is the fee, read from every
   party: not a cellbase, no Nervos DAO withdrawal completed (its compensation enters), no item
   moved, and exactly one party's CKB changed and went down. Nothing is summed to find it.
+- `items` — every item of the transaction, once, in the order it first appears among the parties,
+  computed from every party (part 4: on Godwoken rows hundreds of parties' items move, and a row
+  drew them all; the token page measured 2,342,234 bytes with them):
+  `{ kind, …what the item's deltas name it by, movement, parties[, amount] }`. A token:
+  `typeScriptHash`, `symbol`, `decimals`, `amount`; an object: `objectId`, `collection`, `class`,
+  `composition`, `role`; an identity: `identityId`, `standard`. Each party's change of the item is
+  netted first (a party that gave 5 from one cell and took 3 back in another changed by −2);
+  `parties` counts the parties whose holdings of it changed; `movement` is `mint` where they
+  gained more than they gave, `burn` where they gave more, `transfer` where the two are equal;
+  a token's `amount` is the larger of the two, an exact decimal string of raw units: for a
+  transfer the amount that changed hands, for a mint what holders gained, for a burn what they
+  gave. A page reads a row's facts of its items here (its headline, a fold's tokens, an asset
+  feed's amount moved), never from the parties a row draws.
 - `participants` (a `GlobalActivityResponse`; an address's row has none) — the parties DRAWN, in
-  full, in the transaction's order, each once. A feed's or a list's row draws every party of a
-  row of at most six; beyond six, the five largest CKB changes (by size, the earlier party first
-  where two are equal), the fee payer and every party whose items moved: a rule, not a cap. So a
-  row holds every item delta of its transaction, and a page may read items from it; it holds the
-  CKB of the drawn parties only, so a page reads a count from `participantCount` and the fee from
-  `feePayer`, never from `participants`. The transaction's own activity draws every party.
+  full, in the transaction's order, each once, each with its own item deltas. A feed's or a
+  list's row draws every party of a row of at most six; beyond six, the five largest CKB changes
+  (by size, the earlier party first where two are equal) and the fee payer: at most six, five
+  where a fee payer is (it is then the largest). A page reads a count from `participantCount`,
+  the fee from `feePayer` and the items from `items`, never from `participants`. The
+  transaction's own activity draws every party.
 - An address's row draws the address alone (its own changes are the row's fields) and sends no
   other party in full: it reads no other party's lock.
 
@@ -976,7 +989,7 @@ network store too), no re-sync:
 - Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
 - History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
-- New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every party is counted and named (`participantCount`, `partyIds`); the parties a row draws are in full, every party whose items moved among them (activities, **The parties a row draws**). Token amount moved can be read as the sum of positive deltas for that token over the drawn parties, which hold every item delta of the transaction; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
+- New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every party is counted and named (`participantCount`, `partyIds`); the parties a row draws are in full, and its items are stated once (activities, **The parties a row draws**). A token's amount moved is the row's `items` entry's `amount`; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
 
 Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0025-simple-udt/0025-simple-udt.md) and [RFC 0052](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0052-extensible-udt/0052-extensible-udt.md), rather than arbitrary compatible-script argument guesses.
