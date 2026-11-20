@@ -389,16 +389,46 @@ struct AddressActivityRecord {
     item_deltas: Vec<serde_json::Value>,
 }
 
-/// One party of a global activity row.
+/// One party of a global activity row, with its item deltas.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalParticipantApiRecord {
     lock_hash: Option<String>,
     lock_hash_prefix: Option<String>,
+    item_deltas: Vec<ItemDeltaApiRecord>,
 }
 
-/// A feed row of `/activities`: it sends in full only the parties it draws, and names every party
-/// of its transaction by its short id (`partyIds`, `[id, tags]`) beside their count.
+/// One item delta of a party: the item by its kind and id (an identity's standard too), and its
+/// signed change (a token's an exact decimal string, an object's or an identity's ±1).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemDeltaApiRecord {
+    kind: String,
+    type_script_hash: Option<String>,
+    object_id: Option<String>,
+    identity_id: Option<String>,
+    standard: Option<String>,
+    delta: serde_json::Value,
+}
+
+/// One item a row states once (lane feed, part 4): what it is, its movement, how many parties'
+/// holdings of it changed and a token's amount moved.
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RowItemApiRecord {
+    kind: String,
+    type_script_hash: Option<String>,
+    object_id: Option<String>,
+    identity_id: Option<String>,
+    standard: Option<String>,
+    movement: String,
+    amount: Option<String>,
+    parties: usize,
+}
+
+/// A feed row of `/activities`: it sends in full only the parties it draws, names every party of
+/// its transaction by its short id (`partyIds`, `[id, tags]`) beside their count, and states its
+/// items once (`items`).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalActivityApiRecord {
@@ -406,6 +436,204 @@ struct GlobalActivityApiRecord {
     block_number: i64,
     participant_count: usize,
     party_ids: Vec<(String, u16)>,
+    items: Vec<RowItemApiRecord>,
+}
+
+/// An unsigned integer of 256 bits, little-endian limbs: wide enough for any transaction's sum of
+/// token amounts (each a u128), exact, for holding a row's stated amounts against its parties.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Wide([u64; 4]);
+
+impl Wide {
+    fn parse(digits: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+            "not a decimal amount: {digits:?}"
+        );
+        let mut value = Self::default();
+        for digit in digits.bytes() {
+            value = value.mul_add(10, u64::from(digit - b'0'))?;
+        }
+        Ok(value)
+    }
+
+    fn mul_add(self, factor: u64, addend: u64) -> anyhow::Result<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = u128::from(addend);
+        for (limb, value) in out.iter_mut().zip(self.0) {
+            let wide = u128::from(value) * u128::from(factor) + carry;
+            *limb = wide as u64;
+            carry = wide >> 64;
+        }
+        anyhow::ensure!(carry == 0, "an amount past 256 bits");
+        Ok(Self(out))
+    }
+
+    fn add(self, other: Self) -> anyhow::Result<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = false;
+        for (i, limb) in out.iter_mut().enumerate() {
+            let (sum, over_a) = self.0[i].overflowing_add(other.0[i]);
+            let (sum, over_b) = sum.overflowing_add(u64::from(carry));
+            *limb = sum;
+            carry = over_a || over_b;
+        }
+        anyhow::ensure!(!carry, "an amount past 256 bits");
+        Ok(Self(out))
+    }
+
+    /// `self − other`, where `self ≥ other`.
+    fn sub(self, other: Self) -> Self {
+        let mut out = [0u64; 4];
+        let mut borrow = false;
+        for (i, limb) in out.iter_mut().enumerate() {
+            let (diff, under_a) = self.0[i].overflowing_sub(other.0[i]);
+            let (diff, under_b) = diff.overflowing_sub(u64::from(borrow));
+            *limb = diff;
+            borrow = under_a || under_b;
+        }
+        out.into()
+    }
+
+    fn decimal(self) -> String {
+        const CHUNK: u64 = 10_000_000_000_000_000_000;
+        let mut limbs = self.0;
+        let mut chunks = Vec::new();
+        loop {
+            let mut remainder = 0u128;
+            for limb in limbs.iter_mut().rev() {
+                let value = (remainder << 64) | u128::from(*limb);
+                *limb = (value / u128::from(CHUNK)) as u64;
+                remainder = value % u128::from(CHUNK);
+            }
+            chunks.push(remainder as u64);
+            if limbs.iter().all(|limb| *limb == 0) {
+                break;
+            }
+        }
+        let mut out = chunks.pop().unwrap_or(0).to_string();
+        for chunk in chunks.iter().rev() {
+            out.push_str(&format!("{chunk:019}"));
+        }
+        out
+    }
+}
+
+impl From<[u64; 4]> for Wide {
+    fn from(limbs: [u64; 4]) -> Self {
+        Self(limbs)
+    }
+}
+
+impl PartialOrd for Wide {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Wide {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.iter().rev().cmp(other.0.iter().rev())
+    }
+}
+
+/// What every party of a transaction moves of each item, as a row states it (lane feed, part 4):
+/// each item once in the order it first appears among the parties, each party's deltas of it
+/// netted first; `parties` the parties whose holdings changed; `movement` `mint` where they gained
+/// more than they gave, `burn` where they gave more, `transfer` where the two are equal; a token's
+/// `amount` the larger of the two. Computed here from the transaction's own activity, the
+/// verifier's own reading, to hold the route's statement against.
+fn items_moved_by(parties: &[GlobalParticipantApiRecord]) -> anyhow::Result<Vec<RowItemApiRecord>> {
+    type Key = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let key = |d: &ItemDeltaApiRecord| -> Key {
+        (
+            d.kind.clone(),
+            d.type_script_hash.clone(),
+            d.object_id.clone(),
+            d.identity_id.clone(),
+            d.standard.clone(),
+        )
+    };
+    let mut totals: Vec<(Key, Wide, Wide, usize)> = Vec::new();
+    for party in parties {
+        let mut nets: Vec<(Key, Wide, Wide)> = Vec::new();
+        for delta in &party.item_deltas {
+            let text = match &delta.delta {
+                serde_json::Value::String(text) => text.clone(),
+                serde_json::Value::Number(number) => number.to_string(),
+                other => anyhow::bail!("an item delta of {other}"),
+            };
+            let (negative, digits) = match text.strip_prefix('-') {
+                Some(digits) => (true, digits),
+                None => (false, text.as_str()),
+            };
+            let amount = Wide::parse(digits)?;
+            let k = key(delta);
+            let at = match nets.iter().position(|(n, _, _)| *n == k) {
+                Some(at) => at,
+                None => {
+                    nets.push((k, Wide::default(), Wide::default()));
+                    nets.len() - 1
+                }
+            };
+            let (_, gained, gave) = &mut nets[at];
+            if negative {
+                *gave = gave.add(amount)?;
+            } else {
+                *gained = gained.add(amount)?;
+            }
+        }
+        for (k, gained, gave) in nets {
+            let at = match totals.iter().position(|(t, _, _, _)| *t == k) {
+                Some(at) => at,
+                None => {
+                    totals.push((k, Wide::default(), Wide::default(), 0));
+                    totals.len() - 1
+                }
+            };
+            let (_, received, sent, movers) = &mut totals[at];
+            match gained.cmp(&gave) {
+                std::cmp::Ordering::Greater => *received = received.add(gained.sub(gave))?,
+                std::cmp::Ordering::Less => *sent = sent.add(gave.sub(gained))?,
+                std::cmp::Ordering::Equal => continue,
+            }
+            *movers += 1;
+        }
+    }
+    Ok(totals
+        .into_iter()
+        .map(
+            |(
+                (kind, type_script_hash, object_id, identity_id, standard),
+                received,
+                sent,
+                parties,
+            )| {
+                let movement = match received.cmp(&sent) {
+                    std::cmp::Ordering::Greater => "mint",
+                    std::cmp::Ordering::Less => "burn",
+                    std::cmp::Ordering::Equal => "transfer",
+                };
+                let amount = (kind == "token").then(|| std::cmp::max(received, sent).decimal());
+                RowItemApiRecord {
+                    kind,
+                    type_script_hash,
+                    object_id,
+                    identity_id,
+                    standard,
+                    movement: movement.to_string(),
+                    amount,
+                    parties,
+                }
+            },
+        )
+        .collect())
 }
 
 /// A transaction's own activity (`/transactions/{hash}/activity`): every party in full.
@@ -5131,6 +5359,41 @@ impl Check for ParticipantRowsConsistency {
                         },
                         own.participant_count,
                         own.participants.len(),
+                    )],
+                });
+            }
+            // the row's items, stated once, against what every party moves (lane feed, part 4)
+            let moved = items_moved_by(&own.participants)?;
+            if activity.items != moved {
+                let said = |items: &[RowItemApiRecord]| {
+                    items
+                        .iter()
+                        .map(|i| {
+                            format!(
+                                "{} {} {}{} by {}",
+                                i.kind,
+                                i.type_script_hash
+                                    .as_deref()
+                                    .or(i.object_id.as_deref())
+                                    .or(i.identity_id.as_deref())
+                                    .unwrap_or("?"),
+                                i.movement,
+                                i.amount
+                                    .as_deref()
+                                    .map(|a| format!(" {a}"))
+                                    .unwrap_or_default(),
+                                i.parties
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                };
+                findings.push(Finding {
+                    entity: format!("tx={}", activity.tx_hash),
+                    details: vec![format!(
+                        "the row states its items as [{}]; every party of its own activity moves [{}]",
+                        said(&activity.items),
+                        said(&moved)
                     )],
                 });
             }
@@ -10540,6 +10803,19 @@ mod tests {
     /// movement, how many parties' holdings changed (each party's deltas netted first) and a
     /// token's amount moved (the larger of what holders gained and gave). A statement right in
     /// all passes; a wrong amount, mover count or movement is a finding naming the transaction.
+    /// The verifier's sums of token amounts are exact past a u128 (a transaction's amounts of one
+    /// token can sum past one): two u128::MAX make 2^129 − 2, written back in full.
+    #[test]
+    fn wide_amounts_sum_past_a_u128_exactly() {
+        let max = Wide::parse(&u128::MAX.to_string()).unwrap();
+        let twice = max.add(max).unwrap();
+        assert_eq!(twice.decimal(), "680564733841876926926749214863536422910");
+        assert_eq!(twice.sub(max), max);
+        assert!(twice > max);
+        assert_eq!(Wide::parse("0").unwrap().decimal(), "0");
+        assert!(Wide::parse("-1").is_err());
+    }
+
     #[test]
     fn participant_rows_check_holds_the_row_items_against_every_party() {
         const TX: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
