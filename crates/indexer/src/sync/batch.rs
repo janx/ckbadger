@@ -10690,14 +10690,18 @@ mod tests {
                 assert_eq!(row.chain_metadata.as_ref(), Some(&chain), "{path}");
                 assert!(row.chain_metadata_conflict(), "{path}");
             }
-            let mut live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
+            let live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
             let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
-            // Pre-existing, outside IV-26: the live writer keeps the label
-            // placeholder's first_seen_block (0) while bulk records the issuance
-            // block; see the INT result file, "Found, not fixed".
-            assert_eq!((live.first_seen_block, bulk_row.first_seen_block), (0, 101));
-            live.first_seen_block = bulk_row.first_seen_block;
+            // resync fix round M1: one first block on both paths, the block
+            // of the token's first cell (the issuance), whether or not label
+            // import named the token first (it pinned live's label
+            // placeholder 0 against bulk's 101 as a known divergence).
+            assert_eq!(
+                (live.first_seen_block, bulk_row.first_seen_block),
+                (101, 101)
+            );
             assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
+            assert_eq!(live_bytes, bulk_bytes, "live and bulk CF_TOKENS rows, raw");
             // Label import alone wrote the label and nothing about the chain.
             assert_eq!(
                 (labelled.metadata_source, labelled.chain_metadata),
@@ -14541,6 +14545,166 @@ mod tests {
             .await;
             assert_eq!(per_block_row, one_batch_row);
             per_block_row
+        }
+
+        /// Supply token 1's curated label, as `docs/metadata/tokens/` would
+        /// carry it.
+        fn supply_token_label() -> crate::label_import::TokenMetadata {
+            let token = supply_token_type(1);
+            crate::label_import::TokenMetadata {
+                name: "Supply One".to_string(),
+                symbol: "SUP1".to_string(),
+                decimals: 8,
+                standard: "xudt".to_string(),
+                icon: Some("https://example.invalid/sup1.png".to_string()),
+                description: Some("the claim rule's labelled token".to_string()),
+                disabled: false,
+                mainnet: Some(crate::label_import::TokenDeployment {
+                    code_hash: token.code_hash,
+                    hash_type: token.hash_type,
+                    args: token.args,
+                }),
+                testnet: None,
+            }
+        }
+
+        /// Label import of supply token 1 on `store` (what the indexer runs
+        /// before its first block).
+        fn import_supply_token_label(store: &CkbadgerStore) -> Result<()> {
+            let result = crate::label_import::import_all(
+                store,
+                "mainnet",
+                std::slice::from_ref(&supply_token_label()),
+                &[],
+            )?;
+            anyhow::ensure!(result.errors.is_empty(), "{:?}", result.errors);
+            Ok(())
+        }
+
+        /// The STORED `CF_TOKENS` row of `type_hash` after label import and
+        /// `batches` written live, raw.
+        async fn labelled_live_row(
+            batches: &[Vec<BlockResponseWithCycles>],
+            type_hash: &[u8],
+        ) -> (Arc<CkbadgerStore>, Option<Vec<u8>>) {
+            let store = Arc::new(CkbadgerStore::open_test_unified_temp().unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            import_supply_token_label(store.as_ref()).unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for batch in batches {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    batch.clone(),
+                )
+                .await
+                .unwrap();
+            }
+            let row = store.get_cf(store.cf_tokens(), type_hash).unwrap();
+            (store, row)
+        }
+
+        /// resync fix round M1 (logic M1): a token's first block is the block
+        /// of its first cell on both paths, whether or not label import named
+        /// the token first, and a claim made before that block is not the
+        /// token's. Label import names supply token 1 (owner: its supply-mode
+        /// Omnilock); block 101 holds that Omnilock's claim 7700 while the
+        /// chain holds no cell of the token; block 102 issues the token and
+        /// claims 8800. Bulk, live a block per batch and live in one batch
+        /// store the same `CF_TOKENS` row, byte for byte: first block 102, max
+        /// supply 8800, the label attached.
+        #[tokio::test]
+        async fn a_labelled_tokens_first_block_and_max_supply_are_the_chains_on_every_path() {
+            let blocks = vec![
+                funding_block(),
+                claim_rule_block(
+                    101,
+                    vec![genuine_claim_tx(
+                        0xa1,
+                        input(0xc0, 0),
+                        FUNDING_CAPACITY,
+                        7700,
+                    )],
+                ),
+                claim_rule_block(
+                    102,
+                    vec![
+                        issue_tx(
+                            0xa2,
+                            input(0xa1, 1),
+                            FUNDING_CAPACITY - 300_00000000,
+                            supply_token_type(1),
+                        ),
+                        genuine_claim_tx(
+                            0xa3,
+                            input(0xa2, 1),
+                            FUNDING_CAPACITY - 300_00000000 - EXT_CELL_CAPACITY,
+                            8800,
+                        ),
+                    ],
+                ),
+            ];
+            let type_hash = supply_token_hash(1);
+            let bulk = crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                &blocks,
+                import_supply_token_label,
+            )
+            .expect("bulk");
+            let bulk_bytes = bulk
+                .token_rows
+                .tokens
+                .get(&type_hash)
+                .expect("bulk writes the token row")
+                .clone();
+            let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
+            for (plan, shape) in [
+                (per_block(&blocks), "live, a block per batch"),
+                (
+                    vec![blocks[..1].to_vec(), blocks[1..].to_vec()],
+                    "live, one batch",
+                ),
+            ] {
+                let (_, live_bytes) = labelled_live_row(&plan, &type_hash).await;
+                let live_row: TokenInfo =
+                    bincode::deserialize(live_bytes.as_ref().expect("live writes the row"))
+                        .unwrap();
+                assert_eq!(
+                    (live_row.first_seen_block, live_row.max_supply),
+                    (bulk_row.first_seen_block, bulk_row.max_supply),
+                    "{shape}: (first block, max supply), live vs bulk"
+                );
+                assert_eq!(live_bytes.as_ref(), Some(&bulk_bytes), "{shape}: the row");
+            }
+            assert_eq!(
+                (bulk_row.first_seen_block, bulk_row.max_supply),
+                (102, Some(8800))
+            );
+            assert_eq!(
+                (
+                    bulk_row.name.as_deref(),
+                    bulk_row.symbol.as_deref(),
+                    bulk_row.decimals,
+                    bulk_row.icon_url.as_deref(),
+                ),
+                (
+                    Some("Supply One"),
+                    Some("SUP1"),
+                    Some(8),
+                    Some("https://example.invalid/sup1.png")
+                ),
+                "the label is attached"
+            );
+
+            // While the chain holds no cell of the token, nothing writes its
+            // row: not label import, not the claim's block (in its scope).
+            let (store, row) = labelled_live_row(&per_block(&blocks[..2]), &type_hash).await;
+            assert_eq!(row, None, "no row for a token the chain does not hold");
+            assert!(
+                token_journal_entries(store.as_ref(), 101).is_empty(),
+                "the claim's block journals no token row"
+            );
         }
 
         /// The lead's rule: a claim made before the token's first block is
