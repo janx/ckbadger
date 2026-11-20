@@ -4184,9 +4184,13 @@ async fn a_many_party_row_states_its_count_draws_by_the_rule_and_names_every_par
 /// draws the address's party alone (the route's `participants` of the other parties is gone).
 #[tokio::test]
 async fn the_transaction_page_draws_every_party_and_an_address_row_names_them_by_id() {
+    use ckbadger_store::types::TAG_INPUT;
     let store = test_store();
     let tx_hash = vec![0xa8; 32];
-    let actions = many_party_actions(&tx_hash);
+    let mut actions = many_party_actions(&tx_hash);
+    // two senders (resync fix round 3, tests NOTE-8)
+    actions.participants[0].tags |= TAG_INPUT;
+    actions.participants[1].tags |= TAG_INPUT;
     seed_named_tx(&store, 10, &tx_hash, &actions);
     let focus = many_party_lock(600);
     let mut batch = StoreBatch::new(store.as_ref());
@@ -4201,6 +4205,27 @@ async fn the_transaction_page_draws_every_party_and_an_address_row_names_them_by
     assert_eq!(own["participantCount"], MANY_PARTIES, "participantCount");
     assert_eq!(own["participants"].as_array().unwrap().len(), MANY_PARTIES);
     assert_eq!(own["partyIds"].as_array().unwrap().len(), MANY_PARTIES);
+    // resync fix round 3, tests NOTE-8: S40 reads `sent` here, every party drawn: each states it,
+    // the bit its id carries in `partyIds`, and exactly the two senders sent
+    let sent: Vec<bool> = own["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|party| {
+            party["sent"]
+                .as_bool()
+                .expect("every drawn party states sent")
+        })
+        .collect();
+    let bits: Vec<bool> = own["partyIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pair| pair[1].as_u64().unwrap() & u64::from(TAG_INPUT) != 0)
+        .collect();
+    assert_eq!(sent, bits);
+    assert_eq!(sent.iter().filter(|sent| **sent).count(), 2);
+    assert!(sent[0] && sent[1]);
 
     let feed_uri = format!("/addresses/0x{}/activities", hex::encode(focus));
     let (status, feed) = get_json(&app, &feed_uri).await;

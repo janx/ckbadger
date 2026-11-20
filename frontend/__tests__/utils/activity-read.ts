@@ -44,6 +44,7 @@
  */
 
 import type { ActivityRowData } from '@/components/activity/activity-row';
+import { TAG_INPUT, TAG_TYPE_CALL } from '@/lib/api';
 import type {
   Activity,
   GlobalActivity,
@@ -57,11 +58,10 @@ import type {
 /** The Nervos DAO's type code hash (crates/indexer/src/parser/dao.rs `DAO_CODE_HASH`). */
 const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
 
-/** The indexer's TAG_TYPE_CALL (crates/ckbadger-store/src/types.rs, bit 6). */
-const TAG_TYPE_CALL = 1 << 6;
-
-/** The indexer's TAG_INPUT, the senders bit (crates/ckbadger-store/src/types.rs, bit 8). */
-const TAG_INPUT = 1 << 8;
+// The party tag bits the checker reads, TAG_TYPE_CALL and TAG_INPUT (the senders bit), are the
+// page's own constants (`lib/api.ts`), which `__tests__/lib/party-tags-gate.test.ts` holds to the
+// indexer's (crates/ckbadger-store/src/types.rs): resync fix round 3, tests NOTE-7. A test that
+// mocks '@/lib/api' and reads rows through the checker gives the module's own constants.
 
 interface RecognizedTypeFixture {
   typeCodeHash: string;

@@ -26,17 +26,20 @@ import {
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
-vi.mock('@/lib/api', async (importOriginal) => ({
-  // a row's error is said in its own words (readErrorText knows the API's own error class)
-  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
-  api: {
-    getGlobalActivities: vi.fn(),
-  },
-  // C7: the classifier reads a party's TAG_TYPE_CALL (a recognised script that moved nothing)
-  TAG_TYPE_CALL: 64,
-  // the fold reads every party's senders bit from the route's partyIds
-  TAG_INPUT: 256,
-}));
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    // a row's error is said in its own words (readErrorText knows the API's own error class)
+    ApiRequestError: actual.ApiRequestError,
+    api: {
+      getGlobalActivities: vi.fn(),
+    },
+    // the module's own tag bits, never copies (resync fix round 3, tests NOTE-7): C7's
+    // classifier reads a party's TAG_TYPE_CALL, the fold every party's senders bit (TAG_INPUT)
+    TAG_TYPE_CALL: actual.TAG_TYPE_CALL,
+    TAG_INPUT: actual.TAG_INPUT,
+  };
+});
 
 /**
  * A lock hash for a fixture address, one per address as on chain (B4: a feed folds consecutive

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { activityRead as checked } from '@/__tests__/utils/activity-read';
+import { TAG_INPUT } from '@/lib/api';
 
 /** The checker over this file's partial rows, the shapes its rules read. */
 const activityRead = (row: object) => checked(row as never);
@@ -255,6 +256,29 @@ describe('activityRead states what the route states of every party (lane feed)',
     };
     expect(over.participantCount).toBe(1);
     expect(over.feePayer).toBe(payer.lockHash);
+  });
+
+  // resync fix round 3, tests NOTE-7: the route states a drawn party's `sent` and the senders bit
+  // in its tags (and in its id's) from one bit, so the checker refuses a fixture saying both ways
+  it('refuses a party whose tags carry the senders bit while it says it did not send', () => {
+    refuses(
+      feedRow({ participants: [{ ...party([], TAG_INPUT, '-5'), sent: false }, party()] }),
+      'carries the senders bit (TAG_INPUT) in its tags and says it did not send'
+    );
+  });
+
+  it('refuses an id list naming a drawn party with a bit its sent denies', () => {
+    const sender = { ...party([], 0, '-5'), sent: true };
+    refuses(
+      feedRow({
+        participants: [sender],
+        participantCount: 1,
+        partyIds: [[sender.lockHash, 0]],
+        feePayer: null,
+        items: [],
+      }),
+      'as a sender and names it with tags 0: the route states both from one bit (TAG_INPUT)'
+    );
   });
 
   it('refuses an address’s row that does not state its parties, or draws other parties', () => {
