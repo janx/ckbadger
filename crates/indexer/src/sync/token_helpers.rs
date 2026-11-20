@@ -1507,6 +1507,64 @@ mod tests {
         );
     }
 
+    /// A cell with token-info data under 20-byte type args whose type script is
+    /// NOT the Unique Cell (code hash 0x40.., by type): anyone can create one,
+    /// naming any args (resync fix round S1).
+    fn forged_token_info_cell(
+        args: Vec<u8>,
+        total_supply: u128,
+    ) -> crate::parser::cell::ParsedCell {
+        let data = build_token_info_data(total_supply);
+        crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0x10; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x20; 20],
+            lock_script_hash: vec![0x30; 32],
+            type_code_hash: Some(vec![0x40; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(args),
+            type_script_hash: Some(vec![0x51; 32]),
+            data_hash: [0x61; 32],
+            data_size: data.len() as i32,
+            data,
+        }
+    }
+
+    /// resync fix round S1 (logic S1): the xUDT extension claimant is bound by
+    /// its script, not by 20 bytes of args. A transaction that outputs the
+    /// token (its extension names args A) and a cell typed by another code
+    /// with args A and token-info data records no claim and binds no
+    /// metadata.
+    #[test]
+    fn a_forged_unique_cell_beside_the_tokens_output_claims_and_binds_nothing() {
+        let args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let token_type_hash = [0x93; 32];
+        let script_vec = encode_script_vec_with_unique_args(&args);
+        let type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+        let tx = dummy_tx_data(
+            [0xEF; 32],
+            false,
+            vec![],
+            vec![
+                forged_token_info_cell(args, 1111),
+                dummy_xudt_cell(token_type_hash, type_args),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            collect_token_max_supply_observations(std::slice::from_ref(&tx)),
+            HashMap::new(),
+            "a forged Unique Cell makes no claim"
+        );
+        assert_eq!(
+            collect_token_onchain_info(std::slice::from_ref(&tx), &HashMap::new()),
+            HashMap::new(),
+            "a forged Unique Cell binds no metadata"
+        );
+    }
+
     #[test]
     fn test_collect_token_max_supply_observations_from_xudt_extension_flags_0x2_witness() {
         let unique_type_args = vec![0xBC; UNIQUE_TYPE_ARGS_LEN];

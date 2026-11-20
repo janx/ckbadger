@@ -14244,6 +14244,172 @@ mod tests {
             assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
         }
 
+        // ── resync fix round S1: the extension claimant is bound by its
+        // script — the Unique Cell by its registered pair — not by 20 bytes
+        // of args ──
+
+        /// The Unique Cell (mainnet, its registered pair: the binary by
+        /// data1) with the args the extension token names.
+        fn registered_unique_type_script() -> Script {
+            Script {
+                code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
+                hash_type: "data1".to_string(),
+                args: format!("0x{}", "9a".repeat(20)),
+            }
+        }
+
+        /// A type script that is not the Unique Cell, with the same args:
+        /// anyone can create a cell under it carrying token-info data.
+        fn forged_unique_type_script() -> Script {
+            Script {
+                code_hash: format!("0x{}", "77".repeat(32)),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "9a".repeat(20)),
+            }
+        }
+
+        /// A transaction moving the extension token's cell `token_in` to
+        /// `to`, with `cells` (each a type script and a total supply) before
+        /// it and the change after: `available` shannons come in.
+        fn s1_tx(
+            hash: u8,
+            token_in: CellInput,
+            change_in: CellInput,
+            available: u64,
+            cells: &[(Script, u128)],
+            to: Script,
+        ) -> TransactionView {
+            let mut outputs: Vec<(CellOutput, String)> = cells
+                .iter()
+                .map(|(type_script, supply)| {
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(type_script.clone())),
+                        unique_data_with(*supply),
+                    )
+                })
+                .collect();
+            outputs.push((
+                output(EXT_CELL_CAPACITY, to, Some(xudt_ext_type_script())),
+                amount_data(TOKEN_AMOUNT),
+            ));
+            let spent = u64::try_from(cells.len()).unwrap() * CELL_CAPACITY + EXT_CELL_CAPACITY;
+            outputs.push((
+                output(available - spent - EXT_CELL_CAPACITY, lock_script(), None),
+                "0x".to_string(),
+            ));
+            d3_tx(
+                hash,
+                vec![token_in, change_in],
+                outputs,
+                vec!["0x".to_string()],
+            )
+        }
+
+        /// The reader's case on a chain: block 102 moves the token beside a
+        /// forged Unique Cell (another code, the extension's args, total
+        /// supply 1111); block 103 moves it beside the genuine one (2222).
+        /// The genuine claim is the token's, on every path and batching.
+        #[tokio::test]
+        async fn a_forged_unique_cell_before_the_genuine_one_claims_nothing() {
+            let at_102 = FUNDING_CAPACITY;
+            let forged = s1_tx(
+                0xe2,
+                input(0xe1, 0),
+                input(0xe1, 1),
+                at_102,
+                &[(forged_unique_type_script(), 1111)],
+                lock_script_b(),
+            );
+            let at_103 = at_102 - CELL_CAPACITY - 2 * EXT_CELL_CAPACITY + EXT_CELL_CAPACITY;
+            let genuine = s1_tx(
+                0xe3,
+                input(0xe2, 1),
+                input(0xe2, 2),
+                at_103,
+                &[(registered_unique_type_script(), 2222)],
+                lock_script(),
+            );
+            let blocks = vec![
+                funding_block(),
+                ext_issuance_block(),
+                d3_block(102, forged),
+                d3_block(103, genuine),
+            ];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, Some(2222), "the genuine claim stands");
+        }
+
+        /// One transaction, the genuine Unique Cell then a forged cell with
+        /// the same args: the claim is the genuine one's.
+        #[tokio::test]
+        async fn a_forged_cell_after_the_genuine_unique_cell_in_one_transaction_claims_nothing() {
+            let tx = s1_tx(
+                0xe2,
+                input(0xe1, 0),
+                input(0xe1, 1),
+                FUNDING_CAPACITY,
+                &[
+                    (registered_unique_type_script(), 2222),
+                    (forged_unique_type_script(), 1111),
+                ],
+                lock_script_b(),
+            );
+            let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, tx)];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, Some(2222));
+        }
+
+        /// One transaction, two Unique Cells by the registered pair with the
+        /// same args, the first carrying a total supply and the last none:
+        /// one rule on both paths — the last such output gives the binding
+        /// and the claim (it carries none, so no max supply).
+        #[tokio::test]
+        async fn two_unique_cells_with_the_same_args_in_one_transaction_are_read_by_one_rule() {
+            let tx = d3_tx(
+                0xe2,
+                vec![input(0xe1, 0), input(0xe1, 1)],
+                vec![
+                    (
+                        output(
+                            CELL_CAPACITY,
+                            lock_script(),
+                            Some(registered_unique_type_script()),
+                        ),
+                        unique_data_with(2222),
+                    ),
+                    (
+                        output(
+                            CELL_CAPACITY,
+                            lock_script(),
+                            Some(registered_unique_type_script()),
+                        ),
+                        format!("0x{RGBPP_UNIQUE_CELL_DATA_HEX}"),
+                    ),
+                    (
+                        output(
+                            EXT_CELL_CAPACITY,
+                            lock_script_b(),
+                            Some(xudt_ext_type_script()),
+                        ),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(
+                            FUNDING_CAPACITY - 2 * CELL_CAPACITY - 2 * EXT_CELL_CAPACITY,
+                            lock_script(),
+                            None,
+                        ),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let blocks = vec![funding_block(), ext_issuance_block(), d3_block(102, tx)];
+            let row = token_row_on_every_path(&blocks, &ext_type_hash()).await;
+            assert_eq!(row.max_supply, None, "the last Unique Cell carries none");
+            assert_eq!(row.name.as_deref(), Some("RGB++ Protocol"));
+        }
+
         /// The type script of supply token `seed`'s supply-info cell.
         fn supply_info_type(seed: u8) -> Script {
             Script {
