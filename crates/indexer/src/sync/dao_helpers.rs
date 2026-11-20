@@ -1504,6 +1504,68 @@ mod tests {
 
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------
 
+    /// resync fix round, logic NOTE N2: the DAO is recognised by its consensus
+    /// pair, through one function (`DaoParser::is_dao_code_hash`, the
+    /// registry's DAO pair: its reference by type). A deposit-shaped output
+    /// under the DAO's code hash by data runs no DAO (no binary has that data
+    /// hash), so the live snapshot deltas count no deposit for it (they read
+    /// the code hash alone).
+    #[test]
+    fn a_deposit_shaped_cell_under_the_dao_code_hash_by_data_is_no_deposit() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let tx_hash = [0xAC; 32];
+        let mut by_data = dummy_dao_cell(20_000_000_000, true);
+        by_data.type_hash_type = Some(0);
+        let tx = dummy_tx_data(tx_hash, false, vec![], vec![by_data], vec![]);
+        let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        batch_cell_infos.insert(
+            (tx_hash.to_vec(), 0),
+            dummy_positioned_info(20_000_000_000, 0, vec![0x56; 32]),
+        );
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_protocol_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &HashMap::new(),
+            &mut HashMap::new(),
+            &HashMap::new(),
+            &batch_cell_infos,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut daily_active_delta,
+            &mut daily_protocol_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                daily_active_delta,
+                daily_protocol_delta,
+                daily_gross_deposit_delta,
+                daily_new_deposits_delta
+            ),
+            (
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new()
+            ),
+            "the DAO's code hash by data is no deposit"
+        );
+    }
+
     #[test]
     fn test_phase1_subtracts_active_delta() {
         // Phase-1 (withdraw request) subtracts from daily_active_delta,
