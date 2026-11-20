@@ -30,3 +30,4 @@ tikv-jemallocator = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ckbadger-store = { path = "../ckbadger-store", features = ["test-store"] }

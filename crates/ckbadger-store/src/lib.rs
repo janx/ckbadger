@@ -81,7 +81,11 @@ pub use block_overlay::{
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucket};
-pub use layout_ops::{StoreLayoutMismatch, StoreLayoutState, STORE_LAYOUT, STORE_LAYOUT_CHANGE};
+#[cfg(any(test, feature = "test-store"))]
+pub use layout_ops::earlier_layout_for_test;
+pub use layout_ops::{
+    inspect_domain_store, StoreLayoutMismatch, StoreLayoutState, STORE_LAYOUT, STORE_LAYOUT_CHANGE,
+};
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;
 pub use reorg_ops::{JournalEntry, RollbackResult};

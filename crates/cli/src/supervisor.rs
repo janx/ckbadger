@@ -1896,6 +1896,43 @@ mod tests {
         );
     }
 
+    /// resync fix round 2, A: the sequencer's probe of a gating network's
+    /// store refuses a store an earlier build left (without the column
+    /// families this build added), saying the refusal (not "very likely
+    /// corrupt"), and creates nothing in it.
+    #[test]
+    fn the_sequencers_probe_refuses_a_store_of_an_earlier_layout() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+            let mut reader = BulkStatusReader::new(&SequencedIndexer {
+                spec: ChildSpec {
+                    label: "mainnet/indexer".to_string(),
+                    service: "indexer".to_string(),
+                    workdir: dir.path().to_string_lossy().into_owned(),
+                },
+                domain_data_path: domain.clone(),
+                bulk_sync_threshold: 1_000,
+                store_runtime_config: StoreRuntimeConfig::default(),
+            });
+            let error = reader.read().unwrap_err();
+            let mismatch = error
+                .downcast_ref::<ckbadger_store::StoreLayoutMismatch>()
+                .unwrap_or_else(|| panic!("stamp {stamp:?}: the refusal, got {error:#}"));
+            assert_eq!(mismatch.found, stamp);
+            assert!(
+                mismatch.to_string().contains("live_code_cells_by_type"),
+                "{mismatch}"
+            );
+            assert_eq!(store_files_and_column_families(&domain), before);
+        }
+    }
+
     /// resync fix round N7: the supervisor names the blocked chain-store
     /// child and the way out, the same words for the indexer and the API.
     #[test]

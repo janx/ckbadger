@@ -1149,6 +1149,47 @@ mod tests {
         assert!(db.store_handle().is_none(), "nothing of that store is read");
     }
 
+    /// resync fix round 2, A: the TUI on a store an earlier build left
+    /// (without the column families this build added; one row and no stamp,
+    /// or stamped 7) shows the refusal as the network's row, reads nothing of
+    /// the store, and creates nothing in it.
+    #[tokio::test]
+    async fn the_tui_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            let append = dir.path().join("append-only");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+            let db = TuiDb::new(
+                "http://127.0.0.1:3001/api/v1",
+                domain.to_str().unwrap(),
+                append.to_str().unwrap(),
+            )
+            .await;
+            let (row, _, _, _) = db.get_local_snapshot().await;
+            let words = match row {
+                Ok(_) => panic!("stamp {stamp:?}: an earlier layout's store is shown"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(
+                words.contains("live_code_cells_by_type")
+                    && words.contains(&format!(
+                        "this build reads and writes store layout {}",
+                        ckbadger_store::STORE_LAYOUT
+                    ))
+                    && words.contains("delete RocksDB and re-sync from genesis")
+                    && words.contains(domain.to_str().unwrap()),
+                "stamp {stamp:?}: {words}"
+            );
+            assert!(db.store_handle().is_none(), "nothing of that store is read");
+            assert_eq!(store_files_and_column_families(&domain), before);
+        }
+    }
+
     #[test]
     fn parse_epoch_full() {
         assert_eq!(

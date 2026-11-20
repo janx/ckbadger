@@ -774,6 +774,75 @@ mod tests {
     /// another stamp, is an old store: the API's open refuses it as
     /// rebuild-required (exit 78, as the indexer's refusal is), both layouts
     /// named, with the way out.
+    /// resync fix round 2, A: a store an earlier build left (without the
+    /// column families this build added; one row and no stamp, or stamped 7):
+    /// the API's open reads it and refuses it as rebuild-required (exit 78),
+    /// the one message, and changes nothing in it. (The N7 tests meet old
+    /// stores built with all of this build's column families.)
+    #[test]
+    fn the_apis_open_refuses_a_store_of_an_earlier_layout_as_rebuild_required() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let (_dir, domain, append) = api_test_stores();
+            create_earlier_layout_domain_store(&domain, stamp);
+            CkbadgerStore::open_append_only(&append).unwrap();
+            let before = store_files_and_column_families(&domain);
+            let error = match api_readiness_of(&domain, &append) {
+                Ok(_) => panic!("a store stamped {stamp:?} without this build's CFs is refused"),
+                Err(error) => error,
+            };
+            assert!(
+                ckbadger_indexer::lifecycle::is_rebuild_required(&error),
+                "stamp {stamp:?}: the refusal is rebuild-required (exit 78): {error:#}"
+            );
+            let words = error.to_string();
+            assert!(
+                words.contains("live_code_cells_by_type")
+                    && words.contains(&format!(
+                        "this build reads and writes store layout {}",
+                        ckbadger_store::STORE_LAYOUT
+                    ))
+                    && words.contains("re-sync from genesis"),
+                "{words}"
+            );
+            assert_eq!(store_files_and_column_families(&domain), before);
+        }
+    }
+
+    /// resync fix round 2, tests report NOTE-5: the API's wait ends with the
+    /// refusal when the store that appears while it waits is an old one; it
+    /// never waits on it for ever.
+    #[tokio::test(start_paused = true)]
+    async fn the_apis_wait_ends_with_the_refusal_of_an_old_store_that_appears() {
+        let (_dir, domain, append) = api_test_stores();
+        let wait = tokio::spawn(wait_for_stores(
+            domain.to_str().unwrap().to_string(),
+            append.to_str().unwrap().to_string(),
+            StoreRuntimeConfig::default(),
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        assert!(!wait.is_finished(), "no store yet: the API waits");
+        {
+            let primary = CkbadgerStore::open_domain(&domain).unwrap();
+            primary.set_network_identity("mainnet").unwrap();
+        }
+        CkbadgerStore::open_append_only(&append).unwrap();
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+            .await
+            .expect("the wait ends once the old store appears")
+            .unwrap();
+        let error = match ended {
+            Ok(_) => panic!("an old store is refused, not served"),
+            Err(error) => error,
+        };
+        assert!(
+            ckbadger_indexer::lifecycle::is_rebuild_required(&error),
+            "{error:#}"
+        );
+    }
+
     #[test]
     fn the_apis_open_refuses_an_old_store_as_rebuild_required() {
         for stamp in [None, Some(7)] {

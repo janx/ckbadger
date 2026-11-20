@@ -27,3 +27,4 @@ crossterm = "0.28"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ckbadger-store = { path = "../ckbadger-store", features = ["test-store"] }

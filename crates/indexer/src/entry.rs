@@ -2385,6 +2385,80 @@ mod tests {
         }
     }
 
+    /// resync fix round 2, A: a store an earlier build left (without the
+    /// column families this build added; one row and no stamp, or stamped 7)
+    /// is refused at startup, rebuild-required, and NOTHING is created in it:
+    /// its files and column families are as they were, so the earlier build
+    /// still opens it. (The T3 test above meets stores built with this
+    /// build's column families.)
+    #[test]
+    fn startup_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            let append_only = dir.path().join("append-only");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+
+            let err = match open_chain_stores_for_startup(
+                domain.to_str().unwrap(),
+                append_only.to_str().unwrap(),
+                startup_runtime_config(),
+                10_000,
+                1_000,
+            ) {
+                Ok(_) => panic!("a store stamped {stamp:?} must be refused at open"),
+                Err(err) => err,
+            };
+            assert!(is_rebuild_required(&err), "{err:#}");
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: nothing is created in a refused store"
+            );
+            assert!(!append_only.exists());
+            let words = err.to_string();
+            assert!(
+                words.contains("live_code_cells_by_type")
+                    && words.contains(&format!("store layout {}", ckbadger_store::STORE_LAYOUT))
+                    && words.contains("delete RocksDB and re-sync from genesis"),
+                "{words}"
+            );
+        }
+    }
+
+    /// resync fix round 2, A: `ckbadger label-import` refuses a store an
+    /// earlier build left the same way, creating nothing in it.
+    #[tokio::test]
+    async fn label_import_refuses_a_store_of_an_earlier_layout_creating_nothing_in_it() {
+        use ckbadger_store::earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+
+            let error = run_label_import(label_import_config(dir.path()))
+                .await
+                .unwrap_err();
+            assert!(is_rebuild_required(&error), "{error:#}");
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: nothing is created in a refused store"
+            );
+            assert!(
+                error.to_string().contains("live_code_cells_by_type"),
+                "{error:#}"
+            );
+        }
+    }
+
     fn label_import_config(dir: &std::path::Path) -> LabelImportServiceConfig {
         LabelImportServiceConfig {
             domain_data_path: dir.join("domain").to_string_lossy().into_owned(),

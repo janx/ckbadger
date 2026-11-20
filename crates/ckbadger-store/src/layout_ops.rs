@@ -215,6 +215,77 @@ impl CkbadgerStore {
     }
 }
 
+/// What the domain store at `primary_path` is, for an opener that must not
+/// change a store it refuses (resync fix round 2, A): `None` while no store
+/// exists there (no `CURRENT`), else the layout check. As every reader
+/// reads it today: a secondary of this build's column families at
+/// `secondary_path`, then [`CkbadgerStore::check_store_layout`].
+pub fn inspect_domain_store(
+    primary_path: &std::path::Path,
+    secondary_path: &std::path::Path,
+) -> anyhow::Result<Option<Result<StoreLayoutState, StoreLayoutMismatch>>> {
+    if !primary_path.join("CURRENT").exists() {
+        return Ok(None);
+    }
+    let store = CkbadgerStore::open_domain_secondary(primary_path, secondary_path)?;
+    Ok(Some(store.check_store_layout()?))
+}
+
+/// A domain store as an earlier build left it, for the tests of every opener
+/// (resync fix round 2, A): written with plain RocksDB, never through this
+/// build's open (which would create the column families this build added).
+#[cfg(any(test, feature = "test-store"))]
+pub mod earlier_layout_for_test {
+    use crate::keys::sync_meta_keys;
+    use crate::store::{CF_LIVE_CODE_CELLS_BY_TYPE, CF_SYNC_META, CF_TOKEN_LABELS, DOMAIN_CFS};
+    use std::path::Path;
+
+    /// The column families this build added since layout 7, which an earlier
+    /// build's store lacks.
+    pub const ADDED_SINCE_LAYOUT_7: [&str; 2] = [CF_TOKEN_LABELS, CF_LIVE_CODE_CELLS_BY_TYPE];
+
+    /// Create, at `path`, a domain store with every domain column family of
+    /// this build but [`ADDED_SINCE_LAYOUT_7`], holding one row (the network
+    /// identity) and the layout stamp `stamp`, if any.
+    pub fn create_earlier_layout_domain_store(path: &Path, stamp: Option<u32>) {
+        let mut opts = rocksdb::Options::default();
+        opts.create_if_missing(true);
+        opts.create_missing_column_families(true);
+        let column_families: Vec<&str> = DOMAIN_CFS
+            .iter()
+            .copied()
+            .filter(|name| !ADDED_SINCE_LAYOUT_7.contains(name))
+            .collect();
+        let db = rocksdb::DB::open_cf(&opts, path, column_families).unwrap();
+        let sync_meta = db.cf_handle(CF_SYNC_META).unwrap();
+        db.put_cf(sync_meta, sync_meta_keys::NETWORK_IDENTITY, b"mainnet")
+            .unwrap();
+        if let Some(stamp) = stamp {
+            db.put_cf(sync_meta, sync_meta_keys::STORE_LAYOUT, stamp.to_le_bytes())
+                .unwrap();
+        }
+    }
+
+    /// What a refusal must leave as it found it: the store directory's files
+    /// (name, size) and the store's column families, each sorted.
+    pub fn store_files_and_column_families(path: &Path) -> (Vec<(String, u64)>, Vec<String>) {
+        let mut files: Vec<(String, u64)> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.metadata().unwrap().len(),
+                )
+            })
+            .collect();
+        files.sort();
+        let mut column_families = rocksdb::DB::list_cf(&rocksdb::Options::default(), path).unwrap();
+        column_families.sort();
+        (files, column_families)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +462,61 @@ mod tests {
             store.check_store_layout().unwrap(),
             Err(StoreLayoutMismatch { found: None })
         );
+    }
+
+    /// resync fix round 2, A: a store an earlier build left (without the
+    /// column families this build added; one row and no stamp, or stamped 7)
+    /// is read for what it is, writing nothing in it, and refused: by the
+    /// inspection an opener makes before it opens, and by a secondary of it
+    /// (the API, `status`, the TUI, the sequencer). The store's files and
+    /// column families are as they were, so the earlier build still opens it.
+    #[test]
+    fn a_store_of_an_earlier_layout_is_read_without_writing_and_refused() {
+        use earlier_layout_for_test::{
+            create_earlier_layout_domain_store, store_files_and_column_families,
+            ADDED_SINCE_LAYOUT_7,
+        };
+        for stamp in [None, Some(7)] {
+            let dir = tempfile::tempdir().unwrap();
+            let domain = dir.path().join("domain");
+            create_earlier_layout_domain_store(&domain, stamp);
+            let before = store_files_and_column_families(&domain);
+            let assert_refused = |mismatch: StoreLayoutMismatch| {
+                assert_eq!(mismatch.found, stamp);
+                let words = mismatch.to_string();
+                for added in ADDED_SINCE_LAYOUT_7 {
+                    assert!(words.contains(added), "stamp {stamp:?}: {words}");
+                }
+                assert!(
+                    words.contains(&format!(
+                        "this build reads and writes store layout {STORE_LAYOUT}"
+                    )) && words.contains("delete RocksDB and re-sync from genesis"),
+                    "{words}"
+                );
+            };
+
+            let inspected = inspect_domain_store(&domain, &dir.path().join("inspect"));
+            match inspected {
+                Ok(Some(Err(mismatch))) => assert_refused(mismatch),
+                other => panic!("stamp {stamp:?}: the inspection refuses it, got {other:?}"),
+            }
+
+            let secondary =
+                CkbadgerStore::open_domain_secondary(&domain, &dir.path().join("secondary"));
+            match secondary.map(|store| store.check_store_layout()) {
+                Ok(Ok(Err(mismatch))) => assert_refused(mismatch),
+                Ok(other) => panic!("stamp {stamp:?}: a secondary refuses it, got {other:?}"),
+                Err(error) => {
+                    panic!("stamp {stamp:?}: a secondary opens it to refuse it: {error:#}")
+                }
+            }
+
+            assert_eq!(
+                store_files_and_column_families(&domain),
+                before,
+                "stamp {stamp:?}: the refused store is as it was"
+            );
+        }
     }
 
     #[test]
