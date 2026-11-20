@@ -3198,6 +3198,11 @@ pub struct DailyActivityStats {
 /// A [`DailyActivityStats::script_counts`] key: the script's pair,
 /// `"<hex code hash>:<hash type>"` (e.g. `"9bd7…cce8:type"`). A hash type CKB
 /// does not define is an error, named.
+///
+/// Built in one allocation of its exact size (the hex, `:`, the label): it
+/// runs once per type call and lock call of every transaction, live and bulk
+/// (resync fix round 4: `hex::encode` and `format!` cost more than the key
+/// they built).
 pub fn script_count_key(code_hash: &[u8], hash_type: i16) -> anyhow::Result<String> {
     let label = u8::try_from(hash_type)
         .ok()
@@ -3208,7 +3213,15 @@ pub fn script_count_key(code_hash: &[u8], hash_type: i16) -> anyhow::Result<Stri
                 hex::encode(code_hash)
             )
         })?;
-    Ok(format!("{}:{label}", hex::encode(code_hash)))
+    let hex_len = 2 * code_hash.len();
+    let mut key = vec![0u8; hex_len + 1 + label.len()];
+    hex::encode_to_slice(code_hash, &mut key[..hex_len]).map_err(|e| {
+        anyhow::anyhow!("script count key of {hash_type} ({label}): hex of the code hash: {e}")
+    })?;
+    key[hex_len] = b':';
+    key[hex_len + 1..].copy_from_slice(label.as_bytes());
+    String::from_utf8(key)
+        .map_err(|e| anyhow::anyhow!("script count key of {hash_type} ({label}): not text: {e}"))
 }
 
 /// The pair a [`script_count_key`] names: the code hash and its hash type
