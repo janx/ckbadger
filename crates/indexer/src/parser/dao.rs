@@ -52,6 +52,12 @@ fn checked_usize_to_i32(value: usize, context: &str) -> anyhow::Result<i32> {
 }
 
 impl DaoParser {
+    /// THE DAO recognition (resync fix round, logic NOTE N2): whether a type
+    /// script `(code_hash, hash_type)` runs the Nervos DAO, by the registry's
+    /// DAO pair, its consensus reference by type alone (the consensus pays
+    /// compensation for that script only). Every site that identifies the DAO
+    /// asks this function, never the code hash alone or a second hash type
+    /// check.
     pub fn is_dao_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY.is(
             code_hash,
@@ -132,11 +138,9 @@ impl DaoParser {
                     Some(v) => v,
                     None => return Ok(None),
                 };
+                // The DAO by its consensus pair (its reference by type), the
+                // one function: no second hash type check beside it.
                 if !Self::is_dao_code_hash(type_code_hash, cell.type_hash_type.ok_or_else(|| anyhow::anyhow!("a typed cell without a hash type: tx=0x{} output={idx}", hex::encode(tx_hash)))?) {
-                    return Ok(None);
-                }
-                // hash_type must be "type" (value 1) to match is_dao_cell() behavior
-                if cell.type_hash_type != Some(1) {
                     return Ok(None);
                 }
                 if cell.data_size != 8 {

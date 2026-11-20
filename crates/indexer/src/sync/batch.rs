@@ -3494,8 +3494,6 @@ impl Indexer {
             })?;
 
         // The daily DAO deltas read the batch's one lifecycle resolution.
-        let dao_code_hash_for_stats =
-            crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let consumed_dao_for_stats = live_dao.consumed();
         let mut same_batch_dao_for_stats = DaoSameBatchMap::new();
         let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -3834,7 +3832,6 @@ impl Indexer {
             accumulate_dao_snapshot_deltas_for_txs(
                 tx_slice,
                 block_date,
-                &dao_code_hash_for_stats,
                 consumed_dao_for_stats,
                 &mut same_batch_dao_for_stats,
                 &input_cell_info,

@@ -434,7 +434,9 @@ fn classify(
         return Ok(result);
     }
     let protocol = PROTOCOL_REGISTRY.protocol(code, hash_type);
-    if protocol == Some(ProtocolScript::Dao) && hash_type == 1 {
+    // The DAO by its consensus pair, the one function (resync fix round,
+    // logic NOTE N2).
+    if ckbadger_indexer::parser::dao::DaoParser::is_dao_code_hash(code, hash_type) {
         ensure!(
             info.data_size == 8,
             "invalid DAO cell data size {}",

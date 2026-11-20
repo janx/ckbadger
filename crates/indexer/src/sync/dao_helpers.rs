@@ -427,7 +427,6 @@ fn parsed_consumed_dao_capacity(
 pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     tx_slice: &[TxData],
     block_date: NaiveDate,
-    dao_code_hash: &[u8],
     consumed_dao_map: &DaoConsumedMap,
     same_batch_dao_map: &mut DaoSameBatchMap,
     _input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -445,8 +444,12 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
 ) -> Result<()> {
     for tx_data in tx_slice {
         for (output_index, cell) in tx_data.cells.iter().enumerate() {
-            if let Some(ref type_code_hash) = cell.type_code_hash {
-                if type_code_hash == dao_code_hash
+            // The DAO by its consensus pair, the one function (a typed
+            // `ParsedCell` carries its hash type with its code hash).
+            if let Some((type_code_hash, type_hash_type)) =
+                cell.type_code_hash.as_deref().zip(cell.type_hash_type)
+            {
+                if crate::parser::dao::DaoParser::is_dao_code_hash(type_code_hash, type_hash_type)
                     && cell.data_size == 8
                     && cell.data.len() == 8
                     && cell.data.iter().all(|&b| b == 0)
@@ -1513,7 +1516,6 @@ mod tests {
     #[test]
     fn a_deposit_shaped_cell_under_the_dao_code_hash_by_data_is_no_deposit() {
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let tx_hash = [0xAC; 32];
         let mut by_data = dummy_dao_cell(20_000_000_000, true);
         by_data.type_hash_type = Some(0);
@@ -1531,7 +1533,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &HashMap::new(),
             &mut HashMap::new(),
             &HashMap::new(),
@@ -1571,7 +1572,6 @@ mod tests {
         // Phase-1 (withdraw request) subtracts from daily_active_delta,
         // matching the CKB explorer convention.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x11; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
@@ -1622,7 +1622,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -1666,7 +1665,6 @@ mod tests {
     #[test]
     fn test_same_batch_deposit_then_phase1_nets_active_delta() {
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 8, 6).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let deposit_tx_hash = [0x61; 32];
         let lock_args = vec![0x71; 32];
         let lock_hash = dummy_dao_lock_hash(&lock_args);
@@ -1708,7 +1706,6 @@ mod tests {
             accumulate_dao_snapshot_deltas_for_txs(
                 &[tx],
                 block_date,
-                &dao_code_hash,
                 &consumed_dao_map,
                 &mut same_batch_dao_map,
                 &HashMap::new(),
@@ -1747,7 +1744,6 @@ mod tests {
         // Phase-2 (withdraw completion) increments daily_withdrawals_delta
         // but does NOT subtract from daily_active_delta (already done at phase-1).
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x22; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
@@ -1793,7 +1789,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -1835,7 +1830,6 @@ mod tests {
     #[test]
     fn test_accumulate_dao_snapshot_deltas_counts_status1_inputs_as_withdrawals() {
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x33; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
@@ -1879,7 +1873,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -1908,7 +1901,6 @@ mod tests {
     #[test]
     fn test_accumulate_dao_snapshot_deltas_counts_status1_inputs_in_mixed_tx() {
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x34; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
@@ -1953,7 +1945,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -1978,7 +1969,6 @@ mod tests {
     fn test_accumulate_dao_snapshot_deltas_errors_on_invalid_capacity_string() {
         // Phase-2 must fail fast on a bad capacity string — test with status=1.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x44; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
@@ -2021,7 +2011,6 @@ mod tests {
         let err = accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -2046,7 +2035,6 @@ mod tests {
         // Verify that depositor counts increment on deposit and decrement on phase-2,
         // and that phase-1 does NOT modify depositor counts.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let deposit_tx_hash = [0x51; 32];
         let withdraw_req_tx_hash = [0x52; 32];
         let lock_args = vec![0x77; 32];
@@ -2127,7 +2115,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[deposit_tx],
             block_date,
-            &dao_code_hash,
             &empty_consumed,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -2165,7 +2152,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[phase1_first],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map_phase1,
             &mut same_batch_dao_map,
             &input_cell_info,
@@ -2199,7 +2185,6 @@ mod tests {
         accumulate_dao_snapshot_deltas_for_txs(
             &[phase2_first],
             block_date,
-            &dao_code_hash,
             &consumed_dao_map_phase2,
             &mut same_batch_dao_map,
             &input_cell_info,

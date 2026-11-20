@@ -319,8 +319,10 @@ fn is_dotbit_account_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
     PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::DotbitAccount)
 }
 
+/// The DAO by its consensus pair: the one function
+/// (`DaoParser::is_dao_code_hash`, resync fix round, logic NOTE N2).
 fn is_dao_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
-    PROTOCOL_REGISTRY.is(code_hash, hash_type, ProtocolScript::Dao)
+    ckbadger_indexer::parser::dao::DaoParser::is_dao_code_hash(code_hash, hash_type)
 }
 
 fn is_mnft_issuer_type_code_hash(code_hash: &[u8], hash_type: i16) -> bool {
