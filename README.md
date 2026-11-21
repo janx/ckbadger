@@ -190,10 +190,19 @@ CKBadger is designed local-first, but the architecture doesn't lock you in. The 
 
 #### Docker (Linux amd64)
 
-For a published Docker release, mount your CKBadger workdir (writable by UID/GID
-1000) and CKB node directory. Set `[ckb].workdir = "/var/lib/ckb"`,
-`[ckb].rpc_url` to an address reachable from the container, and
-`[frontend].host = "0.0.0.0"`.
+Use a CKBadger workdir writable by UID/GID 1000 and CKB node directories
+readable by that user. Use the same CKBadger workdir for `init` and `run`.
+
+For an empty workdir, run:
+
+```sh
+docker run --rm -v /path/to/ckbadger-workdir:/work ghcr.io/janx/ckbadger init
+```
+
+Set `[ckb].workdir = "/var/lib/ckb"` and `[ckb].rpc_url` to the matching
+node's RPC URL in the network's `config.toml` (`mainnet/config.toml` by
+default). Set `[frontend].host = "0.0.0.0"` in the root `ckbadger.toml`.
+For an existing standalone workdir, set both sections in its `config.toml`.
 
 ```sh
 docker run --rm --init \
@@ -205,9 +214,16 @@ docker run --rm --init \
   ghcr.io/janx/ckbadger
 ```
 
-Open `http://localhost:8100`. Add `--network <ckb-network>` for a CKB container
-on a shared network. For host-loopback RPC, use `--network host`, omit `-p`, and
-bind the frontend to `127.0.0.1`.
+For a CKB container, add `--network <ckb-network>` and use its Docker DNS
+name in the RPC URL. For Linux host-loopback RPC, use `--network host`,
+omit `-p`, and set `[frontend].host` to `127.0.0.1`.
+
+To run both networks, add `--with-testnet` to `init`. In the run command,
+replace the single CKB mount with two read-only mounts at distinct container
+paths. Set `[ckb].workdir` and `[ckb].rpc_url` in `mainnet/config.toml` and
+`testnet/config.toml` to each node’s mount path and reachable RPC URL.
+
+Open `http://localhost:8100`.
 
 Keep the stop timeout when running under Docker. The supervisor handles
 `docker stop` by stopping its services in order, allowing up to 120 seconds
