@@ -349,13 +349,8 @@ impl BatchWriter {
             .store
             .get_cell_dist_cursor()?
             .map(|cursor| cursor.last_processed_block);
-        if hodl_last.is_some_and(|last| last > start_block)
-            || cell_dist_last.is_some_and(|last| last > start_block)
-        {
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(hodl_last.is_some_and(|last| last > start_block)
+            || cell_dist_last.is_some_and(|last| last > start_block))
     }
 
     fn tx_index_boundary_block(&self, mode: rocksdb::IteratorMode) -> Option<i64> {
