@@ -1,0 +1,111 @@
+name: Docker image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and smoke-test Linux amd64 image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev zlib1g-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docker-amd64
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: Build release binary
+        run: cargo build --release -j 2 -p ckbadger
+
+      - name: Package Docker image
+        env:
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          context="$(mktemp -d)"
+          install -m 0755 target/release/ckbadger "$context/ckbadger"
+          docker build --pull --file Dockerfile --tag ckbadger:ci \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            "$context"
+
+      - name: Smoke-test packaged frontend
+        run: |
+          docker run --rm ckbadger:ci --version
+          # The existing test hosts deterministic fixtures on the runner's loopback.
+          # Mount only its temporary workdir and run as the runner UID to read it.
+          launcher="$(mktemp)"
+          cat > "$launcher" <<'SH'
+          #!/bin/sh
+          set -eu
+          exec docker run --rm --init --network host \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$PWD,dst=$PWD" \
+            ckbadger:ci "$@"
+          SH
+          chmod +x "$launcher"
+          python3 scripts/test_frontend_release.py --binary "$launcher"
+
+      - name: Export tested image for release
+        if: github.ref_type == 'tag'
+        run: docker save -o "$RUNNER_TEMP/ckbadger-image.tar" ckbadger:ci
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: ckbadger-image-amd64
+          path: ${{ runner.temp }}/ckbadger-image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish release image to GHCR
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ckbadger-image-amd64
+          path: ${{ runner.temp }}
+
+      - name: Push tested release image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="$image:$GITHUB_REF_NAME"
+          latest="$image:latest"
+          docker load -i "$RUNNER_TEMP/ckbadger-image.tar"
+          docker tag ckbadger:ci "$version"
+          docker tag ckbadger:ci "$latest"
+          printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$version"
+          docker push "$latest"
+          printf 'Published `%s` and `%s`.\n' "$version" "$latest" >> "$GITHUB_STEP_SUMMARY"

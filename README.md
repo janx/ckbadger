@@ -188,6 +188,26 @@ as a read-only secondary.
 
 CKBadger is designed local-first, but the architecture doesn't lock you in. The services are stateless beyond RocksDB, so with the right deployment setup the same binary can sit behind a reverse proxy and serve a public audience. Run it for yourself, or run it for others.
 
+#### Docker (Linux amd64)
+
+For a published Docker release, mount your CKBadger workdir (writable by UID/GID
+1000) and CKB node directory. Set `[ckb].workdir = "/var/lib/ckb"`,
+`[ckb].rpc_url` to an address reachable from the container, and
+`[frontend].host = "0.0.0.0"`.
+
+```sh
+docker run --rm --init \
+  --ulimit nofile=65535:65535 \
+  -p 127.0.0.1:8100:8100 \
+  -v /path/to/ckbadger-workdir:/work \
+  -v /path/to/ckb-node-dir:/var/lib/ckb:ro \
+  ghcr.io/janx/ckbadger
+```
+
+Open `http://localhost:8100`. Add `--network <ckb-network>` for a CKB container
+on a shared network. For host-loopback RPC, use `--network host`, omit `-p`, and
+bind the frontend to `127.0.0.1`.
+
 ### Work Directory Structure
 
 `ckbadger init` sets up an **orchestrator root**: a top-level `ckbadger.toml` plus one work directory per network. Each network subdirectory is a self-contained single-network work dir.
