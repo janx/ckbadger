@@ -275,7 +275,7 @@ def main():
                     for format_, suffix in [('markdown', 'md'), ('raw', 'raw')]:
                         for pattern in caps['routes'][format_]:
                             path = re.sub(r'\{([^}]+)\}', lambda m: {
-                                'slug': 'hash-rate', 'outpoint': '0xmissing-0',
+                                'slug': 'hash-rate', 'outpoint': '0xmissing-0', 'orphan': 'deadbeef',
                             }.get(m[1], '424242'), pattern)
                             profiles = caps['rawProfiles']['routes'][pattern] if format_ == 'raw' else ['default']
                             for profile in profiles:
