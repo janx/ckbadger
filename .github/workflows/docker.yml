@@ -51,6 +51,7 @@ jobs:
           docker build --pull --file Dockerfile --tag ckbadger:ci \
             --label "org.opencontainers.image.source=$SOURCE_URL" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$GITHUB_REF_NAME" \
             "$context"
 
       - name: Smoke-test packaged frontend
@@ -90,6 +91,10 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
+    # Queue every release. The lock covers both reading and updating :latest.
+    concurrency:
+      group: ckbadger-ghcr-publish
+      queue: max
     permissions:
       packages: write
     steps:
@@ -105,10 +110,80 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           version="$image:$GITHUB_REF_NAME"
           latest="$image:latest"
-          docker load -i "$RUNNER_TEMP/ckbadger-image.tar"
-          docker tag ckbadger:ci "$version"
-          docker tag ckbadger:ci "$latest"
+          stable_tag='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          digest_pattern='^sha256:[0-9a-f]{64}$'
+          fail() { printf '::error::%s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_REF_NAME" =~ $stable_tag ]] || fail 'Expected a stable vMAJOR.MINOR.PATCH tag.'
+
           printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker push "$version"
-          docker push "$latest"
-          printf 'Published `%s` and `%s`.\n' "$version" "$latest" >> "$GITHUB_STEP_SUMMARY"
+          authfile="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+
+          # Return an empty digest only for explicitly missing manifests.
+          manifest_digest() {
+            local ref="$1" output
+            if output=$(docker buildx imagetools inspect --format '{{printf "%s" .Manifest.Digest}}' "$ref" 2>&1); then
+              [[ "$output" =~ $digest_pattern ]] || fail "Invalid GHCR manifest digest for $ref."
+              printf '%s\n' "$output"
+            elif [[ "$output" != "ERROR: $ref: not found" ]] && ! grep -Fqi 'manifest unknown' <<< "$output"; then
+              printf '%s\n' "$output" >&2
+              fail "Cannot verify GHCR manifest for $ref."
+            fi
+          }
+          image_labels() {
+            skopeo inspect --no-tags --authfile "$authfile" "docker://$image@$1" | jq -c '.Labels // {}'
+          }
+
+          version_digest=$(manifest_digest "$version")
+          latest_digest=$(manifest_digest "$latest")
+          if [[ -n "$version_digest" ]]; then
+            existing_revision=$(image_labels "$version_digest" | jq -r '."org.opencontainers.image.revision" // empty')
+            [[ "$existing_revision" == "$GITHUB_SHA" ]] || fail "Existing immutable image $version has a different or unknown source revision."
+          fi
+
+          current=
+          if [[ -n "$latest_digest" ]]; then
+            current=$(image_labels "$latest_digest" | jq -r '."org.opencontainers.image.version" // empty')
+            if [[ ! "$current" =~ $stable_tag ]]; then
+              # Legacy latest may carry the base OS version rather than the release.
+              # Query published GHCR tags; the matching Git tag may have been deleted.
+              tags=$(skopeo list-tags --authfile "$authfile" "docker://$image" |
+                jq -r '.Tags | if type == "array" then .[] else error("Invalid GHCR tags") end' |
+                LC_ALL=C sort -rV)
+              current=
+              while IFS= read -r tag; do
+                [[ "$tag" =~ $stable_tag ]] || continue
+                digest=$(manifest_digest "$image:$tag")
+                [[ -n "$digest" ]] || fail "A listed GHCR tag disappeared: $tag."
+                if [[ "$digest" == "$latest_digest" ]]; then
+                  current="$tag"
+                  break
+                fi
+              done <<< "$tags"
+              [[ -n "$current" ]] || fail 'Cannot identify the release behind legacy latest; no tags were changed.'
+            fi
+          fi
+
+          # Do not overwrite a published version: it may be the only durable record
+          # that identifies a legacy latest, and a retry must reuse the same image.
+          if [[ -z "$version_digest" ]]; then
+            docker load -i "$RUNNER_TEMP/ckbadger-image.tar"
+            docker tag ckbadger:ci "$version"
+            docker push "$version"
+            version_digest=$(manifest_digest "$version")
+            [[ -n "$version_digest" ]] || fail "Cannot verify the newly published version $version."
+            printf 'Published %s.\n' "$version" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Reused immutable release %s.\n' "$version" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf '\nFirst-time GHCR packages are private by default. Set visibility to public if intended and verify an anonymous pull.\n' >> "$GITHUB_STEP_SUMMARY"
+
+          highest=$(printf '%s\n%s\n' "$current" "$GITHUB_REF_NAME" | LC_ALL=C sort -V | tail -n 1)
+          if [[ "$highest" != "$GITHUB_REF_NAME" ]]; then
+            printf 'Kept %s on newer release %s.\n' "$latest" "$current" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$version_digest" != "$latest_digest" ]]; then
+            skopeo copy --all --preserve-digests --authfile "$authfile" "docker://$image@$version_digest" "docker://$latest"
+            [[ "$(manifest_digest "$latest")" == "$version_digest" ]] || fail 'Cannot verify the promoted latest digest.'
+            printf 'Promoted %s to %s.\n' "$version" "$latest" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Kept %s on its existing digest.\n' "$latest" >> "$GITHUB_STEP_SUMMARY"
+          fi
