@@ -188,6 +188,47 @@ as a read-only secondary.
 
 CKBadger is designed local-first, but the architecture doesn't lock you in. The services are stateless beyond RocksDB, so with the right deployment setup the same binary can sit behind a reverse proxy and serve a public audience. Run it for yourself, or run it for others.
 
+#### Docker (Linux amd64)
+
+Use a CKBadger workdir writable by UID/GID 1000 and CKB node directories
+readable by that user. Use the same CKBadger workdir for `init` and `run`.
+
+For an empty workdir, run:
+
+```sh
+docker run --rm -v /path/to/ckbadger-workdir:/work ghcr.io/janx/ckbadger init
+```
+
+Set `[ckb].workdir = "/var/lib/ckb"` and `[ckb].rpc_url` to the matching
+node's RPC URL in the network's `config.toml` (`mainnet/config.toml` by
+default). Set `[frontend].host = "0.0.0.0"` in the root `ckbadger.toml`.
+For an existing standalone workdir, set both sections in its `config.toml`.
+
+```sh
+docker run --rm --init \
+  --stop-timeout 300 \
+  --ulimit nofile=65535:65535 \
+  -p 127.0.0.1:8100:8100 \
+  -v /path/to/ckbadger-workdir:/work \
+  -v /path/to/ckb-node-dir:/var/lib/ckb:ro \
+  ghcr.io/janx/ckbadger
+```
+
+For a CKB container, add `--network <ckb-network>` and use its Docker DNS
+name in the RPC URL. For Linux host-loopback RPC, use `--network host`,
+omit `-p`, and set `[frontend].host` to `127.0.0.1`.
+
+To run both networks, add `--with-testnet` to `init`. In the run command,
+replace the single CKB mount with two read-only mounts at distinct container
+paths. Set `[ckb].workdir` and `[ckb].rpc_url` in `mainnet/config.toml` and
+`testnet/config.toml` to each node’s mount path and reachable RPC URL.
+
+Open `http://localhost:8100`.
+
+Keep the stop timeout when running under Docker. The supervisor handles
+`docker stop` by stopping its services in order, allowing up to 120 seconds
+per indexer to finish in-flight RocksDB writes and exit.
+
 ### Work Directory Structure
 
 `ckbadger init` sets up an **orchestrator root**: a top-level `ckbadger.toml` plus one work directory per network. Each network subdirectory is a self-contained single-network work dir.
