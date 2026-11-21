@@ -70,6 +70,9 @@ jobs:
           chmod +x "$launcher"
           python3 scripts/test_frontend_release.py --binary "$launcher"
 
+      - name: Smoke-test graceful Docker shutdown
+        run: bash scripts/test_docker_shutdown.sh ckbadger:ci
+
       - name: Export tested image for release
         if: github.ref_type == 'tag'
         run: docker save -o "$RUNNER_TEMP/ckbadger-image.tar" ckbadger:ci

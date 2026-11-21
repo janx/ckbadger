@@ -197,6 +197,7 @@ For a published Docker release, mount your CKBadger workdir (writable by UID/GID
 
 ```sh
 docker run --rm --init \
+  --stop-timeout 300 \
   --ulimit nofile=65535:65535 \
   -p 127.0.0.1:8100:8100 \
   -v /path/to/ckbadger-workdir:/work \
@@ -207,6 +208,10 @@ docker run --rm --init \
 Open `http://localhost:8100`. Add `--network <ckb-network>` for a CKB container
 on a shared network. For host-loopback RPC, use `--network host`, omit `-p`, and
 bind the frontend to `127.0.0.1`.
+
+Keep the stop timeout when running under Docker. The supervisor handles
+`docker stop` by stopping its services in order, allowing up to 120 seconds
+per indexer to finish in-flight RocksDB writes and exit.
 
 ### Work Directory Structure
 

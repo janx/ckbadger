@@ -9,5 +9,7 @@ COPY --chmod=0755 ckbadger /usr/local/bin/ckbadger
 
 USER 1000:1000
 WORKDIR /work
+# The supervisor handles SIGINT for cooperative shutdown.
+STOPSIGNAL SIGINT
 ENTRYPOINT ["ckbadger"]
 CMD ["run"]
